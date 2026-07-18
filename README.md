@@ -61,12 +61,23 @@ Nhóm endpoint chính (xem full trong Excel `06_API` ~176 API):
 - `/api/customers`, `/api/price-lists`, `/api/sales-orders`, `/api/deliveries`, `/api/payments`, `/api/invoices`
 - `/api/operation-logs`, `/api/reports/*`, `/api/dashboard/overview`, `/api/settings`
 
+## Edge sync (từ CrabSenseKiosk)
+
+Kiosk tại trại **không** chỉ gọi CRUD nghiệp vụ — còn:
+
+- `POST /api/sync/hdf5` — nhận file HDF5 đã seal + metadata (`farm_id`, `device_code`, chunk time, checksum)
+- Index object storage (MinIO/S3) + bảng `hdf5_uploads`
+- Hot path tùy chọn: `POST /api/iot/sensor-data` khi Kiosk online
+
+Luồng: **IoT + AI WQ → Kiosk (HDF5) → BE**.
+
 ## Stack đề xuất
 
 - ASP.NET Core 8 (N-Layer: Api / Application / Domain / Infrastructure)
 - PostgreSQL 14+
-- JWT + RBAC
-- Docker Compose (API + Postgres)
+- JWT + RBAC (+ API key thiết bị cho sync edge)
+- MinIO / S3 cho archive HDF5
+- Docker Compose (API + Postgres + MinIO)
 
 ## Liên kết repo anh em
 
