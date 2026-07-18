@@ -85,7 +85,7 @@ Luồng: **IoT + AI WQ → Kiosk (HDF5) → BE**.
 |------|---------|
 | [CrabSenseFE](https://github.com/CrabSense/CrabSenseFE) | Web admin/operator/sales |
 | [CrabSenseApp](https://github.com/CrabSense/CrabSenseApp) | Mobile hiện trường |
-| [CrabSenseKiosk](https://github.com/CrabSense/CrabSenseKiosk) | Desktop / wallboard |
+| [CrabSenseKiosk](https://github.com/CrabSense/CrabSenseKiosk) | Edge tại trại: IoT+AI WQ → HDF5 → BE (**không** sales/payment) |
 | [CrabSenseIot](https://github.com/CrabSense/CrabSenseIot) | ESP32 / gateway firmware |
 | [CrabSenseAIWaterQualityAnalysis](https://github.com/CrabSense/CrabSenseAIWaterQualityAnalysis) | AI Decision + phân tích WQ |
 
