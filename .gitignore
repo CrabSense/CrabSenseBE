@@ -1,0 +1,39 @@
+## .gitignore for CrabSenseBE (ASP.NET Core)
+
+# Build output
+bin/
+obj/
+out/
+publish/
+
+# Visual Studio
+.vs/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# Rider / JetBrains
+.idea/
+*.sln.iml
+
+# Environment & secrets
+.env
+appsettings.Production.json
+appsettings.Local.json
+
+# Logs
+logs/
+*.log
+
+# Test results
+TestResults/
+coverage/
+*.coverage
+*.coveragexml
+
+# EF Core Migrations (keep Migrations/ tracked)
+# src/*/Migrations/*
+
+# Docker
+docker-compose.override.yml

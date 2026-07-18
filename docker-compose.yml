@@ -1,0 +1,74 @@
+version: "3.9"
+
+services:
+  # ─── PostgreSQL ──────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: crabsense_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-crabsense}
+      POSTGRES_USER: ${POSTGRES_USER:-crabsense_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-crabsense_user} -d ${POSTGRES_DB:-crabsense}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ─── MinIO (S3-compatible object storage for HDF5) ───────────────────────
+  minio:
+    image: minio/minio:latest
+    container_name: crabsense_minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-minioadmin}
+    ports:
+      - "${MINIO_PORT:-9000}:9000"
+      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ─── CrabSense API ───────────────────────────────────────────────────────
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: crabsense_api
+    restart: unless-stopped
+    ports:
+      - "${API_PORT:-8080}:8080"
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      ASPNETCORE_URLS: http://+:8080
+      ConnectionStrings__DefaultConnection: >
+        Host=postgres;Port=5432;Database=${POSTGRES_DB:-crabsense};
+        Username=${POSTGRES_USER:-crabsense_user};
+        Password=${POSTGRES_PASSWORD:-changeme}
+      Jwt__Secret: ${JWT_SECRET:-CHANGE_ME_IN_PRODUCTION_AT_LEAST_32_CHARS}
+      Jwt__Issuer: CrabSenseBE
+      Jwt__Audience: CrabSenseClients
+      MinIO__Endpoint: minio:9000
+      MinIO__AccessKey: ${MINIO_ACCESS_KEY:-minioadmin}
+      MinIO__SecretKey: ${MINIO_SECRET_KEY:-minioadmin}
+      MinIO__UseSSL: "false"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
+  minio_data:
