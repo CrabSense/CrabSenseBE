@@ -8,6 +8,7 @@ using Serilog;
 using System.Text;
 
 var builder = WebApplication.CreateBuilder(args);
+builder.Configuration.AddJsonFile("appsettings.Local.json", optional: true, reloadOnChange: true);
 
 // ─── Serilog ────────────────────────────────────────────────────────────────
 Log.Logger = new LoggerConfiguration()
@@ -67,18 +68,31 @@ builder.Services.AddSwaggerGen(c =>
     {
         Title = "CrabSense API",
         Version = "v1",
-        Description = "Backend API cho hệ thống quản lý trại nuôi cua lột CrabSense/CrabGuardian"
+        Description = "CrabSense/CrabGuardian backend API.\n\n" +
+                      "Hierarchy on CREATE:\n" +
+                      "1) Area (khu) — OwnerId from JWT (not in body)\n" +
+                      "2) Row (dãy) — requires farmingAreaId\n" +
+                      "3) Box (hộp) — requires farmingRowId (Area auto)\n" +
+                      "4) Crab (cua) — requires boxId + crabLotId + cropBatchId (Row/Area auto from box)\n\n" +
+                      "Each operation is prefixed with [READ]/[CREATE]/[UPDATE]/[DELETE]/[AUTH]/[ACTION]."
     });
 
-    // JWT Bearer in Swagger UI
+    var xml = Path.Combine(AppContext.BaseDirectory, "CrabSenseBE.Api.xml");
+    if (File.Exists(xml))
+        c.IncludeXmlComments(xml, includeControllerXmlComments: true);
+
+    c.DocumentFilter<CrabSenseBE.Api.SwaggerTagOrderDocumentFilter>();
+    c.SchemaFilter<CrabSenseBE.Api.FarmCreateSchemaFilter>();
+
+    // JWT: Http scheme → Swagger auto-adds "Bearer " (paste accessToken only)
     c.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme
     {
+        Description = "Paste accessToken from /api/auth/login (do not type the word Bearer).",
         Name = "Authorization",
-        Type = SecuritySchemeType.ApiKey,
-        Scheme = "Bearer",
-        BearerFormat = "JWT",
         In = ParameterLocation.Header,
-        Description = "Nhập token theo format: Bearer {your_token}"
+        Type = SecuritySchemeType.Http,
+        Scheme = "bearer",
+        BearerFormat = "JWT"
     });
     c.AddSecurityRequirement(new OpenApiSecurityRequirement
     {
@@ -126,10 +140,13 @@ if (app.Environment.IsDevelopment())
 
 app.UseSerilogRequestLogging();
 app.UseCors("AllowFrontend");
-app.UseHttpsRedirection();
+if (!app.Environment.IsDevelopment())
+    app.UseHttpsRedirection();
 app.UseAuthentication();
 app.UseAuthorization();
 app.MapControllers();
 app.MapHealthChecks("/health");
+
+await DevDbBootstrap.InitializeAsync(app);
 
 app.Run();

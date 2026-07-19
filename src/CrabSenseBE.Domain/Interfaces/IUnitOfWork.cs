@@ -13,6 +13,9 @@ public interface IUnitOfWork : IDisposable
     IRepository<CrabLot> CrabLots { get; }
     IRepository<CropBatch> CropBatches { get; }
     IRepository<OperationLog> OperationLogs { get; }
+    IRepository<CrabBoxAllocation> CrabBoxAllocations { get; }
+    IRepository<MoltingRecord> MoltingRecords { get; }
+    IRepository<BoxStatusHistory> BoxStatusHistories { get; }
     IRepository<WaterSystem> WaterSystems { get; }
     IRepository<Sensor> Sensors { get; }
     IRepository<Device> Devices { get; }
@@ -21,6 +24,9 @@ public interface IUnitOfWork : IDisposable
     IRepository<AlertThreshold> AlertThresholds { get; }
     IRepository<Alert> Alerts { get; }
     IRepository<Notification> Notifications { get; }
+    IRepository<NotificationChannel> NotificationChannels { get; }
+    IRepository<NotificationDelivery> NotificationDeliveries { get; }
+    IRepository<MediaAsset> MediaAssets { get; }
     IRepository<HarvestVoucher> HarvestVouchers { get; }
     IRepository<HarvestLine> HarvestLines { get; }
     IRepository<FrozenLot> FrozenLots { get; }

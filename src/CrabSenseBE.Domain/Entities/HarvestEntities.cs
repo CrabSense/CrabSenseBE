@@ -51,17 +51,30 @@ public class FrozenLot : BaseEntity
     public HarvestVoucher? HarvestVoucher { get; set; }
 }
 
-/// <summary>Mã QR truy xuất nguồn gốc — MOD-TRACE</summary>
+/// <summary>
+/// Mã QR — dùng cho box tại trại (NV quét điện thoại) và truy xuất lô đông/harvest.
+/// DB: qr_code (entity_type + entity_id).
+/// </summary>
 public class QrCode : BaseEntity
 {
+    /// <summary>Giá trị in trên tem / encode trong QR (vd: BOX-A01-7F3A).</summary>
     public string Code { get; set; } = string.Empty;
+
+    /// <summary>box | frozen_lot | harvest_voucher</summary>
+    public string EntityType { get; set; } = "box";
+
+    public Guid? BoxId { get; set; }
     public Guid? FrozenLotId { get; set; }
     public Guid? HarvestVoucherId { get; set; }
-    public string? Payload { get; set; } // JSON blob
+
+    /// <summary>JSON phụ (URL deep-link App, meta…).</summary>
+    public string? Payload { get; set; }
+
     public DateTime? ExpiresAt { get; set; }
     public int ScanCount { get; set; } = 0;
+    public bool IsActive { get; set; } = true;
 
-    // Navigation
+    public Box? Box { get; set; }
     public FrozenLot? FrozenLot { get; set; }
     public ICollection<TraceabilityLink> TraceabilityLinks { get; set; } = new List<TraceabilityLink>();
 }

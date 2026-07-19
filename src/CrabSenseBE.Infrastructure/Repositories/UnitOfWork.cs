@@ -39,6 +39,18 @@ public class UnitOfWork : IUnitOfWork
     private IRepository<OperationLog>? _operationLogs;
     public IRepository<OperationLog> OperationLogs => _operationLogs ??= new GenericRepository<OperationLog>(_context);
 
+    private IRepository<CrabBoxAllocation>? _crabBoxAllocations;
+    public IRepository<CrabBoxAllocation> CrabBoxAllocations =>
+        _crabBoxAllocations ??= new GenericRepository<CrabBoxAllocation>(_context);
+
+    private IRepository<MoltingRecord>? _moltingRecords;
+    public IRepository<MoltingRecord> MoltingRecords =>
+        _moltingRecords ??= new GenericRepository<MoltingRecord>(_context);
+
+    private IRepository<BoxStatusHistory>? _boxStatusHistories;
+    public IRepository<BoxStatusHistory> BoxStatusHistories =>
+        _boxStatusHistories ??= new GenericRepository<BoxStatusHistory>(_context);
+
     // IoT
     private IRepository<WaterSystem>? _waterSystems;
     public IRepository<WaterSystem> WaterSystems => _waterSystems ??= new GenericRepository<WaterSystem>(_context);
@@ -64,6 +76,18 @@ public class UnitOfWork : IUnitOfWork
 
     private IRepository<Notification>? _notifications;
     public IRepository<Notification> Notifications => _notifications ??= new GenericRepository<Notification>(_context);
+
+    private IRepository<NotificationChannel>? _notificationChannels;
+    public IRepository<NotificationChannel> NotificationChannels =>
+        _notificationChannels ??= new GenericRepository<NotificationChannel>(_context);
+
+    private IRepository<NotificationDelivery>? _notificationDeliveries;
+    public IRepository<NotificationDelivery> NotificationDeliveries =>
+        _notificationDeliveries ??= new GenericRepository<NotificationDelivery>(_context);
+
+    private IRepository<MediaAsset>? _mediaAssets;
+    public IRepository<MediaAsset> MediaAssets =>
+        _mediaAssets ??= new GenericRepository<MediaAsset>(_context);
 
     // Harvest / Frozen / QR
     private IRepository<HarvestVoucher>? _harvestVouchers;

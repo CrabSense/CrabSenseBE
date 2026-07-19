@@ -38,11 +38,43 @@ public class Notification : BaseEntity
     public Guid? AlertId { get; set; }
     public string Title { get; set; } = string.Empty;
     public string Body { get; set; } = string.Empty;
-    public string Channel { get; set; } = "in-app"; // in-app, email, push
+
+    /// <summary>Kênh: in-app | push | telegram | zalo | email</summary>
+    public string Channel { get; set; } = "in-app";
     public bool IsRead { get; set; } = false;
     public DateTime? ReadAt { get; set; }
 
-    // Navigation
     public AppUser? User { get; set; }
     public Alert? Alert { get; set; }
+}
+
+/// <summary>
+/// Cấu hình kênh gửi thông báo (Telegram bot, Zalo OA, …).
+/// Tương ứng bảng DB: notification_channel.
+/// </summary>
+public class NotificationChannel : BaseEntity
+{
+    /// <summary>Mã kênh: in_app, telegram, zalo_oa, email, push</summary>
+    public string ChannelCode { get; set; } = string.Empty;
+    public string DisplayName { get; set; } = string.Empty;
+    public bool IsEnabled { get; set; } = false;
+
+    /// <summary>JSON cấu hình (bot_token, chat_id, oa_id, …).</summary>
+    public string? ConfigJson { get; set; }
+}
+
+/// <summary>
+/// Log từng lần gửi thông báo (pending/sent/failed).
+/// Tương ứng bảng DB: notification_delivery.
+/// </summary>
+public class NotificationDelivery : BaseEntity
+{
+    public Guid NotificationId { get; set; }
+    public string ChannelCode { get; set; } = string.Empty;
+    public string? Recipient { get; set; }
+    public string Status { get; set; } = "pending"; // pending | sent | failed
+    public DateTime? SentAt { get; set; }
+    public string? ErrorMessage { get; set; }
+
+    public Notification? Notification { get; set; }
 }

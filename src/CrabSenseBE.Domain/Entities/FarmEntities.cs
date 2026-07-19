@@ -2,14 +2,17 @@ using CrabSenseBE.Domain.Common;
 
 namespace CrabSenseBE.Domain.Entities;
 
-/// <summary>Khu vực nuôi (Area) — MOD-FARM</summary>
+/// <summary>Khu vực nuôi (Area) — MOD-FARM. Thuộc chủ trại (Owner).</summary>
 public class FarmingArea : BaseEntity
 {
+    /// <summary>Chủ sở hữu khu — gắn từ JWT lúc tạo.</summary>
+    public Guid OwnerId { get; set; }
     public string Name { get; set; } = string.Empty;
     public string? Description { get; set; }
     public bool IsActive { get; set; } = true;
 
     // Navigation
+    public AppUser? Owner { get; set; }
     public ICollection<FarmingRow> Rows { get; set; } = new List<FarmingRow>();
     public ICollection<WaterSystem> WaterSystems { get; set; } = new List<WaterSystem>();
 }
@@ -40,11 +43,12 @@ public class Box : BaseEntity
     public ICollection<Crab> Crabs { get; set; } = new List<Crab>();
 }
 
-/// <summary>Cá thể cua — MOD-FARM</summary>
+/// <summary>Cá thể cua — MOD-FARM. Trong hộp + thuộc lô + vụ nuôi.</summary>
 public class Crab : BaseEntity
 {
     public Guid BoxId { get; set; }
-    public Guid? CrabLotId { get; set; }
+    public Guid CrabLotId { get; set; }
+    public Guid CropBatchId { get; set; }
     public string? Tag { get; set; }
     public decimal? WeightGram { get; set; }
     public string? MoltingStage { get; set; }
@@ -54,6 +58,7 @@ public class Crab : BaseEntity
     // Navigation
     public Box? Box { get; set; }
     public CrabLot? CrabLot { get; set; }
+    public CropBatch? CropBatch { get; set; }
 }
 
 /// <summary>Lô cua (Lot) — nhóm cua nhập vào</summary>
@@ -78,6 +83,8 @@ public class CropBatch : BaseEntity
     public DateTime? EndDate { get; set; }
     public string? Status { get; set; }
     public string? Notes { get; set; }
+
+    public ICollection<Crab> Crabs { get; set; } = new List<Crab>();
 }
 
 /// <summary>Nhật ký vận hành — MOD-FARM</summary>
