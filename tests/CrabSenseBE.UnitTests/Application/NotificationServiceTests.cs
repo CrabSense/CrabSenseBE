@@ -3,6 +3,7 @@ using CrabSenseBE.Application.Services;
 using CrabSenseBE.Domain.Entities;
 using CrabSenseBE.Domain.Interfaces;
 using FluentAssertions;
+using Microsoft.Extensions.Logging;
 using Moq;
 
 namespace CrabSenseBE.UnitTests.Application;
@@ -11,7 +12,20 @@ namespace CrabSenseBE.UnitTests.Application;
 public class NotificationServiceTests
 {
     private readonly Mock<IUnitOfWork> _uow = new();
-    private NotificationService Create() => new(_uow.Object);
+    private readonly Mock<IHttpClientFactory> _httpClientFactory;
+    private readonly Mock<ILogger<NotificationService>> _logger;
+
+    public NotificationServiceTests()
+    {
+        _httpClientFactory = new Mock<IHttpClientFactory>();
+        _logger = new Mock<ILogger<NotificationService>>();
+    }
+
+    private NotificationService Create() =>
+        new(
+            _uow.Object,
+            _httpClientFactory.Object,
+            _logger.Object);
 
     [Fact]
     public async Task GetChannels_SeedsDefaultsIncludingZalo()

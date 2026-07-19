@@ -81,8 +81,14 @@ public class JwtService : IJwtService
             };
 
             var principal = handler.ValidateToken(token, validationParams, out _);
-            var sub = principal.FindFirstValue(JwtRegisteredClaimNames.Sub);
-            return sub is not null ? Guid.Parse(sub) : null;
+
+            var rawUserId =
+                principal.FindFirstValue(JwtRegisteredClaimNames.Sub)
+                ?? principal.FindFirstValue(ClaimTypes.NameIdentifier);
+
+            return Guid.TryParse(rawUserId, out var userId)
+                ? userId
+                : null;
         }
         catch
         {

@@ -6,6 +6,8 @@ using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
 using Serilog;
 using System.Text;
+using CrabSenseBE.Api.Services;
+using CrabSenseBE.Application.Interfaces;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.Configuration.AddJsonFile("appsettings.Local.json", optional: true, reloadOnChange: true);
@@ -23,6 +25,8 @@ builder.Host.UseSerilog();
 // ─── Application + Infrastructure DI ───────────────────────────────────────
 builder.Services.AddApplication();
 builder.Services.AddInfrastructure(builder.Configuration);
+builder.Services.AddHttpContextAccessor();
+builder.Services.AddScoped<ICurrentUserService, CurrentUserService>();
 
 // ─── JWT Authentication ─────────────────────────────────────────────────────
 var jwtSecret = builder.Configuration["Jwt:Secret"]
