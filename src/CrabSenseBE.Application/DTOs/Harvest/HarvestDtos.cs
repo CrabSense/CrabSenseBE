@@ -89,58 +89,6 @@ public record HarvestPeriodItemDto(
     decimal SoftshellRate
 );
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Frozen Inventory
-// ─────────────────────────────────────────────────────────────────────────────
-
-public record FrozenLotDto(
-    Guid Id,
-    string LotCode,
-    Guid? HarvestVoucherId,
-    DateTime FrozenDate,
-    DateTime ExpiryDate,
-    decimal WeightKg,
-    string? Grade,
-    int Quantity,
-    string Status,
-    string? StorageLocation,
-    int StorageDays,
-    int RemainingShelfLifeDays,
-    bool IsNearExpiry,
-    bool IsExpired,
-    DateTime CreatedAt
-);
-
-public record CreateFrozenLotRequest(
-    Guid? HarvestVoucherId,
-    DateTime FrozenDate,
-    DateTime ExpiryDate,
-    decimal WeightKg,
-    string? Grade,
-    int Quantity,
-    string? StorageLocation
-);
-
-public record UpdateFrozenLotRequest(
-    DateTime? ExpiryDate,
-    string? Grade,
-    string? StorageLocation
-);
-
-public record UpdateFrozenLotStatusRequest(
-    string Status
-);
-
-public record FrozenInventorySummaryDto(
-    int TotalLots,
-    int AvailableLots,
-    int ReservedLots,
-    int ShippedLots,
-    int NearExpiryLots,
-    int ExpiredLots,
-    int TotalQuantity,
-    decimal TotalWeightKg
-);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // QR / Traceability
