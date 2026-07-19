@@ -21,6 +21,11 @@ publish/
 .env
 appsettings.Production.json
 appsettings.Local.json
+secrets/
+**/google-drive-sa.json
+
+# Local media fallback
+media-storage/
 
 # Logs
 logs/

@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <title>CrabSense Local UI</title>
+  <style>
+    body { font-family: Consolas, monospace; margin: 12px; }
+    table { border-collapse: collapse; width: 100%; margin-top: 8px; }
+    th, td { border: 1px solid #000; padding: 4px 6px; font-size: 12px; vertical-align: top; }
+    th { background: #eee; text-align: left; }
+    input, select, button, textarea { margin: 2px; font: inherit; }
+    .row { margin: 6px 0; }
+    .msg { white-space: pre-wrap; border: 1px solid #999; padding: 6px; min-height: 1.2em; margin: 8px 0; }
+    .tabs button { margin-right: 4px; }
+    .tabs button.active { font-weight: bold; text-decoration: underline; }
+    fieldset { margin: 8px 0; }
+    .id { font-size: 10px; word-break: break-all; max-width: 180px; }
+    #app { display: none; }
+  </style>
+</head>
+<body>
+  <h2>CrabSense Local UI (máy local)</h2>
+
+  <fieldset id="loginBox">
+    <legend>Login</legend>
+    <label>API <input id="apiBase" size="36" value="http://localhost:5080" /></label>
+    <label>User <input id="username" value="owner" /></label>
+    <label>Pass <input id="password" type="password" value="Owner@123" /></label>
+    <button type="button" id="btnLogin">Login</button>
+    <span id="loginInfo"></span>
+  </fieldset>
+
+  <div id="app">
+    <div class="row">
+      <button type="button" id="btnLogout">Logout</button>
+      <button type="button" id="btnMe">GET /me</button>
+      <span id="userLine"></span>
+    </div>
+    <div class="tabs" id="tabs"></div>
+    <div id="panel"></div>
+  </div>
+
+  <div class="msg" id="msg"></div>
+  <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

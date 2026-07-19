@@ -18,6 +18,9 @@ public class AppDbContext : DbContext
     public DbSet<CrabLot> CrabLots => Set<CrabLot>();
     public DbSet<CropBatch> CropBatches => Set<CropBatch>();
     public DbSet<OperationLog> OperationLogs => Set<OperationLog>();
+    public DbSet<CrabBoxAllocation> CrabBoxAllocations => Set<CrabBoxAllocation>();
+    public DbSet<MoltingRecord> MoltingRecords => Set<MoltingRecord>();
+    public DbSet<BoxStatusHistory> BoxStatusHistories => Set<BoxStatusHistory>();
 
     // IoT
     public DbSet<WaterSystem> WaterSystems => Set<WaterSystem>();
@@ -30,6 +33,9 @@ public class AppDbContext : DbContext
     public DbSet<AlertThreshold> AlertThresholds => Set<AlertThreshold>();
     public DbSet<Alert> Alerts => Set<Alert>();
     public DbSet<Notification> Notifications => Set<Notification>();
+    public DbSet<NotificationChannel> NotificationChannels => Set<NotificationChannel>();
+    public DbSet<NotificationDelivery> NotificationDeliveries => Set<NotificationDelivery>();
+    public DbSet<MediaAsset> MediaAssets => Set<MediaAsset>();
 
     // Harvest / Frozen / QR
     public DbSet<HarvestVoucher> HarvestVouchers => Set<HarvestVoucher>();
@@ -58,12 +64,11 @@ public class AppDbContext : DbContext
     {
         base.OnModelCreating(modelBuilder);
 
+        // Schema riêng — không đụng bảng Cap_Ras snake_case trong public
+        modelBuilder.HasDefaultSchema("be");
+
         // Apply all IEntityTypeConfiguration from this assembly
         modelBuilder.ApplyConfigurationsFromAssembly(typeof(AppDbContext).Assembly);
-
-        // Default schema
-        modelBuilder.HasDefaultSchema("public");
-
         // Enum conversions stored as string
         modelBuilder.Entity<AppUser>()
             .Property(u => u.Role)

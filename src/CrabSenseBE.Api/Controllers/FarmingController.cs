@@ -1,97 +1,253 @@
 using CrabSenseBE.Application.Common;
 using CrabSenseBE.Application.DTOs.Farm;
 using CrabSenseBE.Application.Interfaces;
+using CrabSenseBE.Domain.Enums;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using System.IdentityModel.Tokens.Jwt;
+using System.Security.Claims;
 
 namespace CrabSenseBE.Api.Controllers;
 
+/// <summary>CRUD Farming Areas — Owner (chủ) comes from JWT on create</summary>
 [ApiController]
 [Route("api/farming-areas")]
 [Authorize]
+[Tags("01. CRUD — Farming Areas")]
 [Produces("application/json")]
 public class FarmingAreasController : ControllerBase
 {
     private readonly IFarmingService _service;
     public FarmingAreasController(IFarmingService service) => _service = service;
 
+    /// <summary>[READ] List / filter areas — no query = GET ALL</summary>
     [HttpGet]
-    public async Task<IActionResult> GetAll(CancellationToken ct)
-        => Ok(await _service.GetAreasAsync(ct));
+    public async Task<IActionResult> GetAll(
+        [FromQuery] string? search = null,
+        [FromQuery] bool? isActive = null,
+        [FromQuery] int page = 1,
+        [FromQuery] int? pageSize = null,
+        CancellationToken ct = default)
+        => Ok(await _service.GetAreasAsync(new FarmingAreaFilter(search, isActive, page, pageSize), ct));
 
+    /// <summary>[READ] Get area by id</summary>
     [HttpGet("{id:guid}")]
     public async Task<IActionResult> GetById(Guid id, CancellationToken ct)
         => Ok(await _service.GetAreaByIdAsync(id, ct));
 
+    /// <summary>[CREATE] Create khu — body: name; OwnerId auto from JWT user</summary>
     [HttpPost]
-    [Authorize(Roles = "Admin,Operator")]
+    [Authorize(Roles = AppRoles.FarmWrite)]
     public async Task<IActionResult> Create([FromBody] CreateFarmingAreaRequest req, CancellationToken ct)
-        => Ok(await _service.CreateAreaAsync(req, ct));
+        => Ok(await _service.CreateAreaAsync(req, RequireUserId(), ct));
 
+    /// <summary>[UPDATE] Update farming area</summary>
     [HttpPut("{id:guid}")]
-    [Authorize(Roles = "Admin,Operator")]
+    [Authorize(Roles = AppRoles.FarmWrite)]
     public async Task<IActionResult> Update(Guid id, [FromBody] UpdateFarmingAreaRequest req, CancellationToken ct)
         => Ok(await _service.UpdateAreaAsync(id, req, ct));
 
+    /// <summary>[DELETE] Delete area (only if no rows remain)</summary>
     [HttpDelete("{id:guid}")]
-    [Authorize(Roles = "Admin")]
+    [Authorize(Roles = AppRoles.FarmManage)]
     public async Task<IActionResult> Delete(Guid id, CancellationToken ct)
         => Ok(await _service.DeleteAreaAsync(id, ct));
 
-    // ─── Nested: Rows
+    /// <summary>[READ] List rows in area — no pageSize = GET ALL</summary>
     [HttpGet("{areaId:guid}/rows")]
-    public async Task<IActionResult> GetRows(Guid areaId, CancellationToken ct)
-        => Ok(await _service.GetRowsByAreaAsync(areaId, ct));
+    public async Task<IActionResult> GetRows(
+        Guid areaId,
+        [FromQuery] string? search = null,
+        [FromQuery] bool? isActive = null,
+        [FromQuery] int page = 1,
+        [FromQuery] int? pageSize = null,
+        CancellationToken ct = default)
+        => Ok(await _service.GetRowsAsync(new FarmingRowFilter(areaId, search, isActive, page, pageSize), ct));
 
+    /// <summary>[CREATE] Create row in area (path areaId = FarmingAreaId)</summary>
     [HttpPost("{areaId:guid}/rows")]
-    [Authorize(Roles = "Admin,Operator")]
+    [Authorize(Roles = AppRoles.FarmWrite)]
     public async Task<IActionResult> CreateRow(Guid areaId, [FromBody] CreateFarmingRowRequest req, CancellationToken ct)
         => Ok(await _service.CreateRowAsync(req with { FarmingAreaId = areaId }, ct));
+
+    private Guid RequireUserId()
+    {
+        var raw = User.FindFirstValue(JwtRegisteredClaimNames.Sub)
+            ?? User.FindFirstValue(ClaimTypes.NameIdentifier)
+            ?? User.FindFirstValue("sub");
+        if (raw is null || !Guid.TryParse(raw, out var id) || id == Guid.Empty)
+            throw AppException.Unauthorized("Missing user id claim in JWT.");
+        return id;
+    }
 }
 
+/// <summary>CRUD Farming Rows</summary>
 [ApiController]
-[Route("api/farming-rows/{rowId:guid}/boxes")]
+[Route("api/farming-rows")]
 [Authorize]
+[Tags("02. CRUD — Farming Rows")]
+[Produces("application/json")]
+public class FarmingRowsController : ControllerBase
+{
+    private readonly IFarmingService _service;
+    public FarmingRowsController(IFarmingService service) => _service = service;
+
+    /// <summary>[READ] List / filter rows — no query = GET ALL</summary>
+    [HttpGet]
+    public async Task<IActionResult> GetAll(
+        [FromQuery] Guid? farmingAreaId = null,
+        [FromQuery] string? search = null,
+        [FromQuery] bool? isActive = null,
+        [FromQuery] int page = 1,
+        [FromQuery] int? pageSize = null,
+        CancellationToken ct = default)
+        => Ok(await _service.GetRowsAsync(new FarmingRowFilter(farmingAreaId, search, isActive, page, pageSize), ct));
+
+    /// <summary>[READ] Get row by id</summary>
+    [HttpGet("{id:guid}")]
+    public async Task<IActionResult> GetById(Guid id, CancellationToken ct)
+        => Ok(await _service.GetRowByIdAsync(id, ct));
+
+    /// <summary>[CREATE] Create row — body: farmingAreaId (khu) + name</summary>
+    [HttpPost]
+    [Authorize(Roles = AppRoles.FarmWrite)]
+    public async Task<IActionResult> Create([FromBody] CreateFarmingRowRequest req, CancellationToken ct)
+        => Ok(await _service.CreateRowAsync(req, ct));
+
+    /// <summary>[UPDATE] Update farming row</summary>
+    [HttpPut("{id:guid}")]
+    [Authorize(Roles = AppRoles.FarmWrite)]
+    public async Task<IActionResult> Update(Guid id, [FromBody] UpdateFarmingRowRequest req, CancellationToken ct)
+        => Ok(await _service.UpdateRowAsync(id, req, ct));
+
+    /// <summary>[DELETE] Delete row (only if no boxes remain)</summary>
+    [HttpDelete("{id:guid}")]
+    [Authorize(Roles = AppRoles.FarmManage)]
+    public async Task<IActionResult> Delete(Guid id, CancellationToken ct)
+        => Ok(await _service.DeleteRowAsync(id, ct));
+
+    /// <summary>[READ] List boxes in row — no pageSize = GET ALL</summary>
+    [HttpGet("{rowId:guid}/boxes")]
+    public async Task<IActionResult> GetBoxes(
+        Guid rowId,
+        [FromQuery] string? code = null,
+        [FromQuery] string? status = null,
+        [FromQuery] bool? isOccupied = null,
+        [FromQuery] int page = 1,
+        [FromQuery] int? pageSize = null,
+        CancellationToken ct = default)
+        => Ok(await _service.GetBoxesAsync(new BoxFilter(null, rowId, code, status, isOccupied, page, pageSize), ct));
+
+    /// <summary>[CREATE] Create box in row — path rowId only; Area auto-filled from row</summary>
+    [HttpPost("{rowId:guid}/boxes")]
+    [Authorize(Roles = AppRoles.FarmWrite)]
+    public async Task<IActionResult> CreateBox(Guid rowId, [FromBody] CreateBoxRequest? req, CancellationToken ct)
+        => Ok(await _service.CreateBoxAsync(
+            (req ?? new CreateBoxRequest(rowId)) with { FarmingRowId = rowId }, ct));
+}
+
+/// <summary>CRUD Crab Farm Boxes</summary>
+[ApiController]
+[Route("api/boxes")]
+[Authorize]
+[Tags("03. CRUD — Crab Farm Boxes")]
 [Produces("application/json")]
 public class BoxesController : ControllerBase
 {
     private readonly IFarmingService _service;
     public BoxesController(IFarmingService service) => _service = service;
 
+    /// <summary>[READ] List / filter boxes — no query = GET ALL</summary>
     [HttpGet]
-    public async Task<IActionResult> GetByRow(Guid rowId, CancellationToken ct)
-        => Ok(await _service.GetBoxesByRowAsync(rowId, ct));
+    public async Task<IActionResult> GetAll(
+        [FromQuery] Guid? farmingAreaId = null,
+        [FromQuery] Guid? farmingRowId = null,
+        [FromQuery] string? code = null,
+        [FromQuery] string? status = null,
+        [FromQuery] bool? isOccupied = null,
+        [FromQuery] int page = 1,
+        [FromQuery] int? pageSize = null,
+        CancellationToken ct = default)
+        => Ok(await _service.GetBoxesAsync(
+            new BoxFilter(farmingAreaId, farmingRowId, code, status, isOccupied, page, pageSize), ct));
 
+    /// <summary>[READ] Empty boxes currently available (+ suggested next). Filter by area/row</summary>
+    [HttpGet("available")]
+    public async Task<IActionResult> GetAvailable(
+        [FromQuery] Guid? farmingAreaId = null,
+        [FromQuery] Guid? farmingRowId = null,
+        CancellationToken ct = default)
+        => Ok(await _service.GetAvailabilityAsync(farmingAreaId, farmingRowId, ct));
+
+    /// <summary>[READ] Get box by id</summary>
+    [HttpGet("{id:guid}")]
+    public async Task<IActionResult> GetById(Guid id, CancellationToken ct)
+        => Ok(await _service.GetBoxByIdAsync(id, ct));
+
+    /// <summary>[CREATE] Create box — body: farmingRowId (dãy); khu auto from row; code optional</summary>
     [HttpPost]
-    [Authorize(Roles = "Admin,Operator")]
-    public async Task<IActionResult> Create(Guid rowId, [FromBody] CreateBoxRequest req, CancellationToken ct)
-        => Ok(await _service.CreateBoxAsync(req with { FarmingRowId = rowId }, ct));
+    [Authorize(Roles = AppRoles.FarmWrite)]
+    public async Task<IActionResult> Create([FromBody] CreateBoxRequest req, CancellationToken ct)
+        => Ok(await _service.CreateBoxAsync(req, ct));
+
+    /// <summary>[UPDATE] Update code / status / occupied</summary>
+    [HttpPut("{id:guid}")]
+    [Authorize(Roles = AppRoles.FarmWrite)]
+    public async Task<IActionResult> Update(Guid id, [FromBody] UpdateBoxRequest req, CancellationToken ct)
+        => Ok(await _service.UpdateBoxAsync(id, req, ct));
+
+    /// <summary>[UPDATE] Update box farming status only</summary>
+    [HttpPatch("{boxId:guid}/status")]
+    [Authorize(Roles = AppRoles.FarmWrite)]
+    public async Task<IActionResult> UpdateStatus(Guid boxId, [FromBody] UpdateBoxStatusRequest req, CancellationToken ct)
+        => Ok(await _service.UpdateBoxStatusAsync(boxId, req, ct));
+
+    /// <summary>[DELETE] Delete box (no live crabs)</summary>
+    [HttpDelete("{id:guid}")]
+    [Authorize(Roles = AppRoles.FarmManage)]
+    public async Task<IActionResult> Delete(Guid id, CancellationToken ct)
+        => Ok(await _service.DeleteBoxAsync(id, ct));
 }
 
+/// <summary>CRUD Crabs</summary>
 [ApiController]
 [Route("api/crabs")]
 [Authorize]
+[Tags("04. CRUD — Crabs")]
 [Produces("application/json")]
 public class CrabsController : ControllerBase
 {
     private readonly IFarmingService _service;
     public CrabsController(IFarmingService service) => _service = service;
 
+    /// <summary>[READ] List crabs — pageSize=0 or omit = GET ALL</summary>
     [HttpGet]
-    public async Task<IActionResult> GetAll([FromQuery] int page = 1, [FromQuery] int pageSize = 20, CancellationToken ct = default)
+    public async Task<IActionResult> GetAll(
+        [FromQuery] int page = 1,
+        [FromQuery] int pageSize = 0,
+        CancellationToken ct = default)
         => Ok(await _service.GetCrabsAsync(page, pageSize, ct));
 
+    /// <summary>[READ] Get crab by id</summary>
     [HttpGet("{id:guid}")]
     public async Task<IActionResult> GetById(Guid id, CancellationToken ct)
         => Ok(await _service.GetCrabByIdAsync(id, ct));
 
+    /// <summary>[CREATE] Place crab — required: crabLotId + cropBatchId + boxId (Row/Area auto from box)</summary>
     [HttpPost]
-    [Authorize(Roles = "Admin,Operator")]
+    [Authorize(Roles = AppRoles.FarmWrite)]
     public async Task<IActionResult> Create([FromBody] CreateCrabRequest req, CancellationToken ct)
         => Ok(await _service.CreateCrabAsync(req, ct));
 
+    /// <summary>[UPDATE] Update crab details</summary>
     [HttpPut("{id:guid}")]
-    [Authorize(Roles = "Admin,Operator")]
+    [Authorize(Roles = AppRoles.FarmWrite)]
     public async Task<IActionResult> Update(Guid id, [FromBody] UpdateCrabRequest req, CancellationToken ct)
         => Ok(await _service.UpdateCrabAsync(id, req, ct));
+
+    /// <summary>[DELETE] Soft-delete crab (IsAlive=false, free box, keep history)</summary>
+    [HttpDelete("{id:guid}")]
+    [Authorize(Roles = AppRoles.FarmWrite)]
+    public async Task<IActionResult> Delete(Guid id, CancellationToken ct)
+        => Ok(await _service.DeleteCrabAsync(id, ct));
 }

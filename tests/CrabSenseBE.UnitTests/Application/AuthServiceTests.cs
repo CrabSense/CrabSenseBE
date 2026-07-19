@@ -28,7 +28,7 @@ public class AuthServiceTests
             Email = "test@example.com",
             PasswordHash = passwordHash,
             FullName = "Test User",
-            Role = UserRole.Operator,
+            Role = UserRole.Staff,
             IsActive = true
         };
 
