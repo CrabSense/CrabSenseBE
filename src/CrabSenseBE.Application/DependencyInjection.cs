@@ -20,6 +20,8 @@ public static class DependencyInjection
         services.AddScoped<IMediaService, MediaService>();
 
         services.AddScoped<IHarvestReportService, HarvestReportService>();
+        services.AddScoped<IInventoryReportService, InventoryReportService>();
+
 
 
         services.AddHttpClient("telegram");
