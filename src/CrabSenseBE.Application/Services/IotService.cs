@@ -3,7 +3,6 @@ using CrabSenseBE.Application.DTOs.IoT;
 using CrabSenseBE.Application.Interfaces;
 using CrabSenseBE.Domain.Entities;
 using CrabSenseBE.Domain.Interfaces;
-using CrabSenseBE.Infrastructure.Services;
 
 namespace CrabSenseBE.Application.Services;
 

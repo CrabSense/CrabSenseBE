@@ -5,6 +5,7 @@ using CrabSenseBE.Infrastructure.Services;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using CrabSenseBE.Application.Interfaces;
 
 namespace CrabSenseBE.Infrastructure;
 
@@ -27,7 +28,7 @@ public static class DependencyInjection
         services.AddScoped<IJwtService, JwtService>();
 
         // Storage (MinIO)
-        services.AddSingleton<IStorageService, MinioStorageService>();
+        services.AddScoped<IStorageService, MinioStorageService>();
 
         return services;
     }

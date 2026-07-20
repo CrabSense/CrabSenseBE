@@ -74,14 +74,6 @@ public class NotificationsController : ControllerBase
     [HttpGet] public IActionResult GetAll() => Ok(new { success = true, data = Array.Empty<object>() });
 }
 
-[ApiController] [Route("api/reports")] [Produces("application/json")]
-public class ReportsController : ControllerBase
-{
-    [HttpGet("harvest")] public IActionResult Harvest() => Ok(new { success = true, data = new object() });
-    [HttpGet("inventory")] public IActionResult Inventory() => Ok(new { success = true, data = new object() });
-    [HttpGet("sales")] public IActionResult Sales() => Ok(new { success = true, data = new object() });
-}
-
 [ApiController] [Route("api/dashboard")] [Produces("application/json")]
 public class DashboardController : ControllerBase
 {

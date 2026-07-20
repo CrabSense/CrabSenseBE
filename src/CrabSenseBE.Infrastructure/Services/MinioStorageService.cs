@@ -1,16 +1,10 @@
 using Microsoft.Extensions.Configuration;
 using Minio;
 using Minio.DataModel.Args;
+using CrabSenseBE.Application.Interfaces;
 
 namespace CrabSenseBE.Infrastructure.Services;
 
-public interface IStorageService
-{
-    Task<string> UploadAsync(string bucketName, string objectName, Stream data, string contentType, CancellationToken ct = default);
-    Task<Stream> DownloadAsync(string bucketName, string objectName, CancellationToken ct = default);
-    Task DeleteAsync(string bucketName, string objectName, CancellationToken ct = default);
-    Task EnsureBucketExistsAsync(string bucketName, CancellationToken ct = default);
-}
 
 public class MinioStorageService : IStorageService
 {

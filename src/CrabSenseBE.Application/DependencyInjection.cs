@@ -11,9 +11,13 @@ public static class DependencyInjection
         services.AddScoped<IAuthService, AuthService>();
         services.AddScoped<IFarmingService, FarmingService>();
         services.AddScoped<IIotService, IotService>();
-
+        // API-310 
+        services.AddScoped<IHarvestReportService, HarvestReportService>();
         // AutoMapper
         services.AddAutoMapper(typeof(DependencyInjection).Assembly);
+        
+
+        
 
         return services;
     }
