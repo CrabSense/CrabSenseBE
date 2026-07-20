@@ -91,53 +91,12 @@ public class PaymentsController : ControllerBase
     public IActionResult GetAll() => Ok(new { success = true, data = Array.Empty<object>() });
 }
 
-<<<<<<< HEAD
-[ApiController] [Route("api/alerts")] [Produces("application/json")]
-public class AlertsController : ControllerBase
-{
-    [HttpGet] public IActionResult GetAll() => Ok(new { success = true, data = Array.Empty<object>() });
-}
-
-[ApiController] [Route("api/alert-thresholds")] [Produces("application/json")]
-public class AlertThresholdsController : ControllerBase
-{
-    [HttpGet] public IActionResult GetAll() => Ok(new { success = true, data = Array.Empty<object>() });
-}
-
-[ApiController] [Route("api/notifications")] [Produces("application/json")]
-public class NotificationsController : ControllerBase
-{
-    [HttpGet] public IActionResult GetAll() => Ok(new { success = true, data = Array.Empty<object>() });
-}
-
-[ApiController] [Route("api/dashboard")] [Produces("application/json")]
-=======
-[ApiController]
-[Route("api/reports")]
-[Authorize]
-[Tags("30. Reports (stub)")]
-[Produces("application/json")]
-public class ReportsController : ControllerBase
-{
-    /// <summary>[READ] Harvest report</summary>
-    [HttpGet("harvest")]
-    public IActionResult Harvest() => Ok(new { success = true, data = new object() });
-
-    /// <summary>[READ] Inventory report</summary>
-    [HttpGet("inventory")]
-    public IActionResult Inventory() => Ok(new { success = true, data = new object() });
-
-    /// <summary>[READ] Sales report</summary>
-    [HttpGet("sales")]
-    public IActionResult Sales() => Ok(new { success = true, data = new object() });
-}
 
 [ApiController]
 [Route("api/dashboard")]
 [Authorize]
 [Tags("31. Dashboard (stub)")]
 [Produces("application/json")]
->>>>>>> 2ac811f2a030cae27ef3979cceb2ed5204e97e08
 public class DashboardController : ControllerBase
 {
     /// <summary>[READ] Dashboard overview</summary>

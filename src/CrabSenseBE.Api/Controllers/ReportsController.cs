@@ -6,7 +6,7 @@ namespace CrabSenseBE.Api.Controllers;
 
 [ApiController]
 [Route("api/reports")]
-[Authorize(Roles = "Admin")]
+[Authorize(Roles = "SystemAdmin")]
 public class ReportsController : ControllerBase
 {
     private readonly IHarvestReportService _harvestReportService;

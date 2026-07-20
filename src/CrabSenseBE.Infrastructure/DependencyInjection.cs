@@ -27,13 +27,8 @@ public static class DependencyInjection
         // JWT
         services.AddScoped<IJwtService, JwtService>();
 
-<<<<<<< HEAD
-        // Storage (MinIO)
-        services.AddScoped<IStorageService, MinioStorageService>();
-=======
         // Storage (MinIO) — HDF5 edge
         services.AddSingleton<IStorageService, MinioStorageService>();
->>>>>>> 2ac811f2a030cae27ef3979cceb2ed5204e97e08
 
         // Media (ảnh / video / log) — Google Drive shared folder (hoặc Local fallback)
         var mediaProvider = (config["MediaStorage:Provider"] ?? "Local").Trim();
