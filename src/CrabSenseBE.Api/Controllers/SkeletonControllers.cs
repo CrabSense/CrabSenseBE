@@ -1,61 +1,97 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
 namespace CrabSenseBE.Api.Controllers;
 
-/// <summary>Skeleton controllers — implement service logic progressively</summary>
-
-[ApiController] [Route("api/harvest-vouchers")] [Produces("application/json")]
+[ApiController]
+[Route("api/harvest-vouchers")]
+[Authorize]
+[Tags("20. CRUD — Harvest (stub)")]
+[Produces("application/json")]
 public class HarvestController : ControllerBase
 {
-    // TODO: inject IHarvestService
-    [HttpGet] public IActionResult GetAll() => Ok(new { success = true, message = "TODO", data = Array.Empty<object>() });
-    [HttpPost] public IActionResult Create() => StatusCode(501, new { message = "Not implemented yet" });
+    /// <summary>[READ] List harvest vouchers (TODO)</summary>
+    [HttpGet]
+    public IActionResult GetAll() => Ok(new { success = true, message = "TODO", data = Array.Empty<object>() });
+
+    /// <summary>[CREATE] Create harvest voucher (TODO)</summary>
+    [HttpPost]
+    public IActionResult Create() => StatusCode(501, new { message = "Not implemented yet" });
 }
 
-[ApiController] [Route("api/frozen-lots")] [Produces("application/json")]
+[ApiController]
+[Route("api/frozen-lots")]
+[Authorize]
+[Tags("21. CRUD — Frozen Lots (stub)")]
+[Produces("application/json")]
 public class FrozenLotsController : ControllerBase
 {
-    [HttpGet] public IActionResult GetAll() => Ok(new { success = true, message = "TODO", data = Array.Empty<object>() });
+    /// <summary>[READ] List frozen lots (TODO)</summary>
+    [HttpGet]
+    public IActionResult GetAll() => Ok(new { success = true, message = "TODO", data = Array.Empty<object>() });
 }
 
-[ApiController] [Route("api/qr-codes")] [Produces("application/json")]
-public class QrController : ControllerBase
-{
-    [HttpGet] public IActionResult GetAll() => Ok(new { success = true, data = Array.Empty<object>() });
-    [HttpGet("/api/traceability/{code}")] public IActionResult Lookup(string code)
-        => Ok(new { success = true, message = $"Lookup for code: {code}", data = new object() });
-}
-
-[ApiController] [Route("api/customers")] [Produces("application/json")]
+[ApiController]
+[Route("api/customers")]
+[Authorize]
+[Tags("22. CRUD — Customers (stub)")]
+[Produces("application/json")]
 public class CustomersController : ControllerBase
 {
-    [HttpGet] public IActionResult GetAll() => Ok(new { success = true, data = Array.Empty<object>() });
+    /// <summary>[READ] List customers (TODO)</summary>
+    [HttpGet]
+    public IActionResult GetAll() => Ok(new { success = true, data = Array.Empty<object>() });
 }
 
-[ApiController] [Route("api/price-lists")] [Produces("application/json")]
+[ApiController]
+[Route("api/price-lists")]
+[Authorize]
+[Tags("23. CRUD — Price Lists (stub)")]
+[Produces("application/json")]
 public class PriceListsController : ControllerBase
 {
-    [HttpGet] public IActionResult GetAll() => Ok(new { success = true, data = Array.Empty<object>() });
+    /// <summary>[READ] List price lists (TODO)</summary>
+    [HttpGet]
+    public IActionResult GetAll() => Ok(new { success = true, data = Array.Empty<object>() });
 }
 
-[ApiController] [Route("api/sales-orders")] [Produces("application/json")]
+[ApiController]
+[Route("api/sales-orders")]
+[Authorize]
+[Tags("24. CRUD — Sales Orders (stub)")]
+[Produces("application/json")]
 public class SalesOrdersController : ControllerBase
 {
-    [HttpGet] public IActionResult GetAll() => Ok(new { success = true, data = Array.Empty<object>() });
+    /// <summary>[READ] List sales orders (TODO)</summary>
+    [HttpGet]
+    public IActionResult GetAll() => Ok(new { success = true, data = Array.Empty<object>() });
 }
 
-[ApiController] [Route("api/deliveries")] [Produces("application/json")]
+[ApiController]
+[Route("api/deliveries")]
+[Authorize]
+[Tags("25. CRUD — Deliveries (stub)")]
+[Produces("application/json")]
 public class DeliveriesController : ControllerBase
 {
-    [HttpGet] public IActionResult GetAll() => Ok(new { success = true, data = Array.Empty<object>() });
+    /// <summary>[READ] List deliveries (TODO)</summary>
+    [HttpGet]
+    public IActionResult GetAll() => Ok(new { success = true, data = Array.Empty<object>() });
 }
 
-[ApiController] [Route("api/payments")] [Produces("application/json")]
+[ApiController]
+[Route("api/payments")]
+[Authorize]
+[Tags("26. CRUD — Payments (stub)")]
+[Produces("application/json")]
 public class PaymentsController : ControllerBase
 {
-    [HttpGet] public IActionResult GetAll() => Ok(new { success = true, data = Array.Empty<object>() });
+    /// <summary>[READ] List payments (TODO)</summary>
+    [HttpGet]
+    public IActionResult GetAll() => Ok(new { success = true, data = Array.Empty<object>() });
 }
 
+<<<<<<< HEAD
 [ApiController] [Route("api/alerts")] [Produces("application/json")]
 public class AlertsController : ControllerBase
 {
@@ -75,21 +111,68 @@ public class NotificationsController : ControllerBase
 }
 
 [ApiController] [Route("api/dashboard")] [Produces("application/json")]
+=======
+[ApiController]
+[Route("api/reports")]
+[Authorize]
+[Tags("30. Reports (stub)")]
+[Produces("application/json")]
+public class ReportsController : ControllerBase
+{
+    /// <summary>[READ] Harvest report</summary>
+    [HttpGet("harvest")]
+    public IActionResult Harvest() => Ok(new { success = true, data = new object() });
+
+    /// <summary>[READ] Inventory report</summary>
+    [HttpGet("inventory")]
+    public IActionResult Inventory() => Ok(new { success = true, data = new object() });
+
+    /// <summary>[READ] Sales report</summary>
+    [HttpGet("sales")]
+    public IActionResult Sales() => Ok(new { success = true, data = new object() });
+}
+
+[ApiController]
+[Route("api/dashboard")]
+[Authorize]
+[Tags("31. Dashboard (stub)")]
+[Produces("application/json")]
+>>>>>>> 2ac811f2a030cae27ef3979cceb2ed5204e97e08
 public class DashboardController : ControllerBase
 {
-    [HttpGet("overview")] public IActionResult Overview() => Ok(new { success = true, data = new object() });
+    /// <summary>[READ] Dashboard overview</summary>
+    [HttpGet("overview")]
+    public IActionResult Overview() => Ok(new { success = true, data = new object() });
 }
 
-[ApiController] [Route("api/settings")] [Produces("application/json")]
+[ApiController]
+[Route("api/settings")]
+[Authorize]
+[Tags("32. CRUD — Settings (stub)")]
+[Produces("application/json")]
 public class SettingsController : ControllerBase
 {
-    [HttpGet] public IActionResult GetAll() => Ok(new { success = true, data = Array.Empty<object>() });
+    /// <summary>[READ] List settings (TODO)</summary>
+    [HttpGet]
+    public IActionResult GetAll() => Ok(new { success = true, data = Array.Empty<object>() });
 }
 
-[ApiController] [Route("api/ai")] [Produces("application/json")]
+[ApiController]
+[Route("api/ai")]
+[Authorize]
+[Tags("33. AI (stub)")]
+[Produces("application/json")]
 public class AiController : ControllerBase
 {
-    [HttpGet("detections")] public IActionResult Detections() => Ok(new { success = true, data = Array.Empty<object>() });
-    [HttpPost("feedback")] public IActionResult Feedback() => Ok(new { success = true });
-    [HttpGet("recommendations")] public IActionResult Recommendations() => Ok(new { success = true, data = Array.Empty<object>() });
+    /// <summary>[READ] List AI detections</summary>
+    [HttpGet("detections")]
+    public IActionResult Detections() => Ok(new { success = true, data = Array.Empty<object>() });
+
+    /// <summary>[CREATE] Submit AI feedback</summary>
+    [HttpPost("feedback")]
+    public IActionResult Feedback() => Ok(new { success = true });
+
+    /// <summary>[READ] AI recommendations</summary>
+    [HttpGet("recommendations")]
+    public IActionResult Recommendations() => Ok(new { success = true, data = Array.Empty<object>() });
 }

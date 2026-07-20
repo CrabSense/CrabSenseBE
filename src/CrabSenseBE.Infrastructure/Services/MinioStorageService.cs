@@ -1,3 +1,4 @@
+using CrabSenseBE.Domain.Interfaces;
 using Microsoft.Extensions.Configuration;
 using Minio;
 using Minio.DataModel.Args;
@@ -5,7 +6,11 @@ using CrabSenseBE.Application.Interfaces;
 
 namespace CrabSenseBE.Infrastructure.Services;
 
+<<<<<<< HEAD
 
+=======
+/// <summary>Triển khai IStorageService bằng MinIO (edge HDF5 archive).</summary>
+>>>>>>> 2ac811f2a030cae27ef3979cceb2ed5204e97e08
 public class MinioStorageService : IStorageService
 {
     private readonly IMinioClient _minio;

@@ -29,6 +29,9 @@ public class Sensor : BaseEntity
     public decimal? MaxThreshold { get; set; }
     public bool IsActive { get; set; } = true;
 
+    /// <summary>Lần cuối nhận dữ liệu — dùng phát hiện mất kết nối cảm biến.</summary>
+    public DateTime? LastSeenAt { get; set; }
+
     // Navigation
     public WaterSystem? WaterSystem { get; set; }
     public Device? Device { get; set; }
@@ -39,6 +42,10 @@ public class Sensor : BaseEntity
 public class Device : BaseEntity
 {
     public string DeviceCode { get; set; } = string.Empty;
+
+    /// <summary>esp32 | camera | gateway | other</summary>
+    public string DeviceType { get; set; } = "esp32";
+
     public string? FirmwareVersion { get; set; }
     public decimal? BatteryLevel { get; set; }
     public decimal? RssiDbm { get; set; }

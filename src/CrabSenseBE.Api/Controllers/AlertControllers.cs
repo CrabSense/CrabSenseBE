@@ -1,0 +1,131 @@
+using CrabSenseBE.Application.DTOs.Alert;
+using CrabSenseBE.Application.Interfaces;
+using CrabSenseBE.Domain.Enums;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
+
+namespace CrabSenseBE.Api.Controllers;
+
+[ApiController]
+[Route("api/alerts")]
+[Authorize]
+[Tags("10. Alerts")]
+[Produces("application/json")]
+public class AlertsController : ControllerBase
+{
+    private readonly IAlertService _service;
+    public AlertsController(IAlertService service) => _service = service;
+
+    /// <summary>[READ] List alerts</summary>
+    [HttpGet]
+    public async Task<IActionResult> GetAll([FromQuery] bool? activeOnly = true, CancellationToken ct = default)
+        => Ok(await _service.GetAlertsAsync(activeOnly, ct));
+
+    /// <summary>[UPDATE] Acknowledge alert</summary>
+    [HttpPatch("{id:guid}/acknowledge")]
+    [Authorize(Roles = AppRoles.FarmWrite)]
+    public async Task<IActionResult> Acknowledge(Guid id, [FromBody] AcknowledgeAlertRequest? req, CancellationToken ct = default)
+        => Ok(await _service.AcknowledgeAsync(id, req ?? new AcknowledgeAlertRequest(null), ct));
+
+    /// <summary>[UPDATE] Resolve alert</summary>
+    [HttpPatch("{id:guid}/resolve")]
+    [Authorize(Roles = AppRoles.FarmWrite)]
+    public async Task<IActionResult> Resolve(Guid id, CancellationToken ct)
+        => Ok(await _service.ResolveAsync(id, ct));
+
+    /// <summary>[ACTION] Scan disconnected devices/sensors</summary>
+    [HttpPost("check-disconnects")]
+    [Authorize(Roles = AppRoles.FarmWrite)]
+    public async Task<IActionResult> CheckDisconnects([FromQuery] int timeoutMinutes = 15, CancellationToken ct = default)
+        => Ok(await _service.CheckDisconnectsAsync(timeoutMinutes, ct));
+}
+
+[ApiController]
+[Route("api/alert-thresholds")]
+[Authorize]
+[Tags("10. Alerts")]
+[Produces("application/json")]
+public class AlertThresholdsController : ControllerBase
+{
+    private readonly IAlertService _service;
+    public AlertThresholdsController(IAlertService service) => _service = service;
+
+    /// <summary>[READ] List all thresholds</summary>
+    [HttpGet]
+    public async Task<IActionResult> GetAll(CancellationToken ct)
+        => Ok(await _service.GetThresholdsAsync(ct));
+
+    /// <summary>[CREATE] Create alert threshold</summary>
+    [HttpPost]
+    [Authorize(Roles = AppRoles.FarmWrite)]
+    public async Task<IActionResult> Create([FromBody] CreateAlertThresholdRequest req, CancellationToken ct)
+        => Ok(await _service.CreateThresholdAsync(req, ct));
+
+    /// <summary>[UPDATE] Update alert threshold</summary>
+    [HttpPut("{id:guid}")]
+    [Authorize(Roles = AppRoles.FarmWrite)]
+    public async Task<IActionResult> Update(Guid id, [FromBody] UpdateAlertThresholdRequest req, CancellationToken ct)
+        => Ok(await _service.UpdateThresholdAsync(id, req, ct));
+
+    /// <summary>[DELETE] Delete alert threshold</summary>
+    [HttpDelete("{id:guid}")]
+    [Authorize(Roles = AppRoles.FarmWrite)]
+    public async Task<IActionResult> Delete(Guid id, CancellationToken ct)
+        => Ok(await _service.DeleteThresholdAsync(id, ct));
+}
+
+[ApiController]
+[Route("api/notifications")]
+[Authorize]
+[Tags("11. Notifications")]
+[Produces("application/json")]
+public class NotificationsController : ControllerBase
+{
+    private readonly INotificationService _service;
+    public NotificationsController(INotificationService service) => _service = service;
+
+    /// <summary>[READ] Notifications by user</summary>
+    [HttpGet("user/{userId:guid}")]
+    public async Task<IActionResult> GetByUser(Guid userId, [FromQuery] bool unreadOnly = false, CancellationToken ct = default)
+        => Ok(await _service.GetByUserAsync(userId, unreadOnly, ct));
+
+    /// <summary>[UPDATE] Mark notification as read</summary>
+    [HttpPatch("{id:guid}/read")]
+    public async Task<IActionResult> MarkRead(Guid id, CancellationToken ct)
+        => Ok(await _service.MarkReadAsync(id, ct));
+
+    /// <summary>[READ] Notification channels (Telegram/Zalo/...)</summary>
+    [HttpGet("channels")]
+    public async Task<IActionResult> GetChannels(CancellationToken ct)
+        => Ok(await _service.GetChannelsAsync(ct));
+
+    /// <summary>[READ] Channel by id</summary>
+    [HttpGet("channels/{id:guid}")]
+    public async Task<IActionResult> GetChannel(Guid id, CancellationToken ct)
+        => Ok(await _service.GetChannelAsync(id, ct));
+
+    /// <summary>[CREATE] Add notification channel</summary>
+    [HttpPost("channels")]
+    [Authorize(Roles = AppRoles.FarmWrite)]
+    public async Task<IActionResult> CreateChannel([FromBody] CreateNotificationChannelRequest req, CancellationToken ct)
+        => Ok(await _service.CreateChannelAsync(req, ct));
+
+    /// <summary>[UPDATE] Enable/disable + configure channel (Telegram/Zalo/...)</summary>
+    [HttpPut("channels/{id:guid}")]
+    [Authorize(Roles = AppRoles.FarmWrite)]
+    public async Task<IActionResult> UpdateChannel(Guid id, [FromBody] UpdateNotificationChannelRequest req, CancellationToken ct)
+        => Ok(await _service.UpdateChannelAsync(id, req, ct));
+
+    /// <summary>[DELETE] Remove notification channel</summary>
+    [HttpDelete("channels/{id:guid}")]
+    [Authorize(Roles = AppRoles.FarmWrite)]
+    public async Task<IActionResult> DeleteChannel(Guid id, CancellationToken ct)
+        => Ok(await _service.DeleteChannelAsync(id, ct));
+
+    /// <summary>[ACTION] Test send via channel</summary>
+    [HttpPost("channels/{id:guid}/test")]
+    [Authorize(Roles = AppRoles.FarmWrite)]
+    public async Task<IActionResult> TestChannel(
+        Guid id, [FromBody] TestNotificationChannelRequest? req, CancellationToken ct)
+        => Ok(await _service.TestChannelAsync(id, req ?? new TestNotificationChannelRequest(), ct));
+}

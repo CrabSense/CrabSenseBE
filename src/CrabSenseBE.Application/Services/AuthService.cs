@@ -83,7 +83,10 @@ public class AuthService : IAuthService
         if (await _uow.Users.AnyAsync(u => u.Email == request.Email, ct))
             throw AppException.Conflict("Email already registered.");
 
-        var role = Enum.Parse<UserRole>(request.Role, ignoreCase: true);
+        if (!Enum.TryParse<UserRole>(request.Role, ignoreCase: true, out var role)
+            || !Enum.IsDefined(role))
+            throw AppException.BadRequest("Role phải là SystemAdmin | FarmOwner | Staff.");
+
         var user = new AppUser
         {
             Username = request.Username,
