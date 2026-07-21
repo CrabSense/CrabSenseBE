@@ -1,0 +1,33 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test:
+    name: Build & Unit Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Restore
+        run: dotnet restore CrabSenseBE.sln
+
+      - name: Build
+        run: dotnet build CrabSenseBE.sln -c Release --no-restore
+
+      - name: Test
+        run: dotnet test tests/CrabSenseBE.UnitTests/CrabSenseBE.UnitTests.csproj -c Release --no-build --verbosity normal

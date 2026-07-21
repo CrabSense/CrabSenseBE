@@ -1,0 +1,110 @@
+name: Deploy VPS
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-vps
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Publish & Deploy to VPS
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Publish linux-x64
+        run: |
+          dotnet publish src/CrabSenseBE.Api/CrabSenseBE.Api.csproj \
+            -c Release -r linux-x64 --self-contained false \
+            -o ./publish
+
+      - name: Inject runtime config (secrets)
+        env:
+          APPSETTINGS_LOCAL_JSON: ${{ secrets.APPSETTINGS_LOCAL_JSON }}
+          GOOGLE_DRIVE_SA_JSON: ${{ secrets.GOOGLE_DRIVE_SA_JSON }}
+        run: |
+          set -euo pipefail
+          if [ -z "${APPSETTINGS_LOCAL_JSON:-}" ]; then
+            echo "Missing secret APPSETTINGS_LOCAL_JSON" >&2
+            exit 1
+          fi
+          printf '%s' "$APPSETTINGS_LOCAL_JSON" > ./publish/appsettings.Local.json
+          mkdir -p ./publish/secrets
+          if [ -n "${GOOGLE_DRIVE_SA_JSON:-}" ]; then
+            printf '%s' "$GOOGLE_DRIVE_SA_JSON" > ./publish/secrets/google-drive-sa.json
+            chmod 600 ./publish/secrets/google-drive-sa.json
+          fi
+          # Ensure public bind
+          python3 - <<'PY'
+          import json
+          p='./publish/appsettings.Local.json'
+          d=json.load(open(p, encoding='utf-8-sig'))
+          d['Urls']='http://0.0.0.0:5080'
+          ms=d.setdefault('MediaStorage', {})
+          if not ms.get('Provider'):
+              ms['Provider']='GoogleDrive' if d.get('GoogleDrive') else 'Local'
+          json.dump(d, open(p,'w', encoding='utf-8'), indent=2)
+          print('Local config ready, provider=', d.get('MediaStorage',{}).get('Provider'))
+          PY
+          tar -czf crabsense-api.tar.gz -C ./publish .
+
+      - name: Upload package to VPS
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          password: ${{ secrets.VPS_PASSWORD }}
+          port: 22
+          source: "crabsense-api.tar.gz"
+          target: "/tmp/"
+
+      - name: Extract & restart service
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          password: ${{ secrets.VPS_PASSWORD }}
+          port: 22
+          script: |
+            set -euo pipefail
+            systemctl stop crabsense-api || true
+            rm -rf /opt/crabsense-api
+            mkdir -p /opt/crabsense-api
+            tar -xzf /tmp/crabsense-api.tar.gz -C /opt/crabsense-api
+            mkdir -p /opt/crabsense-api/logs /opt/crabsense-api/media-storage
+            chmod 600 /opt/crabsense-api/secrets/google-drive-sa.json 2>/dev/null || true
+            printf '%s\n' \
+              '[Unit]' \
+              'Description=CrabSense BE API' \
+              'After=network.target' \
+              '' \
+              '[Service]' \
+              'WorkingDirectory=/opt/crabsense-api' \
+              'ExecStart=/usr/bin/dotnet /opt/crabsense-api/CrabSenseBE.Api.dll --urls http://0.0.0.0:5080' \
+              'Restart=always' \
+              'RestartSec=5' \
+              'Environment=ASPNETCORE_ENVIRONMENT=Development' \
+              'Environment=ASPNETCORE_URLS=http://0.0.0.0:5080' \
+              'Environment=DOTNET_PRINT_TELEMETRY_MESSAGE=false' \
+              '' \
+              '[Install]' \
+              'WantedBy=multi-user.target' \
+              > /etc/systemd/system/crabsense-api.service
+            systemctl daemon-reload
+            systemctl enable crabsense-api
+            systemctl restart crabsense-api
+            sleep 6
+            systemctl is-active crabsense-api
+            curl -fsS http://127.0.0.1:5080/health
+            echo
+            echo DEPLOY_OK
