@@ -19,6 +19,11 @@ public static class DependencyInjection
         services.AddScoped<IAlertService, AlertService>();
         services.AddScoped<IMediaService, MediaService>();
 
+        services.AddScoped<IHarvestReportService, HarvestReportService>();
+        services.AddScoped<IInventoryReportService, InventoryReportService>();
+
+
+
         services.AddHttpClient("telegram");
         services.AddHttpClient("zalo");
         services.AddHostedService<DisconnectCheckHostedService>();
