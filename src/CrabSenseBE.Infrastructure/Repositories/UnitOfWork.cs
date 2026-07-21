@@ -1,7 +1,7 @@
 using CrabSenseBE.Domain.Entities;
 using CrabSenseBE.Domain.Interfaces;
 using CrabSenseBE.Infrastructure.Persistence;
-
+using Microsoft.EntityFrameworkCore;
 namespace CrabSenseBE.Infrastructure.Repositories;
 
 public class UnitOfWork : IUnitOfWork
@@ -51,6 +51,11 @@ public class UnitOfWork : IUnitOfWork
     public IRepository<BoxStatusHistory> BoxStatusHistories =>
         _boxStatusHistories ??= new GenericRepository<BoxStatusHistory>(_context);
 
+
+    private IRepository<CrabMortalityRecord>? _crabMortalityRecords;
+    public IRepository<CrabMortalityRecord> CrabMortalityRecords =>
+    _crabMortalityRecords??= new GenericRepository<CrabMortalityRecord>(_context);
+    
     // IoT
     private IRepository<WaterSystem>? _waterSystems;
     public IRepository<WaterSystem> WaterSystems => _waterSystems ??= new GenericRepository<WaterSystem>(_context);
@@ -146,5 +151,45 @@ public class UnitOfWork : IUnitOfWork
     public Task<int> SaveChangesAsync(CancellationToken ct = default)
         => _context.SaveChangesAsync(ct);
 
+        /// <summary>
+/// Lấy danh sách các bản ghi cua chết
+/// kèm đầy đủ thông tin liên quan. 
+/// </summary>
+public async Task<IReadOnlyList<CrabMortalityRecord>>
+    GetMortalityRecordsWithDetailsAsync(
+        CancellationToken cancellationToken = default)
+{
+    return await _context.CrabMortalityRecords
+
+        // MortalityRecord → Crab → CropBatch
+        .Include(x => x.Crab)
+            .ThenInclude(c => c!.CropBatch)
+
+        // MortalityRecord → Crab → Box
+        // → FarmingRow → FarmingArea
+        .Include(x => x.Crab)
+            .ThenInclude(c => c!.Box)
+                .ThenInclude(b => b!.FarmingRow)
+                    .ThenInclude(r => r!.FarmingArea)
+
+        .ToListAsync(cancellationToken);
+}
+
+public async Task<Crab?> GetCrabWithDetailsAsync(
+    Guid crabId,
+    CancellationToken cancellationToken = default)
+{
+    return await _context.Crabs
+        .Include(c => c.CropBatch)
+        .Include(c => c.Box)
+            .ThenInclude(b => b!.FarmingRow)
+                .ThenInclude(r => r!.FarmingArea)
+        .FirstOrDefaultAsync(
+            c => c.Id == crabId,
+            cancellationToken);
+}
+
     public void Dispose() => _context.Dispose();
+
+
 }

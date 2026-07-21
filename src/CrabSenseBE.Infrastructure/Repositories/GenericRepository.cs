@@ -44,4 +44,6 @@ public class GenericRepository<T> : IRepository<T> where T : class
         => predicate == null
             ? await _dbSet.CountAsync(ct)
             : await _dbSet.CountAsync(predicate, ct);
+
+    public IQueryable<T> Query() => _dbSet.AsQueryable();
 }

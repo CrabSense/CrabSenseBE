@@ -89,6 +89,37 @@ public enum HarvestStatus
     Cancelled
 }
 
+/// <summary>
+/// Nguyên nhân cua chết.
+/// Dùng cho báo cáo tỷ lệ sống và phân tích nguyên nhân tử vong.
+/// </summary>
+public enum MortalityCause
+{
+    /// <summary>Chưa xác định được nguyên nhân.</summary>
+    Unknown = 0,
+
+    /// <summary>Bệnh.</summary>
+    Disease=1,
+    /// <summary>Chất lượng nước.</summary>
+    WaterQuality=2,
+
+    /// <summary>Ăn thịt lẫn nhau.</summary>
+    Cannibalism=3,
+
+    /// <summary>Vấn đề về nhiệt độ.</summary>
+    Temperature=4,
+
+    /// <summary>Vấn đề liên quan đến cho ăn.</summary>
+    Feeding=5,
+
+    /// <summary>Chết do quá trình bắt, vận chuyển hoặc xử lý.</summary>
+    Handling=6,
+
+
+    /// <summary>Nguyên nhân khác.</summary>
+    Other=7
+}
+
 /// <summary>Allowed Box.Status values for farming tracking.</summary>
 public static class BoxStatuses
 {

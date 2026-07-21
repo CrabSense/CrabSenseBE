@@ -21,6 +21,7 @@ public class AppDbContext : DbContext
     public DbSet<CrabBoxAllocation> CrabBoxAllocations => Set<CrabBoxAllocation>();
     public DbSet<MoltingRecord> MoltingRecords => Set<MoltingRecord>();
     public DbSet<BoxStatusHistory> BoxStatusHistories => Set<BoxStatusHistory>();
+    public DbSet<CrabMortalityRecord> CrabMortalityRecords=> Set<CrabMortalityRecord>();
 
     // IoT
     public DbSet<WaterSystem> WaterSystems => Set<WaterSystem>();

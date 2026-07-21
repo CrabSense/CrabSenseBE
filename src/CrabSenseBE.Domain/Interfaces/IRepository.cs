@@ -14,4 +14,5 @@ public interface IRepository<T> where T : class
     void Update(T entity);
     void Remove(T entity);
     Task<int> CountAsync(Expression<Func<T, bool>>? predicate = null, CancellationToken ct = default);
+    IQueryable<T> Query();
 }

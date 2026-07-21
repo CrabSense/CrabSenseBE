@@ -1,4 +1,5 @@
 using CrabSenseBE.Domain.Common;
+using CrabSenseBE.Domain.Enums;
 
 namespace CrabSenseBE.Domain.Entities;
 
@@ -52,6 +53,11 @@ public class Crab : BaseEntity
     public string? Tag { get; set; }
     public decimal? WeightGram { get; set; }
     public string? MoltingStage { get; set; }
+    /// <summary>
+    /// Trạng thái sống hiện tại của cua.
+    /// true  = đang sống
+    /// false = đã chết
+    /// </summary>
     public bool IsAlive { get; set; } = true;
     public DateTime? MoltedAt { get; set; }
 
@@ -59,6 +65,10 @@ public class Crab : BaseEntity
     public Box? Box { get; set; }
     public CrabLot? CrabLot { get; set; }
     public CropBatch? CropBatch { get; set; }
+
+    // Lịch sử tử vong của cá thể cua
+    public ICollection<CrabMortalityRecord> MortalityRecords { get; set; }
+        = new List<CrabMortalityRecord>();
 }
 
 /// <summary>Lô cua (Lot) — nhóm cua nhập vào</summary>
@@ -81,10 +91,14 @@ public class CropBatch : BaseEntity
     public string BatchCode { get; set; } = string.Empty;
     public DateTime StartDate { get; set; }
     public DateTime? EndDate { get; set; }
+    /// <summary> Tổng số cua được thả ban đầu vào đợt nuôi.</summary>
+    public int InitialQuantity { get; set; }
     public string? Status { get; set; }
     public string? Notes { get; set; }
 
     public ICollection<Crab> Crabs { get; set; } = new List<Crab>();
+    public ICollection<CrabMortalityRecord> MortalityRecords { get; set; }
+        = new List<CrabMortalityRecord>();
 }
 
 /// <summary>Nhật ký vận hành — MOD-FARM</summary>
@@ -99,4 +113,48 @@ public class OperationLog : BaseEntity
 
     // Navigation
     public AppUser? User { get; set; }
+}
+
+/// <summary>
+/// Ghi nhận số lượng cua chết.
+/// Dùng để tính tỷ lệ sống/chết theo:
+/// - Đợt nuôi
+/// - Khu
+/// - Dãy
+/// - Box
+/// - Thời gian
+/// - Nguyên nhân
+/// </summary>
+public class CrabMortalityRecord : BaseEntity
+{
+    /// <summary>
+    /// Cá thể cua chết.
+    /// Mỗi CrabId tương ứng với một con cua.
+    /// </summary>
+    public Guid CrabId { get; set; }
+
+    /// <summary>
+    /// Thời điểm ghi nhận cua chết.
+    /// </summary>
+    public DateTime MortalityDate { get; set; }
+
+    /// <summary>
+    /// Nguyên nhân cua chết.
+    /// </summary>
+    public MortalityCause Cause { get; set; } = MortalityCause.Unknown;
+
+    /// <summary>
+    /// Ghi chú.
+    /// </summary>
+    public string? Notes { get; set; }
+
+    /// <summary>
+    /// Người ghi nhận.
+    /// </summary>
+    public Guid RecordedBy { get; set; }
+
+    // Navigation
+    public Crab? Crab { get; set; }
+
+    public AppUser? Recorder { get; set; }
 }
