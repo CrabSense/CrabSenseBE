@@ -3,33 +3,6 @@ using Microsoft.AspNetCore.Mvc;
 
 namespace CrabSenseBE.Api.Controllers;
 
-[ApiController]
-[Route("api/harvest-vouchers")]
-[Authorize]
-[Tags("20. CRUD — Harvest (stub)")]
-[Produces("application/json")]
-public class HarvestController : ControllerBase
-{
-    /// <summary>[READ] List harvest vouchers (TODO)</summary>
-    [HttpGet]
-    public IActionResult GetAll() => Ok(new { success = true, message = "TODO", data = Array.Empty<object>() });
-
-    /// <summary>[CREATE] Create harvest voucher (TODO)</summary>
-    [HttpPost]
-    public IActionResult Create() => StatusCode(501, new { message = "Not implemented yet" });
-}
-
-[ApiController]
-[Route("api/frozen-lots")]
-[Authorize]
-[Tags("21. CRUD — Frozen Lots (stub)")]
-[Produces("application/json")]
-public class FrozenLotsController : ControllerBase
-{
-    /// <summary>[READ] List frozen lots (TODO)</summary>
-    [HttpGet]
-    public IActionResult GetAll() => Ok(new { success = true, message = "TODO", data = Array.Empty<object>() });
-}
 
 [ApiController]
 [Route("api/customers")]

@@ -11,6 +11,8 @@ public static class DependencyInjection
         services.AddScoped<IAuthService, AuthService>();
         services.AddScoped<IFarmingService, FarmingService>();
         services.AddScoped<IFarmLotService, FarmLotService>();
+        services.AddScoped<IHarvestService, HarvestService>();
+        services.AddScoped<IFrozenStorageService, FrozenStorageService>();
         services.AddScoped<IFarmHistoryService, FarmHistoryService>();
         services.AddScoped<IBoxQrService, BoxQrService>();
         services.AddScoped<IIotService, IotService>();
