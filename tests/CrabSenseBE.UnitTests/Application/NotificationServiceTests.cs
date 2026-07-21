@@ -12,20 +12,11 @@ namespace CrabSenseBE.UnitTests.Application;
 public class NotificationServiceTests
 {
     private readonly Mock<IUnitOfWork> _uow = new();
-    private readonly Mock<IHttpClientFactory> _httpClientFactory;
-    private readonly Mock<ILogger<NotificationService>> _logger;
-
-    public NotificationServiceTests()
-    {
-        _httpClientFactory = new Mock<IHttpClientFactory>();
-        _logger = new Mock<ILogger<NotificationService>>();
-    }
+    private readonly Mock<IHttpClientFactory> _httpClientFactory = new();
+    private readonly Mock<ILogger<NotificationService>> _logger = new();
 
     private NotificationService Create() =>
-        new(
-            _uow.Object,
-            _httpClientFactory.Object,
-            _logger.Object);
+        new(_uow.Object, _httpClientFactory.Object, _logger.Object);
 
     [Fact]
     public async Task GetChannels_SeedsDefaultsIncludingZalo()

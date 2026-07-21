@@ -6,6 +6,7 @@ using CrabSenseBE.Domain.Enums;
 using CrabSenseBE.Domain.Interfaces;
 using Moq;
 using FluentAssertions;
+using Xunit;
 
 namespace CrabSenseBE.UnitTests.Application;
 

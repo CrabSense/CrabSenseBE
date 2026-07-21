@@ -2,6 +2,7 @@ using CrabSenseBE.Domain.Interfaces;
 using Microsoft.Extensions.Configuration;
 using Minio;
 using Minio.DataModel.Args;
+using CrabSenseBE.Application.Interfaces;
 
 namespace CrabSenseBE.Infrastructure.Services;
 

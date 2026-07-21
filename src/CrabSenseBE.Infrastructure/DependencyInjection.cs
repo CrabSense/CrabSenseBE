@@ -5,6 +5,7 @@ using CrabSenseBE.Infrastructure.Services;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using CrabSenseBE.Application.Interfaces;
 
 namespace CrabSenseBE.Infrastructure;
 

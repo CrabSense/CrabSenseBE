@@ -64,25 +64,6 @@ public class PaymentsController : ControllerBase
     public IActionResult GetAll() => Ok(new { success = true, data = Array.Empty<object>() });
 }
 
-[ApiController]
-[Route("api/reports")]
-[Authorize]
-[Tags("30. Reports (stub)")]
-[Produces("application/json")]
-public class ReportsController : ControllerBase
-{
-    /// <summary>[READ] Harvest report</summary>
-    [HttpGet("harvest")]
-    public IActionResult Harvest() => Ok(new { success = true, data = new object() });
-
-    /// <summary>[READ] Inventory report</summary>
-    [HttpGet("inventory")]
-    public IActionResult Inventory() => Ok(new { success = true, data = new object() });
-
-    /// <summary>[READ] Sales report</summary>
-    [HttpGet("sales")]
-    public IActionResult Sales() => Ok(new { success = true, data = new object() });
-}
 
 [ApiController]
 [Route("api/dashboard")]
