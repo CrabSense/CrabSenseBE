@@ -827,21 +827,254 @@
       },
     },
     {
-      id: "skeleton",
-      title: "15. Skeleton (GET only)",
+      id: "harvest",
+      title: "15. Harvest vouchers",
+      listPath: "/api/harvest-vouchers",
+      columns: [
+        "voucherCode",
+        "harvestDate",
+        "status",
+        "totalQuantity",
+        "totalWeightKg",
+        "softshellQuantity",
+        "softshellRate",
+        "cropBatchId",
+        "notes",
+        "id",
+      ],
+      filters: [
+        {
+          key: "status",
+          label: "status (PATCH Extra)",
+          type: "select",
+          listIgnore: true,
+          options: ["", "Planned", "InProgress", "Completed", "Cancelled"],
+          def: "InProgress",
+        },
+        { key: "from", label: "from (statistics)", type: "datetime", listIgnore: true },
+        { key: "to", label: "to (statistics)", type: "datetime", listIgnore: true },
+        {
+          key: "period",
+          label: "period",
+          type: "select",
+          listIgnore: true,
+          options: ["day", "week", "month"],
+          def: "day",
+        },
+      ],
+      create: {
+        legend: "Tạo phiếu thu hoạch — dùng JSON raw (Lines[]) hoặc form + linesJson",
+        path: "/api/harvest-vouchers",
+        rawPreferred: true,
+        fields: [
+          {
+            key: "_raw",
+            label: "JSON body CreateHarvestVoucherRequest",
+            type: "textarea",
+            def:
+              '{\n  "cropBatchId": null,\n  "harvestDate": "' +
+              new Date().toISOString() +
+              '",\n  "notes": "demo harvest",\n  "lines": [\n    { "crabId": null, "weightGram": 250, "grade": "M", "isSoftshell": true, "notes": null },\n    { "crabId": null, "weightGram": 280, "grade": "L", "isSoftshell": false, "notes": null }\n  ]\n}',
+          },
+          { key: "cropBatchId", label: "cropBatchId (nếu không dùng raw)" },
+          { key: "harvestDate", label: "harvestDate", type: "datetime", def: () => new Date().toISOString() },
+          { key: "notes", label: "notes" },
+          {
+            key: "lines",
+            label: "lines (JSON array — nếu không dùng raw)",
+            type: "textarea",
+            def: '[{"crabId":null,"weightGram":250,"grade":"M","isSoftshell":true}]',
+          },
+        ],
+      },
+      update: {
+        method: "PATCH",
+        legend: "Chỉ đổi status (Planned→InProgress→Completed | Cancelled)",
+        path: (id) => `/api/harvest-vouchers/${id}/status`,
+        fields: [
+          {
+            key: "status",
+            label: "status*",
+            type: "select",
+            options: ["Planned", "InProgress", "Completed", "Cancelled"],
+            def: "InProgress",
+          },
+        ],
+      },
+      remove: (id) => `/api/harvest-vouchers/${id}`,
+      rowActions: [
+        {
+          label: "→InProgress",
+          method: "PATCH",
+          path: (id) => `/api/harvest-vouchers/${id}/status`,
+          body: () => ({ status: "InProgress" }),
+        },
+        {
+          label: "→Completed",
+          method: "PATCH",
+          path: (id) => `/api/harvest-vouchers/${id}/status`,
+          body: () => ({ status: "Completed" }),
+        },
+        {
+          label: "→Cancelled",
+          method: "PATCH",
+          path: (id) => `/api/harvest-vouchers/${id}/status`,
+          body: () => ({ status: "Cancelled" }),
+        },
+      ],
+      extras: [
+        {
+          label: "GET by id (Pick)",
+          needsId: true,
+          run: async (api, _f, id) => {
+            if (!id) throw new Error("Pick voucher id");
+            return api("GET", `/api/harvest-vouchers/${id}`);
+          },
+        },
+        {
+          label: "GET statistics (from/to/period)",
+          run: async (api, f) => {
+            const from = f.from || new Date(Date.now() - 30 * 864e5).toISOString();
+            const to = f.to || new Date().toISOString();
+            const period = f.period || "day";
+            const q = new URLSearchParams({ from, to, period });
+            return api("GET", `/api/harvest-vouchers/statistics?${q}`);
+          },
+        },
+        {
+          label: "PATCH status (Pick + filter status)",
+          needsId: true,
+          run: async (api, f, id) => {
+            if (!id) throw new Error("Pick id");
+            if (!f.status) throw new Error("Chọn status ở filter");
+            return api("PATCH", `/api/harvest-vouchers/${id}/status`, { status: f.status });
+          },
+        },
+      ],
+    },
+    {
+      id: "frozen",
+      title: "16. Frozen lots",
+      listPath: "/api/frozen-lots",
+      columns: [
+        "lotCode",
+        "frozenDate",
+        "expiryDate",
+        "weightKg",
+        "grade",
+        "quantity",
+        "status",
+        "storageLocation",
+        "harvestVoucherId",
+        "id",
+      ],
+      filters: [
+        { key: "days", label: "days (expiring)", type: "number", def: 30, listIgnore: true },
+      ],
+      create: {
+        path: "/api/frozen-lots",
+        fields: [
+          { key: "lotCode", label: "lotCode*", required: true, def: () => `FL-${Date.now()}` },
+          { key: "harvestVoucherId", label: "harvestVoucherId" },
+          {
+            key: "frozenDate",
+            label: "frozenDate*",
+            type: "datetime",
+            required: true,
+            def: () => new Date().toISOString(),
+          },
+          {
+            key: "expiryDate",
+            label: "expiryDate*",
+            type: "datetime",
+            required: true,
+            def: () => new Date(Date.now() + 90 * 864e5).toISOString(),
+          },
+          { key: "weightKg", label: "weightKg*", type: "number", required: true, def: 10 },
+          {
+            key: "grade",
+            label: "grade",
+            type: "select",
+            options: ["", "S", "M", "L", "XL"],
+            def: "M",
+          },
+          { key: "quantity", label: "quantity*", type: "number", required: true, def: 20 },
+          { key: "storageLocation", label: "storageLocation", def: "Cold-A1" },
+        ],
+      },
+      update: {
+        method: "PUT",
+        path: (id) => `/api/frozen-lots/${id}`,
+        fields: [
+          { key: "frozenDate", label: "frozenDate", type: "datetime" },
+          { key: "expiryDate", label: "expiryDate", type: "datetime" },
+          { key: "weightKg", label: "weightKg", type: "number" },
+          { key: "grade", label: "grade", type: "select", options: ["S", "M", "L", "XL"] },
+          { key: "quantity", label: "quantity", type: "number" },
+          {
+            key: "status",
+            label: "status",
+            type: "select",
+            options: ["Available", "Reserved", "Shipped", "Expired"],
+            def: "Available",
+          },
+          { key: "storageLocation", label: "storageLocation" },
+        ],
+      },
+      remove: (id) => `/api/frozen-lots/${id}`,
+      extras: [
+        {
+          label: "GET inventory-summary",
+          run: (api) => api("GET", "/api/frozen-lots/inventory-summary"),
+        },
+        {
+          label: "GET storage-aging",
+          run: (api) => api("GET", "/api/frozen-lots/storage-aging"),
+        },
+        {
+          label: "GET expiring (days filter)",
+          run: async (api, f) => {
+            const days = f.days ?? 30;
+            return api("GET", `/api/frozen-lots/expiring?days=${days}`);
+          },
+        },
+        {
+          label: "GET by id (Pick)",
+          needsId: true,
+          run: async (api, _f, id) => {
+            if (!id) throw new Error("Pick lot id");
+            return api("GET", `/api/frozen-lots/${id}`);
+          },
+        },
+      ],
+    },
+    {
+      id: "reports",
+      title: "17. Reports (sysadmin)",
       listPath: null,
       filters: [],
       extras: [
-        { label: "harvest-vouchers", run: (api) => api("GET", "/api/harvest-vouchers") },
-        { label: "frozen-lots", run: (api) => api("GET", "/api/frozen-lots") },
+        {
+          label: "GET /api/reports/harvest (cần sysadmin)",
+          run: (api) => api("GET", "/api/reports/harvest"),
+        },
+        {
+          label: "GET /api/reports/inventory (cần sysadmin)",
+          run: (api) => api("GET", "/api/reports/inventory"),
+        },
+      ],
+    },
+    {
+      id: "skeleton",
+      title: "18. Skeleton (GET only)",
+      listPath: null,
+      filters: [],
+      extras: [
         { label: "customers", run: (api) => api("GET", "/api/customers") },
         { label: "price-lists", run: (api) => api("GET", "/api/price-lists") },
         { label: "sales-orders", run: (api) => api("GET", "/api/sales-orders") },
         { label: "deliveries", run: (api) => api("GET", "/api/deliveries") },
         { label: "payments", run: (api) => api("GET", "/api/payments") },
-        { label: "reports/harvest", run: (api) => api("GET", "/api/reports/harvest") },
-        { label: "reports/inventory", run: (api) => api("GET", "/api/reports/inventory") },
-        { label: "reports/sales", run: (api) => api("GET", "/api/reports/sales") },
         { label: "dashboard/overview", run: (api) => api("GET", "/api/dashboard/overview") },
         { label: "settings", run: (api) => api("GET", "/api/settings") },
         { label: "ai/detections", run: (api) => api("GET", "/api/ai/detections") },
@@ -850,7 +1083,7 @@
     },
     {
       id: "notifications",
-      title: "16. Notifications / kênh",
+      title: "19. Notifications / kênh",
       listPath: "/api/notifications/channels",
       columns: ["channelCode", "displayName", "isEnabled", "configJson", "id"],
       filters: [{ key: "userId", label: "userId (in-app inbox)", listIgnore: true }],
@@ -1114,8 +1347,13 @@
     const body = {};
     for (const f of fields || []) {
       if (f.key === "_raw") continue;
-      const v = fieldValue(f, container);
-      if (v !== undefined) body[f.key] = v;
+      let v = fieldValue(f, container);
+      if (v === undefined) continue;
+      // Parse JSON array/object fields (e.g. harvest lines)
+      if (typeof v === "string" && (f.key === "lines" || f.parseJson) && /^[\[{]/.test(v.trim())) {
+        v = JSON.parse(v);
+      }
+      body[f.key] = v;
     }
     return body;
   }
