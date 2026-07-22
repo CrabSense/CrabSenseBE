@@ -1055,18 +1055,151 @@
       filters: [],
       extras: [
         {
-          label: "GET /api/reports/harvest (cần sysadmin)",
+          label: "GET /api/reports/harvest",
           run: (api) => api("GET", "/api/reports/harvest"),
         },
         {
-          label: "GET /api/reports/inventory (cần sysadmin)",
+          label: "GET /api/reports/inventory",
           run: (api) => api("GET", "/api/reports/inventory"),
+        },
+        {
+          label: "GET /api/reports/molting",
+          run: (api) => api("GET", "/api/reports/molting"),
+        },
+        {
+          label: "GET /api/reports/survival-rate",
+          run: (api) => api("GET", "/api/reports/survival-rate"),
+        },
+        {
+          label: "GET /api/reports/operational-efficiency",
+          run: (api) => api("GET", "/api/reports/operational-efficiency"),
+        },
+        {
+          label: "GET /api/dashboard/overview",
+          run: (api) => api("GET", "/api/dashboard/overview"),
+        },
+      ],
+    },
+    {
+      id: "harvest-links",
+      title: "17b. Box ↔ Harvest links",
+      listPath: null,
+      filters: [
+        { key: "harvestVoucherId", label: "harvestVoucherId (GET boxes)" },
+        { key: "boxId", label: "boxId (GET vouchers)" },
+      ],
+      extras: [
+        {
+          label: "GET boxes trong harvest voucher",
+          run: async (api, f) => {
+            if (!f.harvestVoucherId) throw new Error("harvestVoucherId");
+            return api("GET", `/api/harvest-vouchers/${f.harvestVoucherId}/boxes`);
+          },
+        },
+        {
+          label: "GET harvest vouchers của box",
+          run: async (api, f) => {
+            if (!f.boxId) throw new Error("boxId");
+            return api("GET", `/api/boxes/${f.boxId}/harvest-vouchers`);
+          },
+        },
+      ],
+    },
+    {
+      id: "traceability",
+      title: "18. Traceability (QR source origin)",
+      listPath: null,
+      filters: [
+        { key: "frozenLotId", label: "frozenLotId" },
+        { key: "harvestVoucherId", label: "harvestVoucherId" },
+        { key: "qrCode", label: "qr code (trace scan)" },
+      ],
+      extras: [
+        {
+          label: "POST create QR for frozen lot",
+          run: async (api, f) => {
+            if (!f.frozenLotId) throw new Error("frozenLotId");
+            return api("POST", `/api/frozen-lots/${f.frozenLotId}/qr`, {});
+          },
+        },
+        {
+          label: "GET QR for frozen lot",
+          run: async (api, f) => {
+            if (!f.frozenLotId) throw new Error("frozenLotId");
+            return api("GET", `/api/frozen-lots/${f.frozenLotId}/qr`);
+          },
+        },
+        {
+          label: "GET QR PNG for frozen lot",
+          needsId: true,
+          run: async (api, f) => {
+            if (!f.frozenLotId) throw new Error("frozenLotId");
+            const blob = await (async () => {
+              const headers = { Accept: "image/png,*/*" };
+              const tokenVal = localStorage.getItem("cs_token") || "";
+              if (tokenVal) headers.Authorization = `Bearer ${tokenVal}`;
+              const base = ($("apiBase").value || "http://localhost:5080").replace(/\/$/, "");
+              const res = await fetch(`${base}/api/frozen-lots/${f.frozenLotId}/qr.png?size=8`, { headers });
+              if (!res.ok) throw new Error(`${res.status} GET QR PNG`);
+              return res.blob();
+            })();
+            const url = URL.createObjectURL(blob);
+            window.open(url);
+            return { url, message: "QR PNG opened in new tab" };
+          },
+        },
+        {
+          label: "POST create QR for harvest voucher",
+          run: async (api, f) => {
+            if (!f.harvestVoucherId) throw new Error("harvestVoucherId");
+            return api("POST", `/api/harvest-vouchers/${f.harvestVoucherId}/qr`, {});
+          },
+        },
+        {
+          label: "GET QR for harvest voucher",
+          run: async (api, f) => {
+            if (!f.harvestVoucherId) throw new Error("harvestVoucherId");
+            return api("GET", `/api/harvest-vouchers/${f.harvestVoucherId}/qr`);
+          },
+        },
+        {
+          label: "GET QR PNG for harvest voucher",
+          needsId: true,
+          run: async (api, f) => {
+            if (!f.harvestVoucherId) throw new Error("harvestVoucherId");
+            const blob = await (async () => {
+              const headers = { Accept: "image/png,*/*" };
+              const tokenVal = localStorage.getItem("cs_token") || "";
+              if (tokenVal) headers.Authorization = `Bearer ${tokenVal}`;
+              const base = ($("apiBase").value || "http://localhost:5080").replace(/\/$/, "");
+              const res = await fetch(`${base}/api/harvest-vouchers/${f.harvestVoucherId}/qr.png?size=8`, { headers });
+              if (!res.ok) throw new Error(`${res.status} GET QR PNG`);
+              return res.blob();
+            })();
+            const url = URL.createObjectURL(blob);
+            window.open(url);
+            return { url, message: "QR PNG opened in new tab" };
+          },
+        },
+        {
+          label: "GET traceability (scan QR code)",
+          run: async (api, f) => {
+            if (!f.qrCode) throw new Error("qrCode (mã QR cần truy xuất)");
+            return api("GET", `/api/traceability/${encodeURIComponent(f.qrCode)}`);
+          },
+        },
+        {
+          label: "GET traceability (query param)",
+          run: async (api, f) => {
+            if (!f.qrCode) throw new Error("qrCode");
+            return api("GET", `/api/traceability/scan?code=${encodeURIComponent(f.qrCode)}`);
+          },
         },
       ],
     },
     {
       id: "skeleton",
-      title: "18. Skeleton (GET only)",
+      title: "19. Skeleton (GET only)",
       listPath: null,
       filters: [],
       extras: [

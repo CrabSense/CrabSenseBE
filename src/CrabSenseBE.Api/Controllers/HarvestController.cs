@@ -169,4 +169,50 @@ public class HarvestController : ControllerBase
 
         return Ok(result);
     }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Box ↔ Harvest link
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// [READ] Danh sách box tham chiếu trong phiếu thu hoạch.
+    /// </summary>
+    /// <param name="id">ID phiếu thu hoạch.</param>
+    /// <remarks>
+    /// Trả về danh sách box (BoxId, BoxCode) đã được ghi nhận trong các dòng
+    /// thu hoạch, kèm số lượng cua và tổng khối lượng từng box.
+    /// </remarks>
+    [HttpGet("{id:guid}/boxes")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> GetBoxesByVoucher(
+        Guid id,
+        CancellationToken ct)
+    {
+        var result = await _harvestService.GetBoxesByVoucherAsync(id, ct);
+
+        return Ok(result);
+    }
+
+    /// <summary>
+    /// [READ] Danh sách phiếu thu hoạch tham chiếu đến một box.
+    /// </summary>
+    /// <param name="boxId">ID box nuôi.</param>
+    /// <remarks>
+    /// Trả về tất cả phiếu thu hoạch đã ghi nhận cua từ box này,
+    /// kèm số lượng cua và tổng khối lượng từng phiếu.
+    /// </remarks>
+    [HttpGet("~/api/boxes/{boxId:guid}/harvest-vouchers")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> GetVouchersByBox(
+        Guid boxId,
+        CancellationToken ct)
+    {
+        var result = await _harvestService.GetVouchersByBoxAsync(boxId, ct);
+
+        return Ok(result);
+    }
 }

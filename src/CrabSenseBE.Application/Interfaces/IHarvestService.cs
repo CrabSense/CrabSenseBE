@@ -55,6 +55,24 @@ public interface IHarvestService
         CancellationToken ct = default);
 
     // ------------------------------------------------------------------------
+    // Box ↔ Harvest link
+    // ------------------------------------------------------------------------
+
+    /// <summary>
+    /// Gets all boxes referenced in a harvest voucher.
+    /// </summary>
+    Task<ApiResponse<IEnumerable<HarvestBoxDto>>> GetBoxesByVoucherAsync(
+        Guid voucherId,
+        CancellationToken ct = default);
+
+    /// <summary>
+    /// Gets all harvest vouchers that reference a specific box.
+    /// </summary>
+    Task<ApiResponse<IEnumerable<BoxHarvestVoucherDto>>> GetVouchersByBoxAsync(
+        Guid boxId,
+        CancellationToken ct = default);
+
+    // ------------------------------------------------------------------------
     // Statistics
     // ------------------------------------------------------------------------
 
