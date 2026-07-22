@@ -1212,6 +1212,15 @@
     return ($("apiBase").value || "http://localhost:5080").replace(/\/$/, "");
   }
 
+  function clearSession(message) {
+    token = "";
+    user = null;
+    refs.loaded = false;
+    localStorage.removeItem("cs_token");
+    $("app").style.display = "none";
+    $("loginInfo").textContent = message || "Đăng nhập lại";
+  }
+
   async function api(method, path, body) {
     const headers = { Accept: "application/json" };
     if (token) headers.Authorization = `Bearer ${token}`;
@@ -1229,6 +1238,9 @@
       data = text;
     }
     if (!res.ok) {
+      if (res.status === 401 && path !== "/api/auth/login") {
+        clearSession("Token hết hạn — bấm Login lại");
+      }
       const err = new Error(`${res.status} ${method} ${path}`);
       err.payload = data;
       throw err;
@@ -2534,11 +2546,7 @@
   }
 
   function doLogout() {
-    token = "";
-    user = null;
-    localStorage.removeItem("cs_token");
-    $("app").style.display = "none";
-    $("loginInfo").textContent = "logged out";
+    clearSession("logged out");
     msg("logged out");
   }
 
@@ -2555,10 +2563,22 @@
   const savedApi = localStorage.getItem("cs_api");
   if (savedApi) $("apiBase").value = savedApi;
 
-  if (token) {
-    $("app").style.display = "block";
-    $("loginInfo").textContent = "token cached";
-    renderTabs();
-    renderPanel();
+  async function bootWithCachedToken() {
+    if (!token) return;
+    try {
+      const me = await api("GET", "/api/auth/me");
+      user = me?.data || null;
+      $("app").style.display = "block";
+      $("loginInfo").textContent = "token OK";
+      $("userLine").textContent = user
+        ? ` — ${user.username} / ${user.role} / ${user.id}`
+        : "";
+      renderTabs();
+      renderPanel();
+    } catch {
+      clearSession("Token hết hạn — bấm Login lại");
+    }
   }
+
+  bootWithCachedToken();
 })();

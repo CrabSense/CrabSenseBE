@@ -103,7 +103,13 @@ jobs:
             systemctl daemon-reload
             systemctl enable crabsense-api
             systemctl restart crabsense-api
-            sleep 6
+            for i in 1 2 3 4 5 6 8 10; do
+              sleep $i
+              if curl -fsS http://127.0.0.1:5080/health >/dev/null 2>&1; then
+                echo "health ok after ${i}s wait"
+                break
+              fi
+            done
             systemctl is-active crabsense-api
             curl -fsS http://127.0.0.1:5080/health
             echo
