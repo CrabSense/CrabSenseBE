@@ -14,20 +14,25 @@ public class ReportsController : ControllerBase
     private readonly IInventoryReportService _inventoryReportService;
     private readonly ISurvivalRateReportService _survivalRateReportService;
     private readonly IMoltingReportService _moltingReportService;
+    private readonly IOperationalEfficiencyReportService _operationalEfficiencyReportService;
 
     public ReportsController(
         IHarvestReportService harvestReportService,
         IInventoryReportService inventoryReportService,
         ISurvivalRateReportService survivalRateReportService,
-        IMoltingReportService moltingReportService)
+        IMoltingReportService moltingReportService,
+        IOperationalEfficiencyReportService operationalEfficiencyReportService)
     {
         _harvestReportService = harvestReportService;
         _inventoryReportService = inventoryReportService;
         _survivalRateReportService = survivalRateReportService;
         _moltingReportService = moltingReportService;
+        _operationalEfficiencyReportService = operationalEfficiencyReportService;
     }
 
-
+    /// <summary>
+    /// Báo cáo tỉ lệ thu hoạch.
+    /// </summary>
     [HttpGet("harvest")]
     public async Task<IActionResult> GetHarvestReport(
         CancellationToken cancellationToken)
@@ -78,12 +83,33 @@ public class ReportsController : ControllerBase
             data = result
         });
     }
+    /// <summary>
+    /// Báo cáo tỉ lệ lột cua.
+    /// </summary>
     [HttpGet("molting")]
     public async Task<IActionResult> GetMoltingReport(
         CancellationToken cancellationToken)
     {
         var result = await _moltingReportService
             .GetMoltingReportAsync(cancellationToken);
+
+        return Ok(new
+        {
+            success = true,
+            data = result
+        });
+    }
+
+    /// <summary>
+    /// Thống kê hiệu quả vận hành.
+    /// </summary>
+    [HttpGet("operational-efficiency")]
+    public async Task<IActionResult> GetOperationalEfficiency(
+    [FromQuery] OperationalEfficiencyFilterDto filter,
+    CancellationToken cancellationToken)
+    {
+        var result = await _operationalEfficiencyReportService
+            .GetOperationalEfficiencyReportAsync(filter, cancellationToken);
 
         return Ok(new
         {

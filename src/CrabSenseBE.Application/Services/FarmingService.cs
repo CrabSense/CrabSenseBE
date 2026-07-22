@@ -896,6 +896,7 @@ public class FarmingService : IFarmingService
             c.WeightGram,
             lastMolt?.Result,   // MoltingStage
             isAlive,            // IsAlive
-            c.MoltedAt);
+            c.MoltedAt,
+            c.StockedAt);
     }
 }

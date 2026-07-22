@@ -123,7 +123,8 @@ public record CrabDto(
     decimal? WeightGram,
     string? MoltingStage,
     bool IsAlive,
-    DateTime? MoltedAt);
+    DateTime? MoltedAt,
+    DateTime StockedAt);
 
 /// <summary>
 /// Place crab. Required: CrabLotId + CropBatchId, and BoxId

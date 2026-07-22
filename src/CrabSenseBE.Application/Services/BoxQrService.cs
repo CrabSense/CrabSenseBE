@@ -185,7 +185,8 @@ public class BoxQrService : IBoxQrService
             crab.WeightGram,
             crab.MoltingStage,
             crab.Status == CrabStatus.Alive || crab.Status == CrabStatus.Molting || crab.Status == CrabStatus.Quarantined,
-            crab.MoltedAt), "Updated.");
+            crab.MoltedAt,
+            crab.StockedAt), "Updated.");
     }
 
     public async Task<ApiResponse<CrabBoxAllocationDto>> MoveCrabAsync(
