@@ -3,6 +3,7 @@ using CrabSenseBE.Application.Interfaces;
 using CrabSenseBE.Domain.Entities;
 using CrabSenseBE.Domain.Interfaces;
 using CrabSenseBE.Application.Common;
+using CrabSenseBE.Domain.Enums;
 
 namespace CrabSenseBE.Application.Services;
 
@@ -44,7 +45,7 @@ public class MortalityService : IMortalityService
         // 2. KIỂM TRA CUA ĐÃ CHẾT HAY CHƯA
         // ============================================================
 
-        if (!crab.IsAlive)
+        if (crab.Status == CrabStatus.Dead || crab.Status == CrabStatus.Harvested || crab.Status == CrabStatus.Missing)
         {
             throw AppException.BadRequest(
                 "Cá thể cua này đã được ghi nhận là đã chết trước đó.");
@@ -73,7 +74,7 @@ public class MortalityService : IMortalityService
         // 4. CẬP NHẬT TRẠNG THÁI CUA
         // ============================================================
 
-        crab.IsAlive = false;
+        crab.Status = CrabStatus.Dead;
 
         // ============================================================
         // 5. LƯU DATABASE
@@ -90,6 +91,11 @@ public class MortalityService : IMortalityService
         // ============================================================
         // 6. TRẢ KẾT QUẢ
         // ============================================================
+        var latestAlloc = crab.BoxAllocations
+    .OrderByDescending(a => a.StartTime)
+    .FirstOrDefault();
+var boxId = latestAlloc?.BoxId ?? Guid.Empty;
+var box = boxId != Guid.Empty ? await _uow.Boxes.GetByIdAsync(boxId, cancellationToken) : null;
 
         return new MortalityRecordDto(
             Id: mortalityRecord.Id,
@@ -98,30 +104,22 @@ public class MortalityService : IMortalityService
 
             CrabTag: crab.Tag,
 
-            CropBatchId: crab.CropBatchId,
+            BoxId: boxId,
 
-            BatchCode: crab.CropBatch?.BatchCode
-                ?? string.Empty,
+            BoxCode: box?.Code?? string.Empty,
 
-            BoxId: crab.BoxId,
+            FarmingRowId: box?.FarmingRowId?? Guid.Empty,
 
-            BoxCode: crab.Box?.Code
-                ?? string.Empty,
-
-            FarmingRowId: crab.Box?.FarmingRowId
-                ?? Guid.Empty,
-
-            RowName: crab.Box?.FarmingRow?.Name
-                ?? string.Empty,
+            RowName: box?.FarmingRow?.Name?? string.Empty,
 
             FarmingAreaId:
-                crab.Box?
+                box?
                     .FarmingRow?
                     .FarmingAreaId
                 ?? Guid.Empty,
 
             AreaName:
-                crab.Box?
+                box?
                     .FarmingRow?
                     .FarmingArea?
                     .Name
@@ -148,72 +146,38 @@ public class MortalityService : IMortalityService
         GetMortalityRecordsAsync(
             CancellationToken cancellationToken = default)
     {
-        var records =await _uow.GetMortalityRecordsWithDetailsAsync(cancellationToken);
+        var records =await _uow.CrabMortalityRecords.GetAllAsync(cancellationToken);
 
-        return records
-            .Select(x => new MortalityRecordDto(
-                Id: x.Id,
-
-                CrabId: x.CrabId,
-
-                CrabTag: x.Crab?.Tag,
-
-                CropBatchId:
-                    x.Crab?.CropBatchId
-                    ?? Guid.Empty,
-
-                BatchCode:
-                    x.Crab?.CropBatch?.BatchCode
-                    ?? string.Empty,
-
-                BoxId:
-                    x.Crab?.BoxId
-                    ?? Guid.Empty,
-
-                BoxCode:
-                    x.Crab?.Box?.Code
-                    ?? string.Empty,
-
-                FarmingRowId:
-                    x.Crab?
-                        .Box?
-                        .FarmingRowId
-                    ?? Guid.Empty,
-
-                RowName:
-                    x.Crab?
-                        .Box?
-                        .FarmingRow?
-                        .Name
-                    ?? string.Empty,
-
-                FarmingAreaId:
-                    x.Crab?
-                        .Box?
-                        .FarmingRow?
-                        .FarmingAreaId
-                    ?? Guid.Empty,
-
-                AreaName:
-                    x.Crab?
-                        .Box?
-                        .FarmingRow?
-                        .FarmingArea?
-                        .Name
-                    ?? string.Empty,
-
-                MortalityDate:
-                    x.MortalityDate,
-
-                Cause:
-                    x.Cause,
-
-                Notes:
-                    x.Notes,
-
-                RecordedBy:
-                    x.RecordedBy
-            ))
-            .ToList();
+        return records.Select(x => {
+    var crabTask = _uow.Crabs.GetByIdAsync(x.CrabId, cancellationToken).Result;
+    var latestAlloc = crabTask?.BoxAllocations
+        .OrderByDescending(a => a.StartTime).FirstOrDefault();
+    var boxId = latestAlloc?.BoxId ?? Guid.Empty;
+    return new MortalityRecordDto(
+        Id: x.Id,
+        CrabId: x.CrabId,
+        CrabTag: crabTask?.Tag,
+        BoxId: boxId,
+        BoxCode: "",
+        FarmingRowId: Guid.Empty,
+        RowName: "",
+        FarmingAreaId: Guid.Empty,
+        AreaName: "",
+        MortalityDate: x.MortalityDate,
+        Cause: x.Cause,
+        Notes: x.Notes,
+        RecordedBy: x.RecordedBy
+    );
+}).ToList();
     }
+
+    private static bool IsCrabAlive(Crab c) =>
+    c.Status == CrabStatus.Alive
+    || c.Status == CrabStatus.Molting
+    || c.Status == CrabStatus.Quarantined;
+
+    private static Guid GetCrabBoxId(Crab c) =>
+        c.BoxAllocations
+         .OrderByDescending(a => a.StartTime)
+         .FirstOrDefault()?.BoxId ?? Guid.Empty;
 }

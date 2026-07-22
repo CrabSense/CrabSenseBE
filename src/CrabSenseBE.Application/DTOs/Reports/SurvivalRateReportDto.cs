@@ -1,35 +1,46 @@
 namespace CrabSenseBE.Application.DTOs.Reports;
 
-// 1. DTO tổng quan tỷ lệ sống
+/// <summary>
+/// Báo cáo tổng quan tình trạng cua.
+/// </summary>
 public record SurvivalRateReportDto
 (
     int TotalCrabs,
     int AliveCrabs,
     int DeadCrabs,
+    int HarvestedCrabs,
+
     decimal SurvivalRate,
     decimal MortalityRate,
-    List<SurvivalByCropBatchDto> ByCropBatches,
+    decimal HarvestRate,
+
     List<SurvivalByAreaDto> ByAreas
 );
 
-// 2. DTO chi tiết theo đợt nuôi
-public record SurvivalByCropBatchDto
-(
-    Guid CropBatchId,
-    string BatchCode,
-    int TotalCrabs,
-    int AliveCrabs,
-    int DeadCrabs,
-    decimal SurvivalRate
-);
-
-// 3. DTO chi tiết theo khu vực
+/// <summary>
+/// Báo cáo tỷ lệ sống theo khu vực.
+/// </summary>
 public record SurvivalByAreaDto
 (
     Guid AreaId,
     string AreaName,
+
     int TotalCrabs,
     int AliveCrabs,
     int DeadCrabs,
-    decimal SurvivalRate
+    int HarvestedCrabs,
+
+    decimal SurvivalRate,
+    decimal MortalityRate,
+    decimal HarvestRate
+);
+
+/// <summary>
+/// Điều kiện lọc báo cáo tỷ lệ sống.
+/// </summary>
+public record SurvivalRateFilterDto
+(
+    Guid? AreaId,
+    DateTime? FromDate,
+    DateTime? ToDate
 );

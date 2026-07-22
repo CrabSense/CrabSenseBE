@@ -33,8 +33,8 @@ public class UnitOfWork : IUnitOfWork
     private IRepository<CrabLot>? _crabLots;
     public IRepository<CrabLot> CrabLots => _crabLots ??= new GenericRepository<CrabLot>(_context);
 
-    private IRepository<CropBatch>? _cropBatches;
-    public IRepository<CropBatch> CropBatches => _cropBatches ??= new GenericRepository<CropBatch>(_context);
+    // private IRepository<CropBatch>? _cropBatches;
+    // public IRepository<CropBatch> CropBatches => _cropBatches ??= new GenericRepository<CropBatch>(_context);
 
     private IRepository<OperationLog>? _operationLogs;
     public IRepository<OperationLog> OperationLogs => _operationLogs ??= new GenericRepository<OperationLog>(_context);
@@ -54,8 +54,8 @@ public class UnitOfWork : IUnitOfWork
 
     private IRepository<CrabMortalityRecord>? _crabMortalityRecords;
     public IRepository<CrabMortalityRecord> CrabMortalityRecords =>
-    _crabMortalityRecords??= new GenericRepository<CrabMortalityRecord>(_context);
-    
+    _crabMortalityRecords ??= new GenericRepository<CrabMortalityRecord>(_context);
+
     // IoT
     private IRepository<WaterSystem>? _waterSystems;
     public IRepository<WaterSystem> WaterSystems => _waterSystems ??= new GenericRepository<WaterSystem>(_context);
@@ -151,43 +151,20 @@ public class UnitOfWork : IUnitOfWork
     public Task<int> SaveChangesAsync(CancellationToken ct = default)
         => _context.SaveChangesAsync(ct);
 
-        /// <summary>
-/// Lấy danh sách các bản ghi cua chết
-/// kèm đầy đủ thông tin liên quan. 
-/// </summary>
-public async Task<IReadOnlyList<CrabMortalityRecord>>
-    GetMortalityRecordsWithDetailsAsync(
-        CancellationToken cancellationToken = default)
-{
-    return await _context.CrabMortalityRecords
+    public async Task<List<CrabMortalityRecord>> GetMortalityRecordsWithDetailsAsync(CancellationToken ct = default)
+    {
+        return await _context.CrabMortalityRecords
+            .Include(x => x.Crab)
+            .ToListAsync(ct);
+    }
 
-        // MortalityRecord → Crab → CropBatch
-        .Include(x => x.Crab)
-            .ThenInclude(c => c!.CropBatch)
-
-        // MortalityRecord → Crab → Box
-        // → FarmingRow → FarmingArea
-        .Include(x => x.Crab)
-            .ThenInclude(c => c!.Box)
-                .ThenInclude(b => b!.FarmingRow)
-                    .ThenInclude(r => r!.FarmingArea)
-
-        .ToListAsync(cancellationToken);
-}
-
-public async Task<Crab?> GetCrabWithDetailsAsync(
-    Guid crabId,
-    CancellationToken cancellationToken = default)
-{
-    return await _context.Crabs
-        .Include(c => c.CropBatch)
-        .Include(c => c.Box)
-            .ThenInclude(b => b!.FarmingRow)
-                .ThenInclude(r => r!.FarmingArea)
-        .FirstOrDefaultAsync(
-            c => c.Id == crabId,
-            cancellationToken);
-}
+    public async Task<Crab?> GetCrabWithDetailsAsync(Guid crabId, CancellationToken ct = default)
+    {
+        return await _context.Crabs
+            .Include(c => c.BoxAllocations)
+            .Include(c => c.MoltingRecords)
+            .FirstOrDefaultAsync(c => c.Id == crabId, ct);
+    }
 
     public void Dispose() => _context.Dispose();
 

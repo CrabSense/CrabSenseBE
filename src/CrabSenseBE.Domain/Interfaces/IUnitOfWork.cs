@@ -11,7 +11,7 @@ public interface IUnitOfWork : IDisposable
     IRepository<Box> Boxes { get; }
     IRepository<Crab> Crabs { get; }
     IRepository<CrabLot> CrabLots { get; }
-    IRepository<CropBatch> CropBatches { get; }
+    // IRepository<CropBatch> CropBatches { get; }
     IRepository<CrabMortalityRecord> CrabMortalityRecords { get; }
     IRepository<OperationLog> OperationLogs { get; }
     IRepository<CrabBoxAllocation> CrabBoxAllocations { get; }
@@ -49,12 +49,6 @@ public interface IUnitOfWork : IDisposable
 
     Task<int> SaveChangesAsync(CancellationToken ct = default);
 
-    // Lấy mortality kèm đầy đủ thông tin:
-    // Crab → CropBatch
-    // Crab → Box → FarmingRow → FarmingArea
-    Task<IReadOnlyList<CrabMortalityRecord>>
-        GetMortalityRecordsWithDetailsAsync(
-            CancellationToken cancellationToken = default);
-
+    Task<List<CrabMortalityRecord>> GetMortalityRecordsWithDetailsAsync(CancellationToken ct = default);
     Task<Crab?> GetCrabWithDetailsAsync(Guid crabId,CancellationToken cancellationToken = default);
 }

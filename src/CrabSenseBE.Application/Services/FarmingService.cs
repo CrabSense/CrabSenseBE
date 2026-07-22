@@ -4,7 +4,7 @@ using CrabSenseBE.Application.Interfaces;
 using CrabSenseBE.Domain.Entities;
 using CrabSenseBE.Domain.Enums;
 using CrabSenseBE.Domain.Interfaces;
-
+using Microsoft.EntityFrameworkCore;
 namespace CrabSenseBE.Application.Services;
 
 /// <summary>
@@ -428,8 +428,11 @@ public class FarmingService : IFarmingService
     public async Task<ApiResponse> DeleteBoxAsync(Guid id, CancellationToken ct = default)
     {
         var box = await RequireBoxAsync(id, ct);
-        var hasCrabs = await _uow.Crabs.AnyAsync(c => c.BoxId == id && c.IsAlive, ct);
-        if (hasCrabs)
+        var crabsInBox = await _uow.Crabs.Query()
+            .Include(c => c.BoxAllocations)
+            .Where(c => c.BoxAllocations.Any(a => a.BoxId == id && a.EndTime == null))
+            .ToListAsync(ct);
+        var hasCrabs = crabsInBox.Any(IsCrabAlive); if (hasCrabs)
             throw AppException.Conflict("Cannot delete box with live crabs. Move/harvest first.");
 
         var openAlloc = await _uow.CrabBoxAllocations.AnyAsync(a => a.BoxId == id && a.EndTime == null, ct);
@@ -449,8 +452,10 @@ public class FarmingService : IFarmingService
 
     public async Task<ApiResponse<PagedResult<CrabDto>>> GetCrabsAsync(int page, int pageSize, CancellationToken ct = default)
     {
-        var all = await _uow.Crabs.GetAllAsync(ct);
-        var ctx = await LoadBoxContextAsync(ct);
+        var all = await _uow.Crabs.Query()
+                    .Include(c => c.BoxAllocations)
+                    .Include(c => c.MoltingRecords)
+                    .ToListAsync(ct); var ctx = await LoadBoxContextAsync(ct);
         int? size = pageSize <= 0 ? null : pageSize;
         return ApiResponse<PagedResult<CrabDto>>.Ok(
             Page(all.OrderByDescending(c => c.CreatedAt), page, size, c => MapCrab(c, ctx)));
@@ -458,7 +463,10 @@ public class FarmingService : IFarmingService
 
     public async Task<ApiResponse<CrabDto>> GetCrabByIdAsync(Guid id, CancellationToken ct = default)
     {
-        var crab = await _uow.Crabs.GetByIdAsync(id, ct) ?? throw AppException.NotFound("Crab");
+        var crab = await _uow.Crabs.Query()
+            .Include(c => c.BoxAllocations)
+            .Include(c => c.MoltingRecords)
+            .FirstOrDefaultAsync(c => c.Id == id, ct) ?? throw AppException.NotFound("Crab");
         var ctx = await LoadBoxContextAsync(ct);
         return ApiResponse<CrabDto>.Ok(MapCrab(crab, ctx));
     }
@@ -510,32 +518,32 @@ public class FarmingService : IFarmingService
                 throw AppException.BadRequest("FarmingAreaId does not match box. Omit farmingAreaId to auto-fill.");
         }
 
-        var liveInBox = await _uow.Crabs.AnyAsync(c => c.BoxId == box.Id && c.IsAlive, ct);
+        var liveInBox = await _uow.Crabs.Query()
+            .Include(c => c.BoxAllocations)
+            .AnyAsync(c => c.BoxAllocations.Any(a => a.BoxId == box.Id && a.EndTime == null)
+                           && (c.Status == CrabStatus.Alive
+                               || c.Status == CrabStatus.Molting
+                               || c.Status == CrabStatus.Quarantined), ct);
         if (liveInBox)
             throw AppException.Conflict($"Box '{box.Code}' already has a live crab.");
 
         if (req.CrabLotId == Guid.Empty)
             throw AppException.BadRequest("CrabLotId is required — crab must belong to a lot.");
-        if (req.CropBatchId == Guid.Empty)
-            throw AppException.BadRequest("CropBatchId is required — crab must belong to a crop batch (vụ nuôi).");
 
         _ = await _uow.CrabLots.GetByIdAsync(req.CrabLotId, ct)
             ?? throw AppException.NotFound("CrabLot");
-        _ = await _uow.CropBatches.GetByIdAsync(req.CropBatchId, ct)
-            ?? throw AppException.NotFound("CropBatch");
 
         if (req.WeightGram is < 0)
             throw AppException.BadRequest("WeightGram must be >= 0.");
 
         var crab = new Crab
         {
-            BoxId = box.Id,
             CrabLotId = req.CrabLotId,
-            CropBatchId = req.CropBatchId,
             Tag = string.IsNullOrWhiteSpace(req.Tag) ? null : req.Tag.Trim(),
             WeightGram = req.WeightGram,
-            MoltingStage = string.IsNullOrWhiteSpace(req.MoltingStage) ? "hard" : req.MoltingStage.Trim(),
-            IsAlive = true
+            MoltingStage = req.MoltingStage,
+            StockedAt = DateTime.UtcNow,
+            Status = CrabStatus.Alive
         };
         await _uow.Crabs.AddAsync(crab, ct);
 
@@ -562,19 +570,23 @@ public class FarmingService : IFarmingService
     public async Task<ApiResponse<CrabDto>> UpdateCrabAsync(Guid id, UpdateCrabRequest req, CancellationToken ct = default)
     {
         var crab = await _uow.Crabs.GetByIdAsync(id, ct) ?? throw AppException.NotFound("Crab");
-        crab.MoltingStage = req.MoltingStage;
         crab.WeightGram = req.WeightGram;
-        crab.IsAlive = req.IsAlive;
         crab.MoltedAt = req.MoltedAt;
+        crab.MoltingStage = req.MoltingStage;
         _uow.Crabs.Update(crab);
 
         // If crab dies / harvest → free box if no other live crabs
-        if (!req.IsAlive)
+        if (!IsCrabAlive(crab))
         {
-            var box = await _uow.Boxes.GetByIdAsync(crab.BoxId, ct);
+            var boxId = GetCrabBoxId(crab);
+            var box = await _uow.Boxes.GetByIdAsync(boxId, ct);
             if (box is not null)
             {
-                var stillLive = await _uow.Crabs.AnyAsync(c => c.BoxId == box.Id && c.IsAlive && c.Id != id, ct);
+                var crabsInBox = await _uow.Crabs.Query()
+                    .Include(c => c.BoxAllocations)
+                    .Where(c => c.BoxAllocations.Any(a => a.BoxId == box.Id && a.EndTime == null))
+                    .ToListAsync(ct);
+                var stillLive = crabsInBox.Any(c => IsCrabAlive(c) && c.Id != id);
                 if (!stillLive)
                 {
                     box.IsOccupied = false;
@@ -600,17 +612,20 @@ public class FarmingService : IFarmingService
     public async Task<ApiResponse> DeleteCrabAsync(Guid id, CancellationToken ct = default)
     {
         var crab = await _uow.Crabs.GetByIdAsync(id, ct) ?? throw AppException.NotFound("Crab");
-        if (!crab.IsAlive)
+        if (!IsCrabAlive(crab))
             return ApiResponse.Ok("Crab already inactive (soft-deleted).");
 
-        // Soft-delete: keep row for history; free box like death/harvest.
-        crab.IsAlive = false;
-        _uow.Crabs.Update(crab);
+        crab.Status = CrabStatus.Dead;
 
-        var box = await _uow.Boxes.GetByIdAsync(crab.BoxId, ct);
+        var boxId = GetCrabBoxId(crab);
+        var box = await _uow.Boxes.GetByIdAsync(boxId, ct);
         if (box is not null)
         {
-            var stillLive = await _uow.Crabs.AnyAsync(c => c.BoxId == box.Id && c.IsAlive && c.Id != id, ct);
+            var crabsInBox = await _uow.Crabs.Query()
+                .Include(c => c.BoxAllocations)
+                .Where(c => c.BoxAllocations.Any(a => a.BoxId == box.Id && a.EndTime == null))
+                .ToListAsync(ct);
+            var stillLive = crabsInBox.Any(c => IsCrabAlive(c) && c.Id != id);
             if (!stillLive)
             {
                 var oldStatus = box.Status;
@@ -682,8 +697,15 @@ public class FarmingService : IFarmingService
         Guid? farmingAreaId, Guid? farmingRowId, CancellationToken ct)
     {
         var ctx = await LoadBoxContextAsync(ct);
-        var liveBoxIds = (await _uow.Crabs.FindAsync(c => c.IsAlive, ct))
-            .Select(c => c.BoxId)
+        var aliveCrabs = await _uow.Crabs.Query()
+    .Include(c => c.BoxAllocations)
+    .Where(c => c.Status == CrabStatus.Alive
+             || c.Status == CrabStatus.Molting
+             || c.Status == CrabStatus.Quarantined)
+    .ToListAsync(ct);
+
+        var liveBoxIds = aliveCrabs
+            .Select(c => GetCrabBoxId(c))
             .ToHashSet();
 
         IEnumerable<Box> q = ctx.Boxes.Where(b => !liveBoxIds.Contains(b.Id));
@@ -830,25 +852,50 @@ public class FarmingService : IFarmingService
             b.IsOccupied);
     }
 
+    private static bool IsCrabAlive(Crab c) =>
+    c.Status == CrabStatus.Alive
+    || c.Status == CrabStatus.Molting
+    || c.Status == CrabStatus.Quarantined;
+
+    private static Guid GetCrabBoxId(Crab c) =>
+        c.BoxAllocations
+         .OrderByDescending(a => a.StartTime)
+         .FirstOrDefault()?.BoxId ?? Guid.Empty;
     private static CrabDto MapCrab(Crab c, BoxContext ctx)
     {
-        var box = ctx.Boxes.FirstOrDefault(x => x.Id == c.BoxId);
+        // Lấy allocation mới nhất (box hiện tại)
+        var lastAllocation = c.BoxAllocations
+            .OrderByDescending(a => a.StartTime)
+            .FirstOrDefault();
+
+        var boxId = lastAllocation?.BoxId ?? Guid.Empty;
+
+        var box = ctx.Boxes.FirstOrDefault(x => x.Id == boxId);
         FarmingRow? row = null;
         if (box is not null)
             ctx.Rows.TryGetValue(box.FarmingRowId, out row);
 
+        // MoltingStage: lấy từ MoltingRecords gần nhất
+        var lastMolt = c.MoltingRecords
+            .OrderByDescending(m => m.MoltTime)
+            .FirstOrDefault();
+
+        // IsAlive: dùng Status enum
+        var isAlive = c.Status == CrabStatus.Alive
+            || c.Status == CrabStatus.Molting
+            || c.Status == CrabStatus.Quarantined;
+
         return new CrabDto(
             c.Id,
-            c.BoxId,
+            boxId,
             box?.Code,
             box?.FarmingRowId ?? Guid.Empty,
             row?.FarmingAreaId ?? Guid.Empty,
             c.CrabLotId,
-            c.CropBatchId,
             c.Tag,
             c.WeightGram,
-            c.MoltingStage,
-            c.IsAlive,
+            lastMolt?.Result,   // MoltingStage
+            isAlive,            // IsAlive
             c.MoltedAt);
     }
 }

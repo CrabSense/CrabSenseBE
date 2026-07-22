@@ -13,10 +13,6 @@ public record MortalityRecordDto
 
     string? CrabTag,
 
-    Guid CropBatchId,
-
-    string BatchCode,
-
     Guid BoxId,
 
     string BoxCode,

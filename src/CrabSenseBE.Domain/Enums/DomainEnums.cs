@@ -89,6 +89,22 @@ public enum HarvestStatus
     Cancelled
 }
 
+public enum CrabStatus
+{
+    /// <summary>Cua đang sống bình thường.</summary>
+    Alive = 0,
+    /// <summary>Cua đang trong quá trình lột xác.</summary>
+    Molting = 1,
+    /// <summary>Cua đã chết.</summary>
+    Dead = 2,
+    /// <summary>Cua đang được cách ly.</summary>
+    Quarantined = 3,
+    /// <summary>Cua đã được thu hoạch.</summary>
+    Harvested = 4,
+    /// <summary>Không xác định được tình trạng/vị trí cua.</summary>
+    Missing = 5
+}
+
 /// <summary>
 /// Nguyên nhân cua chết.
 /// Dùng cho báo cáo tỷ lệ sống và phân tích nguyên nhân tử vong.

@@ -5,6 +5,8 @@ using CrabSenseBE.Application.Interfaces;
 using CrabSenseBE.Domain.Entities;
 using CrabSenseBE.Domain.Interfaces;
 using QRCoder;
+using CrabSenseBE.Domain.Enums;
+
 
 namespace CrabSenseBE.Application.Services;
 
@@ -110,7 +112,13 @@ public class BoxQrService : IBoxQrService
         }
 
         // Cua đang trong hộp
-        var crabs = (await _uow.Crabs.FindAsync(c => c.BoxId == box.Id && c.IsAlive, ct)).ToList();
+        var allocs = await _uow.CrabBoxAllocations.FindAsync(
+    a => a.BoxId == box.Id && a.EndTime == null, ct);
+        var crabIds = allocs.Select(a => a.CrabId).ToList();
+        var allCrabs = await _uow.Crabs.FindAsync(c => crabIds.Contains(c.Id), ct);
+        var crabs = allCrabs.Where(c =>
+            c.Status == CrabStatus.Alive || c.Status == CrabStatus.Molting || c.Status == CrabStatus.Quarantined
+        ).ToList();
 
         // Thời điểm bắt đầu allocation hiện tại (EndTime == null)
         var openAllocs = await _uow.CrabBoxAllocations.FindAsync(
@@ -120,9 +128,12 @@ public class BoxQrService : IBoxQrService
             .ToDictionary(g => g.Key, g => g.OrderByDescending(x => x.StartTime).First().StartTime);
 
         var crabDtos = crabs.Select(c => new BoxScanCrabDto(
-            c.Id, c.Tag, c.WeightGram, c.MoltingStage, c.IsAlive, c.MoltedAt, c.CrabLotId, c.CropBatchId,
-            allocByCrab.TryGetValue(c.Id, out var start) ? start : null
-        )).ToList();
+    c.Id, c.Tag, c.WeightGram,
+    c.MoltingStage,
+    c.Status == CrabStatus.Alive || c.Status == CrabStatus.Molting || c.Status == CrabStatus.Quarantined,
+    c.MoltedAt, c.CrabLotId,
+    allocByCrab.TryGetValue(c.Id, out var start) ? start : null
+)).ToList();
 
         // Đếm số lần quét (analytics hiện trường)
         qr.ScanCount += 1;
@@ -147,33 +158,33 @@ public class BoxQrService : IBoxQrService
             ?? throw AppException.NotFound("Crab");
 
         // Chỉ cho sửa cua đang thuộc hộp của tem vừa quét (tránh nhầm hộp)
-        if (crab.BoxId != qr.BoxId)
+        if (GetCrabBoxId(crab) != qr.BoxId)
             throw AppException.BadRequest("Cua không thuộc hộp của mã QR này.");
 
         if (req.Tag is not null) crab.Tag = req.Tag;
         if (req.WeightGram.HasValue) crab.WeightGram = req.WeightGram;
         if (req.MoltingStage is not null) crab.MoltingStage = req.MoltingStage;
-        if (req.IsAlive.HasValue) crab.IsAlive = req.IsAlive.Value;
+        if (req.IsAlive.HasValue) crab.Status = req.IsAlive.Value ? CrabStatus.Alive : CrabStatus.Dead;
         if (req.MoltedAt.HasValue) crab.MoltedAt = req.MoltedAt;
 
         _uow.Crabs.Update(crab);
         await _uow.SaveChangesAsync(ct);
 
-        var box = await _uow.Boxes.GetByIdAsync(crab.BoxId, ct);
+        var boxId = GetCrabBoxId(crab);
+        var box = await _uow.Boxes.GetByIdAsync(boxId, ct);
         var row = box is null ? null : await _uow.FarmingRows.GetByIdAsync(box.FarmingRowId, ct);
 
         return ApiResponse<CrabDto>.Ok(new CrabDto(
             crab.Id,
-            crab.BoxId,
+            boxId,
             box?.Code,
             box?.FarmingRowId ?? Guid.Empty,
             row?.FarmingAreaId ?? Guid.Empty,
             crab.CrabLotId,
-            crab.CropBatchId,
             crab.Tag,
             crab.WeightGram,
             crab.MoltingStage,
-            crab.IsAlive,
+            crab.Status == CrabStatus.Alive || crab.Status == CrabStatus.Molting || crab.Status == CrabStatus.Quarantined,
             crab.MoltedAt), "Updated.");
     }
 
@@ -184,7 +195,7 @@ public class BoxQrService : IBoxQrService
         var crab = await _uow.Crabs.GetByIdAsync(req.CrabId, ct)
             ?? throw AppException.NotFound("Crab");
 
-        if (crab.BoxId != sourceQr.BoxId)
+        if (GetCrabBoxId(crab) != sourceQr.BoxId)
             throw AppException.BadRequest("Cua không đang ở hộp nguồn (QR vừa quét).");
 
         // Đích: BoxId hoặc quét thêm tem hộp đích
@@ -234,4 +245,15 @@ public class BoxQrService : IBoxQrService
 
     private static BoxQrDto MapQr(QrCode q) =>
         new(q.Id, q.Code, q.BoxId!.Value, q.Payload, q.ScanCount, q.IsActive);
+
+    private static bool IsCrabAlive(Crab c) =>
+    c.Status == CrabStatus.Alive
+    || c.Status == CrabStatus.Molting
+    || c.Status == CrabStatus.Quarantined;
+
+    private static Guid GetCrabBoxId(Crab c) =>
+        c.BoxAllocations
+         .OrderByDescending(a => a.StartTime)
+         .FirstOrDefault()?.BoxId ?? Guid.Empty;
 }
+

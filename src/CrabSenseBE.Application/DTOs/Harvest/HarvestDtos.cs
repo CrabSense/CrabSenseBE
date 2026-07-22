@@ -7,7 +7,7 @@ namespace CrabSenseBE.Application.DTOs.Harvest;
 public record HarvestVoucherDto(
     Guid Id,
     string VoucherCode,
-    Guid? CropBatchId,
+    // Guid? CropBatchId,
     DateTime HarvestDate,
     string Status,
     int TotalQuantity,
@@ -22,7 +22,7 @@ public record HarvestVoucherDto(
 public record HarvestVoucherDetailDto(
     Guid Id,
     string VoucherCode,
-    Guid? CropBatchId,
+    // Guid? CropBatchId,
     DateTime HarvestDate,
     string Status,
     int TotalQuantity,

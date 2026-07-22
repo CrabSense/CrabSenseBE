@@ -1,12 +1,48 @@
+using CrabSenseBE.Application.Common;
 using CrabSenseBE.Application.DTOs.Reports;
 using CrabSenseBE.Application.Interfaces;
-using CrabSenseBE.Application.Common;
+using CrabSenseBE.Domain.Enums;
 using CrabSenseBE.Domain.Interfaces;
 using Microsoft.EntityFrameworkCore;
 
 namespace CrabSenseBE.Application.Services;
-
-public class SurvivalRateReportService : ISurvivalRateReportService
+/// <summary>
+/// Service tạo báo cáo tỷ lệ sống, chết và thu hoạch của cua.
+///
+/// Quy tắc nghiệp vụ:
+///
+/// Alive:
+///     - Alive
+///     - Molting
+///     - Quarantined
+///
+/// Dead:
+///     - Dead
+///
+/// Harvested:
+///     - Harvested
+///
+/// Tổng số cua:
+///     TotalCrabs = Alive + Dead + Harvested
+///
+/// SurvivalRate:
+///     Alive / Total * 100
+///
+/// MortalityRate:
+///     Dead / Total * 100
+///
+/// HarvestRate:
+///     Harvested / Total * 100
+///
+/// Thời gian lọc:
+///     Dựa trên thời điểm thả cua (StockedAt).
+///
+/// Khu vực:
+///     Dựa trên lần phân bổ cuối cùng của cua
+///     trong CrabBoxAllocation.
+/// </summary>
+public class SurvivalRateReportService
+    : ISurvivalRateReportService
 {
     private readonly IUnitOfWork _uow;
 
@@ -15,128 +51,380 @@ public class SurvivalRateReportService : ISurvivalRateReportService
         _uow = uow;
     }
 
-    public async Task<SurvivalRateReportDto> GetSurvivalRateReportAsync(
-        CancellationToken cancellationToken = default)
+    /// <summary>
+    /// Lấy báo cáo tổng quan tỷ lệ sống của cua.
+    ///
+    /// Có thể lọc theo:
+    /// - Khoảng thời gian thả cua
+    /// - Khu vực nuôi
+    /// </summary>
+    public async Task<SurvivalRateReportDto>
+        GetSurvivalRateReportAsync(
+            SurvivalRateFilterDto filter,
+            CancellationToken cancellationToken = default)
     {
-        var crabs = await _uow.Crabs.Query()
-            .Include(c => c.CropBatch)
-            .Include(c => c.Box)
-                .ThenInclude(b => b!.FarmingRow)
-                    .ThenInclude(r => r!.FarmingArea)
+        // ============================================================
+        // 1. KIỂM TRA KHU VỰC NẾU CÓ FILTER
+        // ============================================================
+
+        if (filter.AreaId.HasValue)
+        {
+            var areaExists =
+                await _uow.FarmingAreas.AnyAsync(
+                    x => x.Id == filter.AreaId.Value,
+                    cancellationToken);
+
+            if (!areaExists)
+            {
+                throw AppException.NotFound(
+                    "Không tìm thấy khu vực.");
+            }
+        }
+
+        // ============================================================
+        // 2. XÂY DỰNG QUERY LẤY DỮ LIỆU CUA
+        // ============================================================
+        //
+        // Cần lấy:
+        //
+        // Crab
+        //   └── BoxAllocations
+        //         └── Box
+        //              └── FarmingRow
+        //                    └── FarmingArea
+        //
+        // Vì cua có thể đã:
+        // - Di chuyển sang box khác
+        // - Chết
+        // - Được thu hoạch
+        //
+        // nên cần lịch sử phân bổ để xác định
+        // khu vực cuối cùng của cua.
+        // ============================================================
+
+        var query = _uow.Crabs
+            .Query()
+
+            .Include(c => c.BoxAllocations)
+                .ThenInclude(a => a.Box)
+                    .ThenInclude(b => b!.FarmingRow)
+                        .ThenInclude(r => r!.FarmingArea)
+
+            .AsQueryable();
+
+        // ============================================================
+        // 3. LỌC THEO THỜI ĐIỂM THẢ CUA
+        // ============================================================
+        //
+        // FromDate:
+        //     Lấy từ đầu ngày.
+        //
+        // ToDate:
+        //     Dùng ngày kế tiếp làm mốc kết thúc
+        //     để bao gồm toàn bộ ngày ToDate.
+        //
+        // Ví dụ:
+        //
+        // FromDate = 01/07/2026
+        // ToDate   = 21/07/2026
+        //
+        // Kết quả:
+        //
+        // StockedAt >= 01/07/2026 00:00:00
+        // StockedAt <  22/07/2026 00:00:00
+        //
+        // Như vậy toàn bộ ngày 21/07 được tính.
+        // ============================================================
+
+        if (filter.FromDate.HasValue)
+        {
+            var fromDate =
+                filter.FromDate.Value.Date;
+
+            query = query.Where(c =>
+                c.StockedAt >= fromDate);
+        }
+
+        if (filter.ToDate.HasValue)
+        {
+            var toDateExclusive =
+                filter.ToDate.Value
+                    .Date
+                    .AddDays(1);
+
+            query = query.Where(c =>
+                c.StockedAt < toDateExclusive);
+        }
+
+        // ============================================================
+        // 4. LẤY DỮ LIỆU TỪ DATABASE
+        // ============================================================
+
+        var crabs = await query
             .ToListAsync(cancellationToken);
 
-        var total = crabs.Count;
-        var alive = crabs.Count(c => c.IsAlive);
-        var dead = total - alive;
-        var survivalRate = total > 0
-            ? decimal.Round((decimal)alive / total * 100, 2)
-            : 0;
-        var mortalityRate = total > 0
-            ? decimal.Round((decimal)dead / total * 100, 2)
-            : 0;
+        // ============================================================
+        // 5. LỌC THEO KHU VỰC
+        // ============================================================
+        //
+        // Mỗi con cua có thể có nhiều allocation:
+        //
+        // Allocation 1:
+        //     BOX-0001
+        //     01/07 → 05/07
+        //
+        // Allocation 2:
+        //     BOX-0002
+        //     05/07 → hiện tại
+        //
+        // Vì vậy lấy allocation có StartTime mới nhất.
+        //
+        // Đối với:
+        // - Cua còn sống:
+        //     Đây thường là allocation hiện tại.
+        //
+        // - Cua đã chết:
+        //     Đây là box cuối cùng trước khi chết.
+        //
+        // - Cua đã thu hoạch:
+        //     Đây là box cuối cùng trước khi thu hoạch.
+        // ============================================================
 
-        var byCropBatches = crabs
-            .GroupBy(c => new { c.CropBatchId, BatchCode = c.CropBatch?.BatchCode ?? "Unknown" })
-            .Select(g => new SurvivalByCropBatchDto(
-                CropBatchId: g.Key.CropBatchId,
-                BatchCode: g.Key.BatchCode,
-                TotalCrabs: g.Count(),
-                AliveCrabs: g.Count(c => c.IsAlive),
-                DeadCrabs: g.Count(c => !c.IsAlive),
-                SurvivalRate: g.Count() > 0
-                    ? decimal.Round((decimal)g.Count(c => c.IsAlive) / g.Count() * 100, 2)
-                    : 0
-            ))
-            .OrderBy(x => x.BatchCode)
-            .ToList();
+        if (filter.AreaId.HasValue)
+        {
+            crabs = crabs
+                .Where(c =>
+                {
+                    var lastAllocation =
+                        c.BoxAllocations
+                            .OrderByDescending(
+                                a => a.StartTime)
+                            .FirstOrDefault();
+
+                    return lastAllocation?
+                        .Box?
+                        .FarmingRow?
+                        .FarmingAreaId
+                        == filter.AreaId.Value;
+                })
+                .ToList();
+        }
+
+        // ============================================================
+        // 6. TÍNH TỔNG QUAN
+        // ============================================================
+
+        var total =
+            crabs.Count;
+
+        // ============================================================
+        // CUA ĐƯỢC TÍNH LÀ CÒN SỐNG
+        // ============================================================
+        //
+        // Alive:
+        //     Cua đang sống bình thường.
+        //
+        // Molting:
+        //     Cua đang trong quá trình lột xác.
+        //
+        // Quarantined:
+        //     Cua đang được cách ly nhưng vẫn còn sống.
+        // ============================================================
+
+        var alive =
+            crabs.Count(c =>
+                c.Status == CrabStatus.Alive
+                || c.Status == CrabStatus.Molting
+                || c.Status == CrabStatus.Quarantined);
+
+        // ============================================================
+        // CUA ĐÃ CHẾT
+        // ============================================================
+
+        var dead =
+            crabs.Count(c =>
+                c.Status == CrabStatus.Dead);
+
+        // ============================================================
+        // CUA ĐÃ THU HOẠCH
+        // ============================================================
+
+        var harvested =
+            crabs.Count(c =>
+                c.Status == CrabStatus.Harvested);
+
+        // ============================================================
+        // 7. THỐNG KÊ THEO KHU VỰC
+        // ============================================================
+        //
+        // Mỗi cua được xác định khu vực dựa trên
+        // allocation cuối cùng của nó.
+        // ============================================================
 
         var byAreas = crabs
-            .GroupBy(c => new
+
+            // Lấy allocation cuối cùng của từng con cua
+            .Select(c => new
             {
-                AreaId = c.Box?.FarmingRow?.FarmingAreaId ?? Guid.Empty,
-                AreaName = c.Box?.FarmingRow?.FarmingArea?.Name ?? "Unknown"
+                Crab = c,
+
+                LastAllocation =
+                    c.BoxAllocations
+                        .OrderByDescending(
+                            a => a.StartTime)
+                        .FirstOrDefault()
             })
-            .Select(g => new SurvivalByAreaDto(
-                AreaId: g.Key.AreaId,
-                AreaName: g.Key.AreaName,
-                TotalCrabs: g.Count(),
-                AliveCrabs: g.Count(c => c.IsAlive),
-                DeadCrabs: g.Count(c => !c.IsAlive),
-                SurvivalRate: g.Count() > 0
-                    ? decimal.Round((decimal)g.Count(c => c.IsAlive) / g.Count() * 100, 2)
-                    : 0
-            ))
+
+            // Chỉ lấy cua có thông tin khu vực hợp lệ
+            .Where(x =>
+                x.LastAllocation != null
+                && x.LastAllocation.Box != null
+                && x.LastAllocation.Box.FarmingRow != null
+                && x.LastAllocation.Box.FarmingRow.FarmingArea != null)
+
+            // Nhóm theo khu vực
+            .GroupBy(x => new
+            {
+                AreaId =
+                    x.LastAllocation!
+                        .Box!
+                        .FarmingRow!
+                        .FarmingAreaId,
+
+                AreaName =
+                    x.LastAllocation!
+                        .Box!
+                        .FarmingRow!
+                        .FarmingArea!
+                        .Name
+            })
+
+            // Tính thống kê cho từng khu vực
+            .Select(g =>
+            {
+                var areaCrabs =
+                    g.Select(x => x.Crab)
+                        .ToList();
+
+                var areaTotal =
+                    areaCrabs.Count;
+
+                var areaAlive =
+                    areaCrabs.Count(c =>
+                        c.Status == CrabStatus.Alive
+                        || c.Status == CrabStatus.Molting
+                        || c.Status == CrabStatus.Quarantined);
+
+                var areaDead =
+                    areaCrabs.Count(c =>
+                        c.Status == CrabStatus.Dead);
+
+                var areaHarvested =
+                    areaCrabs.Count(c =>
+                        c.Status == CrabStatus.Harvested);
+
+                return new SurvivalByAreaDto(
+                    AreaId:
+                        g.Key.AreaId,
+
+                    AreaName:
+                        g.Key.AreaName,
+
+                    TotalCrabs:
+                        areaTotal,
+
+                    AliveCrabs:
+                        areaAlive,
+
+                    DeadCrabs:
+                        areaDead,
+
+                    HarvestedCrabs:
+                        areaHarvested,
+
+                    SurvivalRate:
+                        CalculateRate(
+                            areaAlive,
+                            areaTotal),
+
+                    MortalityRate:
+                        CalculateRate(
+                            areaDead,
+                            areaTotal),
+
+                    HarvestRate:
+                        CalculateRate(
+                            areaHarvested,
+                            areaTotal)
+                );
+            })
+
+            // Sắp xếp khu vực theo tên
             .OrderBy(x => x.AreaName)
+
             .ToList();
 
+        // ============================================================
+        // 8. TRẢ KẾT QUẢ
+        // ============================================================
+
         return new SurvivalRateReportDto(
-            TotalCrabs: total,
-            AliveCrabs: alive,
-            DeadCrabs: dead,
-            SurvivalRate: survivalRate,
-            MortalityRate: mortalityRate,
-            ByCropBatches: byCropBatches,
-            ByAreas: byAreas
+            TotalCrabs:
+                total,
+
+            AliveCrabs:
+                alive,
+
+            DeadCrabs:
+                dead,
+
+            HarvestedCrabs:
+                harvested,
+
+            SurvivalRate:
+                CalculateRate(
+                    alive,
+                    total),
+
+            MortalityRate:
+                CalculateRate(
+                    dead,
+                    total),
+
+            HarvestRate:
+                CalculateRate(
+                    harvested,
+                    total),
+
+            ByAreas:
+                byAreas
         );
     }
 
-    public async Task<SurvivalByCropBatchDto> GetSurvivalRateByCropBatchAsync(
-        Guid cropBatchId,
-        CancellationToken cancellationToken = default)
+    // ================================================================
+    // HÀM TÍNH TỶ LỆ PHẦN TRĂM
+    // ================================================================
+    //
+    // Công thức:
+    //
+    // Rate = Count / Total × 100
+    //
+    // Làm tròn 2 chữ số thập phân.
+    //
+    // Nếu Total = 0:
+    //     Trả về 0 để tránh chia cho 0.
+    // ================================================================
+
+    private static decimal CalculateRate(
+        int count,
+        int total)
     {
-        var batch = await _uow.CropBatches.GetByIdAsync(cropBatchId, cancellationToken);
-        if (batch is null)
-            throw AppException.BadRequest("Không tìm thấy đợt nuôi.");
-
-        var crabs = await _uow.Crabs.Query()
-            .Include(c => c.CropBatch)
-            .Where(c => c.CropBatchId == cropBatchId)
-            .ToListAsync(cancellationToken);
-
-        var total = crabs.Count;
-        var alive = crabs.Count(c => c.IsAlive);
-        var dead = total - alive;
-
-        return new SurvivalByCropBatchDto(
-            CropBatchId: cropBatchId,
-            BatchCode: batch.BatchCode,
-            TotalCrabs: total,
-            AliveCrabs: alive,
-            DeadCrabs: dead,
-            SurvivalRate: total > 0
-                ? decimal.Round((decimal)alive / total * 100, 2)
-                : 0
-        );
-    }
-
-    public async Task<SurvivalByAreaDto> GetSurvivalRateByAreaAsync(
-        Guid areaId,
-        CancellationToken cancellationToken = default)
-    {
-        var area = await _uow.FarmingAreas.GetByIdAsync(areaId, cancellationToken);
-        if (area is null)
-            throw AppException.BadRequest("Không tìm thấy khu vực.");
-
-        var crabs = await _uow.Crabs.Query()
-            .Include(c => c.Box)
-                .ThenInclude(b => b!.FarmingRow)
-                    .ThenInclude(r => r!.FarmingArea)
-            .Where(c => c.Box!.FarmingRow!.FarmingAreaId == areaId)
-            .ToListAsync(cancellationToken);
-
-        var total = crabs.Count;
-        var alive = crabs.Count(c => c.IsAlive);
-        var dead = total - alive;
-
-        return new SurvivalByAreaDto(
-            AreaId: areaId,
-            AreaName: area.Name,
-            TotalCrabs: total,
-            AliveCrabs: alive,
-            DeadCrabs: dead,
-            SurvivalRate: total > 0
-                ? decimal.Round((decimal)alive / total * 100, 2)
-                : 0
-        );
+        return total > 0
+            ? decimal.Round(
+                (decimal)count
+                / total
+                * 100,
+                2)
+            : 0;
     }
 }

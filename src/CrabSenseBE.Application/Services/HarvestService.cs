@@ -122,18 +122,18 @@ public class HarvestService : IHarvestService
                 "HarvestDate cannot be in the future.");
         }
 
-        if (request.CropBatchId.HasValue)
-        {
-            var cropBatchExists = await _uow.CropBatches.AnyAsync(
-                batch => batch.Id == request.CropBatchId.Value,
-                ct);
+        // if (request.CropBatchId.HasValue)
+        // {
+        //     var cropBatchExists = await _uow.CropBatches.AnyAsync(
+        //         batch => batch.Id == request.CropBatchId.Value,
+        //         ct);
 
-            if (!cropBatchExists)
-            {
-                throw AppException.BadRequest(
-                    $"CropBatch '{request.CropBatchId}' does not exist.");
-            }
-        }
+        //     if (!cropBatchExists)
+        //     {
+        //         throw AppException.BadRequest(
+        //             $"CropBatch '{request.CropBatchId}' does not exist.");
+        //     }
+        // }
 
         ValidateHarvestLines(requestLines);
 
@@ -142,15 +142,12 @@ public class HarvestService : IHarvestService
             .Select(line => line.CrabId!.Value)
             .ToList();
 
-        await ValidateCrabsAsync(
-            suppliedCrabIds,
-            request.CropBatchId,
-            ct);
+        await ValidateCrabsAsync(suppliedCrabIds,ct);
 
         var voucher = new HarvestVoucher
         {
             VoucherCode = await GenerateVoucherCodeAsync(ct),
-            CropBatchId = request.CropBatchId,
+            // CropBatchId = request.CropBatchId,
             HarvestDate = NormalizeUtc(request.HarvestDate),
             Status = HarvestStatus.Planned,
             Notes = NormalizeNullable(request.Notes),
@@ -430,7 +427,7 @@ public class HarvestService : IHarvestService
 
     private async Task ValidateCrabsAsync(
         IReadOnlyCollection<Guid> crabIds,
-        Guid? cropBatchId,
+        // Guid? cropBatchId,
         CancellationToken ct)
     {
         foreach (var crabId in crabIds)
@@ -439,19 +436,19 @@ public class HarvestService : IHarvestService
                 ?? throw AppException.BadRequest(
                     $"Crab '{crabId}' does not exist.");
 
-            if (!crab.IsAlive)
+            if (crab.Status == CrabStatus.Dead || crab.Status == CrabStatus.Harvested || crab.Status == CrabStatus.Missing)
             {
                 throw AppException.Conflict(
                     $"Crab '{crabId}' is not alive and cannot be harvested.");
             }
 
-            if (cropBatchId.HasValue
-                && crab.CropBatchId != cropBatchId.Value)
-            {
-                throw AppException.Conflict(
-                    $"Crab '{crabId}' does not belong to crop batch " +
-                    $"'{cropBatchId.Value}'.");
-            }
+            // if (cropBatchId.HasValue
+            //     && crab.CropBatchId != cropBatchId.Value)
+            // {
+            //     throw AppException.Conflict(
+            //         $"Crab '{crabId}' does not belong to crop batch " +
+            //         $"'{cropBatchId.Value}'.");
+            // }
 
             var alreadyHarvested = await _uow.HarvestLines.AnyAsync(
                 line => line.CrabId == crabId,
@@ -512,7 +509,7 @@ public class HarvestService : IHarvestService
     return new HarvestVoucherDto(
         Id: voucher.Id,
         VoucherCode: voucher.VoucherCode,
-        CropBatchId: voucher.CropBatchId,
+        // CropBatchId: voucher.CropBatchId,
         HarvestDate: voucher.HarvestDate,
         Status: voucher.Status.ToString(),
         TotalQuantity: voucher.TotalQuantity,
@@ -541,7 +538,7 @@ public class HarvestService : IHarvestService
         return new HarvestVoucherDetailDto(
             Id: voucher.Id,
             VoucherCode: voucher.VoucherCode,
-            CropBatchId: voucher.CropBatchId,
+            // CropBatchId: voucher.CropBatchId,
             HarvestDate: voucher.HarvestDate,
             Status: voucher.Status.ToString(),
             TotalQuantity: voucher.TotalQuantity,

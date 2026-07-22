@@ -119,7 +119,6 @@ public record CrabDto(
     Guid FarmingRowId,
     Guid FarmingAreaId,
     Guid CrabLotId,
-    Guid CropBatchId,
     string? Tag,
     decimal? WeightGram,
     string? MoltingStage,
@@ -133,7 +132,6 @@ public record CrabDto(
 /// </summary>
 public record CreateCrabRequest(
     Guid CrabLotId,
-    Guid CropBatchId,
     Guid? BoxId = null,
     Guid? FarmingRowId = null,
     Guid? FarmingAreaId = null,

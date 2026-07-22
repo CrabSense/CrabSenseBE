@@ -6,6 +6,7 @@ using CrabSenseBE.Domain.Entities;
 using CrabSenseBE.Domain.Interfaces;
 using FluentAssertions;
 using Moq;
+using CrabSenseBE.Domain.Enums;
 
 namespace CrabSenseBE.UnitTests.Application;
 
@@ -62,8 +63,16 @@ public class BoxQrServiceTests
         var box = new Box { Id = boxId, Code = "A01", FarmingRowId = rowId, Status = "active", IsOccupied = true };
         var row = new FarmingRow { Id = rowId, FarmingAreaId = areaId, Name = "Dãy 1" };
         var area = new FarmingArea { Id = areaId, Name = "Khu A" };
-        var crab = new Crab { Id = Guid.NewGuid(), BoxId = boxId, Tag = "C-1", IsAlive = true, WeightGram = 90 };
-
+        var crabDifferentBoxId = Guid.NewGuid();
+        var crab = new Crab
+        {
+            Id = crabDifferentBoxId,
+            Status = CrabStatus.Alive,
+            BoxAllocations = new List<CrabBoxAllocation>
+    {
+        new() { CrabId = crabDifferentBoxId, BoxId = Guid.NewGuid(), StartTime = DateTime.UtcNow }
+    }
+        };
         var qrRepo = new Mock<IRepository<QrCode>>();
         qrRepo.Setup(r => r.FirstOrDefaultAsync(It.IsAny<System.Linq.Expressions.Expression<Func<QrCode, bool>>>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(qr);
@@ -114,8 +123,15 @@ public class BoxQrServiceTests
         var crabId = Guid.NewGuid();
         var sourceQr = new QrCode { Code = "SRC", EntityType = "box", BoxId = sourceBox, IsActive = true };
         var targetQr = new QrCode { Code = "DST", EntityType = "box", BoxId = targetBox, IsActive = true };
-        var crab = new Crab { Id = crabId, BoxId = sourceBox, IsAlive = true };
-
+        var crab = new Crab
+        {
+            Id = crabId,
+            Status = CrabStatus.Alive,
+            BoxAllocations = new List<CrabBoxAllocation>
+    {
+        new() { CrabId = crabId, BoxId = sourceBox, StartTime = DateTime.UtcNow }
+    }
+        };
         var qrRepo = new Mock<IRepository<QrCode>>();
         qrRepo.SetupSequence(r => r.FirstOrDefaultAsync(It.IsAny<System.Linq.Expressions.Expression<Func<QrCode, bool>>>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(sourceQr)
@@ -158,8 +174,15 @@ public class BoxQrServiceTests
     {
         var boxId = Guid.NewGuid();
         var qr = new QrCode { Code = "A01-X", EntityType = "box", BoxId = boxId, IsActive = true };
-        var crab = new Crab { Id = Guid.NewGuid(), BoxId = Guid.NewGuid() }; // khác hộp
-
+        var crab = new Crab
+        {
+            Id = Guid.NewGuid(),
+            Status = CrabStatus.Alive,
+            BoxAllocations = new List<CrabBoxAllocation>
+    {
+        new() { CrabId = Guid.NewGuid(), BoxId = Guid.NewGuid(), StartTime = DateTime.UtcNow }
+    }
+        };
         var qrRepo = new Mock<IRepository<QrCode>>();
         qrRepo.Setup(r => r.FirstOrDefaultAsync(It.IsAny<System.Linq.Expressions.Expression<Func<QrCode, bool>>>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(qr);
