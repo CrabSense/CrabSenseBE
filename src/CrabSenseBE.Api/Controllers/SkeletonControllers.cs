@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using CrabSenseBE.Application.Interfaces;
 
 namespace CrabSenseBE.Api.Controllers;
 
@@ -66,18 +67,6 @@ public class PaymentsController : ControllerBase
 
 
 [ApiController]
-[Route("api/dashboard")]
-[Authorize]
-[Tags("31. Dashboard (stub)")]
-[Produces("application/json")]
-public class DashboardController : ControllerBase
-{
-    /// <summary>[READ] Dashboard overview</summary>
-    [HttpGet("overview")]
-    public IActionResult Overview() => Ok(new { success = true, data = new object() });
-}
-
-[ApiController]
 [Route("api/settings")]
 [Authorize]
 [Tags("32. CRUD — Settings (stub)")]
@@ -107,4 +96,32 @@ public class AiController : ControllerBase
     /// <summary>[READ] AI recommendations</summary>
     [HttpGet("recommendations")]
     public IActionResult Recommendations() => Ok(new { success = true, data = Array.Empty<object>() });
+}
+
+[ApiController]
+[Route("api/dashboard")]
+[Authorize(Roles = "SystemAdmin,FarmOwner")]
+[Tags("31. Dashboard")]
+[Produces("application/json")]
+public class DashboardController : ControllerBase
+{
+    private readonly IDashboardService _dashboardService;
+
+    public DashboardController(IDashboardService dashboardService)
+        => _dashboardService = dashboardService;
+
+    /// <summary>[READ] Dashboard overview — tổng quan trang trại</summary>
+    [HttpGet("overview")]
+    public async Task<IActionResult> Overview(
+        CancellationToken cancellationToken)
+    {
+        var result = await _dashboardService
+            .GetDashboardOverviewAsync(cancellationToken);
+
+        return Ok(new
+        {
+            success = true,
+            data = result
+        });
+    }
 }
