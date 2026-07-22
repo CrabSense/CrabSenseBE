@@ -1079,6 +1079,11 @@
         { label: "settings", run: (api) => api("GET", "/api/settings") },
         { label: "ai/detections", run: (api) => api("GET", "/api/ai/detections") },
         { label: "ai/recommendations", run: (api) => api("GET", "/api/ai/recommendations") },
+        { label: "GET /api/sync/queue", run: (api) => api("GET", "/api/sync/queue") },
+        { label: "GET /api/v1/sync/pull", run: (api) => api("GET", "/api/v1/sync/pull") },
+        { label: "GET /api/v1/sync/changes", run: (api) => api("GET", "/api/v1/sync/changes") },
+        { label: "GET /api/v1/sync/download", run: (api) => api("GET", "/api/v1/sync/download") },
+        { label: "GET /api/v1/synchronization/queue", run: (api) => api("GET", "/api/v1/synchronization/queue") },
       ],
     },
     {
