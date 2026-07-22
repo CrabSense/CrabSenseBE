@@ -38,6 +38,8 @@ public static class DevDbBootstrap
                 await db.SaveChangesAsync();
                 logger.LogInformation(
                     "Users sẵn sàng: sysadmin/SysAdmin@123 | owner/Owner@123 | staff/Staff@123 (admin/Admin@123 = SystemAdmin).");
+
+                await DemoDataSeeder.SeedAsync(db, logger);
                 return;
             }
             catch (Exception ex)
