@@ -35,6 +35,7 @@ public class AppDbContext : DbContext
     public DbSet<Notification> Notifications => Set<Notification>();
     public DbSet<NotificationChannel> NotificationChannels => Set<NotificationChannel>();
     public DbSet<NotificationDelivery> NotificationDeliveries => Set<NotificationDelivery>();
+    public DbSet<UserPushToken> UserPushTokens => Set<UserPushToken>();
     public DbSet<MediaAsset> MediaAssets => Set<MediaAsset>();
 
     // Harvest / Frozen / QR
@@ -105,6 +106,10 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<HarvestVoucher>()
             .Property(h => h.Status)
             .HasConversion<string>();
+
+        modelBuilder.Entity<UserPushToken>()
+            .HasIndex(t => new { t.UserId, t.Token })
+            .IsUnique();
     }
 
     public override Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)

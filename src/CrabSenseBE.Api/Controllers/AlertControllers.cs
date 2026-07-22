@@ -1,6 +1,7 @@
 using CrabSenseBE.Application.DTOs.Alert;
 using CrabSenseBE.Application.Interfaces;
 using CrabSenseBE.Domain.Enums;
+using CrabSenseBE.Api.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -82,7 +83,12 @@ public class AlertThresholdsController : ControllerBase
 public class NotificationsController : ControllerBase
 {
     private readonly INotificationService _service;
-    public NotificationsController(INotificationService service) => _service = service;
+    private readonly ICurrentUserService _currentUser;
+    public NotificationsController(INotificationService service, ICurrentUserService currentUser)
+    {
+        _service = service;
+        _currentUser = currentUser;
+    }
 
     /// <summary>[READ] Notifications by user</summary>
     [HttpGet("user/{userId:guid}")]
@@ -128,4 +134,33 @@ public class NotificationsController : ControllerBase
     public async Task<IActionResult> TestChannel(
         Guid id, [FromBody] TestNotificationChannelRequest? req, CancellationToken ct)
         => Ok(await _service.TestChannelAsync(id, req ?? new TestNotificationChannelRequest(), ct));
+
+    /// <summary>[CREATE] Register FCM push token (Mobile)</summary>
+    [HttpPost("register")]
+    public async Task<IActionResult> RegisterPushToken(
+        [FromBody] RegisterPushTokenRequest req, CancellationToken ct)
+        => Ok(await _service.RegisterPushTokenAsync(_currentUser.UserId, req, ct));
+
+    /// <summary>[DELETE] Unregister FCM push token</summary>
+    [HttpDelete("register")]
+    public async Task<IActionResult> UnregisterPushToken([FromQuery] string token, CancellationToken ct)
+        => Ok(await _service.UnregisterPushTokenAsync(_currentUser.UserId, token, ct));
+
+    /// <summary>[READ] Active push tokens for current user</summary>
+    [HttpGet("register")]
+    public async Task<IActionResult> GetPushTokens(CancellationToken ct)
+        => Ok(await _service.GetPushTokensAsync(_currentUser.UserId, ct));
+
+    /// <summary>[READ] Notification settings (push / Telegram / Zalo)</summary>
+    [HttpGet("settings")]
+    [Authorize(Roles = AppRoles.FarmWrite)]
+    public async Task<IActionResult> GetSettings(CancellationToken ct)
+        => Ok(await _service.GetSettingsAsync(ct));
+
+    /// <summary>[UPDATE] Notification settings (push / Telegram / Zalo)</summary>
+    [HttpPut("settings")]
+    [Authorize(Roles = AppRoles.FarmWrite)]
+    public async Task<IActionResult> UpdateSettings(
+        [FromBody] UpdateNotificationSettingsRequest req, CancellationToken ct)
+        => Ok(await _service.UpdateSettingsAsync(req, ct));
 }

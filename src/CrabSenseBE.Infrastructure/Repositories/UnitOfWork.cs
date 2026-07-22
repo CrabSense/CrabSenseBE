@@ -85,6 +85,10 @@ public class UnitOfWork : IUnitOfWork
     public IRepository<NotificationDelivery> NotificationDeliveries =>
         _notificationDeliveries ??= new GenericRepository<NotificationDelivery>(_context);
 
+    private IRepository<UserPushToken>? _userPushTokens;
+    public IRepository<UserPushToken> UserPushTokens =>
+        _userPushTokens ??= new GenericRepository<UserPushToken>(_context);
+
     private IRepository<MediaAsset>? _mediaAssets;
     public IRepository<MediaAsset> MediaAssets =>
         _mediaAssets ??= new GenericRepository<MediaAsset>(_context);

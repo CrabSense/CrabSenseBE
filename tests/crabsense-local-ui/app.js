@@ -1156,6 +1156,51 @@
             return api("POST", `/api/notifications/channels/${id}/test`, body);
           },
         },
+        {
+          label: "POST register FCM token",
+          run: async (api) =>
+            api("POST", "/api/notifications/register", {
+              token: "demo-fcm-token-" + Date.now(),
+              platform: "android",
+              deviceId: "local-ui-device",
+            }),
+        },
+        {
+          label: "GET push tokens (current user)",
+          run: async (api) => api("GET", "/api/notifications/register"),
+        },
+        {
+          label: "GET notification settings",
+          run: async (api) => api("GET", "/api/notifications/settings"),
+        },
+        {
+          label: "PUT notification settings (Telegram stub)",
+          run: async (api) =>
+            api("PUT", "/api/notifications/settings", {
+              pushEnabled: true,
+              telegram: {
+                enabled: false,
+                configJson: JSON.stringify({ bot_token: "", chat_id: "" }),
+              },
+              zalo: {
+                enabled: false,
+                configJson: JSON.stringify({ access_token: "", user_id: "" }),
+              },
+            }),
+        },
+        {
+          label: "GET v1 notification settings (Mobile alias)",
+          run: async (api) => api("GET", "/api/v1/notifications/settings"),
+        },
+        {
+          label: "POST v1 register FCM (Mobile alias)",
+          run: async (api) =>
+            api("POST", "/api/v1/notifications/register", {
+              token: "demo-fcm-v1-" + Date.now(),
+              platform: "android",
+              deviceId: "local-ui-v1",
+            }),
+        },
       ],
     },
   ];

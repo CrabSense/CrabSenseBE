@@ -26,6 +26,7 @@ public interface IUnitOfWork : IDisposable
     IRepository<Notification> Notifications { get; }
     IRepository<NotificationChannel> NotificationChannels { get; }
     IRepository<NotificationDelivery> NotificationDeliveries { get; }
+    IRepository<UserPushToken> UserPushTokens { get; }
     IRepository<MediaAsset> MediaAssets { get; }
     IRepository<HarvestVoucher> HarvestVouchers { get; }
     IRepository<HarvestLine> HarvestLines { get; }

@@ -23,7 +23,7 @@ Log.Logger = new LoggerConfiguration()
 builder.Host.UseSerilog();
 
 // ─── Application + Infrastructure DI ───────────────────────────────────────
-builder.Services.AddApplication();
+builder.Services.AddApplication(builder.Configuration);
 builder.Services.AddInfrastructure(builder.Configuration);
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddScoped<ICurrentUserService, CurrentUserService>();

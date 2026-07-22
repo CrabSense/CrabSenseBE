@@ -1,9 +1,11 @@
 using CrabSenseBE.Application.DTOs.Alert;
+using CrabSenseBE.Application.Options;
 using CrabSenseBE.Application.Services;
 using CrabSenseBE.Domain.Entities;
 using CrabSenseBE.Domain.Interfaces;
 using FluentAssertions;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using Moq;
 
 namespace CrabSenseBE.UnitTests.Application;
@@ -14,9 +16,10 @@ public class NotificationServiceTests
     private readonly Mock<IUnitOfWork> _uow = new();
     private readonly Mock<IHttpClientFactory> _httpClientFactory = new();
     private readonly Mock<ILogger<NotificationService>> _logger = new();
+    private readonly IOptions<FcmOptions> _fcm = Options.Create(new FcmOptions());
 
     private NotificationService Create() =>
-        new(_uow.Object, _httpClientFactory.Object, _logger.Object);
+        new(_uow.Object, _httpClientFactory.Object, _logger.Object, _fcm);
 
     [Fact]
     public async Task GetChannels_SeedsDefaultsIncludingZalo()
@@ -56,5 +59,29 @@ public class NotificationServiceTests
         result.Success.Should().BeTrue();
         n.IsRead.Should().BeTrue();
         n.ReadAt.Should().NotBeNull();
+    }
+
+    [Fact]
+    public async Task RegisterPushToken_CreatesNewToken()
+    {
+        var userId = Guid.NewGuid();
+        var repo = new Mock<IRepository<UserPushToken>>();
+        var stored = new List<UserPushToken>();
+
+        repo.Setup(r => r.FindAsync(It.IsAny<System.Linq.Expressions.Expression<Func<UserPushToken, bool>>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((System.Linq.Expressions.Expression<Func<UserPushToken, bool>> pred, CancellationToken _) =>
+                stored.AsQueryable().Where(pred).ToList());
+        repo.Setup(r => r.AddAsync(It.IsAny<UserPushToken>(), It.IsAny<CancellationToken>()))
+            .Callback<UserPushToken, CancellationToken>((t, _) => stored.Add(t))
+            .Returns(Task.CompletedTask);
+
+        _uow.Setup(u => u.UserPushTokens).Returns(repo.Object);
+        _uow.Setup(u => u.SaveChangesAsync(It.IsAny<CancellationToken>())).ReturnsAsync(1);
+
+        var result = await Create().RegisterPushTokenAsync(
+            userId, new RegisterPushTokenRequest("fcm-token-abc", "android", "device-1"));
+
+        result.Success.Should().BeTrue();
+        stored.Should().ContainSingle(t => t.Token == "fcm-token-abc" && t.IsActive);
     }
 }

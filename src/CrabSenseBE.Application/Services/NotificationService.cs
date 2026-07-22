@@ -4,9 +4,11 @@ using System.Text.Json;
 using CrabSenseBE.Application.Common;
 using CrabSenseBE.Application.DTOs.Alert;
 using CrabSenseBE.Application.Interfaces;
+using CrabSenseBE.Application.Options;
 using CrabSenseBE.Domain.Entities;
 using CrabSenseBE.Domain.Interfaces;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace CrabSenseBE.Application.Services;
 
@@ -19,15 +21,18 @@ public class NotificationService : INotificationService
     private readonly IUnitOfWork _uow;
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly ILogger<NotificationService> _logger;
+    private readonly FcmOptions _fcm;
 
     public NotificationService(
         IUnitOfWork uow,
         IHttpClientFactory httpClientFactory,
-        ILogger<NotificationService> logger)
+        ILogger<NotificationService> logger,
+        IOptions<FcmOptions> fcm)
     {
         _uow = uow;
         _httpClientFactory = httpClientFactory;
         _logger = logger;
+        _fcm = fcm.Value;
     }
 
     public async Task<ApiResponse<IEnumerable<NotificationDto>>> GetByUserAsync(
@@ -119,10 +124,108 @@ public class NotificationService : INotificationService
             ? $"Test channel {ch.ChannelCode} at {DateTime.UtcNow:O}"
             : req.Body!;
 
-        var (ok, detail) = await DispatchChannelAsync(ch, title, body, ct);
+        var (ok, detail) = await DispatchChannelAsync(ch, title, body, null, ct);
         return ok
             ? ApiResponse.Ok($"Test OK via {ch.ChannelCode}: {detail}")
             : throw AppException.BadRequest($"Test failed via {ch.ChannelCode}: {detail}");
+    }
+
+    public async Task<ApiResponse<PushTokenDto>> RegisterPushTokenAsync(
+        Guid userId, RegisterPushTokenRequest req, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(req.Token))
+            throw AppException.BadRequest("token is required.");
+
+        var token = req.Token.Trim();
+        var platform = string.IsNullOrWhiteSpace(req.Platform) ? "android" : req.Platform.Trim().ToLowerInvariant();
+        var existing = (await _uow.UserPushTokens.FindAsync(
+            t => t.UserId == userId && t.Token == token, ct)).FirstOrDefault();
+
+        if (existing is not null)
+        {
+            existing.IsActive = true;
+            existing.Platform = platform;
+            existing.DeviceId = req.DeviceId?.Trim();
+            existing.LastSeenAt = DateTime.UtcNow;
+            _uow.UserPushTokens.Update(existing);
+            await _uow.SaveChangesAsync(ct);
+            return ApiResponse<PushTokenDto>.Ok(MapPushToken(existing), "Token updated.");
+        }
+
+        if (!string.IsNullOrWhiteSpace(req.DeviceId))
+        {
+            var sameDevice = (await _uow.UserPushTokens.FindAsync(
+                t => t.UserId == userId && t.DeviceId == req.DeviceId.Trim(), ct)).ToList();
+            foreach (var old in sameDevice)
+            {
+                old.IsActive = false;
+                _uow.UserPushTokens.Update(old);
+            }
+        }
+
+        var entity = new UserPushToken
+        {
+            UserId = userId,
+            Token = token,
+            Platform = platform,
+            DeviceId = req.DeviceId?.Trim(),
+            IsActive = true,
+            LastSeenAt = DateTime.UtcNow
+        };
+        await _uow.UserPushTokens.AddAsync(entity, ct);
+        await _uow.SaveChangesAsync(ct);
+        return ApiResponse<PushTokenDto>.Ok(MapPushToken(entity), "Token registered.");
+    }
+
+    public async Task<ApiResponse> UnregisterPushTokenAsync(
+        Guid userId, string token, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(token))
+            throw AppException.BadRequest("token is required.");
+
+        var entity = (await _uow.UserPushTokens.FindAsync(
+            t => t.UserId == userId && t.Token == token.Trim(), ct)).FirstOrDefault()
+            ?? throw AppException.NotFound("PushToken");
+
+        entity.IsActive = false;
+        _uow.UserPushTokens.Update(entity);
+        await _uow.SaveChangesAsync(ct);
+        return ApiResponse.Ok("Token unregistered.");
+    }
+
+    public async Task<ApiResponse<IEnumerable<PushTokenDto>>> GetPushTokensAsync(
+        Guid userId, CancellationToken ct = default)
+    {
+        var items = await _uow.UserPushTokens.FindAsync(t => t.UserId == userId && t.IsActive, ct);
+        return ApiResponse<IEnumerable<PushTokenDto>>.Ok(items.Select(MapPushToken));
+    }
+
+    public async Task<ApiResponse<NotificationSettingsDto>> GetSettingsAsync(CancellationToken ct = default)
+    {
+        await EnsureDefaultChannelsAsync(ct);
+        var channels = (await _uow.NotificationChannels.GetAllAsync(ct)).ToList();
+        return ApiResponse<NotificationSettingsDto>.Ok(BuildSettings(channels));
+    }
+
+    public async Task<ApiResponse<NotificationSettingsDto>> UpdateSettingsAsync(
+        UpdateNotificationSettingsRequest req, CancellationToken ct = default)
+    {
+        await EnsureDefaultChannelsAsync(ct);
+        var channels = (await _uow.NotificationChannels.GetAllAsync(ct)).ToList();
+
+        if (req.PushEnabled is not null)
+            await UpsertChannelSettingAsync(channels, "push", "Mobile Push", req.PushEnabled.Value, null, ct);
+
+        if (req.Telegram is not null)
+            await UpsertChannelSettingAsync(
+                channels, "telegram", "Telegram", req.Telegram.Enabled, req.Telegram.ConfigJson, ct);
+
+        if (req.Zalo is not null)
+            await UpsertChannelSettingAsync(
+                channels, "zalo_oa", "Zalo OA", req.Zalo.Enabled, req.Zalo.ConfigJson, ct);
+
+        channels = (await _uow.NotificationChannels.GetAllAsync(ct)).ToList();
+        return ApiResponse<NotificationSettingsDto>.Ok(BuildSettings(channels), "Settings updated.");
     }
 
     public async Task NotifyUsersAsync(
@@ -130,8 +233,11 @@ public class NotificationService : INotificationService
     {
         await EnsureDefaultChannelsAsync(ct);
         var channels = (await _uow.NotificationChannels.FindAsync(c => c.IsEnabled, ct)).ToList();
+        var userList = userIds.Distinct().ToList();
+        if (userList.Count == 0) return;
 
-        foreach (var userId in userIds.Distinct())
+        Notification? anchor = null;
+        foreach (var userId in userList)
         {
             var notification = new Notification
             {
@@ -142,31 +248,89 @@ public class NotificationService : INotificationService
                 Channel = "in-app"
             };
             await _uow.Notifications.AddAsync(notification, ct);
-            await _uow.SaveChangesAsync(ct);
+            anchor ??= notification;
 
-            foreach (var ch in channels)
+            var pushChannel = channels.FirstOrDefault(c => c.ChannelCode == "push");
+            if (pushChannel is not null)
             {
-                if (ch.ChannelCode is "in_app" or "in-app") continue;
-
-                var (ok, detail) = await DispatchChannelAsync(ch, title, body, ct);
-                var delivery = new NotificationDelivery
+                var (ok, detail) = await DispatchChannelAsync(pushChannel, title, body, userId, ct);
+                await _uow.NotificationDeliveries.AddAsync(new NotificationDelivery
                 {
                     NotificationId = notification.Id,
+                    ChannelCode = pushChannel.ChannelCode,
+                    Recipient = userId.ToString(),
+                    Status = ok ? "sent" : "failed",
+                    ErrorMessage = ok ? null : detail,
+                    SentAt = ok ? DateTime.UtcNow : null
+                }, ct);
+            }
+        }
+
+        if (anchor is not null)
+        {
+            foreach (var ch in channels.Where(c => c.ChannelCode is "telegram" or "zalo_oa"))
+            {
+                var (ok, detail) = await DispatchChannelAsync(ch, title, body, null, ct);
+                await _uow.NotificationDeliveries.AddAsync(new NotificationDelivery
+                {
+                    NotificationId = anchor.Id,
                     ChannelCode = ch.ChannelCode,
                     Recipient = ExtractRecipient(ch.ConfigJson),
                     Status = ok ? "sent" : "failed",
                     ErrorMessage = ok ? null : detail,
                     SentAt = ok ? DateTime.UtcNow : null
-                };
-                await _uow.NotificationDeliveries.AddAsync(delivery, ct);
+                }, ct);
             }
         }
 
         await _uow.SaveChangesAsync(ct);
     }
 
+    private async Task UpsertChannelSettingAsync(
+        List<NotificationChannel> channels,
+        string code,
+        string displayName,
+        bool enabled,
+        string? configJson,
+        CancellationToken ct)
+    {
+        var ch = channels.FirstOrDefault(c => c.ChannelCode == code);
+        if (ch is null)
+        {
+            ch = new NotificationChannel
+            {
+                ChannelCode = code,
+                DisplayName = displayName,
+                IsEnabled = enabled,
+                ConfigJson = configJson
+            };
+            await _uow.NotificationChannels.AddAsync(ch, ct);
+            await _uow.SaveChangesAsync(ct);
+            return;
+        }
+
+        ch.IsEnabled = enabled;
+        if (configJson is not null)
+            ch.ConfigJson = configJson;
+        _uow.NotificationChannels.Update(ch);
+        await _uow.SaveChangesAsync(ct);
+    }
+
+    private static NotificationSettingsDto BuildSettings(IEnumerable<NotificationChannel> channels)
+    {
+        var list = channels.ToList();
+        NotificationChannelSettingDto Map(string code) =>
+            list.Where(c => c.ChannelCode == code).Select(c => new NotificationChannelSettingDto(c.IsEnabled, c.ConfigJson))
+                .FirstOrDefault() ?? new NotificationChannelSettingDto(false, null);
+
+        return new NotificationSettingsDto(
+            Map("push").Enabled,
+            Map("telegram"),
+            Map("zalo_oa"));
+    }
+
     private async Task<(bool Ok, string Detail)> DispatchChannelAsync(
-        NotificationChannel ch, string title, string body, CancellationToken ct)
+        NotificationChannel ch, string title, string body, Guid? userId, CancellationToken ct)
     {
         try
         {
@@ -174,7 +338,9 @@ public class NotificationService : INotificationService
             {
                 "telegram" => await SendTelegramAsync(ch.ConfigJson, title, body, ct),
                 "zalo_oa" => await SendZaloAsync(ch.ConfigJson, title, body, ct),
-                "push" or "email" => (true, "queued-stub (provider not configured)"),
+                "push" when userId is null => (false, "userId required for push"),
+                "push" => await SendPushAsync(userId!.Value, title, body, ct),
+                "email" => (true, "queued-stub (provider not configured)"),
                 _ => (true, "noop")
             };
         }
@@ -227,6 +393,50 @@ public class NotificationService : INotificationService
         if (!res.IsSuccessStatusCode)
             return (false, $"HTTP {(int)res.StatusCode}: {raw}");
         return (true, "zalo sent");
+    }
+
+    private async Task<(bool Ok, string Detail)> SendPushAsync(
+        Guid userId, string title, string body, CancellationToken ct)
+    {
+        var tokens = (await _uow.UserPushTokens.FindAsync(
+            t => t.UserId == userId && t.IsActive, ct)).ToList();
+        if (tokens.Count == 0)
+            return (false, "no registered device tokens");
+
+        if (!_fcm.Enabled || string.IsNullOrWhiteSpace(_fcm.ServerKey))
+            return (true, $"queued-stub ({tokens.Count} token(s), FCM not configured)");
+
+        var client = _httpClientFactory.CreateClient("fcm");
+        client.DefaultRequestHeaders.TryAddWithoutValidation("Authorization", $"key={_fcm.ServerKey}");
+
+        var sent = 0;
+        var errors = new List<string>();
+        foreach (var token in tokens)
+        {
+            var payload = new
+            {
+                to = token.Token,
+                notification = new { title, body },
+                data = new { title, body, userId = userId.ToString() }
+            };
+            using var res = await client.PostAsJsonAsync("https://fcm.googleapis.com/fcm/send", payload, ct);
+            var raw = await res.Content.ReadAsStringAsync(ct);
+            if (res.IsSuccessStatusCode)
+            {
+                sent++;
+                token.LastSeenAt = DateTime.UtcNow;
+                _uow.UserPushTokens.Update(token);
+            }
+            else
+            {
+                errors.Add($"{token.Platform}: HTTP {(int)res.StatusCode}");
+                _logger.LogWarning("FCM push failed for user {UserId}: {Raw}", userId, raw);
+            }
+        }
+
+        if (sent == 0)
+            return (false, string.Join("; ", errors));
+        return (true, $"push sent to {sent}/{tokens.Count} device(s)");
     }
 
     private async Task EnsureDefaultChannelsAsync(CancellationToken ct)
@@ -309,4 +519,7 @@ public class NotificationService : INotificationService
 
     private static NotificationChannelDto MapChannel(NotificationChannel c) =>
         new(c.Id, c.ChannelCode, c.DisplayName, c.IsEnabled, c.ConfigJson);
+
+    private static PushTokenDto MapPushToken(UserPushToken t) =>
+        new(t.Id, t.UserId, t.Token, t.Platform, t.DeviceId, t.IsActive, t.LastSeenAt);
 }

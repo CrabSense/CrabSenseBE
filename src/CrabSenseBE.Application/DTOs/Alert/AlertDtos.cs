@@ -32,3 +32,21 @@ public record UpdateNotificationChannelRequest(
     bool IsEnabled, string? ConfigJson = null, string? DisplayName = null);
 
 public record TestNotificationChannelRequest(string? Title = null, string? Body = null);
+
+public record RegisterPushTokenRequest(
+    string Token, string Platform = "android", string? DeviceId = null);
+
+public record PushTokenDto(
+    Guid Id, Guid UserId, string Token, string Platform, string? DeviceId, bool IsActive, DateTime LastSeenAt);
+
+public record NotificationChannelSettingDto(bool Enabled, string? ConfigJson);
+
+public record NotificationSettingsDto(
+    bool PushEnabled,
+    NotificationChannelSettingDto Telegram,
+    NotificationChannelSettingDto Zalo);
+
+public record UpdateNotificationSettingsRequest(
+    bool? PushEnabled = null,
+    NotificationChannelSettingDto? Telegram = null,
+    NotificationChannelSettingDto? Zalo = null);
