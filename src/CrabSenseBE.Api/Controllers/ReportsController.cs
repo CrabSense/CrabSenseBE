@@ -12,17 +12,19 @@ public class ReportsController : ControllerBase
 {
     private readonly IHarvestReportService _harvestReportService;
     private readonly IInventoryReportService _inventoryReportService;
-
     private readonly ISurvivalRateReportService _survivalRateReportService;
+    private readonly IMoltingReportService _moltingReportService;
 
     public ReportsController(
         IHarvestReportService harvestReportService,
         IInventoryReportService inventoryReportService,
-        ISurvivalRateReportService survivalRateReportService)
+        ISurvivalRateReportService survivalRateReportService,
+        IMoltingReportService moltingReportService)
     {
         _harvestReportService = harvestReportService;
         _inventoryReportService = inventoryReportService;
         _survivalRateReportService = survivalRateReportService;
+        _moltingReportService = moltingReportService;
     }
 
 
@@ -55,25 +57,38 @@ public class ReportsController : ControllerBase
     }
 
     /// <summary>
-/// Báo cáo tỷ lệ sống tổng quan.
-/// Có thể lọc theo:
-/// - Thời điểm thả cua
-/// - Khu vực
-/// </summary>
-[HttpGet("survival-rate")]
-public async Task<IActionResult> GetSurvivalRate(
-    [FromQuery] SurvivalRateFilterDto filter,
-    CancellationToken cancellationToken)
-{
-    var result = await _survivalRateReportService
-        .GetSurvivalRateReportAsync(
-            filter,
-            cancellationToken);
-
-    return Ok(new
+    /// Báo cáo tỷ lệ sống tổng quan.
+    /// Có thể lọc theo:
+    /// - Thời điểm thả cua
+    /// - Khu vực
+    /// </summary>
+    [HttpGet("survival-rate")]
+    public async Task<IActionResult> GetSurvivalRate(
+        [FromQuery] SurvivalRateFilterDto filter,
+        CancellationToken cancellationToken)
     {
-        success = true,
-        data = result
-    });
-}
+        var result = await _survivalRateReportService
+            .GetSurvivalRateReportAsync(
+                filter,
+                cancellationToken);
+
+        return Ok(new
+        {
+            success = true,
+            data = result
+        });
+    }
+    [HttpGet("molting")]
+    public async Task<IActionResult> GetMoltingReport(
+        CancellationToken cancellationToken)
+    {
+        var result = await _moltingReportService
+            .GetMoltingReportAsync(cancellationToken);
+
+        return Ok(new
+        {
+            success = true,
+            data = result
+        });
+    }
 }
