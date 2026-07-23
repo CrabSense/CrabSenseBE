@@ -541,7 +541,7 @@ public class FarmingService : IFarmingService
             CrabLotId = req.CrabLotId,
             Tag = string.IsNullOrWhiteSpace(req.Tag) ? null : req.Tag.Trim(),
             WeightGram = req.WeightGram,
-            MoltingStage = req.MoltingStage,
+            MoltingStage = req.MoltingStage ?? "hard-shell",
             StockedAt = DateTime.UtcNow,
             Status = CrabStatus.Alive
         };
@@ -572,7 +572,7 @@ public class FarmingService : IFarmingService
         var crab = await _uow.Crabs.GetByIdAsync(id, ct) ?? throw AppException.NotFound("Crab");
         crab.WeightGram = req.WeightGram;
         crab.MoltedAt = req.MoltedAt;
-        crab.MoltingStage = req.MoltingStage;
+        if (req.MoltingStage is not null) crab.MoltingStage = req.MoltingStage;
         _uow.Crabs.Update(crab);
 
         // If crab dies / harvest → free box if no other live crabs

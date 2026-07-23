@@ -54,15 +54,7 @@ public static class DemoDataSeeder
             SupplierName = "Nhà cung cấp Bạc Liêu",
             Notes = "Lô giống demo B"
         };
-        var batch = new CropBatch
-        {
-            BatchCode = "BATCH-2026-Q3",
-            StartDate = now.AddDays(-40),
-            Status = "active",
-            Notes = "Vụ nuôi demo quý 3"
-        };
         db.CrabLots.AddRange(lot1, lot2);
-        db.CropBatches.Add(batch);
 
         // ── Farm hierarchy ───────────────────────────────────────────────────
         var areaA = new FarmingArea
@@ -126,12 +118,12 @@ public static class DemoDataSeeder
         // ── Crabs ──────────────────────────────────────────────────────────
         var crabs = new[]
         {
-            new Crab { BoxId = boxA01.Id, CrabLotId = lot1.Id, CropBatchId = batch.Id, Tag = "CRAB-A01", WeightGram = 210, MoltingStage = "hard-shell", IsAlive = true },
-            new Crab { BoxId = boxA02.Id, CrabLotId = lot1.Id, CropBatchId = batch.Id, Tag = "CRAB-A02", WeightGram = 195, MoltingStage = "molting", IsAlive = true, MoltedAt = now.AddHours(-6) },
-            new Crab { BoxId = boxA03.Id, CrabLotId = lot1.Id, CropBatchId = batch.Id, Tag = "CRAB-A03", WeightGram = 225, MoltingStage = "pre-molt", IsAlive = true },
-            new Crab { BoxId = boxA05.Id, CrabLotId = lot2.Id, CropBatchId = batch.Id, Tag = "CRAB-A04", WeightGram = 188, MoltingStage = "post-molt", IsAlive = true, MoltedAt = now.AddDays(-2) },
-            new Crab { BoxId = boxA06.Id, CrabLotId = lot2.Id, CropBatchId = batch.Id, Tag = "CRAB-A05", WeightGram = 240, MoltingStage = "hard-shell", IsAlive = true },
-            new Crab { BoxId = boxB01.Id, CrabLotId = lot2.Id, CropBatchId = batch.Id, Tag = "CRAB-B01", WeightGram = 200, MoltingStage = "hard-shell", IsAlive = true },
+            new Crab { BoxId = boxA01.Id, CrabLotId = lot1.Id, Tag = "CRAB-A01", WeightGram = 210, MoltingStage = "hard-shell", Status = CrabStatus.Alive },
+            new Crab { BoxId = boxA02.Id, CrabLotId = lot1.Id, Tag = "CRAB-A02", WeightGram = 195, MoltingStage = "molting", Status = CrabStatus.Alive, MoltedAt = now.AddHours(-6) },
+            new Crab { BoxId = boxA03.Id, CrabLotId = lot1.Id, Tag = "CRAB-A03", WeightGram = 225, MoltingStage = "pre-molt", Status = CrabStatus.Alive },
+            new Crab { BoxId = boxA05.Id, CrabLotId = lot2.Id, Tag = "CRAB-A04", WeightGram = 188, MoltingStage = "post-molt", Status = CrabStatus.Alive, MoltedAt = now.AddDays(-2) },
+            new Crab { BoxId = boxA06.Id, CrabLotId = lot2.Id, Tag = "CRAB-A05", WeightGram = 240, MoltingStage = "hard-shell", Status = CrabStatus.Alive },
+            new Crab { BoxId = boxB01.Id, CrabLotId = lot2.Id, Tag = "CRAB-B01", WeightGram = 200, MoltingStage = "hard-shell", Status = CrabStatus.Alive },
         };
         db.Crabs.AddRange(crabs);
         lot1.Quantity = 3;
@@ -246,7 +238,6 @@ public static class DemoDataSeeder
         var harvest = new HarvestVoucher
         {
             VoucherCode = "HV-2026-DEMO-001",
-            CropBatchId = batch.Id,
             HarvestDate = now.AddDays(-3),
             Status = HarvestStatus.Completed,
             TotalQuantity = 2,

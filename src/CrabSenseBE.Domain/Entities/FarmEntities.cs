@@ -47,15 +47,17 @@ public class Box : BaseEntity
 /// <summary>Cá thể cua — MOD-FARM. Trong hộp + thuộc lô + vụ nuôi.</summary>
 public class Crab : BaseEntity
 {
+    public Guid? BoxId { get; set; }
     public Guid CrabLotId { get; set; }
     public string? Tag { get; set; }
     public decimal? WeightGram { get; set; }
     public DateTime StockedAt { get; set; }
-    public String MoltingStage { get; set; }
+    public string MoltingStage { get; set; } = string.Empty;
     public DateTime? MoltedAt { get; set; }
     public CrabStatus Status { get; set; } = CrabStatus.Alive;
 
     // Navigation
+    public Box? Box { get; set; }
     public CrabLot? CrabLot { get; set; }
     // Lịch sử tử vong của cá thể cua
     public ICollection<CrabBoxAllocation> BoxAllocations { get; set; }

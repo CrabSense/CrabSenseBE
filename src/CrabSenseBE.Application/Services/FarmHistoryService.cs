@@ -490,10 +490,8 @@ public class FarmHistoryService : IFarmHistoryService
         _uow.Crabs.Update(crab);
     }
 
-    private static bool IsCrabAlive(Crab c) =>
-    c.Status == CrabStatus.Alive
-    || c.Status == CrabStatus.Molting
-    || c.Status == CrabStatus.Quarantined;
+    private static bool IsCrabAlive(Crab? c) =>
+        c is not null && (c.Status == CrabStatus.Alive || c.Status == CrabStatus.Molting || c.Status == CrabStatus.Quarantined);
 
     private static Guid GetCrabBoxId(Crab c) =>
         c.BoxAllocations
