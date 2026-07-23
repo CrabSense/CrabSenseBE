@@ -22,7 +22,7 @@ public class AuthService : IAuthService
     public async Task<ApiResponse<LoginResponse>> LoginAsync(LoginRequest request, CancellationToken ct = default)
     {
         var user = await _uow.Users.FirstOrDefaultAsync(
-            u => u.Username == request.Username && u.IsActive, ct);
+            u => (u.Username == request.Username || u.Email == request.Username) && u.IsActive, ct);
 
         if (user is null || !BCrypt.Net.BCrypt.Verify(request.Password, user.PasswordHash))
             throw AppException.Unauthorized("Invalid username or password.");
@@ -46,6 +46,10 @@ public class AuthService : IAuthService
 
     public async Task<ApiResponse<LoginResponse>> RefreshTokenAsync(RefreshTokenRequest request, CancellationToken ct = default)
     {
+        if (string.IsNullOrWhiteSpace(request.RefreshToken)
+            || request.RefreshToken.StartsWith("mock_", StringComparison.OrdinalIgnoreCase))
+            throw AppException.Unauthorized("Invalid or expired refresh token.");
+
         var user = await _uow.Users.FirstOrDefaultAsync(
             u => u.RefreshToken == request.RefreshToken
                  && u.RefreshTokenExpiry > DateTime.UtcNow

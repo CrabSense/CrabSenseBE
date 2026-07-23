@@ -11,8 +11,6 @@ public static class DevDbBootstrap
 {
     public static async Task InitializeAsync(WebApplication app)
     {
-        if (!app.Environment.IsDevelopment()) return;
-
         using var scope = app.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
         var logger = scope.ServiceProvider.GetRequiredService<ILoggerFactory>()

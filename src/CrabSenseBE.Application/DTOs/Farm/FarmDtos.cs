@@ -28,7 +28,8 @@ public record FarmingAreaFilter(
     string? Search = null,
     bool? IsActive = null,
     int Page = 1,
-    int? PageSize = null);
+    int? PageSize = null,
+    Guid? OwnerId = null);
 
 // --- FarmingRow ---
 public record FarmingRowDto(
