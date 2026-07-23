@@ -328,7 +328,7 @@ public static class DemoDataSeeder
         var boxes = await db.Boxes.Where(b => rowIds.Contains(b.FarmingRowId)).ToListAsync(ct);
         var boxIds = boxes.Select(b => b.Id).ToHashSet();
 
-        var crabs = await db.Crabs.Where(c => boxIds.Contains(c.BoxId)).ToListAsync(ct);
+        var crabs = await db.Crabs.Where(c => c.BoxId != null && boxIds.Contains(c.BoxId.Value)).ToListAsync(ct);
         var crabIds = crabs.Select(c => c.Id).ToHashSet();
 
         if (crabIds.Count > 0)
