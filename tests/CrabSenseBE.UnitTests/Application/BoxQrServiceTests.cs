@@ -67,11 +67,12 @@ public class BoxQrServiceTests
         var crab = new Crab
         {
             Id = crabDifferentBoxId,
+            Tag = "C-1",
             Status = CrabStatus.Alive,
             BoxAllocations = new List<CrabBoxAllocation>
-    {
-        new() { CrabId = crabDifferentBoxId, BoxId = Guid.NewGuid(), StartTime = DateTime.UtcNow }
-    }
+            {
+                new() { CrabId = crabDifferentBoxId, BoxId = Guid.NewGuid(), StartTime = DateTime.UtcNow }
+            }
         };
         var qrRepo = new Mock<IRepository<QrCode>>();
         qrRepo.Setup(r => r.FirstOrDefaultAsync(It.IsAny<System.Linq.Expressions.Expression<Func<QrCode, bool>>>(), It.IsAny<CancellationToken>()))
