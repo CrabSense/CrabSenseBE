@@ -88,6 +88,8 @@ public class FarmHistoryService : IFarmHistoryService
         };
         await _uow.CrabBoxAllocations.AddAsync(alloc, ct);
 
+        crab.BoxId = req.BoxId;
+        crab.BoxAllocations.Add(alloc);
         _uow.Crabs.Update(crab);
 
         await ApplyBoxStatusAsync(box, BoxStatuses.Active, true, "Crab allocated", ct);
