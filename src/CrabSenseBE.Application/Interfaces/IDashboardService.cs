@@ -5,13 +5,13 @@ namespace CrabSenseBE.Application.Interfaces;
 
 public interface IDashboardService
 {
-    Task<ApiResponse<DashboardOverviewDto>> GetOverviewAsync(CancellationToken ct = default);
-    Task<ApiResponse<DashboardMetricsDto>> GetMetricsAsync(CancellationToken ct = default);
-    Task<ApiResponse<List<AiRecommendationDto>>> GetRecommendationsAsync(CancellationToken ct = default);
+    Task<ApiResponse<DashboardOverviewDto>> GetOverviewAsync(Guid? farmingAreaId = null, CancellationToken ct = default);
+    Task<ApiResponse<DashboardMetricsDto>> GetMetricsAsync(Guid? farmingAreaId = null, CancellationToken ct = default);
+    Task<ApiResponse<List<AiRecommendationDto>>> GetRecommendationsAsync(Guid? farmingAreaId = null, CancellationToken ct = default);
 }
 
 public interface IOperationLogService
 {
-    Task<ApiResponse<List<OperationTaskDto>>> GetTodayTasksAsync(CancellationToken ct = default);
-    Task<ApiResponse<List<RecentActivityDto>>> GetRecentAsync(int limit = 20, CancellationToken ct = default);
+    Task<ApiResponse<List<OperationTaskDto>>> GetTodayTasksAsync(Guid? farmingAreaId = null, CancellationToken ct = default);
+    Task<ApiResponse<List<RecentActivityDto>>> GetRecentAsync(int limit = 20, Guid? farmingAreaId = null, CancellationToken ct = default);
 }

@@ -12,7 +12,10 @@ public interface IAlertService
     Task<ApiResponse<AlertThresholdDto>> UpdateThresholdAsync(Guid id, UpdateAlertThresholdRequest req, CancellationToken ct = default);
     Task<ApiResponse> DeleteThresholdAsync(Guid id, CancellationToken ct = default);
 
-    Task<ApiResponse<IEnumerable<AlertDto>>> GetAlertsAsync(bool? activeOnly = true, CancellationToken ct = default);
+    Task<ApiResponse<IEnumerable<AlertDto>>> GetAlertsAsync(
+        bool? activeOnly = true,
+        Guid? farmingAreaId = null,
+        CancellationToken ct = default);
     Task<ApiResponse<AlertDto>> AcknowledgeAsync(Guid id, AcknowledgeAlertRequest req, CancellationToken ct = default);
     Task<ApiResponse<AlertDto>> ResolveAsync(Guid id, CancellationToken ct = default);
 

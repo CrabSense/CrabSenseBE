@@ -120,11 +120,21 @@ public class IotService : IIotService
     }
 
     public async Task<ApiResponse<IEnumerable<SensorLiveDto>>> GetLiveSnapshotAsync(
-        Guid? deviceId = null, CancellationToken ct = default)
+        Guid? deviceId = null,
+        Guid? farmingAreaId = null,
+        CancellationToken ct = default)
     {
         var sensors = (await _uow.Sensors.GetAllAsync(ct)).AsEnumerable();
         if (deviceId.HasValue)
             sensors = sensors.Where(s => s.DeviceId == deviceId.Value);
+
+        if (farmingAreaId is Guid areaId && areaId != Guid.Empty)
+        {
+            var wsIds = (await _uow.WaterSystems.FindAsync(w => w.FarmingAreaId == areaId, ct))
+                .Select(w => w.Id)
+                .ToHashSet();
+            sensors = sensors.Where(s => s.WaterSystemId != null && wsIds.Contains(s.WaterSystemId.Value));
+        }
 
         var devices = (await _uow.Devices.GetAllAsync(ct)).ToDictionary(d => d.Id);
         var allMeas = await _uow.WaterMeasurements.GetAllAsync(ct);
@@ -232,10 +242,28 @@ public class IotService : IIotService
 
     // ─── Devices CRUD ───────────────────────────────────────────────────────
 
-    public async Task<ApiResponse<IEnumerable<DeviceDto>>> GetDevicesAsync(CancellationToken ct = default)
+    public async Task<ApiResponse<IEnumerable<DeviceDto>>> GetDevicesAsync(
+        Guid? farmingAreaId = null,
+        CancellationToken ct = default)
     {
-        var devices = await _uow.Devices.GetAllAsync(ct);
-        var sensors = await _uow.Sensors.GetAllAsync(ct);
+        var devices = (await _uow.Devices.GetAllAsync(ct)).AsEnumerable();
+        var sensors = (await _uow.Sensors.GetAllAsync(ct)).ToList();
+
+        if (farmingAreaId is Guid areaId && areaId != Guid.Empty)
+        {
+            var wsIds = (await _uow.WaterSystems.FindAsync(w => w.FarmingAreaId == areaId, ct))
+                .Select(w => w.Id)
+                .ToHashSet();
+            var deviceIds = sensors
+                .Where(s => s.WaterSystemId != null && wsIds.Contains(s.WaterSystemId.Value) && s.DeviceId != null)
+                .Select(s => s.DeviceId!.Value)
+                .ToHashSet();
+            devices = devices.Where(d => deviceIds.Contains(d.Id));
+            sensors = sensors
+                .Where(s => s.WaterSystemId != null && wsIds.Contains(s.WaterSystemId.Value))
+                .ToList();
+        }
+
         var countBy = sensors.Where(s => s.DeviceId.HasValue)
             .GroupBy(s => s.DeviceId!.Value)
             .ToDictionary(g => g.Key, g => g.Count());

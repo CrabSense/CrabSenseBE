@@ -15,15 +15,15 @@ public class DashboardController : ControllerBase
 
     public DashboardController(IDashboardService dashboard) => _dashboard = dashboard;
 
-    /// <summary>[READ] Farm overview totals for Home hero</summary>
+    /// <summary>[READ] Farm overview totals for Home hero — optional farmingAreaId scopes to one khu</summary>
     [HttpGet("overview")]
-    public async Task<IActionResult> Overview(CancellationToken ct)
-        => Ok(await _dashboard.GetOverviewAsync(ct));
+    public async Task<IActionResult> Overview([FromQuery] Guid? farmingAreaId = null, CancellationToken ct = default)
+        => Ok(await _dashboard.GetOverviewAsync(farmingAreaId, ct));
 
-    /// <summary>[READ] Farm health score metrics</summary>
+    /// <summary>[READ] Farm health score metrics — optional farmingAreaId</summary>
     [HttpGet("metrics")]
-    public async Task<IActionResult> Metrics(CancellationToken ct)
-        => Ok(await _dashboard.GetMetricsAsync(ct));
+    public async Task<IActionResult> Metrics([FromQuery] Guid? farmingAreaId = null, CancellationToken ct = default)
+        => Ok(await _dashboard.GetMetricsAsync(farmingAreaId, ct));
 }
 
 [ApiController]
@@ -39,11 +39,14 @@ public class OperationsController : ControllerBase
 
     /// <summary>[READ] Today's operational tasks for Home</summary>
     [HttpGet("today")]
-    public async Task<IActionResult> Today(CancellationToken ct)
-        => Ok(await _ops.GetTodayTasksAsync(ct));
+    public async Task<IActionResult> Today([FromQuery] Guid? farmingAreaId = null, CancellationToken ct = default)
+        => Ok(await _ops.GetTodayTasksAsync(farmingAreaId, ct));
 
     /// <summary>[READ] Recent activity feed</summary>
     [HttpGet("recent")]
-    public async Task<IActionResult> Recent([FromQuery] int limit = 20, CancellationToken ct = default)
-        => Ok(await _ops.GetRecentAsync(limit, ct));
+    public async Task<IActionResult> Recent(
+        [FromQuery] int limit = 20,
+        [FromQuery] Guid? farmingAreaId = null,
+        CancellationToken ct = default)
+        => Ok(await _ops.GetRecentAsync(limit, farmingAreaId, ct));
 }

@@ -2,6 +2,7 @@ using CrabSenseBE.Domain.Entities;
 using CrabSenseBE.Domain.Enums;
 using CrabSenseBE.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
+using Npgsql;
 
 /// <summary>
 /// Development: migrate schema + seed 3 role user (SystemAdmin / FarmOwner / Staff).
@@ -20,8 +21,8 @@ public static class DevDbBootstrap
         {
             try
             {
-                await db.Database.MigrateAsync();
-                logger.LogInformation("Migrate completed (attempt {A}).", attempt);
+                await EnsureSchemaReadyAsync(db, logger);
+                logger.LogInformation("Schema ready (attempt {A}).", attempt);
 
                 await RemapLegacyRolesAsync(db, logger);
                 await EnsureUserAsync(db, "sysadmin", "admin-sys@crabsense.local", "Admin hệ thống",
@@ -49,6 +50,50 @@ public static class DevDbBootstrap
                     await Task.Delay(1500 * attempt);
             }
         }
+    }
+
+    /// <summary>
+    /// Apply EF migrations. If Supabase already has schema but empty history
+    /// (42P07 already exists), baseline history then apply remaining only.
+    /// </summary>
+    private static async Task EnsureSchemaReadyAsync(AppDbContext db, ILogger logger)
+    {
+        try
+        {
+            await db.Database.MigrateAsync();
+            return;
+        }
+        catch (PostgresException ex) when (ex.SqlState == "42P07")
+        {
+            logger.LogWarning("Schema objects already exist — baselining EF migration history.");
+        }
+        catch (Exception ex) when (ex.InnerException is PostgresException { SqlState: "42P07" })
+        {
+            logger.LogWarning("Schema objects already exist — baselining EF migration history.");
+        }
+
+        await BaselineMigrationHistoryAsync(db, logger);
+        await db.Database.MigrateAsync();
+    }
+
+    private static async Task BaselineMigrationHistoryAsync(AppDbContext db, ILogger logger)
+    {
+        var all = db.Database.GetMigrations().ToList();
+        var applied = (await db.Database.GetAppliedMigrationsAsync()).ToList();
+        var missing = all.Except(applied).ToList();
+        if (missing.Count == 0) return;
+
+        foreach (var id in missing)
+        {
+            await db.Database.ExecuteSqlInterpolatedAsync(
+                $"""
+                 INSERT INTO be."__EFMigrationsHistory" ("MigrationId", "ProductVersion")
+                 VALUES ({id}, {"8.0.0"})
+                 ON CONFLICT ("MigrationId") DO NOTHING
+                 """);
+        }
+
+        logger.LogInformation("Baselined {N} migration(s) into be.__EFMigrationsHistory.", missing.Count);
     }
 
     /// <summary>
@@ -97,6 +142,7 @@ public static class DevDbBootstrap
         user.Role = role;
         user.FullName = fullName;
         user.IsActive = true;
+        user.PasswordHash = BCrypt.Net.BCrypt.HashPassword(password);
         if (string.IsNullOrWhiteSpace(user.Email))
             user.Email = email;
     }
