@@ -12,10 +12,11 @@ public class OperationLogService : IOperationLogService
 
     public OperationLogService(IUnitOfWork uow) => _uow = uow;
 
-    public async Task<ApiResponse<List<OperationTaskDto>>> GetTodayTasksAsync(CancellationToken ct = default)
+    public async Task<ApiResponse<List<OperationTaskDto>>> GetTodayTasksAsync(
+        Guid? farmingAreaId = null, CancellationToken ct = default)
     {
         var tasks = new List<OperationTaskDto>();
-        var boxes = (await _uow.Boxes.GetAllAsync(ct)).ToList();
+        var boxes = await GetBoxesForAreaAsync(farmingAreaId, ct);
         var endOfDay = DateTime.UtcNow.Date.AddDays(1).AddTicks(-1);
 
         foreach (var box in boxes.Where(b =>
@@ -42,7 +43,12 @@ public class OperationLogService : IOperationLogService
                 IsCompleted: false));
         }
 
-        var activeAlerts = (await _uow.Alerts.FindAsync(a => a.Status == AlertStatus.Active, ct)).Take(5);
+        var sensorIds = await GetSensorIdsForAreaAsync(farmingAreaId, ct);
+        var activeAlerts = (await _uow.Alerts.FindAsync(a => a.Status == AlertStatus.Active, ct))
+            .Where(a => !farmingAreaId.HasValue
+                        || farmingAreaId == Guid.Empty
+                        || (a.SensorId is Guid sid && sensorIds.Contains(sid)))
+            .Take(5);
         foreach (var alert in activeAlerts)
         {
             tasks.Add(new OperationTaskDto(
@@ -59,7 +65,9 @@ public class OperationLogService : IOperationLogService
             tasks.Add(new OperationTaskDto(
                 Id: "routine-feed",
                 Title: "Kiểm tra cho ăn định kỳ",
-                Target: "Toàn trang trại",
+                Target: farmingAreaId.HasValue && farmingAreaId != Guid.Empty
+                    ? "Khu đang chọn"
+                    : "Toàn trang trại",
                 Deadline: endOfDay,
                 Priority: "low",
                 IsCompleted: false));
@@ -68,11 +76,20 @@ public class OperationLogService : IOperationLogService
         return ApiResponse<List<OperationTaskDto>>.Ok(tasks);
     }
 
-    public async Task<ApiResponse<List<RecentActivityDto>>> GetRecentAsync(int limit = 20, CancellationToken ct = default)
+    public async Task<ApiResponse<List<RecentActivityDto>>> GetRecentAsync(
+        int limit = 20, Guid? farmingAreaId = null, CancellationToken ct = default)
     {
         limit = Math.Clamp(limit, 1, 100);
+        var boxIds = (await GetBoxesForAreaAsync(farmingAreaId, ct)).Select(b => b.Id).ToHashSet();
         var logs = (await _uow.OperationLogs.GetAllAsync(ct))
             .OrderByDescending(l => l.CreatedAt)
+            .Where(l =>
+            {
+                if (farmingAreaId is null || farmingAreaId == Guid.Empty) return true;
+                if (l.EntityId is Guid eid && boxIds.Contains(eid)) return true;
+                // Keep user/system logs without entity when not area-scoped tightly
+                return l.EntityId is null;
+            })
             .Take(limit)
             .ToList();
 
@@ -87,10 +104,13 @@ public class OperationLogService : IOperationLogService
                 Timestamp: l.CreatedAt);
         }).ToList();
 
-        // Fallback: surface recent alerts as activity if no logs
         if (items.Count == 0)
         {
+            var sensorIds = await GetSensorIdsForAreaAsync(farmingAreaId, ct);
             var alerts = (await _uow.Alerts.GetAllAsync(ct))
+                .Where(a =>
+                    farmingAreaId is null || farmingAreaId == Guid.Empty
+                    || (a.SensorId is Guid sid && sensorIds.Contains(sid)))
                 .OrderByDescending(a => a.CreatedAt)
                 .Take(limit)
                 .ToList();
@@ -103,6 +123,31 @@ public class OperationLogService : IOperationLogService
         }
 
         return ApiResponse<List<RecentActivityDto>>.Ok(items);
+    }
+
+    private async Task<List<Domain.Entities.Box>> GetBoxesForAreaAsync(Guid? farmingAreaId, CancellationToken ct)
+    {
+        if (farmingAreaId is null || farmingAreaId == Guid.Empty)
+            return (await _uow.Boxes.GetAllAsync(ct)).ToList();
+
+        var rowIds = (await _uow.FarmingRows.FindAsync(r => r.FarmingAreaId == farmingAreaId.Value, ct))
+            .Select(r => r.Id)
+            .ToHashSet();
+        return (await _uow.Boxes.FindAsync(b => rowIds.Contains(b.FarmingRowId), ct)).ToList();
+    }
+
+    private async Task<HashSet<Guid>> GetSensorIdsForAreaAsync(Guid? farmingAreaId, CancellationToken ct)
+    {
+        if (farmingAreaId is null || farmingAreaId == Guid.Empty)
+            return (await _uow.Sensors.GetAllAsync(ct)).Select(s => s.Id).ToHashSet();
+
+        var wsIds = (await _uow.WaterSystems.FindAsync(w => w.FarmingAreaId == farmingAreaId.Value, ct))
+            .Select(w => w.Id)
+            .ToHashSet();
+        return (await _uow.Sensors.FindAsync(
+                s => s.WaterSystemId != null && wsIds.Contains(s.WaterSystemId.Value), ct))
+            .Select(s => s.Id)
+            .ToHashSet();
     }
 
     private static string MapActivityType(string action, string? entityType)

@@ -19,8 +19,11 @@ public class AlertsController : ControllerBase
 
     /// <summary>[READ] List alerts</summary>
     [HttpGet]
-    public async Task<IActionResult> GetAll([FromQuery] bool? activeOnly = true, CancellationToken ct = default)
-        => Ok(await _service.GetAlertsAsync(activeOnly, ct));
+    public async Task<IActionResult> GetAll(
+        [FromQuery] bool? activeOnly = true,
+        [FromQuery] Guid? farmingAreaId = null,
+        CancellationToken ct = default)
+        => Ok(await _service.GetAlertsAsync(activeOnly, farmingAreaId, ct));
 
     /// <summary>[UPDATE] Acknowledge alert</summary>
     [HttpPatch("{id:guid}/acknowledge")]

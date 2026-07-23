@@ -78,13 +78,27 @@ public class AlertService : IAlertService
     // ─── Alerts ─────────────────────────────────────────────────────────────
 
     public async Task<ApiResponse<IEnumerable<AlertDto>>> GetAlertsAsync(
-        bool? activeOnly = true, CancellationToken ct = default)
+        bool? activeOnly = true,
+        Guid? farmingAreaId = null,
+        CancellationToken ct = default)
     {
         IEnumerable<Alert> items;
         if (activeOnly == true)
             items = await _uow.Alerts.FindAsync(a => a.Status == AlertStatus.Active, ct);
         else
             items = await _uow.Alerts.GetAllAsync(ct);
+
+        if (farmingAreaId is Guid areaId && areaId != Guid.Empty)
+        {
+            var wsIds = (await _uow.WaterSystems.FindAsync(w => w.FarmingAreaId == areaId, ct))
+                .Select(w => w.Id)
+                .ToHashSet();
+            var sensorIds = (await _uow.Sensors.FindAsync(
+                    s => s.WaterSystemId != null && wsIds.Contains(s.WaterSystemId.Value), ct))
+                .Select(s => s.Id)
+                .ToHashSet();
+            items = items.Where(a => a.SensorId is Guid sid && sensorIds.Contains(sid));
+        }
 
         return ApiResponse<IEnumerable<AlertDto>>.Ok(
             items.OrderByDescending(a => a.CreatedAt).Select(MapAlert));

@@ -17,7 +17,13 @@ public static class DependencyInjection
         services.AddDbContext<AppDbContext>(options =>
             options.UseNpgsql(
                 config.GetConnectionString("DefaultConnection"),
-                npgsql => npgsql.MigrationsAssembly(typeof(AppDbContext).Assembly.FullName)
+                npgsql =>
+                {
+                    npgsql.MigrationsAssembly(typeof(AppDbContext).Assembly.FullName);
+                    // Schema "be" matches AppDbContext.HasDefaultSchema — required for Supabase pooler.
+                    npgsql.MigrationsHistoryTable("__EFMigrationsHistory", "be");
+                    npgsql.CommandTimeout(120);
+                }
             ));
 
         // Repositories

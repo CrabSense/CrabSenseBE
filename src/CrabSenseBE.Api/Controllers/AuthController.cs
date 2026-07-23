@@ -3,7 +3,6 @@ using CrabSenseBE.Application.DTOs.Auth;
 using CrabSenseBE.Application.Interfaces;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-using System.Security.Claims;
 
 namespace CrabSenseBE.Api.Controllers;
 
@@ -14,7 +13,13 @@ namespace CrabSenseBE.Api.Controllers;
 public class AuthController : ControllerBase
 {
     private readonly IAuthService _authService;
-    public AuthController(IAuthService authService) => _authService = authService;
+    private readonly ICurrentUserService _currentUser;
+
+    public AuthController(IAuthService authService, ICurrentUserService currentUser)
+    {
+        _authService = authService;
+        _currentUser = currentUser;
+    }
 
     /// <summary>[AUTH] Login — get JWT accessToken</summary>
     [HttpPost("login")]
@@ -37,26 +42,17 @@ public class AuthController : ControllerBase
     [HttpPost("logout")]
     [Authorize]
     public async Task<IActionResult> Logout(CancellationToken ct)
-    {
-        var userId = Guid.Parse(User.FindFirstValue(System.IdentityModel.Tokens.Jwt.JwtRegisteredClaimNames.Sub)!);
-        return Ok(await _authService.LogoutAsync(userId, ct));
-    }
+        => Ok(await _authService.LogoutAsync(_currentUser.UserId, ct));
 
     /// <summary>[READ] Current logged-in user</summary>
     [HttpGet("me")]
     [Authorize]
     public async Task<IActionResult> Me(CancellationToken ct)
-    {
-        var userId = Guid.Parse(User.FindFirstValue(System.IdentityModel.Tokens.Jwt.JwtRegisteredClaimNames.Sub)!);
-        return Ok(await _authService.GetMeAsync(userId, ct));
-    }
+        => Ok(await _authService.GetMeAsync(_currentUser.UserId, ct));
 
     /// <summary>[UPDATE] Change password</summary>
     [HttpPost("change-password")]
     [Authorize]
     public async Task<IActionResult> ChangePassword([FromBody] ChangePasswordRequest request, CancellationToken ct)
-    {
-        var userId = Guid.Parse(User.FindFirstValue(System.IdentityModel.Tokens.Jwt.JwtRegisteredClaimNames.Sub)!);
-        return Ok(await _authService.ChangePasswordAsync(userId, request, ct));
-    }
+        => Ok(await _authService.ChangePasswordAsync(_currentUser.UserId, request, ct));
 }

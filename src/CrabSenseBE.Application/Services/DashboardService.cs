@@ -12,12 +12,16 @@ public class DashboardService : IDashboardService
 
     public DashboardService(IUnitOfWork uow) => _uow = uow;
 
-    public async Task<ApiResponse<DashboardOverviewDto>> GetOverviewAsync(CancellationToken ct = default)
+    public async Task<ApiResponse<DashboardOverviewDto>> GetOverviewAsync(
+        Guid? farmingAreaId = null, CancellationToken ct = default)
     {
-        var boxes = (await _uow.Boxes.GetAllAsync(ct)).ToList();
-        var crabs = (await _uow.Crabs.GetAllAsync(ct)).ToList();
-        var alerts = (await _uow.Alerts.FindAsync(a => a.Status == AlertStatus.Active, ct)).ToList();
-        var devices = (await _uow.Devices.GetAllAsync(ct)).ToList();
+        var scope = await ResolveScopeAsync(farmingAreaId, ct);
+        var boxes = scope.Boxes;
+        var crabs = (await _uow.Crabs.GetAllAsync(ct))
+            .Where(c => c.BoxId is Guid bid && scope.BoxIds.Contains(bid))
+            .ToList();
+        var alerts = await FilterAlertsAsync(scope, ct);
+        var devices = scope.Devices;
 
         var totalBoxes = boxes.Count;
         var activeBoxes = boxes.Count(b =>
@@ -38,12 +42,14 @@ public class DashboardService : IDashboardService
             DateTime.UtcNow));
     }
 
-    public async Task<ApiResponse<DashboardMetricsDto>> GetMetricsAsync(CancellationToken ct = default)
+    public async Task<ApiResponse<DashboardMetricsDto>> GetMetricsAsync(
+        Guid? farmingAreaId = null, CancellationToken ct = default)
     {
-        var devices = (await _uow.Devices.GetAllAsync(ct)).ToList();
-        var boxes = (await _uow.Boxes.GetAllAsync(ct)).ToList();
-        var sensors = (await _uow.Sensors.GetAllAsync(ct)).ToList();
-        var activeAlerts = (await _uow.Alerts.FindAsync(a => a.Status == AlertStatus.Active, ct)).ToList();
+        var scope = await ResolveScopeAsync(farmingAreaId, ct);
+        var devices = scope.Devices;
+        var boxes = scope.Boxes;
+        var sensors = scope.Sensors;
+        var activeAlerts = await FilterAlertsAsync(scope, ct);
 
         var deviceScore = devices.Count == 0
             ? 80
@@ -58,7 +64,6 @@ public class DashboardService : IDashboardService
             ? 85
             : (int)Math.Round(healthyBoxes * 100.0 / Math.Max(occupied, 1));
 
-        // Penalize for quarantine / critical alerts
         var quarantine = boxes.Count(b =>
             string.Equals(b.Status, BoxStatuses.Quarantine, StringComparison.OrdinalIgnoreCase));
         crabScore = Math.Clamp(crabScore - quarantine * 5 - activeAlerts.Count(a => a.Severity == AlertSeverity.Critical) * 8, 0, 100);
@@ -82,9 +87,10 @@ public class DashboardService : IDashboardService
             _ => ("danger", "Critical")
         };
 
+        var areaLabel = farmingAreaId.HasValue ? "khu đang chọn" : "trang trại";
         var explanation = activeAlerts.Count > 0
-            ? $"Có {activeAlerts.Count} cảnh báo đang mở; điểm thiết bị {deviceScore}%, nước {waterScore}%, cua {crabScore}%."
-            : $"Trang trại ổn định — nước {waterScore}%, cua {crabScore}%, thiết bị {deviceScore}%.";
+            ? $"Có {activeAlerts.Count} cảnh báo đang mở trên {areaLabel}; điểm thiết bị {deviceScore}%, nước {waterScore}%, cua {crabScore}%."
+            : $"{(farmingAreaId.HasValue ? "Khu" : "Trang trại")} ổn định — nước {waterScore}%, cua {crabScore}%, thiết bị {deviceScore}%.";
 
         return ApiResponse<DashboardMetricsDto>.Ok(new DashboardMetricsDto(
             score,
@@ -98,11 +104,13 @@ public class DashboardService : IDashboardService
             explanation));
     }
 
-    public async Task<ApiResponse<List<AiRecommendationDto>>> GetRecommendationsAsync(CancellationToken ct = default)
+    public async Task<ApiResponse<List<AiRecommendationDto>>> GetRecommendationsAsync(
+        Guid? farmingAreaId = null, CancellationToken ct = default)
     {
         var list = new List<AiRecommendationDto>();
-        var boxes = (await _uow.Boxes.GetAllAsync(ct)).ToList();
-        var alerts = (await _uow.Alerts.FindAsync(a => a.Status == AlertStatus.Active, ct)).ToList();
+        var scope = await ResolveScopeAsync(farmingAreaId, ct);
+        var boxes = scope.Boxes;
+        var alerts = await FilterAlertsAsync(scope, ct);
 
         foreach (var box in boxes.Where(b =>
                      string.Equals(b.Status, BoxStatuses.Molting, StringComparison.OrdinalIgnoreCase)).Take(5))
@@ -130,7 +138,7 @@ public class DashboardService : IDashboardService
                 Description: string.IsNullOrWhiteSpace(alert.Message)
                     ? "Cần kiểm tra thông số môi trường / thiết bị."
                     : alert.Message,
-                TargetBoxOrArea: "Trang trại",
+                TargetBoxOrArea: farmingAreaId.HasValue ? "Khu đang chọn" : "Trang trại",
                 ConfidencePercentage: alert.Severity == AlertSeverity.Critical ? 95 : 80,
                 Priority: alert.Severity == AlertSeverity.Critical ? "high" : "medium",
                 Reason: $"Cảnh báo {alert.Severity}",
@@ -146,7 +154,7 @@ public class DashboardService : IDashboardService
                 Type: "observe",
                 Title: "Không có hành động khẩn cấp",
                 Description: "Hệ thống đang hoạt động ổn định",
-                TargetBoxOrArea: "Toàn trang trại",
+                TargetBoxOrArea: farmingAreaId.HasValue ? "Khu đang chọn" : "Toàn trang trại",
                 ConfidencePercentage: 99,
                 Priority: "low",
                 Reason: "Không có box lột hoặc cảnh báo ưu tiên",
@@ -156,5 +164,79 @@ public class DashboardService : IDashboardService
         }
 
         return ApiResponse<List<AiRecommendationDto>>.Ok(list);
+    }
+
+    private async Task<List<Domain.Entities.Alert>> FilterAlertsAsync(AreaScope scope, CancellationToken ct)
+    {
+        var alerts = (await _uow.Alerts.FindAsync(a => a.Status == AlertStatus.Active, ct)).ToList();
+        if (!scope.IsFiltered) return alerts;
+        return alerts
+            .Where(a => a.SensorId is Guid sid && scope.SensorIds.Contains(sid))
+            .ToList();
+    }
+
+    private async Task<AreaScope> ResolveScopeAsync(Guid? farmingAreaId, CancellationToken ct)
+    {
+        if (farmingAreaId is null || farmingAreaId == Guid.Empty)
+        {
+            var allBoxes = (await _uow.Boxes.GetAllAsync(ct)).ToList();
+            var allSensors = (await _uow.Sensors.GetAllAsync(ct)).ToList();
+            var allDevices = (await _uow.Devices.GetAllAsync(ct)).ToList();
+            return AreaScope.Unfiltered(allBoxes, allSensors, allDevices);
+        }
+
+        var rowIds = (await _uow.FarmingRows.FindAsync(r => r.FarmingAreaId == farmingAreaId.Value, ct))
+            .Select(r => r.Id)
+            .ToHashSet();
+        var boxes = (await _uow.Boxes.FindAsync(b => rowIds.Contains(b.FarmingRowId), ct)).ToList();
+        var boxIds = boxes.Select(b => b.Id).ToHashSet();
+
+        var waterSystemIds = (await _uow.WaterSystems.FindAsync(
+                w => w.FarmingAreaId == farmingAreaId.Value, ct))
+            .Select(w => w.Id)
+            .ToHashSet();
+        var sensors = (await _uow.Sensors.FindAsync(
+                s => s.WaterSystemId != null && waterSystemIds.Contains(s.WaterSystemId.Value), ct))
+            .ToList();
+        var sensorIds = sensors.Select(s => s.Id).ToHashSet();
+        var deviceIds = sensors.Where(s => s.DeviceId != null).Select(s => s.DeviceId!.Value).ToHashSet();
+        var devices = (await _uow.Devices.GetAllAsync(ct))
+            .Where(d => deviceIds.Contains(d.Id))
+            .ToList();
+
+        return new AreaScope(true, boxes, boxIds, sensors, sensorIds, devices);
+    }
+
+    private sealed class AreaScope
+    {
+        public bool IsFiltered { get; }
+        public List<Domain.Entities.Box> Boxes { get; }
+        public HashSet<Guid> BoxIds { get; }
+        public List<Domain.Entities.Sensor> Sensors { get; }
+        public HashSet<Guid> SensorIds { get; }
+        public List<Domain.Entities.Device> Devices { get; }
+
+        public AreaScope(
+            bool isFiltered,
+            List<Domain.Entities.Box> boxes,
+            HashSet<Guid> boxIds,
+            List<Domain.Entities.Sensor> sensors,
+            HashSet<Guid> sensorIds,
+            List<Domain.Entities.Device> devices)
+        {
+            IsFiltered = isFiltered;
+            Boxes = boxes;
+            BoxIds = boxIds;
+            Sensors = sensors;
+            SensorIds = sensorIds;
+            Devices = devices;
+        }
+
+        public static AreaScope Unfiltered(
+            List<Domain.Entities.Box> boxes,
+            List<Domain.Entities.Sensor> sensors,
+            List<Domain.Entities.Device> devices) =>
+            new(false, boxes, boxes.Select(b => b.Id).ToHashSet(),
+                sensors, sensors.Select(s => s.Id).ToHashSet(), devices);
     }
 }

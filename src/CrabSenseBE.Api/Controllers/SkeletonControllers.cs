@@ -97,8 +97,10 @@ public class AiController : ControllerBase
     [HttpPost("feedback")]
     public IActionResult Feedback() => Ok(new { success = true });
 
-    /// <summary>[READ] AI recommendations for Home</summary>
+    /// <summary>[READ] AI recommendations for Home — optional farmingAreaId</summary>
     [HttpGet("recommendations")]
-    public async Task<IActionResult> Recommendations(CancellationToken ct)
-        => Ok(await _dashboard.GetRecommendationsAsync(ct));
+    public async Task<IActionResult> Recommendations(
+        [FromQuery] Guid? farmingAreaId = null,
+        CancellationToken ct = default)
+        => Ok(await _dashboard.GetRecommendationsAsync(farmingAreaId, ct));
 }
