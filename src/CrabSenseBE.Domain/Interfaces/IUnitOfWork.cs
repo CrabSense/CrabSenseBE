@@ -11,7 +11,8 @@ public interface IUnitOfWork : IDisposable
     IRepository<Box> Boxes { get; }
     IRepository<Crab> Crabs { get; }
     IRepository<CrabLot> CrabLots { get; }
-    IRepository<CropBatch> CropBatches { get; }
+    // IRepository<CropBatch> CropBatches { get; }
+    IRepository<CrabMortalityRecord> CrabMortalityRecords { get; }
     IRepository<OperationLog> OperationLogs { get; }
     IRepository<CrabBoxAllocation> CrabBoxAllocations { get; }
     IRepository<MoltingRecord> MoltingRecords { get; }
@@ -45,6 +46,10 @@ public interface IUnitOfWork : IDisposable
     IRepository<AiFeedback> AiFeedbacks { get; }
     IRepository<AiRecommendation> AiRecommendations { get; }
     IRepository<Inspection> Inspections { get; }
+    
 
     Task<int> SaveChangesAsync(CancellationToken ct = default);
+
+    Task<List<CrabMortalityRecord>> GetMortalityRecordsWithDetailsAsync(CancellationToken ct = default);
+    Task<Crab?> GetCrabWithDetailsAsync(Guid crabId,CancellationToken cancellationToken = default);
 }

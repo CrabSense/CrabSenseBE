@@ -87,57 +87,57 @@ public class FarmLotService : IFarmLotService
 
     // ─── CropBatch ──────────────────────────────────────────────────────────
 
-    public async Task<ApiResponse<IEnumerable<CropBatchDto>>> GetBatchesAsync(CancellationToken ct = default)
-    {
-        var batches = await _uow.CropBatches.GetAllAsync(ct);
-        return ApiResponse<IEnumerable<CropBatchDto>>.Ok(batches.Select(MapBatch));
-    }
+    // public async Task<ApiResponse<IEnumerable<CropBatchDto>>> GetBatchesAsync(CancellationToken ct = default)
+    // {
+    //     var batches = await _uow.CropBatches.GetAllAsync(ct);
+    //     return ApiResponse<IEnumerable<CropBatchDto>>.Ok(batches.Select(MapBatch));
+    // }
 
-    public async Task<ApiResponse<CropBatchDto>> CreateBatchAsync(CreateCropBatchRequest req, CancellationToken ct = default)
-    {
-        if (string.IsNullOrWhiteSpace(req.BatchCode))
-            throw AppException.BadRequest("BatchCode is required.");
-        if (await _uow.CropBatches.AnyAsync(b => b.BatchCode == req.BatchCode.Trim(), ct))
-            throw AppException.Conflict($"BatchCode '{req.BatchCode}' already exists.");
+    // public async Task<ApiResponse<CropBatchDto>> CreateBatchAsync(CreateCropBatchRequest req, CancellationToken ct = default)
+    // {
+    //     if (string.IsNullOrWhiteSpace(req.BatchCode))
+    //         throw AppException.BadRequest("BatchCode is required.");
+    //     if (await _uow.CropBatches.AnyAsync(b => b.BatchCode == req.BatchCode.Trim(), ct))
+    //         throw AppException.Conflict($"BatchCode '{req.BatchCode}' already exists.");
 
-        var batch = new CropBatch
-        {
-            BatchCode = req.BatchCode.Trim(),
-            StartDate = req.StartDate == default ? DateTime.UtcNow : req.StartDate,
-            Status = "active",
-            Notes = req.Notes
-        };
-        await _uow.CropBatches.AddAsync(batch, ct);
-        await _uow.SaveChangesAsync(ct);
-        return ApiResponse<CropBatchDto>.Ok(MapBatch(batch), "Created.");
-    }
+    //     var batch = new CropBatch
+    //     {
+    //         BatchCode = req.BatchCode.Trim(),
+    //         StartDate = req.StartDate == default ? DateTime.UtcNow : req.StartDate,
+    //         Status = "active",
+    //         Notes = req.Notes
+    //     };
+    //     await _uow.CropBatches.AddAsync(batch, ct);
+    //     await _uow.SaveChangesAsync(ct);
+    //     return ApiResponse<CropBatchDto>.Ok(MapBatch(batch), "Created.");
+    // }
 
-    public async Task<ApiResponse<CropBatchDto>> UpdateBatchAsync(Guid id, UpdateCropBatchRequest req, CancellationToken ct = default)
-    {
-        var batch = await _uow.CropBatches.GetByIdAsync(id, ct)
-            ?? throw AppException.NotFound("CropBatch");
-        batch.EndDate = req.EndDate ?? batch.EndDate;
-        batch.Status = req.Status ?? batch.Status;
-        batch.Notes = req.Notes ?? batch.Notes;
-        _uow.CropBatches.Update(batch);
-        await _uow.SaveChangesAsync(ct);
-        return ApiResponse<CropBatchDto>.Ok(MapBatch(batch));
-    }
+    // public async Task<ApiResponse<CropBatchDto>> UpdateBatchAsync(Guid id, UpdateCropBatchRequest req, CancellationToken ct = default)
+    // {
+    //     var batch = await _uow.CropBatches.GetByIdAsync(id, ct)
+    //         ?? throw AppException.NotFound("CropBatch");
+    //     batch.EndDate = req.EndDate ?? batch.EndDate;
+    //     batch.Status = req.Status ?? batch.Status;
+    //     batch.Notes = req.Notes ?? batch.Notes;
+    //     _uow.CropBatches.Update(batch);
+    //     await _uow.SaveChangesAsync(ct);
+    //     return ApiResponse<CropBatchDto>.Ok(MapBatch(batch));
+    // }
 
-    public async Task<ApiResponse> DeleteBatchAsync(Guid id, CancellationToken ct = default)
-    {
-        var batch = await _uow.CropBatches.GetByIdAsync(id, ct)
-            ?? throw AppException.NotFound("CropBatch");
+    // public async Task<ApiResponse> DeleteBatchAsync(Guid id, CancellationToken ct = default)
+    // {
+    //     var batch = await _uow.CropBatches.GetByIdAsync(id, ct)
+    //         ?? throw AppException.NotFound("CropBatch");
 
-        var inUse = await _uow.Crabs.AnyAsync(c => c.CropBatchId == id, ct);
-        if (inUse)
-            throw AppException.Conflict(
-                $"Cannot delete crop batch '{batch.BatchCode}' — crabs still reference it. Soft-delete/remove crabs first.");
+    //     var inUse = await _uow.Crabs.AnyAsync(c => c.CropBatchId == id, ct);
+    //     if (inUse)
+    //         throw AppException.Conflict(
+    //             $"Cannot delete crop batch '{batch.BatchCode}' — crabs still reference it. Soft-delete/remove crabs first.");
 
-        _uow.CropBatches.Remove(batch);
-        await _uow.SaveChangesAsync(ct);
-        return ApiResponse.Ok($"Crop batch '{batch.BatchCode}' deleted.");
-    }
+    //     _uow.CropBatches.Remove(batch);
+    //     await _uow.SaveChangesAsync(ct);
+    //     return ApiResponse.Ok($"Crop batch '{batch.BatchCode}' deleted.");
+    // }
 
     private async Task<Dictionary<Guid, LotStats>> LoadLotStatsAsync(CancellationToken ct)
     {
@@ -169,8 +169,8 @@ public class FarmLotService : IFarmLotService
             l.Notes);
     }
 
-    private static CropBatchDto MapBatch(CropBatch b) =>
-        new(b.Id, b.BatchCode, b.StartDate, b.EndDate, b.Status, b.Notes);
+    // private static CropBatchDto MapBatch(CropBatch b) =>
+    //     new(b.Id, b.BatchCode, b.StartDate, b.EndDate, b.Status, b.Notes);
 
     private sealed record LotStats(int Quantity, decimal? AverageWeightGram);
 }

@@ -1,7 +1,7 @@
 using CrabSenseBE.Domain.Entities;
 using CrabSenseBE.Domain.Interfaces;
 using CrabSenseBE.Infrastructure.Persistence;
-
+using Microsoft.EntityFrameworkCore;
 namespace CrabSenseBE.Infrastructure.Repositories;
 
 public class UnitOfWork : IUnitOfWork
@@ -33,8 +33,8 @@ public class UnitOfWork : IUnitOfWork
     private IRepository<CrabLot>? _crabLots;
     public IRepository<CrabLot> CrabLots => _crabLots ??= new GenericRepository<CrabLot>(_context);
 
-    private IRepository<CropBatch>? _cropBatches;
-    public IRepository<CropBatch> CropBatches => _cropBatches ??= new GenericRepository<CropBatch>(_context);
+    // private IRepository<CropBatch>? _cropBatches;
+    // public IRepository<CropBatch> CropBatches => _cropBatches ??= new GenericRepository<CropBatch>(_context);
 
     private IRepository<OperationLog>? _operationLogs;
     public IRepository<OperationLog> OperationLogs => _operationLogs ??= new GenericRepository<OperationLog>(_context);
@@ -50,6 +50,11 @@ public class UnitOfWork : IUnitOfWork
     private IRepository<BoxStatusHistory>? _boxStatusHistories;
     public IRepository<BoxStatusHistory> BoxStatusHistories =>
         _boxStatusHistories ??= new GenericRepository<BoxStatusHistory>(_context);
+
+
+    private IRepository<CrabMortalityRecord>? _crabMortalityRecords;
+    public IRepository<CrabMortalityRecord> CrabMortalityRecords =>
+    _crabMortalityRecords ??= new GenericRepository<CrabMortalityRecord>(_context);
 
     // IoT
     private IRepository<WaterSystem>? _waterSystems;
@@ -150,5 +155,22 @@ public class UnitOfWork : IUnitOfWork
     public Task<int> SaveChangesAsync(CancellationToken ct = default)
         => _context.SaveChangesAsync(ct);
 
+    public async Task<List<CrabMortalityRecord>> GetMortalityRecordsWithDetailsAsync(CancellationToken ct = default)
+    {
+        return await _context.CrabMortalityRecords
+            .Include(x => x.Crab)
+            .ToListAsync(ct);
+    }
+
+    public async Task<Crab?> GetCrabWithDetailsAsync(Guid crabId, CancellationToken ct = default)
+    {
+        return await _context.Crabs
+            .Include(c => c.BoxAllocations)
+            .Include(c => c.MoltingRecords)
+            .FirstOrDefaultAsync(c => c.Id == crabId, ct);
+    }
+
     public void Dispose() => _context.Dispose();
+
+
 }

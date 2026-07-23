@@ -119,12 +119,12 @@ public record CrabDto(
     Guid FarmingRowId,
     Guid FarmingAreaId,
     Guid CrabLotId,
-    Guid CropBatchId,
     string? Tag,
     decimal? WeightGram,
     string? MoltingStage,
     bool IsAlive,
-    DateTime? MoltedAt);
+    DateTime? MoltedAt,
+    DateTime StockedAt);
 
 /// <summary>
 /// Place crab. Required: CrabLotId + CropBatchId, and BoxId
@@ -133,7 +133,6 @@ public record CrabDto(
 /// </summary>
 public record CreateCrabRequest(
     Guid CrabLotId,
-    Guid CropBatchId,
     Guid? BoxId = null,
     Guid? FarmingRowId = null,
     Guid? FarmingAreaId = null,

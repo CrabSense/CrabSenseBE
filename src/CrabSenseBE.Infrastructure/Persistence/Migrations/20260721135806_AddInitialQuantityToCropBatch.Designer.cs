@@ -3,6 +3,7 @@ using System;
 using CrabSenseBE.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace CrabSenseBE.Infrastructure.Persistence.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    partial class AppDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260721135806_AddInitialQuantityToCropBatch")]
+    partial class AddInitialQuantityToCropBatch
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -355,7 +358,7 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uuid");
 
-                    b.Property<Guid?>("BoxId")
+                    b.Property<Guid>("BoxId")
                         .HasColumnType("uuid");
 
                     b.Property<Guid>("CrabLotId")
@@ -364,18 +367,17 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<Guid>("CropBatchId")
+                        .HasColumnType("uuid");
+
+                    b.Property<bool>("IsAlive")
+                        .HasColumnType("boolean");
+
                     b.Property<DateTime?>("MoltedAt")
                         .HasColumnType("timestamp with time zone");
 
                     b.Property<string>("MoltingStage")
-                        .IsRequired()
                         .HasColumnType("text");
-
-                    b.Property<int>("Status")
-                        .HasColumnType("integer");
-
-                    b.Property<DateTime>("StockedAt")
-                        .HasColumnType("timestamp with time zone");
 
                     b.Property<string>("Tag")
                         .HasColumnType("text");
@@ -391,6 +393,8 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.HasIndex("BoxId");
 
                     b.HasIndex("CrabLotId");
+
+                    b.HasIndex("CropBatchId");
 
                     b.ToTable("Crabs", "be");
                 });
@@ -482,6 +486,9 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<Guid?>("CropBatchId")
+                        .HasColumnType("uuid");
+
                     b.Property<DateTime>("MortalityDate")
                         .HasColumnType("timestamp with time zone");
 
@@ -501,9 +508,47 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
 
                     b.HasIndex("CrabId");
 
+                    b.HasIndex("CropBatchId");
+
                     b.HasIndex("RecorderId");
 
                     b.ToTable("CrabMortalityRecords", "be");
+                });
+
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.CropBatch", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("BatchCode")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTime?>("EndDate")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int>("InitialQuantity")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("Notes")
+                        .HasColumnType("text");
+
+                    b.Property<DateTime>("StartDate")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Status")
+                        .HasColumnType("text");
+
+                    b.Property<DateTime?>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("CropBatches", "be");
                 });
 
             modelBuilder.Entity("CrabSenseBE.Domain.Entities.Customer", b =>
@@ -824,6 +869,9 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                         .HasColumnType("timestamp with time zone");
 
                     b.Property<Guid>("CreatedBy")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid?>("CropBatchId")
                         .HasColumnType("uuid");
 
                     b.Property<DateTime>("HarvestDate")
@@ -1557,46 +1605,6 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.ToTable("TraceabilityLinks", "be");
                 });
 
-            modelBuilder.Entity("CrabSenseBE.Domain.Entities.UserPushToken", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uuid");
-
-                    b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("DeviceId")
-                        .HasColumnType("text");
-
-                    b.Property<bool>("IsActive")
-                        .HasColumnType("boolean");
-
-                    b.Property<DateTime>("LastSeenAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("Platform")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<string>("Token")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<DateTime?>("UpdatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<Guid>("UserId")
-                        .HasColumnType("uuid");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("UserId", "Token")
-                        .IsUnique();
-
-                    b.ToTable("UserPushTokens", "be");
-                });
-
             modelBuilder.Entity("CrabSenseBE.Domain.Entities.WaterMeasurement", b =>
                 {
                     b.Property<Guid>("Id")
@@ -1739,9 +1747,11 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
 
             modelBuilder.Entity("CrabSenseBE.Domain.Entities.Crab", b =>
                 {
-                    b.HasOne("CrabSenseBE.Domain.Entities.Box", null)
+                    b.HasOne("CrabSenseBE.Domain.Entities.Box", "Box")
                         .WithMany("Crabs")
-                        .HasForeignKey("BoxId");
+                        .HasForeignKey("BoxId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
 
                     b.HasOne("CrabSenseBE.Domain.Entities.CrabLot", "CrabLot")
                         .WithMany("Crabs")
@@ -1749,7 +1759,17 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
 
+                    b.HasOne("CrabSenseBE.Domain.Entities.CropBatch", "CropBatch")
+                        .WithMany("Crabs")
+                        .HasForeignKey("CropBatchId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Box");
+
                     b.Navigation("CrabLot");
+
+                    b.Navigation("CropBatch");
                 });
 
             modelBuilder.Entity("CrabSenseBE.Domain.Entities.CrabBoxAllocation", b =>
@@ -1761,7 +1781,7 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                         .IsRequired();
 
                     b.HasOne("CrabSenseBE.Domain.Entities.Crab", "Crab")
-                        .WithMany("BoxAllocations")
+                        .WithMany()
                         .HasForeignKey("CrabId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
@@ -1778,6 +1798,10 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                         .HasForeignKey("CrabId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
+
+                    b.HasOne("CrabSenseBE.Domain.Entities.CropBatch", null)
+                        .WithMany("MortalityRecords")
+                        .HasForeignKey("CropBatchId");
 
                     b.HasOne("CrabSenseBE.Domain.Entities.AppUser", "Recorder")
                         .WithMany()
@@ -1910,7 +1934,7 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                         .HasForeignKey("BoxId");
 
                     b.HasOne("CrabSenseBE.Domain.Entities.Crab", "Crab")
-                        .WithMany("MoltingRecords")
+                        .WithMany()
                         .HasForeignKey("CrabId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
@@ -2039,17 +2063,6 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.Navigation("QrCode");
                 });
 
-            modelBuilder.Entity("CrabSenseBE.Domain.Entities.UserPushToken", b =>
-                {
-                    b.HasOne("CrabSenseBE.Domain.Entities.AppUser", "User")
-                        .WithMany()
-                        .HasForeignKey("UserId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("User");
-                });
-
             modelBuilder.Entity("CrabSenseBE.Domain.Entities.WaterMeasurement", b =>
                 {
                     b.HasOne("CrabSenseBE.Domain.Entities.Sensor", "Sensor")
@@ -2102,16 +2115,19 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
 
             modelBuilder.Entity("CrabSenseBE.Domain.Entities.Crab", b =>
                 {
-                    b.Navigation("BoxAllocations");
-
-                    b.Navigation("MoltingRecords");
-
                     b.Navigation("MortalityRecords");
                 });
 
             modelBuilder.Entity("CrabSenseBE.Domain.Entities.CrabLot", b =>
                 {
                     b.Navigation("Crabs");
+                });
+
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.CropBatch", b =>
+                {
+                    b.Navigation("Crabs");
+
+                    b.Navigation("MortalityRecords");
                 });
 
             modelBuilder.Entity("CrabSenseBE.Domain.Entities.Customer", b =>

@@ -8,6 +8,7 @@ using Serilog;
 using System.Text;
 using CrabSenseBE.Api.Services;
 using CrabSenseBE.Application.Interfaces;
+using CrabSenseBE.Application.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.Configuration.AddJsonFile("appsettings.Local.json", optional: true, reloadOnChange: true);
@@ -27,6 +28,7 @@ builder.Services.AddApplication(builder.Configuration);
 builder.Services.AddInfrastructure(builder.Configuration);
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddScoped<ICurrentUserService, CurrentUserService>();
+builder.Services.AddScoped< IMortalityService, MortalityService>();
 
 // ─── JWT Authentication ─────────────────────────────────────────────────────
 var jwtSecret = builder.Configuration["Jwt:Secret"]

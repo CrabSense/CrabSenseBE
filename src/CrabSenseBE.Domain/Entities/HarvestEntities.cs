@@ -7,7 +7,7 @@ namespace CrabSenseBE.Domain.Entities;
 public class HarvestVoucher : BaseEntity
 {
     public string VoucherCode { get; set; } = string.Empty;
-    public Guid? CropBatchId { get; set; }
+    // public Guid? CropBatchId { get; set; }
     public DateTime HarvestDate { get; set; }
     public HarvestStatus Status { get; set; } = HarvestStatus.Planned;
     public int TotalQuantity { get; set; }

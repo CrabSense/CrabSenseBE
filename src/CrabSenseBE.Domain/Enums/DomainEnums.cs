@@ -89,6 +89,53 @@ public enum HarvestStatus
     Cancelled
 }
 
+public enum CrabStatus
+{
+    /// <summary>Cua đang sống bình thường.</summary>
+    Alive = 0,
+    /// <summary>Cua đang trong quá trình lột xác.</summary>
+    Molting = 1,
+    /// <summary>Cua đã chết.</summary>
+    Dead = 2,
+    /// <summary>Cua đang được cách ly.</summary>
+    Quarantined = 3,
+    /// <summary>Cua đã được thu hoạch.</summary>
+    Harvested = 4,
+    /// <summary>Không xác định được tình trạng/vị trí cua.</summary>
+    Missing = 5
+}
+
+/// <summary>
+/// Nguyên nhân cua chết.
+/// Dùng cho báo cáo tỷ lệ sống và phân tích nguyên nhân tử vong.
+/// </summary>
+public enum MortalityCause
+{
+    /// <summary>Chưa xác định được nguyên nhân.</summary>
+    Unknown = 0,
+
+    /// <summary>Bệnh.</summary>
+    Disease=1,
+    /// <summary>Chất lượng nước.</summary>
+    WaterQuality=2,
+
+    /// <summary>Ăn thịt lẫn nhau.</summary>
+    Cannibalism=3,
+
+    /// <summary>Vấn đề về nhiệt độ.</summary>
+    Temperature=4,
+
+    /// <summary>Vấn đề liên quan đến cho ăn.</summary>
+    Feeding=5,
+
+    /// <summary>Chết do quá trình bắt, vận chuyển hoặc xử lý.</summary>
+    Handling=6,
+
+
+    /// <summary>Nguyên nhân khác.</summary>
+    Other=7
+}
+
 /// <summary>Allowed Box.Status values for farming tracking.</summary>
 public static class BoxStatuses
 {

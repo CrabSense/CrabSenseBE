@@ -3,6 +3,7 @@ using System;
 using CrabSenseBE.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace CrabSenseBE.Infrastructure.Persistence.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    partial class AppDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260722112617_FixMoltingStageNullable")]
+    partial class FixMoltingStageNullable
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -1557,46 +1560,6 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.ToTable("TraceabilityLinks", "be");
                 });
 
-            modelBuilder.Entity("CrabSenseBE.Domain.Entities.UserPushToken", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uuid");
-
-                    b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("DeviceId")
-                        .HasColumnType("text");
-
-                    b.Property<bool>("IsActive")
-                        .HasColumnType("boolean");
-
-                    b.Property<DateTime>("LastSeenAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("Platform")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<string>("Token")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<DateTime?>("UpdatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<Guid>("UserId")
-                        .HasColumnType("uuid");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("UserId", "Token")
-                        .IsUnique();
-
-                    b.ToTable("UserPushTokens", "be");
-                });
-
             modelBuilder.Entity("CrabSenseBE.Domain.Entities.WaterMeasurement", b =>
                 {
                     b.Property<Guid>("Id")
@@ -2037,17 +2000,6 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                         .IsRequired();
 
                     b.Navigation("QrCode");
-                });
-
-            modelBuilder.Entity("CrabSenseBE.Domain.Entities.UserPushToken", b =>
-                {
-                    b.HasOne("CrabSenseBE.Domain.Entities.AppUser", "User")
-                        .WithMany()
-                        .HasForeignKey("UserId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("User");
                 });
 
             modelBuilder.Entity("CrabSenseBE.Domain.Entities.WaterMeasurement", b =>

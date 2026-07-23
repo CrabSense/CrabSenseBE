@@ -16,11 +16,12 @@ public class AppDbContext : DbContext
     public DbSet<Box> Boxes => Set<Box>();
     public DbSet<Crab> Crabs => Set<Crab>();
     public DbSet<CrabLot> CrabLots => Set<CrabLot>();
-    public DbSet<CropBatch> CropBatches => Set<CropBatch>();
+    // public DbSet<CropBatch> CropBatches => Set<CropBatch>();
     public DbSet<OperationLog> OperationLogs => Set<OperationLog>();
     public DbSet<CrabBoxAllocation> CrabBoxAllocations => Set<CrabBoxAllocation>();
     public DbSet<MoltingRecord> MoltingRecords => Set<MoltingRecord>();
     public DbSet<BoxStatusHistory> BoxStatusHistories => Set<BoxStatusHistory>();
+    public DbSet<CrabMortalityRecord> CrabMortalityRecords=> Set<CrabMortalityRecord>();
 
     // IoT
     public DbSet<WaterSystem> WaterSystems => Set<WaterSystem>();

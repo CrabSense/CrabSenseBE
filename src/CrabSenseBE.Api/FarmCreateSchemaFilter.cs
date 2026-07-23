@@ -96,7 +96,7 @@ public sealed class FarmCreateSchemaFilter : ISchemaFilter
             SetRequired(schema, "crabLotId", "cropBatchId");
             schema.Example = Obj(
                 ("crabLotId", Uuid(sample.LotId)),
-                ("cropBatchId", Uuid(sample.BatchId)),
+                // ("cropBatchId", Uuid(sample.BatchId)),
                 ("boxId", Uuid(sample.BoxId)),
                 ("farmingRowId", Uuid(sample.RowId)),
                 ("farmingAreaId", Uuid(sample.AreaId)),
@@ -105,7 +105,7 @@ public sealed class FarmCreateSchemaFilter : ISchemaFilter
                 ("weightGram", new OpenApiDouble(150)),
                 ("moltingStage", new OpenApiString("hard")));
             Describe(schema, "crabLotId", $"Required — lô. Sample: {sample.LotCode}");
-            Describe(schema, "cropBatchId", $"Required — vụ nuôi. Sample: {sample.BatchCode}");
+            // Describe(schema, "cropBatchId", $"Required — vụ nuôi. Sample: {sample.BatchCode}");
             Describe(schema, "boxId", $"Hộp — Row/Area auto. Sample: {sample.BoxCode}");
             Describe(schema, "farmingRowId",
                 $"Auto from box if omitted. Sample: {sample.RowName} ({sample.RowId})");
@@ -205,15 +205,14 @@ public sealed class FarmCreateSchemaFilter : ISchemaFilter
                 .OrderBy(l => l.ImportDate)
                 .Select(l => new { l.Id, l.LotCode })
                 .FirstOrDefault();
-            var batch = db.CropBatches.AsNoTracking()
-                .OrderBy(b => b.StartDate)
-                .Select(b => new { b.Id, b.BatchCode })
-                .FirstOrDefault();
+            // var batch = db.CropBatches.AsNoTracking()
+            //     .OrderBy(b => b.StartDate)
+            //     .Select(b => new { b.Id, b.BatchCode })
+            //     .FirstOrDefault();
             var crab = box is null
                 ? null
                 : db.Crabs.AsNoTracking()
-                    .Where(c => c.BoxId == box.Id)
-                    .OrderBy(c => c.CreatedAt)
+                    .Where(c => c.BoxAllocations.Any(a => a.BoxId == box.Id && a.EndTime == null)).OrderBy(c => c.CreatedAt)
                     .Select(c => new { c.Id })
                     .FirstOrDefault();
 
@@ -226,9 +225,9 @@ public sealed class FarmCreateSchemaFilter : ISchemaFilter
                 BoxCode: box?.Code ?? "(create box first)",
                 LotId: lot?.Id ?? DemoGuid(4),
                 LotCode: lot?.LotCode ?? "(create crab-lot first)",
-                BatchId: batch?.Id ?? DemoGuid(5),
-                BatchCode: batch?.BatchCode ?? "(create crop-batch first)",
-                CrabId: crab?.Id ?? DemoGuid(6));
+                // BatchId: batch?.Id ?? DemoGuid(5),
+                // BatchCode: batch?.BatchCode ?? "(create crop-batch first)",
+                CrabId: crab?.Id ?? DemoGuid(5));
         }
         catch
         {
@@ -244,7 +243,7 @@ public sealed class FarmCreateSchemaFilter : ISchemaFilter
         Guid RowId, string RowName,
         Guid BoxId, string BoxCode,
         Guid LotId, string LotCode,
-        Guid BatchId, string BatchCode,
+        // Guid BatchId, string BatchCode,
         Guid CrabId)
     {
         public static HierarchySample Fallback() => new(
@@ -252,8 +251,8 @@ public sealed class FarmCreateSchemaFilter : ISchemaFilter
             DemoGuid(2), "sample-row",
             DemoGuid(3), "sample-box",
             DemoGuid(4), "sample-lot",
-            DemoGuid(5), "sample-batch",
-            DemoGuid(6));
+            // DemoGuid(5), "sample-batch",
+            DemoGuid(5));
 
         private static Guid DemoGuid(byte n) =>
             Guid.Parse($"3fa85f64-5717-4562-b3fc-2c963f66afa{n}");

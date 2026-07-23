@@ -5,6 +5,7 @@ using CrabSenseBE.Domain.Entities;
 using CrabSenseBE.Domain.Interfaces;
 using FluentAssertions;
 using Moq;
+using CrabSenseBE.Domain.Enums;
 
 namespace CrabSenseBE.UnitTests.Application;
 
@@ -22,8 +23,15 @@ public class FarmHistoryServiceTests
         var newBox = Guid.NewGuid();
         var rowId = Guid.NewGuid();
         var areaId = Guid.NewGuid();
-        var crab = new Crab { Id = crabId, BoxId = oldBox, IsAlive = true };
-        var box = new Box { Id = newBox, FarmingRowId = rowId, Code = "B2", Status = "empty", IsOccupied = false };
+        var crab = new Crab
+        {
+            Id = crabId,
+            Status = CrabStatus.Alive,
+            BoxAllocations = new List<CrabBoxAllocation>
+    {
+        new() { CrabId = crabId, BoxId = oldBox, StartTime = DateTime.UtcNow }
+    }
+        }; var box = new Box { Id = newBox, FarmingRowId = rowId, Code = "B2", Status = "empty", IsOccupied = false };
         var row = new FarmingRow { Id = rowId, FarmingAreaId = areaId, Name = "R1", IsActive = true };
         var area = new FarmingArea { Id = areaId, Name = "A1", IsActive = true };
 
@@ -66,8 +74,7 @@ public class FarmHistoryServiceTests
         var result = await Create().AllocateCrabAsync(new AllocateCrabRequest(areaId, rowId, crabId, newBox, "stock"));
 
         result.Success.Should().BeTrue();
-        crab.BoxId.Should().Be(newBox);
-        box.IsOccupied.Should().BeTrue();
+        crab.BoxAllocations.Should().Contain(a => a.BoxId == newBox); box.IsOccupied.Should().BeTrue();
         box.Status.Should().Be("active");
     }
 
@@ -76,8 +83,15 @@ public class FarmHistoryServiceTests
     {
         var crabId = Guid.NewGuid();
         var boxId = Guid.NewGuid();
-        var crab = new Crab { Id = crabId, BoxId = boxId, WeightGram = 100 };
-        var box = new Box { Id = boxId, Status = "active", IsOccupied = true };
+        var crab = new Crab
+        {
+            Id = crabId,
+            WeightGram = 100,
+            BoxAllocations = new List<CrabBoxAllocation>
+    {
+        new() { CrabId = crabId, BoxId = boxId, StartTime = DateTime.UtcNow }
+    }
+        }; var box = new Box { Id = boxId, Status = "active", IsOccupied = true };
         var crabRepo = new Mock<IRepository<Crab>>();
         crabRepo.Setup(r => r.GetByIdAsync(crabId, It.IsAny<CancellationToken>())).ReturnsAsync(crab);
         crabRepo.Setup(r => r.Update(It.IsAny<Crab>()));

@@ -4,7 +4,7 @@ using CrabSenseBE.Application.Interfaces;
 using CrabSenseBE.Domain.Entities;
 using CrabSenseBE.Domain.Enums;
 using CrabSenseBE.Domain.Interfaces;
-
+using Microsoft.EntityFrameworkCore;
 namespace CrabSenseBE.Application.Services;
 
 /// <summary>
@@ -32,7 +32,7 @@ public class FarmHistoryService : IFarmHistoryService
 
         var crab = await _uow.Crabs.GetByIdAsync(req.CrabId, ct)
             ?? throw AppException.NotFound("Crab");
-        if (!crab.IsAlive)
+        if (!IsCrabAlive(crab))
             throw AppException.BadRequest("Cannot allocate a dead/harvested crab.");
 
         var area = await _uow.FarmingAreas.GetByIdAsync(req.FarmingAreaId, ct)
@@ -52,8 +52,9 @@ public class FarmHistoryService : IFarmHistoryService
         if (box.FarmingRowId != row.Id)
             throw AppException.BadRequest("BoxId does not belong to FarmingRowId.");
 
-        var liveInTarget = await _uow.Crabs.AnyAsync(
-            c => c.BoxId == req.BoxId && c.IsAlive && c.Id != req.CrabId, ct);
+        var allocsWithCrab = await _uow.CrabBoxAllocations.FindAsync(
+    a => a.BoxId == req.BoxId && a.EndTime == null && a.CrabId != req.CrabId, ct);
+        var liveInTarget = allocsWithCrab.Any();
         if (liveInTarget)
             throw AppException.Conflict($"Box '{box.Code}' already has a live crab.");
 
@@ -65,13 +66,14 @@ public class FarmHistoryService : IFarmHistoryService
             _uow.CrabBoxAllocations.Update(a);
         }
 
-        if (crab.BoxId != req.BoxId)
+        if (GetCrabBoxId(crab) != req.BoxId)
         {
-            var prevBox = await _uow.Boxes.GetByIdAsync(crab.BoxId, ct);
+            var prevBox = await _uow.Boxes.GetByIdAsync(GetCrabBoxId(crab), ct);
             if (prevBox is not null)
             {
-                var stillLive = await _uow.Crabs.AnyAsync(
-                    c => c.BoxId == prevBox.Id && c.IsAlive && c.Id != crab.Id, ct);
+                var stillAlloc = await _uow.CrabBoxAllocations.FindAsync(
+    a => a.BoxId == prevBox.Id && a.EndTime == null && a.CrabId != crab.Id, ct);
+                var stillLive = stillAlloc.Any();
                 if (!stillLive)
                     await ApplyBoxStatusAsync(prevBox, BoxStatuses.Empty, false, "Crab moved out", ct);
             }
@@ -86,7 +88,6 @@ public class FarmHistoryService : IFarmHistoryService
         };
         await _uow.CrabBoxAllocations.AddAsync(alloc, ct);
 
-        crab.BoxId = req.BoxId;
         _uow.Crabs.Update(crab);
 
         await ApplyBoxStatusAsync(box, BoxStatuses.Active, true, "Crab allocated", ct);
@@ -162,7 +163,7 @@ public class FarmHistoryService : IFarmHistoryService
         if (!allowedResults.Contains(result))
             throw AppException.BadRequest("Result must be success | failed | incomplete.");
 
-        var boxId = req.BoxId ?? crab.BoxId;
+        var boxId = req.BoxId ?? GetCrabBoxId(crab);
         if (boxId == Guid.Empty)
             throw AppException.BadRequest("BoxId is required — crab must be in a box to record molting.");
 
@@ -416,7 +417,10 @@ public class FarmHistoryService : IFarmHistoryService
         if (row is not null)
             area = await _uow.FarmingAreas.GetByIdAsync(row.FarmingAreaId, ct);
 
-        var liveCrab = (await _uow.Crabs.FindAsync(c => c.BoxId == box.Id && c.IsAlive, ct))
+        var allocs = await _uow.CrabBoxAllocations.FindAsync(a => a.BoxId == box.Id && a.EndTime == null, ct);
+        var liveCrabIds = allocs.Select(a => a.CrabId).ToList();
+        var allCrabs = await _uow.Crabs.FindAsync(c => liveCrabIds.Contains(c.Id), ct);
+        var liveCrab = allCrabs.Where(IsCrabAlive)
             .OrderByDescending(c => c.CreatedAt)
             .FirstOrDefault();
 
@@ -442,7 +446,7 @@ public class FarmHistoryService : IFarmHistoryService
             liveCrab?.Tag,
             liveCrab?.MoltingStage,
             liveCrab?.WeightGram,
-            liveCrab?.IsAlive,
+            IsCrabAlive(liveCrab),
             openAlloc?.Id,
             openAlloc?.StartTime,
             allAlloc.Count(),
@@ -485,6 +489,16 @@ public class FarmHistoryService : IFarmHistoryService
 
         _uow.Crabs.Update(crab);
     }
+
+    private static bool IsCrabAlive(Crab c) =>
+    c.Status == CrabStatus.Alive
+    || c.Status == CrabStatus.Molting
+    || c.Status == CrabStatus.Quarantined;
+
+    private static Guid GetCrabBoxId(Crab c) =>
+        c.BoxAllocations
+         .OrderByDescending(a => a.StartTime)
+         .FirstOrDefault()?.BoxId ?? Guid.Empty;
 
     private static IOrderedEnumerable<T> FilterByRange<T>(
         IEnumerable<T> source, Func<T, DateTime> at, DateTime? from, DateTime? to)

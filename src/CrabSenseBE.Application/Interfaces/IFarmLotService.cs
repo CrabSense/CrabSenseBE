@@ -12,8 +12,8 @@ public interface IFarmLotService
     Task<ApiResponse<CrabLotDto>> UpdateLotAsync(Guid id, UpdateCrabLotRequest req, CancellationToken ct = default);
     Task<ApiResponse> DeleteLotAsync(Guid id, CancellationToken ct = default);
 
-    Task<ApiResponse<IEnumerable<CropBatchDto>>> GetBatchesAsync(CancellationToken ct = default);
-    Task<ApiResponse<CropBatchDto>> CreateBatchAsync(CreateCropBatchRequest req, CancellationToken ct = default);
-    Task<ApiResponse<CropBatchDto>> UpdateBatchAsync(Guid id, UpdateCropBatchRequest req, CancellationToken ct = default);
-    Task<ApiResponse> DeleteBatchAsync(Guid id, CancellationToken ct = default);
+//     Task<ApiResponse<IEnumerable<CropBatchDto>>> GetBatchesAsync(CancellationToken ct = default);
+//     Task<ApiResponse<CropBatchDto>> CreateBatchAsync(CreateCropBatchRequest req, CancellationToken ct = default);
+//     Task<ApiResponse<CropBatchDto>> UpdateBatchAsync(Guid id, UpdateCropBatchRequest req, CancellationToken ct = default);
+//     Task<ApiResponse> DeleteBatchAsync(Guid id, CancellationToken ct = default);
 }
