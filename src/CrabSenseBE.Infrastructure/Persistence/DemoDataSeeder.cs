@@ -308,6 +308,35 @@ public static class DemoDataSeeder
             Details = "Demo dataset seeded",
             IpAddress = "127.0.0.1"
         });
+        db.OperationLogs.Add(new OperationLog
+        {
+            UserId = owner.Id,
+            Action = "qr_scan",
+            EntityType = "Box",
+            EntityId = boxA01.Id,
+            Details = $"Quét QR box {boxA01.Code}",
+            IpAddress = "127.0.0.1",
+            CreatedAt = now.AddHours(-2)
+        });
+        db.OperationLogs.Add(new OperationLog
+        {
+            UserId = owner.Id,
+            Action = "sensor_update",
+            EntityType = "Sensor",
+            Details = "Cập nhật chỉ số nước RAS-A",
+            IpAddress = "127.0.0.1",
+            CreatedAt = now.AddHours(-1)
+        });
+        db.OperationLogs.Add(new OperationLog
+        {
+            UserId = staff?.Id ?? owner.Id,
+            Action = "harvest_check",
+            EntityType = "Box",
+            EntityId = boxA02.Id,
+            Details = $"Kiểm tra cửa sổ softshell {boxA02.Code}",
+            IpAddress = "127.0.0.1",
+            CreatedAt = now.AddMinutes(-35)
+        });
 
         await db.SaveChangesAsync(ct);
         logger.LogInformation(

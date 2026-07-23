@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using CrabSenseBE.Application.Interfaces;
 
 namespace CrabSenseBE.Api.Controllers;
 
@@ -66,18 +67,6 @@ public class PaymentsController : ControllerBase
 
 
 [ApiController]
-[Route("api/dashboard")]
-[Authorize]
-[Tags("31. Dashboard (stub)")]
-[Produces("application/json")]
-public class DashboardController : ControllerBase
-{
-    /// <summary>[READ] Dashboard overview</summary>
-    [HttpGet("overview")]
-    public IActionResult Overview() => Ok(new { success = true, data = new object() });
-}
-
-[ApiController]
 [Route("api/settings")]
 [Authorize]
 [Tags("32. CRUD — Settings (stub)")]
@@ -92,10 +81,14 @@ public class SettingsController : ControllerBase
 [ApiController]
 [Route("api/ai")]
 [Authorize]
-[Tags("33. AI (stub)")]
+[Tags("33. AI")]
 [Produces("application/json")]
 public class AiController : ControllerBase
 {
+    private readonly IDashboardService _dashboard;
+
+    public AiController(IDashboardService dashboard) => _dashboard = dashboard;
+
     /// <summary>[READ] List AI detections</summary>
     [HttpGet("detections")]
     public IActionResult Detections() => Ok(new { success = true, data = Array.Empty<object>() });
@@ -104,7 +97,8 @@ public class AiController : ControllerBase
     [HttpPost("feedback")]
     public IActionResult Feedback() => Ok(new { success = true });
 
-    /// <summary>[READ] AI recommendations</summary>
+    /// <summary>[READ] AI recommendations for Home</summary>
     [HttpGet("recommendations")]
-    public IActionResult Recommendations() => Ok(new { success = true, data = Array.Empty<object>() });
+    public async Task<IActionResult> Recommendations(CancellationToken ct)
+        => Ok(await _dashboard.GetRecommendationsAsync(ct));
 }

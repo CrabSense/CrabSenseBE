@@ -31,6 +31,8 @@ public class FarmingService : IFarmingService
         var all = await _uow.FarmingAreas.GetAllAsync(ct);
         var q = all.AsEnumerable();
 
+        if (filter.OwnerId.HasValue && filter.OwnerId.Value != Guid.Empty)
+            q = q.Where(a => a.OwnerId == filter.OwnerId.Value);
         if (filter.IsActive.HasValue)
             q = q.Where(a => a.IsActive == filter.IsActive.Value);
         if (!string.IsNullOrWhiteSpace(filter.Search))

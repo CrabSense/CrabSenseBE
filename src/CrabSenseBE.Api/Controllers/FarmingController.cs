@@ -20,15 +20,22 @@ public class FarmingAreasController : ControllerBase
     private readonly IFarmingService _service;
     public FarmingAreasController(IFarmingService service) => _service = service;
 
-    /// <summary>[READ] List / filter areas — no query = GET ALL</summary>
+    /// <summary>[READ] List / filter areas. FarmOwner is auto-scoped to JWT user when ownerId omitted.</summary>
     [HttpGet]
     public async Task<IActionResult> GetAll(
+        [FromQuery] Guid? ownerId = null,
         [FromQuery] string? search = null,
         [FromQuery] bool? isActive = null,
         [FromQuery] int page = 1,
         [FromQuery] int? pageSize = null,
         CancellationToken ct = default)
-        => Ok(await _service.GetAreasAsync(new FarmingAreaFilter(search, isActive, page, pageSize), ct));
+    {
+        // Mobile Home passes ownerId from /auth/me; if missing, FarmOwner still only sees own areas.
+        if (ownerId is null && User.IsInRole(AppRoles.FarmOwner))
+            ownerId = TryGetUserId();
+
+        return Ok(await _service.GetAreasAsync(new FarmingAreaFilter(search, isActive, page, pageSize, ownerId), ct));
+    }
 
     /// <summary>[READ] Get area by id</summary>
     [HttpGet("{id:guid}")]
@@ -78,6 +85,14 @@ public class FarmingAreasController : ControllerBase
         if (raw is null || !Guid.TryParse(raw, out var id) || id == Guid.Empty)
             throw AppException.Unauthorized("Missing user id claim in JWT.");
         return id;
+    }
+
+    private Guid? TryGetUserId()
+    {
+        var raw = User.FindFirstValue(JwtRegisteredClaimNames.Sub)
+            ?? User.FindFirstValue(ClaimTypes.NameIdentifier)
+            ?? User.FindFirstValue("sub");
+        return raw is not null && Guid.TryParse(raw, out var id) && id != Guid.Empty ? id : null;
     }
 }
 
