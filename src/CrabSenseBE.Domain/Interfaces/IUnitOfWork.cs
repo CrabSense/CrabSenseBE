@@ -46,7 +46,8 @@ public interface IUnitOfWork : IDisposable
     IRepository<AiFeedback> AiFeedbacks { get; }
     IRepository<AiRecommendation> AiRecommendations { get; }
     IRepository<Inspection> Inspections { get; }
-    
+    IRepository<FarmOperation> FarmOperations { get; }
+    IRepository<SaleTransaction> SaleTransactions { get; }
 
     Task<int> SaveChangesAsync(CancellationToken ct = default);
 

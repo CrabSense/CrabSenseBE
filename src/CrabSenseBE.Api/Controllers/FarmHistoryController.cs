@@ -21,6 +21,12 @@ public class FarmHistoryController : ControllerBase
     public async Task<IActionResult> Allocate([FromBody] AllocateCrabRequest req, CancellationToken ct)
         => Ok(await _service.AllocateCrabAsync(req, ct));
 
+    /// <summary>[CREATE] Mobile transfer alias — crabId + destinationBoxId (+ sourceBoxId)</summary>
+    [HttpPost("api/allocations/transfer")]
+    [Authorize(Roles = AppRoles.FarmWrite)]
+    public async Task<IActionResult> Transfer([FromBody] MobileTransferCrabRequest req, CancellationToken ct)
+        => Ok(await _service.TransferCrabAsync(req, ct));
+
     /// <summary>[UPDATE] Fix allocation notes / times (mistake correction)</summary>
     [HttpPut("api/allocations/{id:guid}")]
     [Authorize(Roles = AppRoles.FarmWrite)]

@@ -30,14 +30,24 @@ public record CrabBoxAllocationDto(
 
 /// <summary>
 /// Allocate crab into a box. Required: FarmingAreaId + FarmingRowId + CrabId + BoxId
-/// (box must belong to row → area).
+/// (box must belong to row → area). Area/Row may be omitted when BoxId is set (auto-filled).
 /// </summary>
 public record AllocateCrabRequest(
-    Guid FarmingAreaId,
-    Guid FarmingRowId,
     Guid CrabId,
     Guid BoxId,
-    string? Notes);
+    Guid? FarmingAreaId = null,
+    Guid? FarmingRowId = null,
+    string? Notes = null,
+    // Mobile transfer aliases
+    Guid? SourceBoxId = null,
+    Guid? DestinationBoxId = null);
+
+/// <summary>Mobile-friendly transfer: crabId + destinationBoxId (+ optional sourceBoxId).</summary>
+public record MobileTransferCrabRequest(
+    Guid CrabId,
+    Guid DestinationBoxId,
+    Guid? SourceBoxId = null,
+    string? Notes = null);
 
 /// <summary>Sửa bản ghi allocation (ghi chú / thời gian) — không đổi crab/box.</summary>
 public record UpdateAllocationRequest(

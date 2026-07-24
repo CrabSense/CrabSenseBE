@@ -7,6 +7,7 @@ namespace CrabSenseBE.Application.Interfaces;
 public interface IFarmHistoryService
 {
     Task<ApiResponse<CrabBoxAllocationDto>> AllocateCrabAsync(AllocateCrabRequest req, CancellationToken ct = default);
+    Task<ApiResponse<CrabBoxAllocationDto>> TransferCrabAsync(MobileTransferCrabRequest req, CancellationToken ct = default);
     Task<ApiResponse<IEnumerable<CrabBoxAllocationDto>>> GetAllocationsByCrabAsync(
         Guid crabId, DateTime? from = null, DateTime? to = null, CancellationToken ct = default);
     Task<ApiResponse<IEnumerable<CrabBoxAllocationDto>>> GetAllocationsByBoxAsync(

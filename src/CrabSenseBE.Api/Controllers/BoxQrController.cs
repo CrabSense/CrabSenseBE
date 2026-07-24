@@ -49,6 +49,15 @@ public class BoxQrController : ControllerBase
     public async Task<IActionResult> ScanByPath(string code, CancellationToken ct)
         => Ok(await _service.ScanAsync(code, ct));
 
+    /// <summary>[READ] Mobile Quick Result alias via box-qr path</summary>
+    [HttpGet("api/box-qr/{code}/quick-result")]
+    [Authorize(Roles = AppRoles.Any)]
+    public async Task<IActionResult> QuickResult(
+        string code,
+        [FromServices] IBoxDetailService detail,
+        CancellationToken ct)
+        => Ok(await detail.GetQuickResultByQrAsync(code, ct));
+
     /// <summary>[UPDATE] Update crab at scanned box</summary>
     [HttpPatch("api/box-qr/{code}/crabs/{crabId:guid}")]
     [Authorize(Roles = AppRoles.FarmWrite)]

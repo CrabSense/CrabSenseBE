@@ -15,7 +15,10 @@ public interface IAlertService
     Task<ApiResponse<IEnumerable<AlertDto>>> GetAlertsAsync(
         bool? activeOnly = true,
         Guid? farmingAreaId = null,
+        Guid? boxId = null,
         CancellationToken ct = default);
+    Task<ApiResponse<AlertDto>> GetByIdAsync(Guid id, CancellationToken ct = default);
+    Task<ApiResponse<object>> GetUnreadCountAsync(CancellationToken ct = default);
     Task<ApiResponse<AlertDto>> AcknowledgeAsync(Guid id, AcknowledgeAlertRequest req, CancellationToken ct = default);
     Task<ApiResponse<AlertDto>> ResolveAsync(Guid id, CancellationToken ct = default);
 

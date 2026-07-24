@@ -80,8 +80,19 @@ public class AlertService : IAlertService
     public async Task<ApiResponse<IEnumerable<AlertDto>>> GetAlertsAsync(
         bool? activeOnly = true,
         Guid? farmingAreaId = null,
+        Guid? boxId = null,
         CancellationToken ct = default)
     {
+        // Resolve farming area from box when boxId is provided.
+        if (boxId is Guid bid && bid != Guid.Empty)
+        {
+            var box = await _uow.Boxes.GetByIdAsync(bid, ct)
+                ?? throw AppException.NotFound("Box");
+            var row = await _uow.FarmingRows.GetByIdAsync(box.FarmingRowId, ct);
+            if (row is not null)
+                farmingAreaId = row.FarmingAreaId;
+        }
+
         IEnumerable<Alert> items;
         if (activeOnly == true)
             items = await _uow.Alerts.FindAsync(a => a.Status == AlertStatus.Active, ct);
@@ -102,6 +113,19 @@ public class AlertService : IAlertService
 
         return ApiResponse<IEnumerable<AlertDto>>.Ok(
             items.OrderByDescending(a => a.CreatedAt).Select(MapAlert));
+    }
+
+    public async Task<ApiResponse<AlertDto>> GetByIdAsync(Guid id, CancellationToken ct = default)
+    {
+        var alert = await _uow.Alerts.GetByIdAsync(id, ct)
+            ?? throw AppException.NotFound("Alert");
+        return ApiResponse<AlertDto>.Ok(MapAlert(alert));
+    }
+
+    public async Task<ApiResponse<object>> GetUnreadCountAsync(CancellationToken ct = default)
+    {
+        var count = (await _uow.Alerts.FindAsync(a => a.Status == AlertStatus.Active, ct)).Count();
+        return ApiResponse<object>.Ok(new { count, unreadCount = count });
     }
 
     public async Task<ApiResponse<AlertDto>> AcknowledgeAsync(

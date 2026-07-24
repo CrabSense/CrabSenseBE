@@ -61,6 +61,8 @@ public class AppDbContext : DbContext
     public DbSet<AiFeedback> AiFeedbacks => Set<AiFeedback>();
     public DbSet<AiRecommendation> AiRecommendations => Set<AiRecommendation>();
     public DbSet<Inspection> Inspections => Set<Inspection>();
+    public DbSet<FarmOperation> FarmOperations => Set<FarmOperation>();
+    public DbSet<SaleTransaction> SaleTransactions => Set<SaleTransaction>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {

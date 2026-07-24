@@ -1,0 +1,52 @@
+[
+    {
+        "Box":  "BOX-A01",
+        "Qr":  "QR-BOX-A01",
+        "Id":  "7f64cffe-2d8d-4b71-90d2-0e005dffe073"
+    },
+    {
+        "Box":  "BOX-A02",
+        "Qr":  "BOX-A02",
+        "Id":  "e79646ce-9c7a-436c-8ff6-8d6a3d645d9a"
+    },
+    {
+        "Box":  "BOX-A03",
+        "Qr":  "BOX-A03-FF251FA4",
+        "Id":  "ff251fa4-4e9d-433a-8c2f-b36c286cace5"
+    },
+    {
+        "Box":  "BOX-A04",
+        "Qr":  "BOX-A04",
+        "Id":  "e6ebe234-e0ef-43cc-a1a6-7d22678acca9"
+    },
+    {
+        "Box":  "BOX-A05",
+        "Qr":  "BOX-A05",
+        "Id":  "36323634-b0d7-4cfe-9f29-720e000604e6"
+    },
+    {
+        "Box":  "BOX-A06",
+        "Qr":  "BOX-A06",
+        "Id":  "469368e4-0a27-46e4-b79c-c20374e82e22"
+    },
+    {
+        "Box":  "BOX-A07",
+        "Qr":  "BOX-A07",
+        "Id":  "b5f11018-31f2-4336-bc2d-fb2ac414d274"
+    },
+    {
+        "Box":  "BOX-A08",
+        "Qr":  "BOX-A08",
+        "Id":  "514dd6b7-7a29-44a4-bfc1-85d7695091ca"
+    },
+    {
+        "Box":  "BOX-B01",
+        "Qr":  "BOX-B01",
+        "Id":  "8485feb9-ce43-4a66-a7cf-8a9069e7dfa3"
+    },
+    {
+        "Box":  "BOX-B02",
+        "Qr":  "BOX-B02",
+        "Id":  "4dd084ce-d5f6-4607-ae5e-bc9703844cdf"
+    }
+]
