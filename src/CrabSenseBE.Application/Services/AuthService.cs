@@ -1,15 +1,21 @@
+using System.Text.Json;
 using CrabSenseBE.Application.Common;
 using CrabSenseBE.Application.DTOs.Auth;
 using CrabSenseBE.Application.Interfaces;
 using CrabSenseBE.Domain.Entities;
 using CrabSenseBE.Domain.Enums;
 using CrabSenseBE.Domain.Interfaces;
-using BCrypt.Net;
 
 namespace CrabSenseBE.Application.Services;
 
 public class AuthService : IAuthService
 {
+    private static readonly JsonSerializerOptions JsonOpts = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        PropertyNameCaseInsensitive = true,
+    };
+
     private readonly IUnitOfWork _uow;
     private readonly IJwtService _jwt;
 
@@ -114,6 +120,7 @@ public class AuthService : IAuthService
             throw AppException.BadRequest("Current password is incorrect.");
 
         user.PasswordHash = BCrypt.Net.BCrypt.HashPassword(request.NewPassword);
+        user.UpdatedAt = DateTime.UtcNow;
         _uow.Users.Update(user);
         await _uow.SaveChangesAsync(ct);
         return ApiResponse.Ok("Password changed successfully.");
@@ -126,8 +133,93 @@ public class AuthService : IAuthService
         return ApiResponse<UserDto>.Ok(MapToDto(user));
     }
 
+    public async Task<ApiResponse<UserDto>> UpdateProfileAsync(Guid userId, UpdateProfileRequest request, CancellationToken ct = default)
+    {
+        var user = await _uow.Users.GetByIdAsync(userId, ct)
+            ?? throw AppException.NotFound("User");
+
+        if (!string.IsNullOrWhiteSpace(request.Email)
+            && !string.Equals(request.Email, user.Email, StringComparison.OrdinalIgnoreCase))
+        {
+            if (await _uow.Users.AnyAsync(u => u.Email == request.Email && u.Id != userId, ct))
+                throw AppException.Conflict("Email already registered.");
+            user.Email = request.Email.Trim();
+        }
+
+        if (!string.IsNullOrWhiteSpace(request.FullName))
+            user.FullName = request.FullName.Trim();
+
+        if (request.Phone is not null)
+            user.Phone = string.IsNullOrWhiteSpace(request.Phone) ? null : request.Phone.Trim();
+
+        if (request.EmployeeId is not null)
+            user.EmployeeId = string.IsNullOrWhiteSpace(request.EmployeeId) ? null : request.EmployeeId.Trim();
+
+        if (request.AvatarUrl is not null)
+            user.AvatarUrl = string.IsNullOrWhiteSpace(request.AvatarUrl) ? null : request.AvatarUrl.Trim();
+
+        user.UpdatedAt = DateTime.UtcNow;
+        _uow.Users.Update(user);
+        await _uow.SaveChangesAsync(ct);
+        return ApiResponse<UserDto>.Ok(MapToDto(user), "Profile updated.");
+    }
+
+    public async Task<ApiResponse<NotificationPreferencesDto>> GetNotificationPreferencesAsync(
+        Guid userId, CancellationToken ct = default)
+    {
+        var user = await _uow.Users.GetByIdAsync(userId, ct)
+            ?? throw AppException.NotFound("User");
+        return ApiResponse<NotificationPreferencesDto>.Ok(ParsePrefs(user.NotificationPrefsJson));
+    }
+
+    public async Task<ApiResponse<NotificationPreferencesDto>> UpdateNotificationPreferencesAsync(
+        Guid userId, NotificationPreferencesDto request, CancellationToken ct = default)
+    {
+        var user = await _uow.Users.GetByIdAsync(userId, ct)
+            ?? throw AppException.NotFound("User");
+
+        var prefs = new NotificationPreferencesDto(
+            request.WarningsEnabled,
+            request.TaskRemindersEnabled,
+            request.SystemUpdatesEnabled,
+            request.SoundEnabled,
+            request.VibrationEnabled,
+            request.LedIndicatorEnabled);
+
+        user.NotificationPrefsJson = JsonSerializer.Serialize(prefs, JsonOpts);
+        user.UpdatedAt = DateTime.UtcNow;
+        _uow.Users.Update(user);
+        await _uow.SaveChangesAsync(ct);
+        return ApiResponse<NotificationPreferencesDto>.Ok(prefs, "Notification preferences updated.");
+    }
+
+    private static NotificationPreferencesDto ParsePrefs(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json))
+            return new NotificationPreferencesDto();
+
+        try
+        {
+            return JsonSerializer.Deserialize<NotificationPreferencesDto>(json, JsonOpts)
+                   ?? new NotificationPreferencesDto();
+        }
+        catch
+        {
+            return new NotificationPreferencesDto();
+        }
+    }
+
     private static UserDto MapToDto(AppUser u) => new(
-        u.Id, u.Username, u.Email, u.FullName,
-        u.Role.ToString(), u.IsActive, u.LastLoginAt
+        u.Id,
+        u.Username,
+        u.Email,
+        u.FullName,
+        u.Role.ToString(),
+        u.IsActive,
+        u.LastLoginAt,
+        u.Phone,
+        u.EmployeeId,
+        u.AvatarUrl,
+        u.CreatedAt
     );
 }
