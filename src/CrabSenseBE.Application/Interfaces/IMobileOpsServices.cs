@@ -20,6 +20,9 @@ public interface IBoxDetailService
 
 public interface IFarmOperationService
 {
+    Task<ApiResponse<IEnumerable<FarmOperationDto>>> ListAllAsync(
+        int page = 1, int limit = 50, string? type = null,
+        DateTime? startDate = null, DateTime? endDate = null, CancellationToken ct = default);
     Task<ApiResponse<IEnumerable<FarmOperationDto>>> ListByBoxAsync(
         Guid boxId, int page = 1, int limit = 50, string? type = null,
         DateTime? startDate = null, DateTime? endDate = null, CancellationToken ct = default);
