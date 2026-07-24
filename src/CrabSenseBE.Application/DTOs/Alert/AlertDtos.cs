@@ -10,12 +10,36 @@ public record CreateAlertThresholdRequest(
 public record UpdateAlertThresholdRequest(
     decimal MinValue, decimal MaxValue, string Severity, bool IsActive);
 
-// --- Cảnh báo ---
+// --- Cảnh báo (enriched for Mobile Alerts Command Center) ---
 public record AlertDto(
-    Guid Id, Guid? SensorId, string Message, string Severity, string Status,
-    decimal? TriggerValue, DateTime CreatedAt, DateTime? AcknowledgedAt);
+    Guid Id,
+    Guid? SensorId,
+    string Message,
+    string Severity,
+    string Status,
+    decimal? TriggerValue,
+    DateTime CreatedAt,
+    DateTime? AcknowledgedAt,
+    string Title,
+    string Category,
+    string? SensorCode,
+    string? SensorType,
+    string? Unit,
+    Guid? FarmingAreaId,
+    string? FarmingAreaName,
+    string? LocationLabel,
+    decimal? ThresholdMin,
+    decimal? ThresholdMax,
+    int PriorityScore,
+    string PriorityExplanation,
+    string SlaLabel,
+    string? AiRecommendation,
+    int? AiConfidence,
+    Guid? AcknowledgedBy);
 
 public record AcknowledgeAlertRequest(Guid? UserId);
+
+public record AlertUnreadCountDto(int Count, int UnreadCount);
 
 // --- Thông báo ---
 public record NotificationDto(
