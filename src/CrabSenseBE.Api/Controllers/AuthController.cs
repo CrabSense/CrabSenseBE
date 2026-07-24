@@ -50,9 +50,28 @@ public class AuthController : ControllerBase
     public async Task<IActionResult> Me(CancellationToken ct)
         => Ok(await _authService.GetMeAsync(_currentUser.UserId, ct));
 
+    /// <summary>[UPDATE] Update current user profile</summary>
+    [HttpPut("me")]
+    [Authorize]
+    public async Task<IActionResult> UpdateMe([FromBody] UpdateProfileRequest request, CancellationToken ct)
+        => Ok(await _authService.UpdateProfileAsync(_currentUser.UserId, request, ct));
+
     /// <summary>[UPDATE] Change password</summary>
     [HttpPost("change-password")]
     [Authorize]
     public async Task<IActionResult> ChangePassword([FromBody] ChangePasswordRequest request, CancellationToken ct)
         => Ok(await _authService.ChangePasswordAsync(_currentUser.UserId, request, ct));
+
+    /// <summary>[READ] Per-user notification preferences (Account tab)</summary>
+    [HttpGet("me/notification-preferences")]
+    [Authorize]
+    public async Task<IActionResult> GetNotificationPreferences(CancellationToken ct)
+        => Ok(await _authService.GetNotificationPreferencesAsync(_currentUser.UserId, ct));
+
+    /// <summary>[UPDATE] Per-user notification preferences (Account tab)</summary>
+    [HttpPut("me/notification-preferences")]
+    [Authorize]
+    public async Task<IActionResult> UpdateNotificationPreferences(
+        [FromBody] NotificationPreferencesDto request, CancellationToken ct)
+        => Ok(await _authService.UpdateNotificationPreferencesAsync(_currentUser.UserId, request, ct));
 }
