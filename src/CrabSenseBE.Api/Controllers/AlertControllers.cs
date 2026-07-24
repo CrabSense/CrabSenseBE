@@ -31,6 +31,14 @@ public class AlertsController : ControllerBase
     public async Task<IActionResult> UnreadCount(CancellationToken ct)
         => Ok(await _service.GetUnreadCountAsync(ct));
 
+    /// <summary>[READ] Resolved / acknowledged alert history (Mobile)</summary>
+    [HttpGet("history")]
+    public async Task<IActionResult> History(
+        [FromQuery] int days = 30,
+        [FromQuery] Guid? farmingAreaId = null,
+        CancellationToken ct = default)
+        => Ok(await _service.GetHistoryAsync(days, farmingAreaId, ct));
+
     /// <summary>[READ] Alert by id</summary>
     [HttpGet("{id:guid}")]
     public async Task<IActionResult> GetById(Guid id, CancellationToken ct)
