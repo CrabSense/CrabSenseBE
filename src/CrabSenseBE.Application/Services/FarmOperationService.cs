@@ -14,6 +14,28 @@ public class FarmOperationService : IFarmOperationService
 
     public FarmOperationService(IUnitOfWork uow) => _uow = uow;
 
+    public async Task<ApiResponse<IEnumerable<FarmOperationDto>>> ListAllAsync(
+        int page = 1, int limit = 50, string? type = null,
+        DateTime? startDate = null, DateTime? endDate = null, CancellationToken ct = default)
+    {
+        var all = (await _uow.FarmOperations.GetAllAsync(ct)).AsEnumerable();
+        if (!string.IsNullOrWhiteSpace(type))
+            all = all.Where(o => string.Equals(o.Type, type, StringComparison.OrdinalIgnoreCase));
+        if (startDate.HasValue)
+            all = all.Where(o => o.Timestamp >= startDate.Value);
+        if (endDate.HasValue)
+            all = all.Where(o => o.Timestamp <= endDate.Value);
+
+        var pageSize = limit <= 0 ? 50 : limit;
+        var pageNum = page <= 0 ? 1 : page;
+        var items = all.OrderByDescending(o => o.Timestamp)
+            .Skip((pageNum - 1) * pageSize)
+            .Take(pageSize)
+            .Select(Map)
+            .ToList();
+        return ApiResponse<IEnumerable<FarmOperationDto>>.Ok(items);
+    }
+
     public async Task<ApiResponse<IEnumerable<FarmOperationDto>>> ListByBoxAsync(
         Guid boxId, int page = 1, int limit = 50, string? type = null,
         DateTime? startDate = null, DateTime? endDate = null, CancellationToken ct = default)

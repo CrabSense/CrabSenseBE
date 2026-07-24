@@ -58,6 +58,17 @@ public class OperationsController : ControllerBase
         CancellationToken ct = default)
         => Ok(await _ops.GetRecentAsync(limit, farmingAreaId, ct));
 
+    /// <summary>[READ] All farm operations, paginated (operation history)</summary>
+    [HttpGet]
+    public async Task<IActionResult> ListAll(
+        [FromQuery] int page = 1,
+        [FromQuery] int limit = 50,
+        [FromQuery] string? type = null,
+        [FromQuery] DateTime? startDate = null,
+        [FromQuery] DateTime? endDate = null,
+        CancellationToken ct = default)
+        => Ok(await _farmOps.ListAllAsync(page, limit, type, startDate, endDate, ct));
+
     /// <summary>[READ] Farm operations for a box (Mobile notes/tasks)</summary>
     [HttpGet("box/{boxId:guid}")]
     public async Task<IActionResult> ByBox(
