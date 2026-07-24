@@ -278,16 +278,22 @@ public static class DemoDataSeeder
                 StorageLocation = "Kho A - Ngăn 2"
             });
 
-        // ── QR & push token ──────────────────────────────────────────────────
-        db.QrCodes.Add(new QrCode
+        // ── QR for every demo box (scannable = box.Code) ─────────────────────
+        foreach (var box in boxes)
         {
-            Code = "QR-BOX-A01",
-            EntityType = "box",
-            BoxId = boxA01.Id,
-            Payload = $"box:{boxA01.Id}",
-            IsActive = true,
-            ScanCount = 3
-        });
+            var exists = await db.QrCodes.AnyAsync(
+                q => q.BoxId == box.Id && q.IsActive && q.EntityType == "box", ct);
+            if (exists) continue;
+            db.QrCodes.Add(new QrCode
+            {
+                Code = box.Code,
+                EntityType = "box",
+                BoxId = box.Id,
+                Payload = $"{{\"type\":\"box\",\"boxId\":\"{box.Id}\",\"crabsense\":\"CRABSENSE:BOX:{box.Code}\"}}",
+                IsActive = true,
+                ScanCount = box.Code == "BOX-A01" ? 3 : 0
+            });
+        }
 
         db.UserPushTokens.Add(new UserPushToken
         {

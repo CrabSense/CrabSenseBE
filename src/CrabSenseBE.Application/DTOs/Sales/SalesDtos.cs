@@ -1,29 +1,52 @@
 namespace CrabSenseBE.Application.DTOs.Sales;
 
-// --- Customer ---
-public record CustomerDto(Guid Id, string Name, string? Phone, string? Email, string CustomerType, bool IsActive);
-public record CreateCustomerRequest(string Name, string? Phone, string? Email, string? Address, string CustomerType, string? TaxCode);
-public record UpdateCustomerRequest(string Name, string? Phone, string? Email, string? Address, bool IsActive);
+public record SaleDto(
+    Guid Id,
+    string BuyerName,
+    string? BuyerContact,
+    decimal Quantity,
+    decimal UnitPrice,
+    decimal TotalAmount,
+    string PaymentMethod,
+    string PaymentStatus,
+    DateTime SaleDate,
+    Guid? FarmId,
+    Guid? BoxId,
+    Guid OperatorId,
+    string OperatorName,
+    string? Notes,
+    DateTime CreatedAt,
+    bool IsSynced = true);
 
-// --- PriceList ---
-public record PriceListDto(Guid Id, string Name, string Grade, string CustomerType, decimal PricePerKg, DateTime EffectiveFrom, DateTime? EffectiveTo, bool IsActive);
-public record CreatePriceListRequest(string Name, string Grade, string CustomerType, decimal PricePerKg, DateTime EffectiveFrom, DateTime? EffectiveTo);
+public record CreateSaleRequest(
+    string BuyerName,
+    decimal Quantity,
+    decimal UnitPrice,
+    string PaymentMethod = "CASH",
+    string? PaymentStatus = "COMPLETED",
+    string? BuyerContact = null,
+    Guid? FarmId = null,
+    Guid? FarmingAreaId = null,
+    Guid? BoxId = null,
+    Guid? OperatorId = null,
+    string? OperatorName = null,
+    string? Notes = null,
+    DateTime? SaleDate = null,
+    decimal? TotalAmount = null);
 
-// --- SalesOrder ---
-public record SalesOrderDto(
-    Guid Id, string OrderCode, Guid CustomerId, string CustomerName,
-    DateTime OrderDate, string Status, decimal TotalAmount, string? Notes
-);
-public record CreateSalesOrderRequest(
-    Guid CustomerId, DateTime OrderDate, string? Notes,
-    IEnumerable<SalesOrderLineRequest> Lines
-);
-public record SalesOrderLineRequest(Guid? FrozenLotId, string? Grade, decimal QuantityKg, decimal UnitPricePerKg);
-public record UpdateOrderStatusRequest(string Status);
+public record SalesSummaryDto(
+    decimal TotalRevenue,
+    decimal TotalQuantity,
+    int TransactionCount,
+    DateTime StartDate,
+    DateTime EndDate);
 
-// --- Payment ---
-public record PaymentDto(Guid Id, Guid SalesOrderId, decimal Amount, string Method, DateTime PaidAt, string Status, string? Reference);
-public record CreatePaymentRequest(Guid SalesOrderId, decimal Amount, string Method, DateTime PaidAt, string? Reference);
-
-// --- Invoice ---
-public record InvoiceDto(Guid Id, Guid SalesOrderId, string InvoiceNumber, DateTime IssuedAt, decimal TotalAmount, string PaymentStatus);
+public record BoxCameraDto(
+    Guid BoxId,
+    Guid? DeviceId,
+    string DeviceCode,
+    string Status,
+    string? StreamUrl,
+    string? SnapshotUrl,
+    DateTime? LastSeenAt,
+    string Message);

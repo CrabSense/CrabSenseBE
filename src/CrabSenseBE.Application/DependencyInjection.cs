@@ -29,7 +29,14 @@ public static class DependencyInjection
         services.AddScoped<ISurvivalRateReportService, SurvivalRateReportService>();
         services.AddScoped<IMoltingReportService, MoltingReportService>();
         services.AddScoped<IDashboardService, DashboardService>();
+        services.AddScoped<IBoxOverviewService, BoxOverviewService>();
+        services.AddScoped<IBoxDetailService, BoxDetailService>();
+        services.AddScoped<IFarmOperationService, FarmOperationService>();
+        services.AddScoped<IManualInspectionService, ManualInspectionService>();
+        services.AddScoped<IAiOpsService, AiOpsService>();
         services.AddScoped<IOperationLogService, OperationLogService>();
+        services.AddScoped<ISalesService, SalesService>();
+        services.AddScoped<IBoxCameraService, BoxCameraService>();
 
         services.AddHttpClient("telegram");
         services.AddHttpClient("zalo");

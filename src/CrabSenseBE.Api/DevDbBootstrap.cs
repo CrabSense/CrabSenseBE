@@ -22,6 +22,7 @@ public static class DevDbBootstrap
             try
             {
                 await EnsureSchemaReadyAsync(db, logger);
+                await EnsureBoxesMobileSchemaAsync(db, logger);
                 logger.LogInformation("Schema ready (attempt {A}).", attempt);
 
                 await RemapLegacyRolesAsync(db, logger);
@@ -39,6 +40,7 @@ public static class DevDbBootstrap
                     "Users sẵn sàng: sysadmin/SysAdmin@123 | owner/Owner@123 | staff/Staff@123 (admin/Admin@123 = SystemAdmin).");
 
                 await DemoDataSeeder.SeedAsync(db, logger);
+                await EnsureBoxQrsForAllBoxesAsync(db, logger);
                 return;
             }
             catch (Exception ex)
@@ -97,6 +99,67 @@ public static class DevDbBootstrap
     }
 
     /// <summary>
+    /// Idempotent DDL for Boxes tab / inspections / farm ops (works even if EF history was baselined).
+    /// </summary>
+    private static async Task EnsureBoxesMobileSchemaAsync(AppDbContext db, ILogger logger)
+    {
+        await db.Database.ExecuteSqlRawAsync("""
+            ALTER TABLE be."Inspections"
+            ADD COLUMN IF NOT EXISTS "BoxId" uuid NULL,
+            ADD COLUMN IF NOT EXISTS "MoltingStatus" text NULL,
+            ADD COLUMN IF NOT EXISTS "HealthStatus" text NULL,
+            ADD COLUMN IF NOT EXISTS "WeightGram" numeric NULL,
+            ADD COLUMN IF NOT EXISTS "RelatedMediaId" uuid NULL,
+            ADD COLUMN IF NOT EXISTS "PhotoUrlsJson" text NULL,
+            ADD COLUMN IF NOT EXISTS "OperatorName" text NULL,
+            ADD COLUMN IF NOT EXISTS "AiAgreement" boolean NULL;
+
+            ALTER TABLE be."AiDetections"
+            ADD COLUMN IF NOT EXISTS "BoxId" uuid NULL,
+            ADD COLUMN IF NOT EXISTS "MediaId" uuid NULL,
+            ADD COLUMN IF NOT EXISTS "Status" text NOT NULL DEFAULT 'pending';
+
+            CREATE TABLE IF NOT EXISTS be."FarmOperations" (
+                "Id" uuid NOT NULL,
+                "Type" text NOT NULL,
+                "BoxIdsJson" text NOT NULL,
+                "Quantity" numeric NULL,
+                "Unit" text NULL,
+                "Notes" text NOT NULL,
+                "PhotoUrlsJson" text NOT NULL,
+                "Timestamp" timestamp with time zone NOT NULL,
+                "OperatorId" uuid NOT NULL,
+                "OperatorName" text NOT NULL,
+                "CreatedAt" timestamp with time zone NOT NULL,
+                "UpdatedAt" timestamp with time zone NULL,
+                CONSTRAINT "PK_FarmOperations" PRIMARY KEY ("Id")
+            );
+
+            CREATE TABLE IF NOT EXISTS be."SaleTransactions" (
+                "Id" uuid NOT NULL,
+                "BuyerName" text NOT NULL,
+                "BuyerContact" text NULL,
+                "Quantity" numeric NOT NULL,
+                "UnitPrice" numeric NOT NULL,
+                "TotalAmount" numeric NOT NULL,
+                "PaymentMethod" text NOT NULL,
+                "PaymentStatus" text NOT NULL,
+                "SaleDate" timestamp with time zone NOT NULL,
+                "FarmingAreaId" uuid NULL,
+                "BoxId" uuid NULL,
+                "OperatorId" uuid NOT NULL,
+                "OperatorName" text NOT NULL,
+                "Notes" text NULL,
+                "CreatedAt" timestamp with time zone NOT NULL,
+                "UpdatedAt" timestamp with time zone NULL,
+                CONSTRAINT "PK_SaleTransactions" PRIMARY KEY ("Id")
+            );
+            """).ConfigureAwait(false);
+
+        logger.LogInformation("Ensured Boxes/Inspections/FarmOperations/Sales mobile schema columns.");
+    }
+
+    /// <summary>
     /// Role lưu dạng string trong Postgres — remap legacy trước khi EF đọc entity.
     /// Admin/SystemAdmin → SystemAdmin; Operator/Sales → FarmOwner nếu chưa có owner riêng;
     /// Viewer/khác → Staff.
@@ -145,5 +208,64 @@ public static class DevDbBootstrap
         user.PasswordHash = BCrypt.Net.BCrypt.HashPassword(password);
         if (string.IsNullOrWhiteSpace(user.Email))
             user.Email = email;
+    }
+
+    /// <summary>
+    /// Idempotent: create active QR row for every box missing one.
+    /// Sticker value = box.Code (scan also accepts CRABSENSE:BOX:{code}).
+    /// </summary>
+    private static async Task EnsureBoxQrsForAllBoxesAsync(AppDbContext db, ILogger logger)
+    {
+        var boxes = await db.Boxes.AsNoTracking().ToListAsync();
+        if (boxes.Count == 0)
+        {
+            logger.LogInformation("No boxes — skip QR ensure.");
+            return;
+        }
+
+        var existingBoxIds = (await db.QrCodes
+                .Where(q => q.IsActive && q.EntityType == "box" && q.BoxId != null)
+                .Select(q => q.BoxId!.Value)
+                .ToListAsync())
+            .ToHashSet();
+
+        var usedCodes = (await db.QrCodes.Select(q => q.Code).ToListAsync())
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        var added = 0;
+        foreach (var box in boxes)
+        {
+            if (existingBoxIds.Contains(box.Id)) continue;
+
+            var code = string.IsNullOrWhiteSpace(box.Code)
+                ? $"BOX-{box.Id:N}"[..12]
+                : box.Code.Trim();
+            if (usedCodes.Contains(code))
+                code = $"{box.Code}-{box.Id.ToString("N")[..6].ToUpperInvariant()}";
+
+            db.QrCodes.Add(new QrCode
+            {
+                Code = code,
+                EntityType = "box",
+                BoxId = box.Id,
+                IsActive = true,
+                Payload =
+                    $"{{\"type\":\"box\",\"boxId\":\"{box.Id}\",\"boxCode\":\"{box.Code}\",\"crabsense\":\"CRABSENSE:BOX:{box.Code}\"}}",
+                ScanCount = 0,
+                CreatedAt = DateTime.UtcNow
+            });
+            usedCodes.Add(code);
+            added++;
+        }
+
+        if (added > 0)
+        {
+            await db.SaveChangesAsync();
+            logger.LogInformation("Created {N} box QR code(s) for existing boxes.", added);
+        }
+        else
+        {
+            logger.LogInformation("All {N} boxes already have active QR codes.", boxes.Count);
+        }
     }
 }

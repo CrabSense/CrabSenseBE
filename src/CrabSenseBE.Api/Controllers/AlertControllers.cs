@@ -22,8 +22,19 @@ public class AlertsController : ControllerBase
     public async Task<IActionResult> GetAll(
         [FromQuery] bool? activeOnly = true,
         [FromQuery] Guid? farmingAreaId = null,
+        [FromQuery] Guid? boxId = null,
         CancellationToken ct = default)
-        => Ok(await _service.GetAlertsAsync(activeOnly, farmingAreaId, ct));
+        => Ok(await _service.GetAlertsAsync(activeOnly, farmingAreaId, boxId, ct));
+
+    /// <summary>[READ] Unread / active alert count (Mobile)</summary>
+    [HttpGet("unread/count")]
+    public async Task<IActionResult> UnreadCount(CancellationToken ct)
+        => Ok(await _service.GetUnreadCountAsync(ct));
+
+    /// <summary>[READ] Alert by id</summary>
+    [HttpGet("{id:guid}")]
+    public async Task<IActionResult> GetById(Guid id, CancellationToken ct)
+        => Ok(await _service.GetByIdAsync(id, ct));
 
     /// <summary>[UPDATE] Acknowledge alert</summary>
     [HttpPatch("{id:guid}/acknowledge")]
@@ -31,10 +42,22 @@ public class AlertsController : ControllerBase
     public async Task<IActionResult> Acknowledge(Guid id, [FromBody] AcknowledgeAlertRequest? req, CancellationToken ct = default)
         => Ok(await _service.AcknowledgeAsync(id, req ?? new AcknowledgeAlertRequest(null), ct));
 
+    /// <summary>[UPDATE] Acknowledge alias for Mobile clients using POST</summary>
+    [HttpPost("{id:guid}/acknowledge")]
+    [Authorize(Roles = AppRoles.FarmWrite)]
+    public async Task<IActionResult> AcknowledgePost(Guid id, [FromBody] AcknowledgeAlertRequest? req, CancellationToken ct = default)
+        => Ok(await _service.AcknowledgeAsync(id, req ?? new AcknowledgeAlertRequest(null), ct));
+
     /// <summary>[UPDATE] Resolve alert</summary>
     [HttpPatch("{id:guid}/resolve")]
     [Authorize(Roles = AppRoles.FarmWrite)]
     public async Task<IActionResult> Resolve(Guid id, CancellationToken ct)
+        => Ok(await _service.ResolveAsync(id, ct));
+
+    /// <summary>[UPDATE] Resolve / dismiss alias (POST)</summary>
+    [HttpPost("{id:guid}/resolve")]
+    [Authorize(Roles = AppRoles.FarmWrite)]
+    public async Task<IActionResult> ResolvePost(Guid id, CancellationToken ct)
         => Ok(await _service.ResolveAsync(id, ct));
 
     /// <summary>[ACTION] Scan disconnected devices/sensors</summary>

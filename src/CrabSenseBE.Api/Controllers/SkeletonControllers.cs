@@ -1,6 +1,9 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using CrabSenseBE.Application.Common;
+using CrabSenseBE.Application.DTOs.Ops;
 using CrabSenseBE.Application.Interfaces;
+using CrabSenseBE.Domain.Enums;
 
 namespace CrabSenseBE.Api.Controllers;
 
@@ -86,16 +89,40 @@ public class SettingsController : ControllerBase
 public class AiController : ControllerBase
 {
     private readonly IDashboardService _dashboard;
+    private readonly IAiOpsService _ai;
 
-    public AiController(IDashboardService dashboard) => _dashboard = dashboard;
+    public AiController(IDashboardService dashboard, IAiOpsService ai)
+    {
+        _dashboard = dashboard;
+        _ai = ai;
+    }
 
-    /// <summary>[READ] List AI detections</summary>
+    /// <summary>[READ] List AI detections — optional boxId / mediaId (videoId alias)</summary>
     [HttpGet("detections")]
-    public IActionResult Detections() => Ok(new { success = true, data = Array.Empty<object>() });
+    public async Task<IActionResult> Detections(
+        [FromQuery] Guid? boxId = null,
+        [FromQuery] Guid? mediaId = null,
+        [FromQuery] Guid? videoId = null,
+        CancellationToken ct = default)
+        => Ok(await _ai.ListDetectionsAsync(boxId, mediaId ?? videoId, ct));
+
+    /// <summary>[CREATE] Trigger AI analysis on media/video</summary>
+    [HttpPost("analyze")]
+    [Authorize(Roles = AppRoles.FarmWrite)]
+    public async Task<IActionResult> Analyze(
+        [FromBody] AiAnalyzeRequest req, CancellationToken ct = default)
+        => Ok(await _ai.AnalyzeAsync(req, ct));
 
     /// <summary>[CREATE] Submit AI feedback</summary>
     [HttpPost("feedback")]
-    public IActionResult Feedback() => Ok(new { success = true });
+    public async Task<IActionResult> Feedback(
+        [FromBody] AiFeedbackRequest req, CancellationToken ct = default)
+    {
+        var userIdClaim = User.FindFirst("sub")?.Value
+            ?? User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+        _ = Guid.TryParse(userIdClaim, out var userId);
+        return Ok(await _ai.SubmitFeedbackAsync(req, userId, ct));
+    }
 
     /// <summary>[READ] AI recommendations for Home — optional farmingAreaId</summary>
     [HttpGet("recommendations")]

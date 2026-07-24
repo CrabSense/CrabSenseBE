@@ -170,7 +170,18 @@ public class FarmingRowsController : ControllerBase
 public class BoxesController : ControllerBase
 {
     private readonly IFarmingService _service;
-    public BoxesController(IFarmingService service) => _service = service;
+    private readonly IBoxOverviewService _overview;
+    private readonly IBoxDetailService _detail;
+
+    public BoxesController(
+        IFarmingService service,
+        IBoxOverviewService overview,
+        IBoxDetailService detail)
+    {
+        _service = service;
+        _overview = overview;
+        _detail = detail;
+    }
 
     /// <summary>[READ] List / filter boxes — no query = GET ALL</summary>
     [HttpGet]
@@ -186,6 +197,17 @@ public class BoxesController : ControllerBase
         => Ok(await _service.GetBoxesAsync(
             new BoxFilter(farmingAreaId, farmingRowId, code, status, isOccupied, page, pageSize), ct));
 
+    /// <summary>
+    /// [READ] Enriched Boxes tab overview — health score, water, devices, alerts, AI tips, map layout.
+    /// </summary>
+    [HttpGet("overview")]
+    public async Task<IActionResult> Overview(
+        [FromQuery] Guid? farmingAreaId = null,
+        [FromQuery] Guid? farmingRowId = null,
+        [FromQuery] string? status = null,
+        CancellationToken ct = default)
+        => Ok(await _overview.GetOverviewAsync(farmingAreaId, farmingRowId, status, ct));
+
     /// <summary>[READ] Empty boxes currently available (+ suggested next). Filter by area/row</summary>
     [HttpGet("available")]
     public async Task<IActionResult> GetAvailable(
@@ -194,10 +216,48 @@ public class BoxesController : ControllerBase
         CancellationToken ct = default)
         => Ok(await _service.GetAvailabilityAsync(farmingAreaId, farmingRowId, ct));
 
-    /// <summary>[READ] Get box by id</summary>
+    /// <summary>[READ] Mobile QR alias — returns { boxId } for scanner</summary>
+    [HttpGet("qr/{code}")]
+    public async Task<IActionResult> ResolveQr(string code, CancellationToken ct)
+        => Ok(await _detail.ResolveQrAsync(code, ct));
+
+    /// <summary>
+    /// [READ] Mobile Scan QR Quick Result — single payload:
+    /// box snapshot, health/AI scores, water, alerts, recommendation.
+    /// </summary>
+    [HttpGet("qr/{code}/quick-result")]
+    public async Task<IActionResult> QuickResult(string code, CancellationToken ct)
+        => Ok(await _detail.GetQuickResultByQrAsync(code, ct));
+
+    /// <summary>[READ] Enriched box detail (Mobile Box Detail)</summary>
     [HttpGet("{id:guid}")]
     public async Task<IActionResult> GetById(Guid id, CancellationToken ct)
-        => Ok(await _service.GetBoxByIdAsync(id, ct));
+        => Ok(await _detail.GetDetailAsync(id, ct));
+
+    /// <summary>[READ] Crabs currently in box</summary>
+    [HttpGet("{id:guid}/crabs")]
+    public async Task<IActionResult> GetCrabs(Guid id, CancellationToken ct)
+        => Ok(await _detail.GetCrabsAsync(id, ct));
+
+    /// <summary>[CREATE] Add crab into box (Mobile convenience; auto CrabLot if omitted)</summary>
+    [HttpPost("{id:guid}/crabs")]
+    [Authorize(Roles = AppRoles.FarmWrite)]
+    public async Task<IActionResult> AddCrab(
+        Guid id, [FromBody] CrabSenseBE.Application.DTOs.Ops.MobileAddCrabRequest req, CancellationToken ct)
+        => Ok(await _detail.AddCrabAsync(id, req, ct));
+
+    /// <summary>[READ] Videos for box (MediaAsset category=video)</summary>
+    [HttpGet("{id:guid}/videos")]
+    public async Task<IActionResult> GetVideos(Guid id, CancellationToken ct)
+        => Ok(await _detail.GetVideosAsync(id, ct));
+
+    /// <summary>[READ] Camera feed metadata for box (Mobile)</summary>
+    [HttpGet("{id:guid}/camera")]
+    public async Task<IActionResult> GetCamera(
+        Guid id,
+        [FromServices] IBoxCameraService cameras,
+        CancellationToken ct)
+        => Ok(await cameras.GetCameraForBoxAsync(id, ct));
 
     /// <summary>[CREATE] Create box — body: farmingRowId (dãy); khu auto from row; code optional</summary>
     [HttpPost]

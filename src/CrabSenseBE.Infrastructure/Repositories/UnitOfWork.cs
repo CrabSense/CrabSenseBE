@@ -152,6 +152,14 @@ public class UnitOfWork : IUnitOfWork
     private IRepository<Inspection>? _inspections;
     public IRepository<Inspection> Inspections => _inspections ??= new GenericRepository<Inspection>(_context);
 
+    private IRepository<FarmOperation>? _farmOperations;
+    public IRepository<FarmOperation> FarmOperations =>
+        _farmOperations ??= new GenericRepository<FarmOperation>(_context);
+
+    private IRepository<SaleTransaction>? _saleTransactions;
+    public IRepository<SaleTransaction> SaleTransactions =>
+        _saleTransactions ??= new GenericRepository<SaleTransaction>(_context);
+
     public Task<int> SaveChangesAsync(CancellationToken ct = default)
         => _context.SaveChangesAsync(ct);
 

@@ -1,0 +1,95 @@
+using System.Text.Json;
+using CrabSenseBE.Application.Common;
+using CrabSenseBE.Application.DTOs.Farm;
+
+namespace CrabSenseBE.Application.DTOs.Ops;
+
+public record FarmOperationDto(
+    Guid Id,
+    string Type,
+    IReadOnlyList<string> BoxIds,
+    decimal? Quantity,
+    string? Unit,
+    string Notes,
+    IReadOnlyList<string> PhotoUrls,
+    DateTime Timestamp,
+    Guid OperatorId,
+    string OperatorName);
+
+public record CreateFarmOperationRequest(
+    string Type,
+    IReadOnlyList<string> BoxIds,
+    string? Notes = null,
+    decimal? Quantity = null,
+    string? Unit = null,
+    IReadOnlyList<string>? PhotoUrls = null,
+    DateTime? Timestamp = null,
+    Guid? OperatorId = null,
+    string? OperatorName = null);
+
+public record UpdateFarmOperationRequest(
+    string? Type = null,
+    IReadOnlyList<string>? BoxIds = null,
+    string? Notes = null,
+    decimal? Quantity = null,
+    string? Unit = null,
+    IReadOnlyList<string>? PhotoUrls = null);
+
+public record ManualInspectionDto(
+    Guid Id,
+    Guid BoxId,
+    Guid? RelatedVideoId,
+    string MoltingStatus,
+    string HealthStatus,
+    decimal Weight,
+    string Notes,
+    IReadOnlyList<string> PhotoUrls,
+    DateTime Timestamp,
+    Guid OperatorId,
+    string OperatorName,
+    bool? AiAgreement);
+
+public record SubmitManualInspectionRequest(
+    Guid BoxId,
+    string? Id = null,
+    Guid? RelatedVideoId = null,
+    string? MoltingStatus = null,
+    string? HealthStatus = null,
+    decimal? Weight = null,
+    string? Notes = null,
+    IReadOnlyList<string>? PhotoUrls = null,
+    DateTime? Timestamp = null,
+    Guid? OperatorId = null,
+    string? OperatorName = null,
+    bool? AiAgreement = null);
+
+/// <summary>Mobile-friendly add crab under a box (auto-picks CrabLot when omitted).</summary>
+public record MobileAddCrabRequest(
+    Guid? CrabLotId = null,
+    string? Tag = null,
+    decimal? Weight = null,
+    decimal? WeightGram = null,
+    string? MoltingStatus = null,
+    string? MoltingStage = null,
+    string? Species = null);
+
+public record AiAnalyzeRequest(Guid? MediaId = null, Guid? VideoId = null, Guid? BoxId = null);
+
+public record AiDetectionDto(
+    Guid Id,
+    Guid? BoxId,
+    Guid? MediaId,
+    string DetectionType,
+    decimal Confidence,
+    string Status,
+    string? ResultJson,
+    DateTime DetectedAt,
+    string ModelVersion);
+
+public record AiFeedbackRequest(
+    Guid? AiDetectionId = null,
+    Guid? DetectionId = null,
+    bool IsCorrect = true,
+    string? CorrectLabel = null,
+    string? Comment = null,
+    bool? AiAgreement = null);
