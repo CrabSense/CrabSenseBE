@@ -43,7 +43,7 @@ public class BoxQrServiceTests
 
         result.Success.Should().BeTrue();
         result.Data!.BoxId.Should().Be(boxId);
-        result.Data.Code.Should().StartWith("A01-");
+        result.Data.Code.Should().Be("A01");
     }
 
     [Fact]

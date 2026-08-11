@@ -71,7 +71,7 @@ public class FarmHistoryServiceTests
         _uow.Setup(u => u.BoxStatusHistories).Returns(statusHistRepo.Object);
         _uow.Setup(u => u.SaveChangesAsync(It.IsAny<CancellationToken>())).ReturnsAsync(1);
 
-        var result = await Create().AllocateCrabAsync(new AllocateCrabRequest(areaId, rowId, crabId, newBox, "stock"));
+        var result = await Create().AllocateCrabAsync(new AllocateCrabRequest(crabId, newBox, areaId, rowId, "stock"));
 
         result.Success.Should().BeTrue();
         crab.BoxAllocations.Should().Contain(a => a.BoxId == newBox); box.IsOccupied.Should().BeTrue();

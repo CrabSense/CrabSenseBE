@@ -33,6 +33,7 @@ public static class DependencyInjection
         services.AddScoped<IBoxDetailService, BoxDetailService>();
         services.AddScoped<IFarmOperationService, FarmOperationService>();
         services.AddScoped<IManualInspectionService, ManualInspectionService>();
+        services.AddScoped<ICrabConditionService, CrabConditionService>();
         services.AddScoped<IAiOpsService, AiOpsService>();
         services.AddScoped<IOperationLogService, OperationLogService>();
         services.AddScoped<ISalesService, SalesService>();
