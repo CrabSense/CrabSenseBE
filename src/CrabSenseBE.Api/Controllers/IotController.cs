@@ -53,6 +53,15 @@ public class IotController : ControllerBase
         [FromQuery] Guid? farmingAreaId = null,
         CancellationToken ct = default)
         => Ok(await _service.GetLiveSnapshotAsync(deviceId, farmingAreaId, ct));
+
+    /// <summary>[READ] Aggregated water-quality history for charts (period=24h|7d|30d)</summary>
+    [HttpGet("history")]
+    [Authorize]
+    public async Task<IActionResult> History(
+        [FromQuery] Guid? farmingAreaId = null,
+        [FromQuery] string period = "24h",
+        CancellationToken ct = default)
+        => Ok(await _service.GetWaterQualityHistoryAsync(farmingAreaId, period, ct));
 }
 
 [ApiController]

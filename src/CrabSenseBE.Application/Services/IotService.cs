@@ -164,6 +164,106 @@ public class IotService : IIotService
         return ApiResponse<IEnumerable<SensorLiveDto>>.Ok(list);
     }
 
+    public async Task<ApiResponse<IEnumerable<WaterQualitySnapshotDto>>> GetWaterQualityHistoryAsync(
+        Guid? farmingAreaId = null,
+        string period = "24h",
+        CancellationToken ct = default)
+    {
+        var utcNow = DateTime.UtcNow;
+        var from = period.Trim().ToLowerInvariant() switch
+        {
+            "7d" or "7days" or "week" => utcNow.AddDays(-7),
+            "30d" or "30days" or "month" => utcNow.AddDays(-30),
+            _ => utcNow.AddHours(-24),
+        };
+
+        var sensors = (await _uow.Sensors.GetAllAsync(ct)).AsEnumerable();
+        string? farmIdStr = null;
+        if (farmingAreaId is Guid areaId && areaId != Guid.Empty)
+        {
+            farmIdStr = areaId.ToString();
+            var wsIds = (await _uow.WaterSystems.FindAsync(w => w.FarmingAreaId == areaId, ct))
+                .Select(w => w.Id)
+                .ToHashSet();
+            sensors = sensors.Where(s => s.WaterSystemId != null && wsIds.Contains(s.WaterSystemId.Value));
+        }
+
+        var sensorList = sensors.ToList();
+        if (sensorList.Count == 0)
+            return ApiResponse<IEnumerable<WaterQualitySnapshotDto>>.Ok(Array.Empty<WaterQualitySnapshotDto>());
+
+        var sensorById = sensorList.ToDictionary(s => s.Id);
+        var sensorIds = sensorById.Keys.ToHashSet();
+
+        var measurements = (await _uow.WaterMeasurements.FindAsync(
+                m => sensorIds.Contains(m.SensorId) && m.MeasuredAt >= from && m.MeasuredAt <= utcNow,
+                ct))
+            .OrderBy(m => m.MeasuredAt)
+            .ToList();
+
+        // Bucket by minute so multi-sensor samples line up.
+        var buckets = new SortedDictionary<DateTime, Dictionary<string, decimal>>();
+        foreach (var m in measurements)
+        {
+            if (!sensorById.TryGetValue(m.SensorId, out var sensor))
+                continue;
+
+            var bucket = new DateTime(
+                m.MeasuredAt.Year, m.MeasuredAt.Month, m.MeasuredAt.Day,
+                m.MeasuredAt.Hour, m.MeasuredAt.Minute, 0,
+                DateTimeKind.Utc);
+
+            if (!buckets.TryGetValue(bucket, out var values))
+            {
+                values = new Dictionary<string, decimal>(StringComparer.OrdinalIgnoreCase);
+                buckets[bucket] = values;
+            }
+
+            var key = NormalizeSensorType(sensor.SensorType);
+            values[key] = m.Value;
+        }
+
+        var snapshots = new List<WaterQualitySnapshotDto>(buckets.Count);
+        foreach (var (at, values) in buckets)
+        {
+            values.TryGetValue("temperature", out var temp);
+            values.TryGetValue("ph", out var ph);
+            values.TryGetValue("do", out var dio);
+            values.TryGetValue("salinity", out var sal);
+
+            // Field import has TDS/EC but often no Salinity — derive ppt ≈ TDS ppm / 1000.
+            if (sal == 0 && values.TryGetValue("tds", out var tds) && tds > 0)
+                sal = Math.Round(tds / 1000m, 2);
+            else if (sal == 0 && values.TryGetValue("ec", out var ec) && ec > 0)
+                sal = Math.Round(ec * 0.5m, 2);
+
+            snapshots.Add(new WaterQualitySnapshotDto(
+                Id: $"wq_{at:yyyyMMddHHmm}",
+                SensorId: sensorList[0].Id.ToString(),
+                FarmId: farmIdStr,
+                Temperature: temp,
+                Ph: ph,
+                DissolvedOxygen: dio,
+                Salinity: sal,
+                Timestamp: at,
+                IsAlertTriggered: false));
+        }
+
+        return ApiResponse<IEnumerable<WaterQualitySnapshotDto>>.Ok(snapshots);
+    }
+
+    private static string NormalizeSensorType(string sensorType)
+    {
+        var t = sensorType.Trim().ToLowerInvariant();
+        if (t.Contains("temp")) return "temperature";
+        if (t is "ph" || t.Contains("ph")) return "ph";
+        if (t is "do" || t.Contains("oxygen") || t.Contains("oxy")) return "do";
+        if (t.Contains("salin") || t.Contains("salt")) return "salinity";
+        if (t.Contains("tds")) return "tds";
+        if (t is "ec" || t.Contains("conduct")) return "ec";
+        return t;
+    }
+
     // ─── Sensors CRUD ───────────────────────────────────────────────────────
 
     public async Task<ApiResponse<IEnumerable<SensorDto>>> GetSensorsAsync(

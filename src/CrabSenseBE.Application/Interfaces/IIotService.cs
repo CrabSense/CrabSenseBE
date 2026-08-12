@@ -14,6 +14,11 @@ public interface IIotService
         Guid? farmingAreaId = null,
         CancellationToken ct = default);
 
+    /// <summary>Time-series snapshots for charts (period: 24h | 7d | 30d).</summary>
+    Task<ApiResponse<IEnumerable<WaterQualitySnapshotDto>>> GetWaterQualityHistoryAsync(
+        Guid? farmingAreaId = null,
+        string period = "24h",
+        CancellationToken ct = default);
 
     Task<ApiResponse<IEnumerable<SensorDto>>> GetSensorsAsync(Guid? deviceId = null, CancellationToken ct = default);
     Task<ApiResponse<SensorDto>> GetSensorAsync(Guid id, CancellationToken ct = default);

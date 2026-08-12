@@ -28,6 +28,7 @@ public static class DependencyInjection
         services.AddScoped<IInventoryReportService, InventoryReportService>();
         services.AddScoped<ISurvivalRateReportService, SurvivalRateReportService>();
         services.AddScoped<IMoltingReportService, MoltingReportService>();
+        services.AddScoped<IOperationalEfficiencyReportService, OperationalEfficiencyReportService>();
         services.AddScoped<IDashboardService, DashboardService>();
         services.AddScoped<IBoxOverviewService, BoxOverviewService>();
         services.AddScoped<IBoxDetailService, BoxDetailService>();
