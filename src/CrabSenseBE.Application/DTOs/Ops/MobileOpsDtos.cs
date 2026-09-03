@@ -71,7 +71,8 @@ public record MobileAddCrabRequest(
     decimal? WeightGram = null,
     string? MoltingStatus = null,
     string? MoltingStage = null,
-    string? Species = null);
+    string? Species = null,
+    IReadOnlyList<string>? ImageUrls = null);
 
 public record AiAnalyzeRequest(Guid? MediaId = null, Guid? VideoId = null, Guid? BoxId = null);
 

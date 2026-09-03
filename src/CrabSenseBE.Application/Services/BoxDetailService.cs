@@ -102,7 +102,8 @@ public class BoxDetailService : IBoxDetailService
                 AddedBy: "system",
                 WeightGram: c.WeightGram,
                 MoltingStage: c.MoltingStage,
-                Tag: c.Tag);
+                Tag: c.Tag,
+                ImageUrls: JsonStringList.Parse(c.ImageUrlsJson));
         });
         return ApiResponse<IEnumerable<BoxCrabItemDto>>.Ok(list);
     }
@@ -383,7 +384,8 @@ public class BoxDetailService : IBoxDetailService
             WeightGram = weight,
             MoltingStage = molt,
             StockedAt = DateTime.UtcNow,
-            Status = CrabStatus.Alive
+            Status = CrabStatus.Alive,
+            ImageUrlsJson = JsonStringList.Serialize(req.ImageUrls)
         };
         await _uow.Crabs.AddAsync(crab, ct);
 
@@ -413,6 +415,7 @@ public class BoxDetailService : IBoxDetailService
             AddedBy: "mobile",
             WeightGram: weight,
             MoltingStage: molt,
-            Tag: crab.Tag));
+            Tag: crab.Tag,
+            ImageUrls: JsonStringList.Parse(crab.ImageUrlsJson)));
     }
 }

@@ -119,6 +119,9 @@ public static class DevDbBootstrap
             ADD COLUMN IF NOT EXISTS "MediaId" uuid NULL,
             ADD COLUMN IF NOT EXISTS "Status" text NOT NULL DEFAULT 'pending';
 
+            ALTER TABLE be."Crabs"
+            ADD COLUMN IF NOT EXISTS "ImageUrlsJson" text NOT NULL DEFAULT '[]';
+
             CREATE TABLE IF NOT EXISTS be."FarmOperations" (
                 "Id" uuid NOT NULL,
                 "Type" text NOT NULL,

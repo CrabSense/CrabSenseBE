@@ -154,7 +154,8 @@ public class BoxQrService : IBoxQrService
     c.MoltingStage,
     c.Status == CrabStatus.Alive || c.Status == CrabStatus.Molting || c.Status == CrabStatus.Quarantined,
     c.MoltedAt, c.CrabLotId,
-    allocByCrab.TryGetValue(c.Id, out var start) ? start : null
+    allocByCrab.TryGetValue(c.Id, out var start) ? start : null,
+    JsonStringList.Parse(c.ImageUrlsJson)
 )).ToList();
 
         // Đếm số lần quét (analytics hiện trường)
@@ -208,7 +209,8 @@ public class BoxQrService : IBoxQrService
             crab.MoltingStage,
             crab.Status == CrabStatus.Alive || crab.Status == CrabStatus.Molting || crab.Status == CrabStatus.Quarantined,
             crab.MoltedAt,
-            crab.StockedAt), "Updated.");
+            crab.StockedAt,
+            JsonStringList.Parse(crab.ImageUrlsJson)), "Updated.");
     }
 
     public async Task<ApiResponse<CrabBoxAllocationDto>> MoveCrabAsync(

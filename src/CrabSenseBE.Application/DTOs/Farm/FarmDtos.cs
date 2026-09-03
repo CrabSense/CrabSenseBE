@@ -125,7 +125,8 @@ public record CrabDto(
     string? MoltingStage,
     bool IsAlive,
     DateTime? MoltedAt,
-    DateTime StockedAt);
+    DateTime StockedAt,
+    IReadOnlyList<string> ImageUrls);
 
 /// <summary>
 /// Place crab. Required: CrabLotId + CropBatchId, and BoxId
@@ -140,6 +141,12 @@ public record CreateCrabRequest(
     bool AutoAssignEmptyBox = false,
     string? Tag = null,
     decimal? WeightGram = null,
-    string? MoltingStage = null);
+    string? MoltingStage = null,
+    IReadOnlyList<string>? ImageUrls = null);
 
-public record UpdateCrabRequest(string? MoltingStage, decimal? WeightGram, bool IsAlive, DateTime? MoltedAt);
+public record UpdateCrabRequest(
+    string? MoltingStage,
+    decimal? WeightGram,
+    bool IsAlive,
+    DateTime? MoltedAt,
+    IReadOnlyList<string>? ImageUrls = null);

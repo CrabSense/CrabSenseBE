@@ -168,7 +168,10 @@
       id: "crabs",
       title: "4. Cua (crabs)",
       listPath: "/api/crabs",
-      filters: [],
+      filters: [
+        { key: "crabId", label: "crabId (upload sau tạo)", listIgnore: true },
+        { key: "imageFiles", label: "ảnh cua", type: "file", multiple: true, listIgnore: true },
+      ],
       create: {
         path: "/api/crabs",
         fields: [
@@ -182,6 +185,7 @@
           { key: "weightGram", label: "weightGram", type: "number" },
           { key: "moltingStage", label: "moltingStage", type: "select", def: "hard",
             options: ["hard", "premolt", "softshell", "papershell"] },
+          { key: "imageUrls", label: "imageUrls (JSON array link S3)", type: "textarea", parseJson: true },
         ],
       },
       update: {
@@ -192,9 +196,34 @@
           { key: "weightGram", label: "weightGram", type: "number" },
           { key: "isAlive", label: "isAlive", type: "bool", def: true },
           { key: "moltedAt", label: "moltedAt (ISO)" },
+          { key: "imageUrls", label: "imageUrls (JSON array — replace)", type: "textarea", parseJson: true },
         ],
       },
       remove: (id) => `/api/crabs/${id}`,
+      extras: [
+        {
+          label: "Upload ảnh S3 (lấy URL trước khi tạo)",
+          run: async (api, f) => {
+            const files = f.imageFiles;
+            if (!files || !files.length) throw new Error("Chọn ảnh ở filter 'ảnh cua'");
+            const fd = new FormData();
+            for (const file of files) fd.append("files", file);
+            return api("POST", "/api/crabs/images", fd);
+          },
+        },
+        {
+          label: "Upload ảnh S3 vào cua đã tạo",
+          run: async (api, f, id) => {
+            const crabId = f.crabId || id;
+            if (!crabId) throw new Error("Điền crabId hoặc Pick id");
+            const files = f.imageFiles;
+            if (!files || !files.length) throw new Error("Chọn ảnh ở filter 'ảnh cua'");
+            const fd = new FormData();
+            for (const file of files) fd.append("files", file);
+            return api("POST", `/api/crabs/${crabId}/images`, fd);
+          },
+        },
+      ],
     },
     {
       id: "lots",
@@ -1224,11 +1253,12 @@
   async function api(method, path, body) {
     const headers = { Accept: "application/json" };
     if (token) headers.Authorization = `Bearer ${token}`;
-    if (body !== undefined) headers["Content-Type"] = "application/json";
+    const isForm = typeof FormData !== "undefined" && body instanceof FormData;
+    if (body !== undefined && !isForm) headers["Content-Type"] = "application/json";
     const res = await fetch(baseUrl() + path, {
       method,
       headers,
-      body: body === undefined ? undefined : JSON.stringify(body),
+      body: body === undefined ? undefined : isForm ? body : JSON.stringify(body),
     });
     const text = await res.text();
     let data;
@@ -1389,6 +1419,9 @@
       if (el.value === "") return undefined;
       return el.value === "true";
     }
+    if (f.type === "file") {
+      return el.files && el.files.length ? el.files : undefined;
+    }
     if (f.type === "number") {
       if (el.value === "") return undefined;
       return Number(el.value);
@@ -1435,6 +1468,8 @@
 
     if (f.type === "textarea") {
       wrap.innerHTML = `<label>${f.label}<br/><textarea data-f="${f.key}" rows="3" cols="60">${escapeHtml(def)}</textarea></label>`;
+    } else if (f.type === "file") {
+      wrap.innerHTML = `<label>${f.label}<br/><input type="file" data-f="${f.key}" accept="image/*" ${f.multiple ? "multiple" : ""} /></label>`;
     } else if (f.type === "datetime") {
       wrap.innerHTML = `<label>${f.label} <input type="datetime-local" data-f="${f.key}" value="${escapeAttr(def)}" /></label>`;
     } else if (f.type === "bool") {
@@ -2273,7 +2308,7 @@
           if (f.key === "_raw") continue;
           const el = panel.querySelector(`[data-form="update"] [data-f="${f.key}"]`);
           if (!el || row[f.key] == null) continue;
-          el.value = String(row[f.key]);
+          el.value = Array.isArray(row[f.key]) ? JSON.stringify(row[f.key]) : String(row[f.key]);
         }
       };
     });

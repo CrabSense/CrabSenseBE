@@ -23,6 +23,7 @@ public static class DependencyInjection
         services.AddScoped<INotificationService, NotificationService>();
         services.AddScoped<IAlertService, AlertService>();
         services.AddScoped<IMediaService, MediaService>();
+        services.AddScoped<ICrabImageService, CrabImageService>();
 
         services.AddScoped<IHarvestReportService, HarvestReportService>();
         services.AddScoped<IInventoryReportService, InventoryReportService>();

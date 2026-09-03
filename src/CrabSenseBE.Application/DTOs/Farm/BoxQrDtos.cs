@@ -35,7 +35,8 @@ public record BoxScanCrabDto(
     bool IsAlive,
     DateTime? MoltedAt,
     Guid CrabLotId,
-    DateTime? CurrentAllocationStart);
+    DateTime? CurrentAllocationStart,
+    IReadOnlyList<string> ImageUrls);
 
 /// <summary>NV cập nhật nhanh thông tin cua ngay trên màn quét QR.</summary>
 public record UpdateCrabFromScanRequest(

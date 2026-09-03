@@ -293,7 +293,12 @@ public class BoxesController : ControllerBase
 public class CrabsController : ControllerBase
 {
     private readonly IFarmingService _service;
-    public CrabsController(IFarmingService service) => _service = service;
+    private readonly ICrabImageService _images;
+    public CrabsController(IFarmingService service, ICrabImageService images)
+    {
+        _service = service;
+        _images = images;
+    }
 
     /// <summary>[READ] List crabs — pageSize=0 or omit = GET ALL</summary>
     [HttpGet]
@@ -303,26 +308,75 @@ public class CrabsController : ControllerBase
         CancellationToken ct = default)
         => Ok(await _service.GetCrabsAsync(page, pageSize, ct));
 
+    /// <summary>
+    /// [CREATE] Upload crab photos to S3. Returns public URLs.
+    /// Call this first, then POST /api/crabs with imageUrls. Or POST /api/crabs/{id}/images after create.
+    /// Form field: files (multiple).
+    /// </summary>
+    [HttpPost("images")]
+    [Authorize(Roles = AppRoles.FarmWrite)]
+    [RequestSizeLimit(30_000_000)]
+    [Consumes("multipart/form-data")]
+    public async Task<IActionResult> UploadImages(
+        [FromForm] List<IFormFile>? files,
+        IFormFile? file,
+        CancellationToken ct = default)
+        => Ok(await _images.UploadAsync(ToImageFiles(files, file), crabId: null, TryGetUserId(), ct));
+
     /// <summary>[READ] Get crab by id</summary>
     [HttpGet("{id:guid}")]
     public async Task<IActionResult> GetById(Guid id, CancellationToken ct)
         => Ok(await _service.GetCrabByIdAsync(id, ct));
 
-    /// <summary>[CREATE] Place crab — required: crabLotId + cropBatchId + boxId (Row/Area auto from box)</summary>
+    /// <summary>[CREATE] Place crab — required: crabLotId + boxId (Row/Area auto from box). imageUrls = S3 links from POST /api/crabs/images</summary>
     [HttpPost]
     [Authorize(Roles = AppRoles.FarmWrite)]
     public async Task<IActionResult> Create([FromBody] CreateCrabRequest req, CancellationToken ct)
         => Ok(await _service.CreateCrabAsync(req, ct));
 
-    /// <summary>[UPDATE] Update crab details</summary>
+    /// <summary>[UPDATE] Update crab details. Send imageUrls to replace the full photo list.</summary>
     [HttpPut("{id:guid}")]
     [Authorize(Roles = AppRoles.FarmWrite)]
     public async Task<IActionResult> Update(Guid id, [FromBody] UpdateCrabRequest req, CancellationToken ct)
         => Ok(await _service.UpdateCrabAsync(id, req, ct));
+
+    /// <summary>[CREATE] Upload more photos to S3 and append URLs on this crab.</summary>
+    [HttpPost("{id:guid}/images")]
+    [Authorize(Roles = AppRoles.FarmWrite)]
+    [RequestSizeLimit(30_000_000)]
+    [Consumes("multipart/form-data")]
+    public async Task<IActionResult> UploadImagesForCrab(
+        Guid id,
+        [FromForm] List<IFormFile>? files,
+        IFormFile? file,
+        CancellationToken ct = default)
+        => Ok(await _images.UploadAsync(ToImageFiles(files, file), id, TryGetUserId(), ct));
 
     /// <summary>[DELETE] Soft-delete crab (IsAlive=false, free box, keep history)</summary>
     [HttpDelete("{id:guid}")]
     [Authorize(Roles = AppRoles.FarmWrite)]
     public async Task<IActionResult> Delete(Guid id, CancellationToken ct)
         => Ok(await _service.DeleteCrabAsync(id, ct));
+
+    private static IReadOnlyList<CrabSenseBE.Application.Interfaces.CrabImageFile> ToImageFiles(
+        List<IFormFile>? files, IFormFile? file)
+    {
+        var list = new List<IFormFile>();
+        if (files is { Count: > 0 })
+            list.AddRange(files.Where(f => f is { Length: > 0 }));
+        if (file is { Length: > 0 } && list.All(f => f != file))
+            list.Add(file);
+        return list
+            .Select(f => new CrabSenseBE.Application.Interfaces.CrabImageFile(
+                f.OpenReadStream(), f.FileName, f.ContentType ?? "application/octet-stream"))
+            .ToList();
+    }
+
+    private Guid? TryGetUserId()
+    {
+        var raw = User.FindFirstValue(JwtRegisteredClaimNames.Sub)
+            ?? User.FindFirstValue(ClaimTypes.NameIdentifier)
+            ?? User.FindFirstValue("sub");
+        return raw is not null && Guid.TryParse(raw, out var id) && id != Guid.Empty ? id : null;
+    }
 }

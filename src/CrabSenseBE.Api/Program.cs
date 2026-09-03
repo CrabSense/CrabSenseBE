@@ -11,7 +11,10 @@ using CrabSenseBE.Application.Interfaces;
 using CrabSenseBE.Application.Services;
 
 var builder = WebApplication.CreateBuilder(args);
+LoadDotEnv(builder.Environment.ContentRootPath);
+LoadDotEnv(Directory.GetCurrentDirectory());
 builder.Configuration.AddJsonFile("appsettings.Local.json", optional: true, reloadOnChange: true);
+builder.Configuration.AddEnvironmentVariables();
 
 // ─── Serilog ────────────────────────────────────────────────────────────────
 Log.Logger = new LoggerConfiguration()
@@ -156,3 +159,27 @@ app.MapHealthChecks("/health");
 await DevDbBootstrap.InitializeAsync(app);
 
 app.Run();
+
+static void LoadDotEnv(string startDir)
+{
+    if (string.IsNullOrWhiteSpace(startDir)) return;
+    var dir = new DirectoryInfo(Path.GetFullPath(startDir));
+    for (var i = 0; i < 6 && dir is not null; i++, dir = dir.Parent)
+    {
+        var path = Path.Combine(dir.FullName, ".env");
+        if (!File.Exists(path)) continue;
+        foreach (var raw in File.ReadAllLines(path))
+        {
+            var line = raw.Trim();
+            if (line.Length == 0 || line.StartsWith('#')) continue;
+            var eq = line.IndexOf('=');
+            if (eq <= 0) continue;
+            var key = line[..eq].Trim();
+            var value = line[(eq + 1)..].Trim().Trim('"').Trim('\'');
+            if (key.Length == 0) continue;
+            if (string.IsNullOrEmpty(Environment.GetEnvironmentVariable(key)))
+                Environment.SetEnvironmentVariable(key, value);
+        }
+        return;
+    }
+}

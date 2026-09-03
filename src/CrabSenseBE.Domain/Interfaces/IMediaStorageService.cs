@@ -33,3 +33,19 @@ public interface IMediaStorageService
 
     Task DeleteAsync(string storageKey, CancellationToken ct = default);
 }
+
+/// <summary>
+/// Upload ảnh công khai (AWS S3 khi cấu hình AwsS3:Bucket; fallback Drive/Local).
+/// Dùng cho ảnh cua — trả URL ổn định để lưu DB.
+/// </summary>
+public interface IPublicImageStorage
+{
+    string ProviderName { get; }
+
+    Task<MediaUploadResult> UploadAsync(
+        Stream data,
+        string fileName,
+        string contentType,
+        string folder,
+        CancellationToken ct = default);
+}

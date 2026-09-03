@@ -545,7 +545,8 @@ public class FarmingService : IFarmingService
             WeightGram = req.WeightGram,
             MoltingStage = req.MoltingStage ?? "hard-shell",
             StockedAt = DateTime.UtcNow,
-            Status = CrabStatus.Alive
+            Status = CrabStatus.Alive,
+            ImageUrlsJson = JsonStringList.Serialize(req.ImageUrls)
         };
         await _uow.Crabs.AddAsync(crab, ct);
 
@@ -575,6 +576,8 @@ public class FarmingService : IFarmingService
         crab.WeightGram = req.WeightGram;
         crab.MoltedAt = req.MoltedAt;
         if (req.MoltingStage is not null) crab.MoltingStage = req.MoltingStage;
+        if (req.ImageUrls is not null)
+            crab.ImageUrlsJson = JsonStringList.Serialize(req.ImageUrls);
         _uow.Crabs.Update(crab);
 
         // If crab dies / harvest → free box if no other live crabs
@@ -899,6 +902,7 @@ public class FarmingService : IFarmingService
             lastMolt?.Result,   // MoltingStage
             isAlive,            // IsAlive
             c.MoltedAt,
-            c.StockedAt);
+            c.StockedAt,
+            JsonStringList.Parse(c.ImageUrlsJson));
     }
 }

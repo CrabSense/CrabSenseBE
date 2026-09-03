@@ -63,6 +63,16 @@ services:
       MinIO__AccessKey: ${MINIO_ACCESS_KEY:-minioadmin}
       MinIO__SecretKey: ${MINIO_SECRET_KEY:-minioadmin}
       MinIO__UseSSL: "false"
+      UPLOAD_STORAGE: ${UPLOAD_STORAGE:-s3}
+      S3_BUCKET: ${S3_BUCKET:-}
+      S3_REGION: ${S3_REGION:-ap-southeast-2}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      MediaStorage__Provider: ${UPLOAD_STORAGE:-s3}
+      AwsS3__Bucket: ${S3_BUCKET:-}
+      AwsS3__Region: ${S3_REGION:-ap-southeast-2}
+      AwsS3__AccessKey: ${AWS_ACCESS_KEY_ID:-}
+      AwsS3__SecretKey: ${AWS_SECRET_ACCESS_KEY:-}
     depends_on:
       postgres:
         condition: service_healthy

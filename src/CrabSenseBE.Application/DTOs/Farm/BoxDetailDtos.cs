@@ -39,7 +39,8 @@ public record BoxCrabItemDto(
     // Backend aliases
     decimal? WeightGram,
     string? MoltingStage,
-    string? Tag);
+    string? Tag,
+    IReadOnlyList<string> ImageUrls);
 
 /// <summary>Mobile video list item (mapped from MediaAsset).</summary>
 public record BoxVideoItemDto(

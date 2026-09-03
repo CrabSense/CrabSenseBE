@@ -103,7 +103,11 @@ public sealed class FarmCreateSchemaFilter : ISchemaFilter
                 ("autoAssignEmptyBox", new OpenApiBoolean(false)),
                 ("tag", new OpenApiString("C-001")),
                 ("weightGram", new OpenApiDouble(150)),
-                ("moltingStage", new OpenApiString("hard")));
+                ("moltingStage", new OpenApiString("hard")),
+                ("imageUrls", new OpenApiArray
+                {
+                    new OpenApiString("https://bucket.s3.ap-southeast-1.amazonaws.com/media/crabs/photo1.jpg")
+                }));
             Describe(schema, "crabLotId", $"Required — lô. Sample: {sample.LotCode}");
             // Describe(schema, "cropBatchId", $"Required — vụ nuôi. Sample: {sample.BatchCode}");
             Describe(schema, "boxId", $"Hộp — Row/Area auto. Sample: {sample.BoxCode}");
@@ -113,6 +117,8 @@ public sealed class FarmCreateSchemaFilter : ISchemaFilter
                 $"Auto from box if omitted. Sample: {sample.AreaName} ({sample.AreaId})");
             Describe(schema, "moltingStage",
                 "Shell stage of the crab: hard (default) = hard shell; after successful molt → softshell. Used to track softshell harvest readiness.");
+            Describe(schema, "imageUrls",
+                "Optional. Public S3 URLs from POST /api/crabs/images. Multiple photos OK.");
             ForceUuid(schema, "crabLotId");
             ForceUuid(schema, "cropBatchId");
             ForceUuid(schema, "boxId");

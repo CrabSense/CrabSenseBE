@@ -56,6 +56,9 @@ public class Crab : BaseEntity
     public DateTime? MoltedAt { get; set; }
     public CrabStatus Status { get; set; } = CrabStatus.Alive;
 
+    /// <summary>JSON array of public S3 (or media) image URLs. Default [].</summary>
+    public string ImageUrlsJson { get; set; } = "[]";
+
     // Navigation
     public Box? Box { get; set; }
     public CrabLot? CrabLot { get; set; }
