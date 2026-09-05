@@ -622,7 +622,81 @@ public class FarmingService : IFarmingService
             .Include(c => c.MoltingRecords)
             .FirstOrDefaultAsync(c => c.Id == id, ct) ?? throw AppException.NotFound("Crab");
         var ctx = await LoadBoxContextAsync(ct);
-        return ApiResponse<CrabDto>.Ok(MapCrab(crab, ctx));
+        var lot = crab.CrabLotId != Guid.Empty
+            ? await _uow.CrabLots.GetByIdAsync(crab.CrabLotId, ct)
+            : null;
+        var latestAi = (await _uow.CrabAiAnalyses.FindAsync(a => a.CrabId == id, ct))
+            .OrderByDescending(a => a.AnalyzedAt)
+            .FirstOrDefault();
+        return ApiResponse<CrabDto>.Ok(MapCrab(crab, ctx, lot, latestAi));
+    }
+
+    public async Task<ApiResponse<CrabProfileDto>> GetCrabProfileAsync(Guid id, CancellationToken ct = default)
+    {
+        var crab = await _uow.Crabs.Query()
+            .Include(c => c.BoxAllocations)
+            .Include(c => c.MoltingRecords)
+            .FirstOrDefaultAsync(c => c.Id == id, ct) ?? throw AppException.NotFound("Crab");
+        var ctx = await LoadBoxContextAsync(ct);
+        var lot = crab.CrabLotId != Guid.Empty
+            ? await _uow.CrabLots.GetByIdAsync(crab.CrabLotId, ct)
+            : null;
+        var analyses = (await _uow.CrabAiAnalyses.FindAsync(a => a.CrabId == id, ct))
+            .OrderByDescending(a => a.AnalyzedAt)
+            .ToList();
+        var latestAi = analyses.FirstOrDefault();
+        var dto = MapCrab(crab, ctx, lot, latestAi);
+
+        var box = ctx.Boxes.FirstOrDefault(b => b.Id == dto.BoxId);
+        ctx.Rows.TryGetValue(box?.FarmingRowId ?? dto.FarmingRowId, out var row);
+        ctx.Areas.TryGetValue(row?.FarmingAreaId ?? dto.FarmingAreaId, out var area);
+
+        var recs = (await _uow.AiRecommendations.FindAsync(
+                r => r.RelatedEntityId == id && r.RelatedEntityType == "Crab", ct))
+            .OrderByDescending(r => r.CreatedAt)
+            .ToList();
+        var recommendation = FirstNonEmpty(
+            latestAi?.AnomalyNote,
+            recs.FirstOrDefault()?.Recommendation,
+            RecommendFromPrediction(dto.AiPrediction ?? latestAi?.Prediction));
+
+        var media = dto.ImageUrls.ToList();
+        foreach (var url in analyses.Select(a => a.MediaUrl).Where(u => !string.IsNullOrWhiteSpace(u)))
+        {
+            if (!media.Contains(url!)) media.Add(url!);
+        }
+        var assets = (await _uow.MediaAssets.FindAsync(m => m.CrabId == id, ct)).ToList();
+        foreach (var link in assets.Select(a => a.ShareLink ?? a.WebContentLink ?? a.WebViewLink)
+                     .Where(u => !string.IsNullOrWhiteSpace(u)))
+        {
+            if (!media.Contains(link!)) media.Add(link!);
+        }
+
+        var timeline = await BuildCrabTimelineAsync(crab, lot, analyses, ct);
+        var alerts = BuildCrabProfileAlerts(crab, latestAi, timeline);
+
+        return ApiResponse<CrabProfileDto>.Ok(new CrabProfileDto(
+            dto,
+            new CrabProfileLocationDto(
+                dto.FarmingAreaId, dto.FarmingRowId, dto.BoxId,
+                area?.Name ?? dto.AreaName, area?.Code ?? dto.AreaCode,
+                row?.Name ?? dto.RowName, row?.Code ?? dto.RowCode,
+                box?.Code ?? dto.BoxCode),
+            new CrabProfileLotDto(
+                lot?.Id ?? crab.CrabLotId,
+                lot?.LotCode ?? dto.LotCode ?? "",
+                lot?.Name ?? dto.LotName,
+                lot?.ImportDate ?? dto.ImportDate),
+            new CrabProfileAiDto(
+                dto.AiPrediction ?? latestAi?.Prediction,
+                dto.AiConfidence ?? latestAi?.Confidence,
+                latestAi?.AnalyzedAt ?? dto.AiAnalyzedAt,
+                recommendation,
+                latestAi?.ActivityLevel,
+                latestAi?.MediaUrl),
+            media,
+            timeline,
+            alerts));
     }
 
     public async Task<ApiResponse<CrabDto>> CreateCrabAsync(CreateCrabRequest req, CancellationToken ct = default)
@@ -1605,7 +1679,8 @@ public class FarmingService : IFarmingService
         c.BoxAllocations
          .OrderByDescending(a => a.StartTime)
          .FirstOrDefault()?.BoxId ?? Guid.Empty;
-    private static CrabDto MapCrab(Crab c, BoxContext ctx)
+    private static CrabDto MapCrab(
+        Crab c, BoxContext ctx, CrabLot? lot = null, CrabAiAnalysis? latestAi = null)
     {
         // Lấy allocation mới nhất (box hiện tại)
         var lastAllocation = c.BoxAllocations
@@ -1662,7 +1737,146 @@ public class FarmingService : IFarmingService
             RowName: row?.Name,
             RowCode: row?.Code,
             AreaName: area?.Name,
-            AreaCode: area?.Code);
+            AreaCode: area?.Code,
+            LotCode: lot?.LotCode,
+            LotName: lot?.Name,
+            ImportDate: lot?.ImportDate,
+            AiAnalyzedAt: latestAi?.AnalyzedAt,
+            AiRecommendation: FirstNonEmpty(
+                latestAi?.AnomalyNote,
+                RecommendFromPrediction(c.AiPrediction ?? latestAi?.Prediction)),
+            AvatarUrl: JsonStringList.Parse(c.ImageUrlsJson).FirstOrDefault());
+    }
+
+    private async Task<IReadOnlyList<CrabTimelineEventDto>> BuildCrabTimelineAsync(
+        Crab crab, CrabLot? lot, IReadOnlyList<CrabAiAnalysis> analyses, CancellationToken ct)
+    {
+        var events = new List<CrabTimelineEventDto>();
+        var importAt = lot?.ImportDate ?? crab.StockedAt;
+        events.Add(new CrabTimelineEventDto(
+            importAt, "stocked", "Nhập hệ thống",
+            string.IsNullOrWhiteSpace(lot?.LotCode) ? null : lot!.LotCode));
+
+        var statuses = (await _uow.CrabStatusHistories.FindAsync(h => h.CrabId == crab.Id, ct)).ToList();
+        foreach (var h in statuses)
+        {
+            events.Add(new CrabTimelineEventDto(
+                h.ChangedAt, "condition",
+                ConditionTimelineTitle(h.NewCondition, h.NewStatus),
+                h.Reason));
+        }
+
+        foreach (var a in analyses)
+        {
+            events.Add(new CrabTimelineEventDto(
+                a.AnalyzedAt, "ai",
+                string.IsNullOrWhiteSpace(a.Prediction) ? "AI phân tích" : $"AI: {a.Prediction}",
+                a.AnomalyNote));
+        }
+
+        var molts = (await _uow.MoltingRecords.FindAsync(m => m.CrabId == crab.Id, ct)).ToList();
+        foreach (var m in molts)
+        {
+            var ok = string.Equals(m.Result, "success", StringComparison.OrdinalIgnoreCase);
+            events.Add(new CrabTimelineEventDto(
+                m.MoltTime, "molt",
+                ok ? "Đã lột thành công" : $"Lột xác: {m.Result}",
+                m.Notes));
+        }
+
+        var harvests = (await _uow.CrabHarvestHistories.FindAsync(h => h.CrabId == crab.Id, ct)).ToList();
+        foreach (var h in harvests)
+        {
+            events.Add(new CrabTimelineEventDto(
+                h.HarvestedAt, "harvest", "Thu hoạch",
+                h.Grade ?? h.Notes));
+        }
+
+        var deaths = (await _uow.CrabMortalityRecords.FindAsync(h => h.CrabId == crab.Id, ct)).ToList();
+        foreach (var d in deaths)
+        {
+            events.Add(new CrabTimelineEventDto(
+                d.MortalityDate, "mortality", "Ghi nhận chết",
+                d.Notes ?? d.Cause.ToString()));
+        }
+
+        return events.OrderBy(e => e.At).ToList();
+    }
+
+    private static IReadOnlyList<CrabProfileAlertDto> BuildCrabProfileAlerts(
+        Crab crab, CrabAiAnalysis? latestAi, IReadOnlyList<CrabTimelineEventDto> timeline)
+    {
+        var alerts = new List<CrabProfileAlertDto>();
+        if (crab.Condition == CrabCondition.Problem)
+        {
+            alerts.Add(new CrabProfileAlertDto(
+                crab.UpdatedAt ?? crab.CreatedAt, "Cua có vấn đề", crab.Notes, "warning"));
+        }
+        if (latestAi is not null)
+        {
+            var activity = latestAi.ActivityLevel ?? "";
+            if (activity.Contains("low", StringComparison.OrdinalIgnoreCase)
+                || activity.Contains("thấp", StringComparison.OrdinalIgnoreCase))
+            {
+                alerts.Add(new CrabProfileAlertDto(
+                    latestAi.AnalyzedAt, "Hoạt động thấp", latestAi.ActivityLevel, "warning"));
+            }
+            if (!string.IsNullOrWhiteSpace(latestAi.AnomalyNote))
+            {
+                alerts.Add(new CrabProfileAlertDto(
+                    latestAi.AnalyzedAt, "AI phát hiện vấn đề", latestAi.AnomalyNote, "warning"));
+            }
+        }
+        if (crab.Status == CrabStatus.Dead)
+        {
+            alerts.Add(new CrabProfileAlertDto(
+                crab.UpdatedAt ?? crab.CreatedAt, "Cua đã chết", null, "critical"));
+        }
+        foreach (var e in timeline.Where(t => t.Kind == "molt" && t.Title.Contains("Lột xác:")))
+            alerts.Add(new CrabProfileAlertDto(e.At, e.Title, e.Detail, "warning"));
+        return alerts.OrderByDescending(a => a.At).ToList();
+    }
+
+    private static string ConditionTimelineTitle(CrabCondition condition, CrabStatus status)
+    {
+        if (status == CrabStatus.Harvested) return "Thu hoạch";
+        if (status == CrabStatus.Dead) return "Đã chết";
+        return condition switch
+        {
+            CrabCondition.Normal => "Bình thường",
+            CrabCondition.Premolt => "AI phát hiện sắp lột",
+            CrabCondition.Molting => "Phát hiện đang lột",
+            CrabCondition.Softshell => "Đã lột — cua mềm",
+            CrabCondition.Problem => "Có vấn đề",
+            CrabCondition.Dead => "Đã chết",
+            CrabCondition.Harvested => "Thu hoạch",
+            _ => condition.ToString()
+        };
+    }
+
+    private static string? RecommendFromPrediction(string? prediction)
+    {
+        var p = (prediction ?? "").Trim().ToLowerInvariant();
+        if (p.Contains("premolt") || p.Contains("sắp lột"))
+            return "Theo dõi cua trong 6 giờ tới";
+        if (p.Contains("molting") || p.Contains("đang lột"))
+            return "Tăng theo dõi softshell, hạn chế tác động";
+        if (p.Contains("soft"))
+            return "Cửa sổ thu hoạch — kiểm tra mai mềm";
+        if (p.Contains("problem") || p.Contains("vấn đề") || p.Contains("dead"))
+            return "Kiểm tra hộp và môi trường ngay";
+        if (p.Contains("low") || p.Contains("thấp"))
+            return "Hoạt động thấp — kiểm tra camera hộp";
+        return null;
+    }
+
+    private static string? FirstNonEmpty(params string?[] values)
+    {
+        foreach (var v in values)
+        {
+            if (!string.IsNullOrWhiteSpace(v)) return v.Trim();
+        }
+        return null;
     }
 
     private async Task<string> PeekNextCrabCodeAsync(CancellationToken ct)

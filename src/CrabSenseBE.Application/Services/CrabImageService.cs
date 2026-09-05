@@ -98,6 +98,104 @@ public class CrabImageService : ICrabImageService
         return ApiResponse<IReadOnlyList<CrabImageDto>>.Ok(results, "Uploaded.");
     }
 
+    public async Task<CrabImageContent?> GetPhotoAsync(Guid crabId, int index, CancellationToken ct = default)
+    {
+        if (index < 0) return null;
+
+        var crab = await _uow.Crabs.GetByIdAsync(crabId, ct);
+        if (crab is null) return null;
+
+        var urls = JsonStringList.Parse(crab.ImageUrlsJson).ToList();
+        var assets = (await _uow.MediaAssets.FindAsync(
+                m => m.CrabId == crabId || (m.RelatedEntityId == crabId && m.RelatedEntityType == "crab"),
+                ct))
+            .OrderBy(m => m.CreatedAt)
+            .ToList();
+
+        foreach (var asset in assets)
+        {
+            var link = asset.ShareLink ?? asset.WebContentLink ?? asset.WebViewLink;
+            if (!string.IsNullOrWhiteSpace(link) && !urls.Contains(link, StringComparer.OrdinalIgnoreCase))
+                urls.Add(link);
+        }
+
+        if (index >= urls.Count) return null;
+        var url = urls[index];
+
+        var assetMatch = assets.FirstOrDefault(a =>
+            string.Equals(a.ShareLink, url, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(a.WebContentLink, url, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(a.WebViewLink, url, StringComparison.OrdinalIgnoreCase));
+
+        if (assetMatch is null && !string.IsNullOrWhiteSpace(url))
+        {
+            assetMatch = (await _uow.MediaAssets.FindAsync(
+                    m => m.ShareLink == url || m.WebContentLink == url || m.WebViewLink == url,
+                    ct))
+                .FirstOrDefault();
+        }
+
+        var contentType = string.IsNullOrWhiteSpace(assetMatch?.ContentType)
+            ? GuessContentType(url, assetMatch?.FileName)
+            : assetMatch!.ContentType;
+        var fileName = assetMatch?.FileName;
+        if (string.IsNullOrWhiteSpace(fileName))
+        {
+            fileName = Uri.TryCreate(url, UriKind.Absolute, out var nameUri)
+                ? Path.GetFileName(Uri.UnescapeDataString(nameUri.AbsolutePath))
+                : Path.GetFileName(url);
+            if (string.IsNullOrWhiteSpace(fileName)) fileName = "photo.jpg";
+        }
+
+        var key = assetMatch?.StorageKey;
+        if (string.IsNullOrWhiteSpace(key))
+            key = TryExtractStorageKey(url);
+
+        if (!string.IsNullOrWhiteSpace(key))
+        {
+            try
+            {
+                var stream = await _storage.DownloadAsync(key, ct);
+                return new CrabImageContent(stream, contentType, fileName);
+            }
+            catch
+            {
+                // Fall through to file:// or miss.
+            }
+        }
+
+        if (Uri.TryCreate(url, UriKind.Absolute, out var uri) && uri.IsFile)
+        {
+            var path = uri.LocalPath;
+            if (File.Exists(path))
+                return new CrabImageContent(File.OpenRead(path), contentType, fileName);
+        }
+
+        return null;
+    }
+
+    private static string? TryExtractStorageKey(string url)
+    {
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri)) return null;
+        if (uri.IsFile) return null;
+        var path = Uri.UnescapeDataString(uri.AbsolutePath).TrimStart('/');
+        return string.IsNullOrWhiteSpace(path) ? null : path;
+    }
+
+    private static string GuessContentType(string url, string? fileName)
+    {
+        var name = fileName ?? url;
+        var ext = Path.GetExtension(name).ToLowerInvariant();
+        return ext switch
+        {
+            ".png" => "image/png",
+            ".webp" => "image/webp",
+            ".gif" => "image/gif",
+            ".heic" or ".heif" => "image/heic",
+            _ => "image/jpeg"
+        };
+    }
+
     private static void ValidateFile(CrabImageFile file)
     {
         if (file.Data is null)

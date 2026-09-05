@@ -22,6 +22,8 @@ public interface IUnitOfWork : IDisposable
     IRepository<CrabAiAnalysis> CrabAiAnalyses { get; }
     IRepository<CrabHarvestHistory> CrabHarvestHistories { get; }
     IRepository<WaterSystem> WaterSystems { get; }
+    IRepository<RasComponent> RasComponents { get; }
+    IRepository<WaterFlow> WaterFlows { get; }
     IRepository<Sensor> Sensors { get; }
     IRepository<Device> Devices { get; }
     IRepository<WaterMeasurement> WaterMeasurements { get; }

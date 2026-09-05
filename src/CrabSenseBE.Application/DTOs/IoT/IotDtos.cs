@@ -11,7 +11,8 @@ public record SensorDto(
     decimal? MinThreshold,
     decimal? MaxThreshold,
     bool IsActive,
-    DateTime? LastSeenAt);
+    DateTime? LastSeenAt,
+    Guid? RasComponentId = null);
 
 public record CreateSensorRequest(
     Guid? WaterSystemId,
@@ -20,7 +21,8 @@ public record CreateSensorRequest(
     string SensorType,
     string? Unit,
     decimal? MinThreshold,
-    decimal? MaxThreshold);
+    decimal? MaxThreshold,
+    Guid? RasComponentId = null);
 
 public record UpdateSensorRequest(
     Guid? WaterSystemId,
@@ -29,7 +31,8 @@ public record UpdateSensorRequest(
     string? Unit,
     decimal? MinThreshold,
     decimal? MaxThreshold,
-    bool? IsActive);
+    bool? IsActive,
+    Guid? RasComponentId = null);
 
 // --- Device (ESP32 / camera gateway) ---
 public record DeviceDto(
@@ -88,9 +91,30 @@ public record SensorDataBatchRequest(IEnumerable<SensorDataRequest> Measurements
 public record SensorDataDto(Guid Id, Guid SensorId, decimal Value, string? Unit, DateTime MeasuredAt, string? Source);
 
 // --- Water system (optional parent) ---
-public record WaterSystemDto(Guid Id, Guid? FarmingAreaId, string Name, string? Type, bool IsActive);
-public record CreateWaterSystemRequest(string Name, Guid? FarmingAreaId = null, string? Type = null);
-public record UpdateWaterSystemRequest(string? Name, Guid? FarmingAreaId, string? Type, bool? IsActive);
+public record WaterSystemDto(
+    Guid Id,
+    Guid? FarmingAreaId,
+    string Name,
+    string? Type,
+    bool IsActive,
+    string Status = "active",
+    string? FlowStatus = null,
+    string? Description = null);
+public record CreateWaterSystemRequest(
+    string Name,
+    Guid? FarmingAreaId = null,
+    string? Type = null,
+    string? Status = null,
+    string? FlowStatus = null,
+    string? Description = null);
+public record UpdateWaterSystemRequest(
+    string? Name,
+    Guid? FarmingAreaId,
+    string? Type,
+    bool? IsActive,
+    string? Status = null,
+    string? FlowStatus = null,
+    string? Description = null);
 
 // --- HDF5 Upload ---
 public record Hdf5UploadRequest(

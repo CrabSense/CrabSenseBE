@@ -76,6 +76,13 @@ public class UnitOfWork : IUnitOfWork
     private IRepository<WaterSystem>? _waterSystems;
     public IRepository<WaterSystem> WaterSystems => _waterSystems ??= new GenericRepository<WaterSystem>(_context);
 
+    private IRepository<RasComponent>? _rasComponents;
+    public IRepository<RasComponent> RasComponents =>
+        _rasComponents ??= new GenericRepository<RasComponent>(_context);
+
+    private IRepository<WaterFlow>? _waterFlows;
+    public IRepository<WaterFlow> WaterFlows => _waterFlows ??= new GenericRepository<WaterFlow>(_context);
+
     private IRepository<Sensor>? _sensors;
     public IRepository<Sensor> Sensors => _sensors ??= new GenericRepository<Sensor>(_context);
 

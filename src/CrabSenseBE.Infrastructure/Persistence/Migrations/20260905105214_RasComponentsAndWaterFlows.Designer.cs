@@ -3,6 +3,7 @@ using System;
 using CrabSenseBE.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace CrabSenseBE.Infrastructure.Persistence.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    partial class AppDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260905105214_RasComponentsAndWaterFlows")]
+    partial class RasComponentsAndWaterFlows
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -1988,9 +1991,6 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.Property<Guid?>("DeviceId")
                         .HasColumnType("uuid");
 
-                    b.Property<Guid?>("RasComponentId")
-                        .HasColumnType("uuid");
-
                     b.Property<bool>("IsActive")
                         .HasColumnType("boolean");
 
@@ -2023,8 +2023,6 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.HasKey("Id");
 
                     b.HasIndex("DeviceId");
-
-                    b.HasIndex("RasComponentId");
 
                     b.HasIndex("WaterSystemId");
 
@@ -2162,18 +2160,6 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                         .IsRequired()
                         .HasColumnType("text");
 
-                    b.Property<string>("Status")
-                        .IsRequired()
-                        .HasMaxLength(32)
-                        .HasColumnType("character varying(32)");
-
-                    b.Property<string>("FlowStatus")
-                        .HasMaxLength(32)
-                        .HasColumnType("character varying(32)");
-
-                    b.Property<string>("Description")
-                        .HasColumnType("text");
-
                     b.Property<string>("Type")
                         .HasColumnType("text");
 
@@ -2185,128 +2171,6 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.HasIndex("FarmingAreaId");
 
                     b.ToTable("WaterSystems", "be");
-                });
-
-            modelBuilder.Entity("CrabSenseBE.Domain.Entities.RasComponent", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uuid");
-
-                    b.Property<decimal?>("Capacity")
-                        .HasPrecision(12, 2)
-                        .HasColumnType("numeric(12,2)");
-
-                    b.Property<string>("Code")
-                        .IsRequired()
-                        .HasMaxLength(64)
-                        .HasColumnType("character varying(64)");
-
-                    b.Property<string>("ControlMode")
-                        .HasColumnType("text");
-
-                    b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("Description")
-                        .HasColumnType("text");
-
-                    b.Property<bool>("HasRelay")
-                        .HasColumnType("boolean");
-
-                    b.Property<string>("IconKey")
-                        .HasColumnType("text");
-
-                    b.Property<bool>("IsOn")
-                        .HasColumnType("boolean");
-
-                    b.Property<string>("Name")
-                        .IsRequired()
-                        .HasMaxLength(128)
-                        .HasColumnType("character varying(128)");
-
-                    b.Property<string>("NodeType")
-                        .HasColumnType("text");
-
-                    b.Property<string>("ParamDefaultsJson")
-                        .HasColumnType("text");
-
-                    b.Property<int>("Position")
-                        .HasColumnType("integer");
-
-                    b.Property<string>("RelayChannel")
-                        .HasColumnType("text");
-
-                    b.Property<Guid?>("RelayDeviceId")
-                        .HasColumnType("uuid");
-
-                    b.Property<string>("Status")
-                        .IsRequired()
-                        .HasMaxLength(32)
-                        .HasColumnType("character varying(32)");
-
-                    b.Property<string>("Type")
-                        .IsRequired()
-                        .HasMaxLength(32)
-                        .HasColumnType("character varying(32)");
-
-                    b.Property<DateTime?>("UpdatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<Guid>("WaterSystemId")
-                        .HasColumnType("uuid");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("RelayDeviceId");
-
-                    b.HasIndex("WaterSystemId", "Position");
-
-                    b.ToTable("RasComponents", "be");
-                });
-
-            modelBuilder.Entity("CrabSenseBE.Domain.Entities.WaterFlow", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uuid");
-
-                    b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<decimal?>("FlowRate")
-                        .HasPrecision(12, 2)
-                        .HasColumnType("numeric(12,2)");
-
-                    b.Property<Guid>("FromComponentId")
-                        .HasColumnType("uuid");
-
-                    b.Property<int>("SortOrder")
-                        .HasColumnType("integer");
-
-                    b.Property<string>("Status")
-                        .IsRequired()
-                        .HasMaxLength(32)
-                        .HasColumnType("character varying(32)");
-
-                    b.Property<Guid>("ToComponentId")
-                        .HasColumnType("uuid");
-
-                    b.Property<DateTime?>("UpdatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<Guid>("WaterSystemId")
-                        .HasColumnType("uuid");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("FromComponentId");
-
-                    b.HasIndex("ToComponentId");
-
-                    b.HasIndex("WaterSystemId");
-
-                    b.ToTable("WaterFlows", "be");
                 });
 
             modelBuilder.Entity("CrabSenseBE.Domain.Entities.AiDetection", b =>
@@ -2736,63 +2600,11 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                         .WithMany("Sensors")
                         .HasForeignKey("DeviceId");
 
-                    b.HasOne("CrabSenseBE.Domain.Entities.RasComponent", "RasComponent")
-                        .WithMany("Sensors")
-                        .HasForeignKey("RasComponentId")
-                        .OnDelete(DeleteBehavior.SetNull);
-
                     b.HasOne("CrabSenseBE.Domain.Entities.WaterSystem", "WaterSystem")
                         .WithMany("Sensors")
                         .HasForeignKey("WaterSystemId");
 
                     b.Navigation("Device");
-
-                    b.Navigation("RasComponent");
-
-                    b.Navigation("WaterSystem");
-                });
-
-            modelBuilder.Entity("CrabSenseBE.Domain.Entities.RasComponent", b =>
-                {
-                    b.HasOne("CrabSenseBE.Domain.Entities.Device", "RelayDevice")
-                        .WithMany()
-                        .HasForeignKey("RelayDeviceId")
-                        .OnDelete(DeleteBehavior.SetNull);
-
-                    b.HasOne("CrabSenseBE.Domain.Entities.WaterSystem", "WaterSystem")
-                        .WithMany("Components")
-                        .HasForeignKey("WaterSystemId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("RelayDevice");
-
-                    b.Navigation("WaterSystem");
-                });
-
-            modelBuilder.Entity("CrabSenseBE.Domain.Entities.WaterFlow", b =>
-                {
-                    b.HasOne("CrabSenseBE.Domain.Entities.RasComponent", "FromComponent")
-                        .WithMany("OutgoingFlows")
-                        .HasForeignKey("FromComponentId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-
-                    b.HasOne("CrabSenseBE.Domain.Entities.RasComponent", "ToComponent")
-                        .WithMany("IncomingFlows")
-                        .HasForeignKey("ToComponentId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-
-                    b.HasOne("CrabSenseBE.Domain.Entities.WaterSystem", "WaterSystem")
-                        .WithMany("Flows")
-                        .HasForeignKey("WaterSystemId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("FromComponent");
-
-                    b.Navigation("ToComponent");
 
                     b.Navigation("WaterSystem");
                 });
@@ -2939,21 +2751,8 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.Navigation("Measurements");
                 });
 
-            modelBuilder.Entity("CrabSenseBE.Domain.Entities.RasComponent", b =>
-                {
-                    b.Navigation("IncomingFlows");
-
-                    b.Navigation("OutgoingFlows");
-
-                    b.Navigation("Sensors");
-                });
-
             modelBuilder.Entity("CrabSenseBE.Domain.Entities.WaterSystem", b =>
                 {
-                    b.Navigation("Components");
-
-                    b.Navigation("Flows");
-
                     b.Navigation("Sensors");
 
                     b.Navigation("WaterMeasurements");

@@ -5,6 +5,8 @@ namespace CrabSenseBE.Application.Interfaces;
 
 public record CrabImageFile(Stream Data, string FileName, string ContentType);
 
+public record CrabImageContent(Stream Data, string ContentType, string FileName);
+
 /// <summary>Upload crab photos to S3 (or fallback media) and optionally attach to a crab.</summary>
 public interface ICrabImageService
 {
@@ -17,4 +19,7 @@ public interface ICrabImageService
         Guid? crabId,
         Guid? uploadedBy,
         CancellationToken ct = default);
+
+    /// <summary>Stream one stored photo (S3/local) by index. Bucket may be private.</summary>
+    Task<CrabImageContent?> GetPhotoAsync(Guid crabId, int index, CancellationToken ct = default);
 }

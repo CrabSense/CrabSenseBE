@@ -29,6 +29,8 @@ public class AppDbContext : DbContext
 
     // IoT
     public DbSet<WaterSystem> WaterSystems => Set<WaterSystem>();
+    public DbSet<RasComponent> RasComponents => Set<RasComponent>();
+    public DbSet<WaterFlow> WaterFlows => Set<WaterFlow>();
     public DbSet<Sensor> Sensors => Set<Sensor>();
     public DbSet<Device> Devices => Set<Device>();
     public DbSet<WaterMeasurement> WaterMeasurements => Set<WaterMeasurement>();
@@ -250,6 +252,69 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<UserPushToken>()
             .HasIndex(t => new { t.UserId, t.Token })
             .IsUnique();
+
+        modelBuilder.Entity<WaterSystem>()
+            .Property(w => w.Status)
+            .HasMaxLength(32);
+        modelBuilder.Entity<WaterSystem>()
+            .Property(w => w.FlowStatus)
+            .HasMaxLength(32);
+
+        modelBuilder.Entity<RasComponent>()
+            .Property(c => c.Code)
+            .HasMaxLength(64);
+        modelBuilder.Entity<RasComponent>()
+            .Property(c => c.Name)
+            .HasMaxLength(128);
+        modelBuilder.Entity<RasComponent>()
+            .Property(c => c.Type)
+            .HasMaxLength(32);
+        modelBuilder.Entity<RasComponent>()
+            .Property(c => c.Status)
+            .HasMaxLength(32);
+        modelBuilder.Entity<RasComponent>()
+            .Property(c => c.Capacity)
+            .HasPrecision(12, 2);
+        modelBuilder.Entity<RasComponent>()
+            .HasIndex(c => new { c.WaterSystemId, c.Position });
+        modelBuilder.Entity<RasComponent>()
+            .HasOne(c => c.WaterSystem)
+            .WithMany(w => w.Components)
+            .HasForeignKey(c => c.WaterSystemId)
+            .OnDelete(DeleteBehavior.Cascade);
+        modelBuilder.Entity<RasComponent>()
+            .HasOne(c => c.RelayDevice)
+            .WithMany()
+            .HasForeignKey(c => c.RelayDeviceId)
+            .OnDelete(DeleteBehavior.SetNull);
+
+        modelBuilder.Entity<WaterFlow>()
+            .Property(f => f.FlowRate)
+            .HasPrecision(12, 2);
+        modelBuilder.Entity<WaterFlow>()
+            .Property(f => f.Status)
+            .HasMaxLength(32);
+        modelBuilder.Entity<WaterFlow>()
+            .HasOne(f => f.WaterSystem)
+            .WithMany(w => w.Flows)
+            .HasForeignKey(f => f.WaterSystemId)
+            .OnDelete(DeleteBehavior.Cascade);
+        modelBuilder.Entity<WaterFlow>()
+            .HasOne(f => f.FromComponent)
+            .WithMany(c => c.OutgoingFlows)
+            .HasForeignKey(f => f.FromComponentId)
+            .OnDelete(DeleteBehavior.Restrict);
+        modelBuilder.Entity<WaterFlow>()
+            .HasOne(f => f.ToComponent)
+            .WithMany(c => c.IncomingFlows)
+            .HasForeignKey(f => f.ToComponentId)
+            .OnDelete(DeleteBehavior.Restrict);
+
+        modelBuilder.Entity<Sensor>()
+            .HasOne(s => s.RasComponent)
+            .WithMany(c => c.Sensors)
+            .HasForeignKey(s => s.RasComponentId)
+            .OnDelete(DeleteBehavior.SetNull);
     }
 
     public override Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)

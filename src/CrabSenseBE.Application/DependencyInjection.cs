@@ -19,6 +19,7 @@ public static class DependencyInjection
         services.AddScoped<IFarmHistoryService, FarmHistoryService>();
         services.AddScoped<IBoxQrService, BoxQrService>();
         services.AddScoped<IIotService, IotService>();
+        services.AddScoped<IRasFlowService, RasFlowService>();
         // Notification trước Alert vì AlertService phụ thuộc INotificationService
         services.AddScoped<INotificationService, NotificationService>();
         services.AddScoped<IAlertService, AlertService>();

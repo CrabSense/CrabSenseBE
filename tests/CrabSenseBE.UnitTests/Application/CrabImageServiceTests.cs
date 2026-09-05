@@ -85,4 +85,34 @@ public class CrabImageServiceTests
                 new[] { new CrabImageFile(stream, "note.pdf", "application/pdf") },
                 null, null));
     }
+
+    [Fact]
+    public async Task GetPhoto_DownloadsByStorageKey()
+    {
+        var crabId = Guid.NewGuid();
+        var url = "https://bucket.s3.ap-southeast-1.amazonaws.com/media/crabs/a.jpg";
+        var crab = new Crab { Id = crabId, ImageUrlsJson = $"""["{url}"]""" };
+        _crabs.Setup(r => r.GetByIdAsync(crabId, It.IsAny<CancellationToken>())).ReturnsAsync(crab);
+        _media.Setup(r => r.FindAsync(It.IsAny<System.Linq.Expressions.Expression<Func<MediaAsset, bool>>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new[]
+            {
+                new MediaAsset
+                {
+                    CrabId = crabId,
+                    ShareLink = url,
+                    StorageKey = "media/crabs/a.jpg",
+                    ContentType = "image/jpeg",
+                    FileName = "a.jpg"
+                }
+            });
+        _storage.Setup(s => s.DownloadAsync("media/crabs/a.jpg", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new MemoryStream(new byte[] { 7, 7, 7 }));
+
+        var photo = await Create().GetPhotoAsync(crabId, 0);
+
+        photo.Should().NotBeNull();
+        photo!.ContentType.Should().Be("image/jpeg");
+        photo.FileName.Should().Be("a.jpg");
+        photo.Data.Length.Should().Be(3);
+    }
 }

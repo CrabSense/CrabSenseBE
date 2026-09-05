@@ -232,7 +232,59 @@ public record CrabDto(
     string? RowName = null,
     string? RowCode = null,
     string? AreaName = null,
-    string? AreaCode = null);
+    string? AreaCode = null,
+    string? LotCode = null,
+    string? LotName = null,
+    DateTime? ImportDate = null,
+    DateTime? AiAnalyzedAt = null,
+    string? AiRecommendation = null,
+    string? AvatarUrl = null);
+
+/// <summary>Hồ sơ vòng đời cua — gom snapshot + lịch sử, không ghi đè bảng Crabs.</summary>
+public record CrabProfileDto(
+    CrabDto Crab,
+    CrabProfileLocationDto Location,
+    CrabProfileLotDto Lot,
+    CrabProfileAiDto Ai,
+    IReadOnlyList<string> ImageUrls,
+    IReadOnlyList<CrabTimelineEventDto> Timeline,
+    IReadOnlyList<CrabProfileAlertDto> Alerts);
+
+public record CrabProfileLocationDto(
+    Guid FarmingAreaId,
+    Guid FarmingRowId,
+    Guid BoxId,
+    string? AreaName,
+    string? AreaCode,
+    string? RowName,
+    string? RowCode,
+    string? BoxCode);
+
+public record CrabProfileLotDto(
+    Guid Id,
+    string LotCode,
+    string? Name,
+    DateTime? ImportDate);
+
+public record CrabProfileAiDto(
+    string? Prediction,
+    decimal? Confidence,
+    DateTime? AnalyzedAt,
+    string? Recommendation,
+    string? ActivityLevel,
+    string? MediaUrl);
+
+public record CrabTimelineEventDto(
+    DateTime At,
+    string Kind,
+    string Title,
+    string? Detail);
+
+public record CrabProfileAlertDto(
+    DateTime At,
+    string Title,
+    string? Detail,
+    string Severity);
 
 public record NextCrabCodeDto(string Code, string QrCode);
 

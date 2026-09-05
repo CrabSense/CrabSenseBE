@@ -374,6 +374,20 @@ public class CrabsController : ControllerBase
     public async Task<IActionResult> GetById(Guid id, CancellationToken ct)
         => Ok(await _service.GetCrabByIdAsync(id, ct));
 
+    /// <summary>[READ] Hồ sơ vòng đời cua — vị trí, lô, AI, media, timeline, cảnh báo. Không xóa field cũ.</summary>
+    [HttpGet("{id:guid}/profile")]
+    public async Task<IActionResult> GetProfile(Guid id, CancellationToken ct)
+        => Ok(await _service.GetCrabProfileAsync(id, ct));
+
+    /// <summary>[READ] Stream 1 ảnh cua (S3 private / local). Desktop dùng kèm Bearer — không phụ thuộc PublicRead.</summary>
+    [HttpGet("{id:guid}/photos/{index:int}")]
+    public async Task<IActionResult> GetPhoto(Guid id, int index, CancellationToken ct)
+    {
+        var photo = await _images.GetPhotoAsync(id, index, ct);
+        if (photo is null) return NotFound();
+        return File(photo.Data, photo.ContentType);
+    }
+
     /// <summary>[CREATE] Place crab — required: crabLotId + boxId (Row/Area auto from box). imageUrls = S3 links from POST /api/crabs/images</summary>
     [HttpPost]
     [Authorize(Roles = AppRoles.FarmWrite)]

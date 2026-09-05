@@ -36,6 +36,7 @@ public interface IFarmingService
     // ─── Crab ──────────────────────────────────────────────────────────────
     Task<ApiResponse<PagedResult<CrabDto>>> GetCrabsAsync(int page, int pageSize, Guid? farmingAreaId = null, CancellationToken ct = default);
     Task<ApiResponse<CrabDto>> GetCrabByIdAsync(Guid id, CancellationToken ct = default);
+    Task<ApiResponse<CrabProfileDto>> GetCrabProfileAsync(Guid id, CancellationToken ct = default);
     Task<ApiResponse<NextCrabCodeDto>> GetNextCrabCodeAsync(CancellationToken ct = default);
     Task<ApiResponse<CrabDto>> CreateCrabAsync(CreateCrabRequest request, CancellationToken ct = default);
     Task<ApiResponse<CrabDto>> UpdateCrabAsync(Guid id, UpdateCrabRequest request, CancellationToken ct = default);
