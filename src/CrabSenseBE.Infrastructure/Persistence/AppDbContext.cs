@@ -22,9 +22,15 @@ public class AppDbContext : DbContext
     public DbSet<MoltingRecord> MoltingRecords => Set<MoltingRecord>();
     public DbSet<BoxStatusHistory> BoxStatusHistories => Set<BoxStatusHistory>();
     public DbSet<CrabMortalityRecord> CrabMortalityRecords=> Set<CrabMortalityRecord>();
+    public DbSet<CrabStatusHistory> CrabStatusHistories => Set<CrabStatusHistory>();
+    public DbSet<CrabWeightHistory> CrabWeightHistories => Set<CrabWeightHistory>();
+    public DbSet<CrabAiAnalysis> CrabAiAnalyses => Set<CrabAiAnalysis>();
+    public DbSet<CrabHarvestHistory> CrabHarvestHistories => Set<CrabHarvestHistory>();
 
     // IoT
     public DbSet<WaterSystem> WaterSystems => Set<WaterSystem>();
+    public DbSet<RasComponent> RasComponents => Set<RasComponent>();
+    public DbSet<WaterFlow> WaterFlows => Set<WaterFlow>();
     public DbSet<Sensor> Sensors => Set<Sensor>();
     public DbSet<Device> Devices => Set<Device>();
     public DbSet<WaterMeasurement> WaterMeasurements => Set<WaterMeasurement>();
@@ -110,9 +116,205 @@ public class AppDbContext : DbContext
             .Property(h => h.Status)
             .HasConversion<string>();
 
+        modelBuilder.Entity<FarmingArea>()
+            .Property(a => a.Status)
+            .HasConversion<string>();
+
+        modelBuilder.Entity<FarmingArea>()
+            .Property(a => a.Code)
+            .HasMaxLength(32);
+
+        modelBuilder.Entity<FarmingArea>()
+            .Property(a => a.Location)
+            .HasMaxLength(256);
+
+        modelBuilder.Entity<FarmingArea>()
+            .HasIndex(a => a.Code)
+            .IsUnique();
+
+        modelBuilder.Entity<FarmingArea>()
+            .Property(a => a.AreaSquareMeters)
+            .HasPrecision(12, 2);
+
+        modelBuilder.Entity<FarmingRow>()
+            .Property(r => r.Status)
+            .HasConversion<string>();
+
+        modelBuilder.Entity<FarmingRow>()
+            .Property(r => r.Code)
+            .HasMaxLength(32);
+
+        modelBuilder.Entity<FarmingRow>()
+            .Property(r => r.Location)
+            .HasMaxLength(256);
+
+        modelBuilder.Entity<FarmingRow>()
+            .HasIndex(r => r.Code)
+            .IsUnique();
+
+        modelBuilder.Entity<Crab>()
+            .Property(c => c.Code)
+            .HasMaxLength(32);
+        modelBuilder.Entity<Crab>()
+            .HasIndex(c => c.Code)
+            .IsUnique();
+        modelBuilder.Entity<Crab>()
+            .Property(c => c.QrCode)
+            .HasMaxLength(48);
+        modelBuilder.Entity<Crab>()
+            .Property(c => c.Condition)
+            .HasConversion<string>();
+        modelBuilder.Entity<Crab>()
+            .Property(c => c.Gender)
+            .HasConversion<string>();
+        modelBuilder.Entity<Crab>()
+            .Property(c => c.WeightGram)
+            .HasPrecision(10, 2);
+        modelBuilder.Entity<Crab>()
+            .Property(c => c.InitialWeightGram)
+            .HasPrecision(10, 2);
+        modelBuilder.Entity<Crab>()
+            .Property(c => c.CarapaceWidthMm)
+            .HasPrecision(8, 2);
+        modelBuilder.Entity<Crab>()
+            .Property(c => c.CarapaceLengthMm)
+            .HasPrecision(8, 2);
+        modelBuilder.Entity<Crab>()
+            .Property(c => c.AiConfidence)
+            .HasPrecision(5, 2);
+
+        modelBuilder.Entity<CrabLot>()
+            .Property(l => l.LotCode)
+            .HasMaxLength(32);
+        modelBuilder.Entity<CrabLot>()
+            .HasIndex(l => l.LotCode)
+            .IsUnique();
+        modelBuilder.Entity<CrabLot>()
+            .Property(l => l.Name)
+            .HasMaxLength(128);
+        modelBuilder.Entity<CrabLot>()
+            .Property(l => l.Condition)
+            .HasMaxLength(16);
+        modelBuilder.Entity<CrabLot>()
+            .Property(l => l.Status)
+            .HasMaxLength(16);
+        modelBuilder.Entity<CrabLot>()
+            .Property(l => l.TotalWeightKg)
+            .HasPrecision(12, 3);
+        modelBuilder.Entity<CrabLot>()
+            .Property(l => l.AverageWeightGram)
+            .HasPrecision(10, 2);
+        modelBuilder.Entity<CrabLot>()
+            .Property(l => l.WeightMinGram)
+            .HasPrecision(10, 2);
+        modelBuilder.Entity<CrabLot>()
+            .Property(l => l.WeightMaxGram)
+            .HasPrecision(10, 2);
+        modelBuilder.Entity<CrabLot>()
+            .Property(l => l.UnitPriceVndPerKg)
+            .HasPrecision(14, 2);
+        modelBuilder.Entity<CrabLot>()
+            .Property(l => l.CrabCostVnd)
+            .HasPrecision(14, 2);
+        modelBuilder.Entity<CrabLot>()
+            .Property(l => l.ShippingCostVnd)
+            .HasPrecision(14, 2);
+        modelBuilder.Entity<CrabLot>()
+            .Property(l => l.OtherCostVnd)
+            .HasPrecision(14, 2);
+        modelBuilder.Entity<CrabLot>()
+            .Property(l => l.TotalCostVnd)
+            .HasPrecision(14, 2);
+
+        modelBuilder.Entity<CrabStatusHistory>()
+            .Property(h => h.OldCondition)
+            .HasConversion<string>();
+        modelBuilder.Entity<CrabStatusHistory>()
+            .Property(h => h.NewCondition)
+            .HasConversion<string>();
+        modelBuilder.Entity<CrabStatusHistory>()
+            .Property(h => h.OldStatus)
+            .HasConversion<string>();
+        modelBuilder.Entity<CrabStatusHistory>()
+            .Property(h => h.NewStatus)
+            .HasConversion<string>();
+
+        modelBuilder.Entity<CrabWeightHistory>()
+            .Property(h => h.WeightGram)
+            .HasPrecision(10, 2);
+        modelBuilder.Entity<CrabAiAnalysis>()
+            .Property(h => h.Confidence)
+            .HasPrecision(5, 2);
+        modelBuilder.Entity<CrabHarvestHistory>()
+            .Property(h => h.WeightGram)
+            .HasPrecision(10, 2);
+
         modelBuilder.Entity<UserPushToken>()
             .HasIndex(t => new { t.UserId, t.Token })
             .IsUnique();
+
+        modelBuilder.Entity<WaterSystem>()
+            .Property(w => w.Status)
+            .HasMaxLength(32);
+        modelBuilder.Entity<WaterSystem>()
+            .Property(w => w.FlowStatus)
+            .HasMaxLength(32);
+
+        modelBuilder.Entity<RasComponent>()
+            .Property(c => c.Code)
+            .HasMaxLength(64);
+        modelBuilder.Entity<RasComponent>()
+            .Property(c => c.Name)
+            .HasMaxLength(128);
+        modelBuilder.Entity<RasComponent>()
+            .Property(c => c.Type)
+            .HasMaxLength(32);
+        modelBuilder.Entity<RasComponent>()
+            .Property(c => c.Status)
+            .HasMaxLength(32);
+        modelBuilder.Entity<RasComponent>()
+            .Property(c => c.Capacity)
+            .HasPrecision(12, 2);
+        modelBuilder.Entity<RasComponent>()
+            .HasIndex(c => new { c.WaterSystemId, c.Position });
+        modelBuilder.Entity<RasComponent>()
+            .HasOne(c => c.WaterSystem)
+            .WithMany(w => w.Components)
+            .HasForeignKey(c => c.WaterSystemId)
+            .OnDelete(DeleteBehavior.Cascade);
+        modelBuilder.Entity<RasComponent>()
+            .HasOne(c => c.RelayDevice)
+            .WithMany()
+            .HasForeignKey(c => c.RelayDeviceId)
+            .OnDelete(DeleteBehavior.SetNull);
+
+        modelBuilder.Entity<WaterFlow>()
+            .Property(f => f.FlowRate)
+            .HasPrecision(12, 2);
+        modelBuilder.Entity<WaterFlow>()
+            .Property(f => f.Status)
+            .HasMaxLength(32);
+        modelBuilder.Entity<WaterFlow>()
+            .HasOne(f => f.WaterSystem)
+            .WithMany(w => w.Flows)
+            .HasForeignKey(f => f.WaterSystemId)
+            .OnDelete(DeleteBehavior.Cascade);
+        modelBuilder.Entity<WaterFlow>()
+            .HasOne(f => f.FromComponent)
+            .WithMany(c => c.OutgoingFlows)
+            .HasForeignKey(f => f.FromComponentId)
+            .OnDelete(DeleteBehavior.Restrict);
+        modelBuilder.Entity<WaterFlow>()
+            .HasOne(f => f.ToComponent)
+            .WithMany(c => c.IncomingFlows)
+            .HasForeignKey(f => f.ToComponentId)
+            .OnDelete(DeleteBehavior.Restrict);
+
+        modelBuilder.Entity<Sensor>()
+            .HasOne(s => s.RasComponent)
+            .WithMany(c => c.Sensors)
+            .HasForeignKey(s => s.RasComponentId)
+            .OnDelete(DeleteBehavior.SetNull);
     }
 
     public override Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)

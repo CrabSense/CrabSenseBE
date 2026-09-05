@@ -202,9 +202,36 @@ public class FarmHistoryService : IFarmHistoryService
 
         crab.MoltedAt = moltTime;
         if (result == "success")
+        {
             crab.MoltingStage = "softshell";
+            var oldCondition = crab.Condition;
+            var oldStatus = crab.Status;
+            crab.Condition = CrabCondition.Softshell;
+            crab.Status = CrabConditions.ToLifecycle(crab.Condition);
+            await _uow.CrabStatusHistories.AddAsync(new CrabStatusHistory
+            {
+                CrabId = crab.Id,
+                OldCondition = oldCondition,
+                NewCondition = crab.Condition,
+                OldStatus = oldStatus,
+                NewStatus = crab.Status,
+                ChangedAt = moltTime,
+                Source = source,
+                Reason = "Molting success"
+            }, ct);
+        }
         if (req.WeightAfterGram.HasValue)
+        {
             crab.WeightGram = req.WeightAfterGram;
+            await _uow.CrabWeightHistories.AddAsync(new CrabWeightHistory
+            {
+                CrabId = crab.Id,
+                WeightGram = req.WeightAfterGram.Value,
+                MeasuredAt = moltTime,
+                Source = source,
+                Notes = "After molt"
+            }, ct);
+        }
         _uow.Crabs.Update(crab);
 
         if (result == "success")
@@ -491,6 +518,8 @@ public class FarmHistoryService : IFarmHistoryService
         {
             crab.MoltedAt = latestSuccess.MoltTime;
             crab.MoltingStage = "softshell";
+            crab.Condition = CrabCondition.Softshell;
+            crab.Status = CrabConditions.ToLifecycle(crab.Condition);
             if (latestSuccess.WeightAfterGram.HasValue)
                 crab.WeightGram = latestSuccess.WeightAfterGram;
         }

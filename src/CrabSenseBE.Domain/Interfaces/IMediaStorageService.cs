@@ -48,4 +48,6 @@ public interface IPublicImageStorage
         string contentType,
         string folder,
         CancellationToken ct = default);
+
+    Task<Stream> DownloadAsync(string storageKey, CancellationToken ct = default);
 }

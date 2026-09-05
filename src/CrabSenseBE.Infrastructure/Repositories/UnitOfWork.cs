@@ -51,6 +51,22 @@ public class UnitOfWork : IUnitOfWork
     public IRepository<BoxStatusHistory> BoxStatusHistories =>
         _boxStatusHistories ??= new GenericRepository<BoxStatusHistory>(_context);
 
+    private IRepository<CrabStatusHistory>? _crabStatusHistories;
+    public IRepository<CrabStatusHistory> CrabStatusHistories =>
+        _crabStatusHistories ??= new GenericRepository<CrabStatusHistory>(_context);
+
+    private IRepository<CrabWeightHistory>? _crabWeightHistories;
+    public IRepository<CrabWeightHistory> CrabWeightHistories =>
+        _crabWeightHistories ??= new GenericRepository<CrabWeightHistory>(_context);
+
+    private IRepository<CrabAiAnalysis>? _crabAiAnalyses;
+    public IRepository<CrabAiAnalysis> CrabAiAnalyses =>
+        _crabAiAnalyses ??= new GenericRepository<CrabAiAnalysis>(_context);
+
+    private IRepository<CrabHarvestHistory>? _crabHarvestHistories;
+    public IRepository<CrabHarvestHistory> CrabHarvestHistories =>
+        _crabHarvestHistories ??= new GenericRepository<CrabHarvestHistory>(_context);
+
 
     private IRepository<CrabMortalityRecord>? _crabMortalityRecords;
     public IRepository<CrabMortalityRecord> CrabMortalityRecords =>
@@ -59,6 +75,13 @@ public class UnitOfWork : IUnitOfWork
     // IoT
     private IRepository<WaterSystem>? _waterSystems;
     public IRepository<WaterSystem> WaterSystems => _waterSystems ??= new GenericRepository<WaterSystem>(_context);
+
+    private IRepository<RasComponent>? _rasComponents;
+    public IRepository<RasComponent> RasComponents =>
+        _rasComponents ??= new GenericRepository<RasComponent>(_context);
+
+    private IRepository<WaterFlow>? _waterFlows;
+    public IRepository<WaterFlow> WaterFlows => _waterFlows ??= new GenericRepository<WaterFlow>(_context);
 
     private IRepository<Sensor>? _sensors;
     public IRepository<Sensor> Sensors => _sensors ??= new GenericRepository<Sensor>(_context);

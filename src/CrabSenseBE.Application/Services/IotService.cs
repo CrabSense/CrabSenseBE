@@ -196,11 +196,15 @@ public class IotService : IIotService
         if (req.WaterSystemId.HasValue)
             _ = await _uow.WaterSystems.GetByIdAsync(req.WaterSystemId.Value, ct)
                 ?? throw AppException.NotFound("WaterSystem");
+        if (req.RasComponentId.HasValue)
+            _ = await _uow.RasComponents.GetByIdAsync(req.RasComponentId.Value, ct)
+                ?? throw AppException.NotFound("RasComponent");
 
         var sensor = new Sensor
         {
             WaterSystemId = req.WaterSystemId,
             DeviceId = req.DeviceId,
+            RasComponentId = req.RasComponentId,
             SensorCode = req.SensorCode.Trim(),
             SensorType = req.SensorType.Trim(),
             Unit = req.Unit,
@@ -219,6 +223,7 @@ public class IotService : IIotService
         var sensor = await _uow.Sensors.GetByIdAsync(id, ct) ?? throw AppException.NotFound("Sensor");
         if (req.WaterSystemId.HasValue) sensor.WaterSystemId = req.WaterSystemId;
         if (req.DeviceId.HasValue) sensor.DeviceId = req.DeviceId;
+        if (req.RasComponentId.HasValue) sensor.RasComponentId = req.RasComponentId;
         if (req.SensorType is not null) sensor.SensorType = req.SensorType.Trim();
         if (req.Unit is not null) sensor.Unit = req.Unit;
         if (req.MinThreshold.HasValue) sensor.MinThreshold = req.MinThreshold;
@@ -361,7 +366,10 @@ public class IotService : IIotService
             Name = req.Name.Trim(),
             FarmingAreaId = req.FarmingAreaId,
             Type = req.Type,
-            IsActive = true
+            IsActive = true,
+            Status = string.IsNullOrWhiteSpace(req.Status) ? "active" : req.Status.Trim(),
+            FlowStatus = req.FlowStatus,
+            Description = req.Description
         };
         await _uow.WaterSystems.AddAsync(ws, ct);
         await _uow.SaveChangesAsync(ct);
@@ -376,6 +384,9 @@ public class IotService : IIotService
         if (req.FarmingAreaId.HasValue) ws.FarmingAreaId = req.FarmingAreaId;
         if (req.Type is not null) ws.Type = req.Type;
         if (req.IsActive.HasValue) ws.IsActive = req.IsActive.Value;
+        if (req.Status is not null) ws.Status = req.Status.Trim();
+        if (req.FlowStatus is not null) ws.FlowStatus = req.FlowStatus;
+        if (req.Description is not null) ws.Description = req.Description;
         _uow.WaterSystems.Update(ws);
         await _uow.SaveChangesAsync(ct);
         return ApiResponse<WaterSystemDto>.Ok(MapWs(ws), "Water system updated.");
@@ -386,6 +397,10 @@ public class IotService : IIotService
         var ws = await _uow.WaterSystems.GetByIdAsync(id, ct) ?? throw AppException.NotFound("WaterSystem");
         if (await _uow.Sensors.AnyAsync(s => s.WaterSystemId == id, ct))
             throw AppException.Conflict("Water system still has sensors.");
+        var flows = (await _uow.WaterFlows.FindAsync(f => f.WaterSystemId == id, ct)).ToList();
+        foreach (var f in flows) _uow.WaterFlows.Remove(f);
+        var comps = (await _uow.RasComponents.FindAsync(c => c.WaterSystemId == id, ct)).ToList();
+        foreach (var c in comps) _uow.RasComponents.Remove(c);
         _uow.WaterSystems.Remove(ws);
         await _uow.SaveChangesAsync(ct);
         return ApiResponse.Ok("Water system deleted.");
@@ -424,12 +439,13 @@ public class IotService : IIotService
 
     private static SensorDto MapSensor(Sensor s) =>
         new(s.Id, s.WaterSystemId, s.DeviceId, s.SensorCode, s.SensorType, s.Unit,
-            s.MinThreshold, s.MaxThreshold, s.IsActive, s.LastSeenAt);
+            s.MinThreshold, s.MaxThreshold, s.IsActive, s.LastSeenAt, s.RasComponentId);
 
     private static DeviceDto MapDevice(Device d, int sensorCount) =>
         new(d.Id, d.DeviceCode, string.IsNullOrWhiteSpace(d.DeviceType) ? "esp32" : d.DeviceType, d.FirmwareVersion, d.BatteryLevel, d.RssiDbm,
             d.Status.ToString(), d.LastSeenAt, sensorCount);
 
     private static WaterSystemDto MapWs(WaterSystem w) =>
-        new(w.Id, w.FarmingAreaId, w.Name, w.Type, w.IsActive);
+        new(w.Id, w.FarmingAreaId, w.Name, w.Type, w.IsActive,
+            string.IsNullOrWhiteSpace(w.Status) ? "active" : w.Status, w.FlowStatus, w.Description);
 }
