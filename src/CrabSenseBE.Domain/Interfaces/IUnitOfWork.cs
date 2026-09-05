@@ -17,6 +17,10 @@ public interface IUnitOfWork : IDisposable
     IRepository<CrabBoxAllocation> CrabBoxAllocations { get; }
     IRepository<MoltingRecord> MoltingRecords { get; }
     IRepository<BoxStatusHistory> BoxStatusHistories { get; }
+    IRepository<CrabStatusHistory> CrabStatusHistories { get; }
+    IRepository<CrabWeightHistory> CrabWeightHistories { get; }
+    IRepository<CrabAiAnalysis> CrabAiAnalyses { get; }
+    IRepository<CrabHarvestHistory> CrabHarvestHistories { get; }
     IRepository<WaterSystem> WaterSystems { get; }
     IRepository<Sensor> Sensors { get; }
     IRepository<Device> Devices { get; }

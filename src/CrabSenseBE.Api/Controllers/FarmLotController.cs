@@ -21,6 +21,11 @@ public class CrabLotsController : ControllerBase
     public async Task<IActionResult> GetAll(CancellationToken ct)
         => Ok(await _service.GetLotsAsync(ct));
 
+    /// <summary>[READ] Next LOT-yyyyMMdd-001</summary>
+    [HttpGet("next-code")]
+    public async Task<IActionResult> NextCode([FromQuery] DateTime? importDate, CancellationToken ct)
+        => Ok(await _service.GetNextLotCodeAsync(importDate, ct));
+
     /// <summary>[READ] Get crab lot by id</summary>
     [HttpGet("{id:guid}")]
     public async Task<IActionResult> GetById(Guid id, CancellationToken ct)

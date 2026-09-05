@@ -107,11 +107,19 @@ public class FarmHistoryServiceTests
         var statusHistRepo = new Mock<IRepository<BoxStatusHistory>>();
         statusHistRepo.Setup(r => r.AddAsync(It.IsAny<BoxStatusHistory>(), It.IsAny<CancellationToken>()))
             .Returns(Task.CompletedTask);
+        var crabStatusRepo = new Mock<IRepository<CrabStatusHistory>>();
+        crabStatusRepo.Setup(r => r.AddAsync(It.IsAny<CrabStatusHistory>(), It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+        var weightRepo = new Mock<IRepository<CrabWeightHistory>>();
+        weightRepo.Setup(r => r.AddAsync(It.IsAny<CrabWeightHistory>(), It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
 
         _uow.Setup(u => u.Crabs).Returns(crabRepo.Object);
         _uow.Setup(u => u.Boxes).Returns(boxRepo.Object);
         _uow.Setup(u => u.MoltingRecords).Returns(moltRepo.Object);
         _uow.Setup(u => u.BoxStatusHistories).Returns(statusHistRepo.Object);
+        _uow.Setup(u => u.CrabStatusHistories).Returns(crabStatusRepo.Object);
+        _uow.Setup(u => u.CrabWeightHistories).Returns(weightRepo.Object);
         _uow.Setup(u => u.SaveChangesAsync(It.IsAny<CancellationToken>())).ReturnsAsync(1);
 
         var result = await Create().CreateMoltingAsync(new CreateMoltingRecordRequest(
@@ -119,6 +127,7 @@ public class FarmHistoryServiceTests
 
         result.Success.Should().BeTrue();
         crab.MoltingStage.Should().Be("softshell");
+        crab.Condition.Should().Be(CrabCondition.Softshell);
         crab.WeightGram.Should().Be(120m);
         crab.MoltedAt.Should().NotBeNull();
         box.Status.Should().Be("molting");

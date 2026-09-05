@@ -22,6 +22,10 @@ public class AppDbContext : DbContext
     public DbSet<MoltingRecord> MoltingRecords => Set<MoltingRecord>();
     public DbSet<BoxStatusHistory> BoxStatusHistories => Set<BoxStatusHistory>();
     public DbSet<CrabMortalityRecord> CrabMortalityRecords=> Set<CrabMortalityRecord>();
+    public DbSet<CrabStatusHistory> CrabStatusHistories => Set<CrabStatusHistory>();
+    public DbSet<CrabWeightHistory> CrabWeightHistories => Set<CrabWeightHistory>();
+    public DbSet<CrabAiAnalysis> CrabAiAnalyses => Set<CrabAiAnalysis>();
+    public DbSet<CrabHarvestHistory> CrabHarvestHistories => Set<CrabHarvestHistory>();
 
     // IoT
     public DbSet<WaterSystem> WaterSystems => Set<WaterSystem>();
@@ -109,6 +113,139 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<HarvestVoucher>()
             .Property(h => h.Status)
             .HasConversion<string>();
+
+        modelBuilder.Entity<FarmingArea>()
+            .Property(a => a.Status)
+            .HasConversion<string>();
+
+        modelBuilder.Entity<FarmingArea>()
+            .Property(a => a.Code)
+            .HasMaxLength(32);
+
+        modelBuilder.Entity<FarmingArea>()
+            .Property(a => a.Location)
+            .HasMaxLength(256);
+
+        modelBuilder.Entity<FarmingArea>()
+            .HasIndex(a => a.Code)
+            .IsUnique();
+
+        modelBuilder.Entity<FarmingArea>()
+            .Property(a => a.AreaSquareMeters)
+            .HasPrecision(12, 2);
+
+        modelBuilder.Entity<FarmingRow>()
+            .Property(r => r.Status)
+            .HasConversion<string>();
+
+        modelBuilder.Entity<FarmingRow>()
+            .Property(r => r.Code)
+            .HasMaxLength(32);
+
+        modelBuilder.Entity<FarmingRow>()
+            .Property(r => r.Location)
+            .HasMaxLength(256);
+
+        modelBuilder.Entity<FarmingRow>()
+            .HasIndex(r => r.Code)
+            .IsUnique();
+
+        modelBuilder.Entity<Crab>()
+            .Property(c => c.Code)
+            .HasMaxLength(32);
+        modelBuilder.Entity<Crab>()
+            .HasIndex(c => c.Code)
+            .IsUnique();
+        modelBuilder.Entity<Crab>()
+            .Property(c => c.QrCode)
+            .HasMaxLength(48);
+        modelBuilder.Entity<Crab>()
+            .Property(c => c.Condition)
+            .HasConversion<string>();
+        modelBuilder.Entity<Crab>()
+            .Property(c => c.Gender)
+            .HasConversion<string>();
+        modelBuilder.Entity<Crab>()
+            .Property(c => c.WeightGram)
+            .HasPrecision(10, 2);
+        modelBuilder.Entity<Crab>()
+            .Property(c => c.InitialWeightGram)
+            .HasPrecision(10, 2);
+        modelBuilder.Entity<Crab>()
+            .Property(c => c.CarapaceWidthMm)
+            .HasPrecision(8, 2);
+        modelBuilder.Entity<Crab>()
+            .Property(c => c.CarapaceLengthMm)
+            .HasPrecision(8, 2);
+        modelBuilder.Entity<Crab>()
+            .Property(c => c.AiConfidence)
+            .HasPrecision(5, 2);
+
+        modelBuilder.Entity<CrabLot>()
+            .Property(l => l.LotCode)
+            .HasMaxLength(32);
+        modelBuilder.Entity<CrabLot>()
+            .HasIndex(l => l.LotCode)
+            .IsUnique();
+        modelBuilder.Entity<CrabLot>()
+            .Property(l => l.Name)
+            .HasMaxLength(128);
+        modelBuilder.Entity<CrabLot>()
+            .Property(l => l.Condition)
+            .HasMaxLength(16);
+        modelBuilder.Entity<CrabLot>()
+            .Property(l => l.Status)
+            .HasMaxLength(16);
+        modelBuilder.Entity<CrabLot>()
+            .Property(l => l.TotalWeightKg)
+            .HasPrecision(12, 3);
+        modelBuilder.Entity<CrabLot>()
+            .Property(l => l.AverageWeightGram)
+            .HasPrecision(10, 2);
+        modelBuilder.Entity<CrabLot>()
+            .Property(l => l.WeightMinGram)
+            .HasPrecision(10, 2);
+        modelBuilder.Entity<CrabLot>()
+            .Property(l => l.WeightMaxGram)
+            .HasPrecision(10, 2);
+        modelBuilder.Entity<CrabLot>()
+            .Property(l => l.UnitPriceVndPerKg)
+            .HasPrecision(14, 2);
+        modelBuilder.Entity<CrabLot>()
+            .Property(l => l.CrabCostVnd)
+            .HasPrecision(14, 2);
+        modelBuilder.Entity<CrabLot>()
+            .Property(l => l.ShippingCostVnd)
+            .HasPrecision(14, 2);
+        modelBuilder.Entity<CrabLot>()
+            .Property(l => l.OtherCostVnd)
+            .HasPrecision(14, 2);
+        modelBuilder.Entity<CrabLot>()
+            .Property(l => l.TotalCostVnd)
+            .HasPrecision(14, 2);
+
+        modelBuilder.Entity<CrabStatusHistory>()
+            .Property(h => h.OldCondition)
+            .HasConversion<string>();
+        modelBuilder.Entity<CrabStatusHistory>()
+            .Property(h => h.NewCondition)
+            .HasConversion<string>();
+        modelBuilder.Entity<CrabStatusHistory>()
+            .Property(h => h.OldStatus)
+            .HasConversion<string>();
+        modelBuilder.Entity<CrabStatusHistory>()
+            .Property(h => h.NewStatus)
+            .HasConversion<string>();
+
+        modelBuilder.Entity<CrabWeightHistory>()
+            .Property(h => h.WeightGram)
+            .HasPrecision(10, 2);
+        modelBuilder.Entity<CrabAiAnalysis>()
+            .Property(h => h.Confidence)
+            .HasPrecision(5, 2);
+        modelBuilder.Entity<CrabHarvestHistory>()
+            .Property(h => h.WeightGram)
+            .HasPrecision(10, 2);
 
         modelBuilder.Entity<UserPushToken>()
             .HasIndex(t => new { t.UserId, t.Token })

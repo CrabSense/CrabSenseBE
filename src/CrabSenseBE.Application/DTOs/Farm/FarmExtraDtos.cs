@@ -2,19 +2,64 @@ namespace CrabSenseBE.Application.DTOs.Farm;
 
 // --- CrabLot ---
 public record CrabLotDto(
-    Guid Id, string LotCode, DateTime ImportDate, int Quantity,
-    decimal? AverageWeightGram, string? SupplierName, string? Notes);
+    Guid Id,
+    string LotCode,
+    string Name,
+    DateTime ImportDate,
+    int Quantity,
+    int PlacedCount,
+    string? SupplierName,
+    decimal? TotalWeightKg,
+    decimal? AverageWeightGram,
+    decimal? WeightMinGram,
+    decimal? WeightMaxGram,
+    decimal? UnitPriceVndPerKg,
+    decimal? CrabCostVnd,
+    decimal? ShippingCostVnd,
+    decimal? OtherCostVnd,
+    decimal? TotalCostVnd,
+    string Condition,
+    int DeadOnArrival,
+    string? Notes,
+    string Status);
+
+public record NextCrabLotCodeDto(string Code);
 
 /// <summary>
-/// Create crab lot (lô nhập). Only LotCode + ImportDate (+ supplier/notes).
-/// Quantity and AverageWeightGram are computed from crabs linked to this lot.
+/// Nhập lô. Required: name + quantity.
+/// lotCode omit → LOT-yyyyMMdd-001. average / tiền tự tính từ tổng kg + số lượng + giá.
 /// </summary>
 public record CreateCrabLotRequest(
-    string LotCode, DateTime ImportDate,
-    string? SupplierName = null, string? Notes = null);
+    string? Name = null,
+    DateTime? ImportDate = null,
+    int Quantity = 0,
+    string? LotCode = null,
+    string? SupplierName = null,
+    decimal? TotalWeightKg = null,
+    decimal? WeightMinGram = null,
+    decimal? WeightMaxGram = null,
+    decimal? UnitPriceVndPerKg = null,
+    decimal? ShippingCostVnd = null,
+    decimal? OtherCostVnd = null,
+    string? Condition = null,
+    int DeadOnArrival = 0,
+    string? Notes = null);
 
-/// <summary>Update lot metadata only — quantity/avg weight are system-calculated.</summary>
-public record UpdateCrabLotRequest(string? SupplierName, string? Notes);
+public record UpdateCrabLotRequest(
+    string? Name = null,
+    DateTime? ImportDate = null,
+    int? Quantity = null,
+    string? SupplierName = null,
+    decimal? TotalWeightKg = null,
+    decimal? WeightMinGram = null,
+    decimal? WeightMaxGram = null,
+    decimal? UnitPriceVndPerKg = null,
+    decimal? ShippingCostVnd = null,
+    decimal? OtherCostVnd = null,
+    string? Condition = null,
+    int? DeadOnArrival = null,
+    string? Notes = null,
+    string? Status = null);
 
 // --- CropBatch ---
 public record CropBatchDto(

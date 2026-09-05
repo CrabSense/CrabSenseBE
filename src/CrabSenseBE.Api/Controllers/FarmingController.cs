@@ -26,6 +26,7 @@ public class FarmingAreasController : ControllerBase
         [FromQuery] Guid? ownerId = null,
         [FromQuery] string? search = null,
         [FromQuery] bool? isActive = null,
+        [FromQuery] string? status = null,
         [FromQuery] int page = 1,
         [FromQuery] int? pageSize = null,
         CancellationToken ct = default)
@@ -34,19 +35,43 @@ public class FarmingAreasController : ControllerBase
         if (ownerId is null && User.IsInRole(AppRoles.FarmOwner))
             ownerId = TryGetUserId();
 
-        return Ok(await _service.GetAreasAsync(new FarmingAreaFilter(search, isActive, page, pageSize, ownerId), ct));
+        return Ok(await _service.GetAreasAsync(
+            new FarmingAreaFilter(search, isActive, status, page, pageSize, ownerId), ct));
     }
+
+    /// <summary>[READ] Next khu code (AREA-A01…) from all areas in DB — not sent on create</summary>
+    [HttpGet("next-code")]
+    public async Task<IActionResult> GetNextCode(CancellationToken ct)
+        => Ok(await _service.GetNextAreaCodeAsync(ct));
 
     /// <summary>[READ] Get area by id</summary>
     [HttpGet("{id:guid}")]
     public async Task<IActionResult> GetById(Guid id, CancellationToken ct)
         => Ok(await _service.GetAreaByIdAsync(id, ct));
 
-    /// <summary>[CREATE] Create khu — body: name; OwnerId auto from JWT user</summary>
+    /// <summary>[CREATE] Create khu — body: name; code auto AREA-xxx; OwnerId from JWT</summary>
     [HttpPost]
     [Authorize(Roles = AppRoles.FarmWrite)]
     public async Task<IActionResult> Create([FromBody] CreateFarmingAreaRequest req, CancellationToken ct)
         => Ok(await _service.CreateAreaAsync(req, RequireUserId(), ct));
+
+    /// <summary>[CREATE] Upload ảnh đại diện (chưa gắn khu). Gắn URL vào POST create (avatarUrl).</summary>
+    [HttpPost("avatar")]
+    [Authorize(Roles = AppRoles.FarmWrite)]
+    [RequestSizeLimit(8_000_000)]
+    [Consumes("multipart/form-data")]
+    public async Task<IActionResult> UploadAvatar(IFormFile? file, CancellationToken ct)
+        => Ok(await _service.UploadAvatarAsync(null, RequireFile(file), file!.FileName,
+            file.ContentType ?? "application/octet-stream", TryGetUserId(), ct));
+
+    /// <summary>[CREATE] Upload và gắn ảnh đại diện cho khu đã có.</summary>
+    [HttpPost("{id:guid}/avatar")]
+    [Authorize(Roles = AppRoles.FarmWrite)]
+    [RequestSizeLimit(8_000_000)]
+    [Consumes("multipart/form-data")]
+    public async Task<IActionResult> UploadAvatarForArea(Guid id, IFormFile? file, CancellationToken ct)
+        => Ok(await _service.UploadAvatarAsync(id, RequireFile(file), file!.FileName,
+            file.ContentType ?? "application/octet-stream", TryGetUserId(), ct));
 
     /// <summary>[UPDATE] Update farming area</summary>
     [HttpPut("{id:guid}")]
@@ -69,7 +94,8 @@ public class FarmingAreasController : ControllerBase
         [FromQuery] int page = 1,
         [FromQuery] int? pageSize = null,
         CancellationToken ct = default)
-        => Ok(await _service.GetRowsAsync(new FarmingRowFilter(areaId, search, isActive, page, pageSize), ct));
+        => Ok(await _service.GetRowsAsync(
+            new FarmingRowFilter(areaId, search, isActive, null, page, pageSize), ct));
 
     /// <summary>[CREATE] Create row in area (path areaId = FarmingAreaId)</summary>
     [HttpPost("{areaId:guid}/rows")]
@@ -94,6 +120,13 @@ public class FarmingAreasController : ControllerBase
             ?? User.FindFirstValue("sub");
         return raw is not null && Guid.TryParse(raw, out var id) && id != Guid.Empty ? id : null;
     }
+
+    private static Stream RequireFile(IFormFile? file)
+    {
+        if (file is null || file.Length <= 0)
+            throw AppException.BadRequest("Image file is required.");
+        return file.OpenReadStream();
+    }
 }
 
 /// <summary>CRUD Farming Rows</summary>
@@ -113,17 +146,24 @@ public class FarmingRowsController : ControllerBase
         [FromQuery] Guid? farmingAreaId = null,
         [FromQuery] string? search = null,
         [FromQuery] bool? isActive = null,
+        [FromQuery] string? status = null,
         [FromQuery] int page = 1,
         [FromQuery] int? pageSize = null,
         CancellationToken ct = default)
-        => Ok(await _service.GetRowsAsync(new FarmingRowFilter(farmingAreaId, search, isActive, page, pageSize), ct));
+        => Ok(await _service.GetRowsAsync(
+            new FarmingRowFilter(farmingAreaId, search, isActive, status, page, pageSize), ct));
+
+    /// <summary>[READ] Next dãy code (DAY-A01…) — not sent on create</summary>
+    [HttpGet("next-code")]
+    public async Task<IActionResult> GetNextCode(CancellationToken ct)
+        => Ok(await _service.GetNextRowCodeAsync(ct));
 
     /// <summary>[READ] Get row by id</summary>
     [HttpGet("{id:guid}")]
     public async Task<IActionResult> GetById(Guid id, CancellationToken ct)
         => Ok(await _service.GetRowByIdAsync(id, ct));
 
-    /// <summary>[CREATE] Create row — body: farmingAreaId (khu) + name</summary>
+    /// <summary>[CREATE] Create dãy — body: farmingAreaId + name; code auto DAY-xxx</summary>
     [HttpPost]
     [Authorize(Roles = AppRoles.FarmWrite)]
     public async Task<IActionResult> Create([FromBody] CreateFarmingRowRequest req, CancellationToken ct)
@@ -300,13 +340,19 @@ public class CrabsController : ControllerBase
         _images = images;
     }
 
-    /// <summary>[READ] List crabs — pageSize=0 or omit = GET ALL</summary>
+    /// <summary>[READ] List crabs — pageSize=0 or omit = GET ALL. farmingAreaId scopes to one khu/trại.</summary>
     [HttpGet]
     public async Task<IActionResult> GetAll(
         [FromQuery] int page = 1,
         [FromQuery] int pageSize = 0,
+        [FromQuery] Guid? farmingAreaId = null,
         CancellationToken ct = default)
-        => Ok(await _service.GetCrabsAsync(page, pageSize, ct));
+        => Ok(await _service.GetCrabsAsync(page, pageSize, farmingAreaId, ct));
+
+    /// <summary>[READ] Next CRAB-0001… + QR-CRAB-0001</summary>
+    [HttpGet("next-code")]
+    public async Task<IActionResult> NextCode(CancellationToken ct)
+        => Ok(await _service.GetNextCrabCodeAsync(ct));
 
     /// <summary>
     /// [CREATE] Upload crab photos to S3. Returns public URLs.
@@ -357,6 +403,26 @@ public class CrabsController : ControllerBase
     [Authorize(Roles = AppRoles.FarmWrite)]
     public async Task<IActionResult> Delete(Guid id, CancellationToken ct)
         => Ok(await _service.DeleteCrabAsync(id, ct));
+
+    /// <summary>[READ] Lịch sử trạng thái cua</summary>
+    [HttpGet("{id:guid}/status-history")]
+    public async Task<IActionResult> StatusHistory(Guid id, CancellationToken ct)
+        => Ok(await _service.GetCrabStatusHistoryAsync(id, ct));
+
+    /// <summary>[READ] Lịch sử cân nặng</summary>
+    [HttpGet("{id:guid}/weights")]
+    public async Task<IActionResult> WeightHistory(Guid id, CancellationToken ct)
+        => Ok(await _service.GetCrabWeightHistoryAsync(id, ct));
+
+    /// <summary>[READ] Lịch sử AI (không nhập tay)</summary>
+    [HttpGet("{id:guid}/ai-analyses")]
+    public async Task<IActionResult> AiAnalyses(Guid id, CancellationToken ct)
+        => Ok(await _service.GetCrabAiAnalysesAsync(id, ct));
+
+    /// <summary>[READ] Lịch sử thu hoạch</summary>
+    [HttpGet("{id:guid}/harvests")]
+    public async Task<IActionResult> HarvestHistory(Guid id, CancellationToken ct)
+        => Ok(await _service.GetCrabHarvestHistoryAsync(id, ct));
 
     private static IReadOnlyList<CrabSenseBE.Application.Interfaces.CrabImageFile> ToImageFiles(
         List<IFormFile>? files, IFormFile? file)

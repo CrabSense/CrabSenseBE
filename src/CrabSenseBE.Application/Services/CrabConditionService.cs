@@ -3,6 +3,7 @@ using CrabSenseBE.Application.Common;
 using CrabSenseBE.Application.DTOs.Condition;
 using CrabSenseBE.Application.Interfaces;
 using CrabSenseBE.Domain.Entities;
+using CrabSenseBE.Domain.Enums;
 using CrabSenseBE.Domain.Interfaces;
 
 namespace CrabSenseBE.Application.Services;
@@ -79,10 +80,50 @@ public class CrabConditionService : ICrabConditionService
             {
                 crab.WeightGram = req.WeightG;
                 crab.MoltingStage = eval.MoltingStatusHint ?? crab.MoltingStage;
+                var oldCondition = crab.Condition;
+                var oldStatus = crab.Status;
+                crab.Condition = CrabConditions.FromMoltingAndStatus(
+                    crab.MoltingStage,
+                    eval.Status == "pre_molt" ? CrabStatus.Molting : crab.Status);
                 if (eval.Status == "pre_molt")
-                    crab.Status = Domain.Enums.CrabStatus.Molting;
+                    crab.Status = CrabStatus.Molting;
+                else
+                    crab.Status = CrabConditions.ToLifecycle(crab.Condition);
+                crab.AiPrediction = eval.MoltingStatusHint ?? eval.Status;
                 crab.UpdatedAt = DateTime.UtcNow;
                 _uow.Crabs.Update(crab);
+
+                if (oldCondition != crab.Condition || oldStatus != crab.Status)
+                {
+                    await _uow.CrabStatusHistories.AddAsync(new CrabStatusHistory
+                    {
+                        CrabId = crab.Id,
+                        OldCondition = oldCondition,
+                        NewCondition = crab.Condition,
+                        OldStatus = oldStatus,
+                        NewStatus = crab.Status,
+                        Source = "ai",
+                        Reason = "Condition evaluate"
+                    }, ct);
+                }
+
+                await _uow.CrabWeightHistories.AddAsync(new CrabWeightHistory
+                {
+                    CrabId = crab.Id,
+                    WeightGram = req.WeightG,
+                    Source = "ai",
+                    Notes = "Condition evaluate"
+                }, ct);
+
+                await _uow.CrabAiAnalyses.AddAsync(new CrabAiAnalysis
+                {
+                    CrabId = crab.Id,
+                    BoxId = req.BoxId,
+                    Prediction = crab.AiPrediction ?? "condition",
+                    Confidence = 0,
+                    AnalyzedAt = DateTime.UtcNow,
+                    ModelVersion = "kn-condition"
+                }, ct);
             }
         }
 

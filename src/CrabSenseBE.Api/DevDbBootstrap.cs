@@ -21,8 +21,23 @@ public static class DevDbBootstrap
         {
             try
             {
-                await EnsureSchemaReadyAsync(db, logger);
+                try
+                {
+                    await EnsureSchemaReadyAsync(db, logger);
+                }
+                catch (Exception migrateEx)
+                {
+                    logger.LogWarning(
+                        migrateEx,
+                        "EF migrate incomplete on attempt {A}; applying idempotent schema ensures.",
+                        attempt);
+                }
+
                 await EnsureBoxesMobileSchemaAsync(db, logger);
+                await EnsureFarmingAreaProfileSchemaAsync(db, logger);
+                await EnsureFarmingRowProfileSchemaAsync(db, logger);
+                await EnsureCrabProfileSchemaAsync(db, logger);
+                await EnsureCrabLotInboundSchemaAsync(db, logger);
                 logger.LogInformation("Schema ready (attempt {A}).", attempt);
 
                 await RemapLegacyRolesAsync(db, logger);
@@ -55,47 +70,55 @@ public static class DevDbBootstrap
     }
 
     /// <summary>
-    /// Apply EF migrations. If Supabase already has schema but empty history
-    /// (42P07 already exists), baseline history then apply remaining only.
+    /// Apply EF migrations. If a pending migration tries to add a table/column/index
+    /// that already exists (42P07 / 42701 / 42710), record only that migration and
+    /// continue — do not baseline every remaining migration (that would skip Crab).
     /// </summary>
     private static async Task EnsureSchemaReadyAsync(AppDbContext db, ILogger logger)
     {
-        try
+        for (var i = 0; i < 24; i++)
         {
-            await db.Database.MigrateAsync();
-            return;
-        }
-        catch (PostgresException ex) when (ex.SqlState == "42P07")
-        {
-            logger.LogWarning("Schema objects already exist — baselining EF migration history.");
-        }
-        catch (Exception ex) when (ex.InnerException is PostgresException { SqlState: "42P07" })
-        {
-            logger.LogWarning("Schema objects already exist — baselining EF migration history.");
+            try
+            {
+                await db.Database.MigrateAsync();
+                return;
+            }
+            catch (Exception ex) when (IsAlreadyExistsSchemaError(ex))
+            {
+                var pending = (await db.Database.GetPendingMigrationsAsync()).ToList();
+                if (pending.Count == 0)
+                {
+                    logger.LogWarning(ex, "Schema object already exists and EF has no pending migrations.");
+                    return;
+                }
+
+                var next = pending[0];
+                await db.Database.ExecuteSqlInterpolatedAsync(
+                    $"""
+                     INSERT INTO be."__EFMigrationsHistory" ("MigrationId", "ProductVersion")
+                     VALUES ({next}, {"8.0.0"})
+                     ON CONFLICT ("MigrationId") DO NOTHING
+                     """);
+                logger.LogWarning(
+                    "Recorded {MigrationId} as applied because the object already exists. Continuing remaining migrations.",
+                    next);
+            }
         }
 
-        await BaselineMigrationHistoryAsync(db, logger);
-        await db.Database.MigrateAsync();
+        throw new InvalidOperationException(
+            "Could not apply EF migrations after skipping already-existing objects.");
     }
 
-    private static async Task BaselineMigrationHistoryAsync(AppDbContext db, ILogger logger)
+    private static bool IsAlreadyExistsSchemaError(Exception ex)
     {
-        var all = db.Database.GetMigrations().ToList();
-        var applied = (await db.Database.GetAppliedMigrationsAsync()).ToList();
-        var missing = all.Except(applied).ToList();
-        if (missing.Count == 0) return;
-
-        foreach (var id in missing)
+        for (var e = ex; e != null; e = e.InnerException)
         {
-            await db.Database.ExecuteSqlInterpolatedAsync(
-                $"""
-                 INSERT INTO be."__EFMigrationsHistory" ("MigrationId", "ProductVersion")
-                 VALUES ({id}, {"8.0.0"})
-                 ON CONFLICT ("MigrationId") DO NOTHING
-                 """);
+            if (e is PostgresException pg &&
+                pg.SqlState is "42P07" or "42701" or "42710")
+                return true;
         }
 
-        logger.LogInformation("Baselined {N} migration(s) into be.__EFMigrationsHistory.", missing.Count);
+        return false;
     }
 
     /// <summary>
@@ -160,6 +183,325 @@ public static class DevDbBootstrap
             """).ConfigureAwait(false);
 
         logger.LogInformation("Ensured Boxes/Inspections/FarmOperations/Sales mobile schema columns.");
+    }
+
+    /// <summary>
+    /// Idempotent khu profile columns + AREA-A01 backfill (works if EF history was baselined).
+    /// </summary>
+    private static async Task EnsureFarmingAreaProfileSchemaAsync(AppDbContext db, ILogger logger)
+    {
+        await db.Database.ExecuteSqlRawAsync(
+            """
+            ALTER TABLE be."FarmingAreas"
+            ADD COLUMN IF NOT EXISTS "Code" character varying(32) NOT NULL DEFAULT '',
+            ADD COLUMN IF NOT EXISTS "Location" character varying(256) NULL,
+            ADD COLUMN IF NOT EXISTS "Address" text NOT NULL DEFAULT '',
+            ADD COLUMN IF NOT EXISTS "Region" text NULL,
+            ADD COLUMN IF NOT EXISTS "AreaSquareMeters" numeric(12,2) NULL,
+            ADD COLUMN IF NOT EXISTS "EstablishedAt" timestamp with time zone NULL,
+            ADD COLUMN IF NOT EXISTS "AvatarUrl" text NULL,
+            ADD COLUMN IF NOT EXISTS "Status" text NOT NULL DEFAULT 'Active';
+
+            CREATE UNIQUE INDEX IF NOT EXISTS "IX_FarmingAreas_Code"
+            ON be."FarmingAreas" ("Code");
+            """).ConfigureAwait(false);
+
+        try
+        {
+            await db.Database.ExecuteSqlRawAsync(
+                """
+                UPDATE be."FarmingAreas"
+                SET
+                    "Status" = CASE
+                        WHEN "Status" IS NULL OR btrim("Status") = '' THEN
+                            CASE WHEN "IsActive" THEN 'Active' ELSE 'Closed' END
+                        ELSE "Status"
+                    END;
+
+                WITH max_existing AS (
+                    SELECT COALESCE(MAX(
+                        CASE
+                            WHEN "Code" ~ '^AREA-[A-Za-z][0-9]{2}$' THEN
+                                (ASCII(UPPER(SUBSTRING("Code" FROM 6 FOR 1))) - 65) * 99
+                                + CAST(SUBSTRING("Code" FROM 7 FOR 2) AS int)
+                            ELSE 0
+                        END
+                    ), 0) AS n
+                    FROM be."FarmingAreas"
+                ),
+                numbered AS (
+                    SELECT a."Id", ROW_NUMBER() OVER (ORDER BY a."CreatedAt", a."Id") AS seq
+                    FROM be."FarmingAreas" a
+                    WHERE a."Code" IS NULL
+                       OR btrim(a."Code") = ''
+                       OR a."Code" ~* '^FARM-'
+                       OR a."Code" ~ '^AREA-[0-9]+$'
+                )
+                UPDATE be."FarmingAreas" a
+                SET "Code" = 'AREA-'
+                    || CHR((65 + (((max_existing.n + numbered.seq) - 1) / 99))::int)
+                    || LPAD(((((max_existing.n + numbered.seq) - 1) % 99) + 1)::text, 2, '0')
+                FROM numbered, max_existing
+                WHERE a."Id" = numbered."Id";
+                """).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "FarmingArea AREA-xxx backfill skipped (column Location is already ensured).");
+        }
+
+        logger.LogInformation("Ensured FarmingArea khu columns and AREA-xxx codes.");
+    }
+
+    /// <summary>Idempotent dãy columns + DAY-A01 backfill.</summary>
+    private static async Task EnsureFarmingRowProfileSchemaAsync(AppDbContext db, ILogger logger)
+    {
+        await db.Database.ExecuteSqlRawAsync(
+            """
+            ALTER TABLE be."FarmingRows"
+            ADD COLUMN IF NOT EXISTS "Code" character varying(32) NOT NULL DEFAULT '',
+            ADD COLUMN IF NOT EXISTS "Location" character varying(256) NULL,
+            ADD COLUMN IF NOT EXISTS "Description" text NULL,
+            ADD COLUMN IF NOT EXISTS "Status" text NOT NULL DEFAULT 'Active',
+            ADD COLUMN IF NOT EXISTS "SortOrder" integer NOT NULL DEFAULT 0;
+            """).ConfigureAwait(false);
+
+        try
+        {
+            await db.Database.ExecuteSqlRawAsync(
+                """
+                UPDATE be."FarmingRows"
+                SET "Status" = CASE
+                    WHEN "Status" IS NULL OR btrim("Status") = '' THEN
+                        CASE WHEN "IsActive" THEN 'Active' ELSE 'Closed' END
+                    ELSE "Status"
+                END;
+
+                WITH max_existing AS (
+                    SELECT COALESCE(MAX(
+                        CASE
+                            WHEN "Code" ~ '^DAY-[A-Za-z][0-9]{2}$' THEN
+                                (ASCII(UPPER(SUBSTRING("Code" FROM 6 FOR 1))) - 65) * 99
+                                + CAST(SUBSTRING("Code" FROM 7 FOR 2) AS int)
+                            ELSE 0
+                        END
+                    ), 0) AS n
+                    FROM be."FarmingRows"
+                ),
+                numbered AS (
+                    SELECT r."Id", ROW_NUMBER() OVER (ORDER BY r."CreatedAt", r."Id") AS seq
+                    FROM be."FarmingRows" r
+                    WHERE r."Code" IS NULL
+                       OR btrim(r."Code") = ''
+                       OR r."Code" ~ '^DAY-[0-9]+$'
+                )
+                UPDATE be."FarmingRows" r
+                SET "Code" = 'DAY-'
+                    || CHR((65 + (((max_existing.n + numbered.seq) - 1) / 99))::int)
+                    || LPAD(((((max_existing.n + numbered.seq) - 1) % 99) + 1)::text, 2, '0')
+                FROM numbered, max_existing
+                WHERE r."Id" = numbered."Id";
+
+                CREATE UNIQUE INDEX IF NOT EXISTS "IX_FarmingRows_Code"
+                ON be."FarmingRows" ("Code");
+                """).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "FarmingRow DAY-xxx backfill skipped (columns already ensured).");
+        }
+
+        logger.LogInformation("Ensured FarmingRow dãy columns and DAY-xxx codes.");
+    }
+
+    /// <summary>Idempotent cua profile columns + history tables. ADD COLUMN tách khỏi backfill.</summary>
+    private static async Task EnsureCrabProfileSchemaAsync(AppDbContext db, ILogger logger)
+    {
+        await db.Database.ExecuteSqlRawAsync(
+            """
+            ALTER TABLE be."Crabs"
+            ADD COLUMN IF NOT EXISTS "Code" character varying(32) NOT NULL DEFAULT '',
+            ADD COLUMN IF NOT EXISTS "QrCode" character varying(48) NULL,
+            ADD COLUMN IF NOT EXISTS "CrabType" text NULL,
+            ADD COLUMN IF NOT EXISTS "Gender" text NOT NULL DEFAULT 'Unknown',
+            ADD COLUMN IF NOT EXISTS "InitialWeightGram" numeric(10,2) NULL,
+            ADD COLUMN IF NOT EXISTS "CarapaceWidthMm" numeric(8,2) NULL,
+            ADD COLUMN IF NOT EXISTS "CarapaceLengthMm" numeric(8,2) NULL,
+            ADD COLUMN IF NOT EXISTS "InitialCondition" text NULL,
+            ADD COLUMN IF NOT EXISTS "Notes" text NULL,
+            ADD COLUMN IF NOT EXISTS "Condition" text NOT NULL DEFAULT 'Normal',
+            ADD COLUMN IF NOT EXISTS "AiPrediction" text NULL,
+            ADD COLUMN IF NOT EXISTS "AiConfidence" numeric(5,2) NULL;
+
+            ALTER TABLE be."QrCodes"
+            ADD COLUMN IF NOT EXISTS "CrabId" uuid NULL;
+
+            CREATE TABLE IF NOT EXISTS be."CrabStatusHistories" (
+                "Id" uuid NOT NULL,
+                "CrabId" uuid NOT NULL,
+                "OldCondition" text NULL,
+                "NewCondition" text NOT NULL,
+                "OldStatus" text NULL,
+                "NewStatus" text NOT NULL,
+                "ChangedAt" timestamp with time zone NOT NULL,
+                "Source" text NOT NULL DEFAULT 'system',
+                "Reason" text NULL,
+                "ChangedByUserId" uuid NULL,
+                "CreatedAt" timestamp with time zone NOT NULL,
+                "UpdatedAt" timestamp with time zone NULL,
+                CONSTRAINT "PK_CrabStatusHistories" PRIMARY KEY ("Id")
+            );
+
+            CREATE TABLE IF NOT EXISTS be."CrabWeightHistories" (
+                "Id" uuid NOT NULL,
+                "CrabId" uuid NOT NULL,
+                "WeightGram" numeric(10,2) NOT NULL,
+                "MeasuredAt" timestamp with time zone NOT NULL,
+                "Source" text NOT NULL DEFAULT 'manual',
+                "Notes" text NULL,
+                "CreatedAt" timestamp with time zone NOT NULL,
+                "UpdatedAt" timestamp with time zone NULL,
+                CONSTRAINT "PK_CrabWeightHistories" PRIMARY KEY ("Id")
+            );
+
+            CREATE TABLE IF NOT EXISTS be."CrabAiAnalyses" (
+                "Id" uuid NOT NULL,
+                "CrabId" uuid NOT NULL,
+                "BoxId" uuid NULL,
+                "Prediction" text NOT NULL,
+                "Confidence" numeric(5,2) NOT NULL,
+                "ActivityLevel" text NULL,
+                "AnomalyNote" text NULL,
+                "MediaUrl" text NULL,
+                "ModelVersion" text NULL,
+                "AnalyzedAt" timestamp with time zone NOT NULL,
+                "CreatedAt" timestamp with time zone NOT NULL,
+                "UpdatedAt" timestamp with time zone NULL,
+                CONSTRAINT "PK_CrabAiAnalyses" PRIMARY KEY ("Id")
+            );
+
+            CREATE TABLE IF NOT EXISTS be."CrabHarvestHistories" (
+                "Id" uuid NOT NULL,
+                "CrabId" uuid NOT NULL,
+                "HarvestLineId" uuid NULL,
+                "HarvestedAt" timestamp with time zone NOT NULL,
+                "WeightGram" numeric(10,2) NULL,
+                "Grade" text NULL,
+                "Notes" text NULL,
+                "CreatedAt" timestamp with time zone NOT NULL,
+                "UpdatedAt" timestamp with time zone NULL,
+                CONSTRAINT "PK_CrabHarvestHistories" PRIMARY KEY ("Id")
+            );
+
+            CREATE INDEX IF NOT EXISTS "IX_CrabStatusHistories_CrabId" ON be."CrabStatusHistories" ("CrabId");
+            CREATE INDEX IF NOT EXISTS "IX_CrabWeightHistories_CrabId" ON be."CrabWeightHistories" ("CrabId");
+            CREATE INDEX IF NOT EXISTS "IX_CrabAiAnalyses_CrabId" ON be."CrabAiAnalyses" ("CrabId");
+            CREATE INDEX IF NOT EXISTS "IX_CrabHarvestHistories_CrabId" ON be."CrabHarvestHistories" ("CrabId");
+            CREATE INDEX IF NOT EXISTS "IX_QrCodes_CrabId" ON be."QrCodes" ("CrabId");
+            """).ConfigureAwait(false);
+
+        try
+        {
+            await db.Database.ExecuteSqlRawAsync(
+                """
+                UPDATE be."Crabs"
+                SET
+                    "InitialWeightGram" = COALESCE("InitialWeightGram", "WeightGram"),
+                    "InitialCondition" = COALESCE(NULLIF(btrim("InitialCondition"), ''), 'Khỏe mạnh'),
+                    "Gender" = CASE WHEN "Gender" IS NULL OR btrim("Gender") = '' THEN 'Unknown' ELSE "Gender" END,
+                    "Condition" = CASE
+                        WHEN "Condition" IS NULL OR btrim("Condition") = '' OR "Condition" = 'Normal' THEN
+                            CASE
+                                WHEN "Status" IN (2) THEN 'Dead'
+                                WHEN "Status" IN (4) THEN 'Harvested'
+                                WHEN "Status" IN (3, 5) THEN 'Problem'
+                                WHEN "Status" IN (1) THEN 'Molting'
+                                WHEN lower(replace(replace(COALESCE("MoltingStage",''), '-', ''), '_', '')) IN ('premolt', 'pre') THEN 'Premolt'
+                                WHEN lower(replace(replace(COALESCE("MoltingStage",''), '-', ''), '_', '')) IN ('molting', 'molt') THEN 'Molting'
+                                WHEN lower(replace(replace(COALESCE("MoltingStage",''), '-', ''), '_', '')) IN ('softshell', 'soft', 'postmolt', 'post') THEN 'Softshell'
+                                ELSE "Condition"
+                            END
+                        ELSE "Condition"
+                    END;
+
+                WITH numbered AS (
+                    SELECT c."Id", ROW_NUMBER() OVER (ORDER BY c."CreatedAt", c."Id") AS seq
+                    FROM be."Crabs" c
+                    WHERE c."Code" IS NULL OR btrim(c."Code") = ''
+                )
+                UPDATE be."Crabs" c
+                SET "Code" = 'CRAB-' || LPAD(numbered.seq::text, 4, '0')
+                FROM numbered
+                WHERE c."Id" = numbered."Id";
+
+                UPDATE be."Crabs"
+                SET
+                    "Tag" = COALESCE(NULLIF(btrim("Tag"), ''), "Code"),
+                    "QrCode" = COALESCE(NULLIF(btrim("QrCode"), ''), 'QR-' || "Code")
+                WHERE btrim("Code") <> '';
+                """).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Crab code/condition backfill skipped (columns already ensured).");
+        }
+
+        try
+        {
+            await db.Database.ExecuteSqlRawAsync(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS "IX_Crabs_Code"
+                ON be."Crabs" ("Code");
+                """).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Crab Code unique index skipped.");
+        }
+
+        logger.LogInformation("Ensured Crab profile columns and history tables.");
+    }
+
+    private static async Task EnsureCrabLotInboundSchemaAsync(AppDbContext db, ILogger logger)
+    {
+        await db.Database.ExecuteSqlRawAsync(
+            """
+            ALTER TABLE be."CrabLots"
+            ADD COLUMN IF NOT EXISTS "Name" character varying(128) NOT NULL DEFAULT '',
+            ADD COLUMN IF NOT EXISTS "TotalWeightKg" numeric(12,3) NULL,
+            ADD COLUMN IF NOT EXISTS "WeightMinGram" numeric(10,2) NULL,
+            ADD COLUMN IF NOT EXISTS "WeightMaxGram" numeric(10,2) NULL,
+            ADD COLUMN IF NOT EXISTS "UnitPriceVndPerKg" numeric(14,2) NULL,
+            ADD COLUMN IF NOT EXISTS "CrabCostVnd" numeric(14,2) NULL,
+            ADD COLUMN IF NOT EXISTS "ShippingCostVnd" numeric(14,2) NULL,
+            ADD COLUMN IF NOT EXISTS "OtherCostVnd" numeric(14,2) NULL,
+            ADD COLUMN IF NOT EXISTS "TotalCostVnd" numeric(14,2) NULL,
+            ADD COLUMN IF NOT EXISTS "Condition" character varying(16) NOT NULL DEFAULT 'Good',
+            ADD COLUMN IF NOT EXISTS "DeadOnArrival" integer NOT NULL DEFAULT 0,
+            ADD COLUMN IF NOT EXISTS "Status" character varying(16) NOT NULL DEFAULT 'Pending';
+            """).ConfigureAwait(false);
+
+        await db.Database.ExecuteSqlRawAsync(
+            """
+            UPDATE be."CrabLots"
+            SET "Name" = "LotCode"
+            WHERE btrim("Name") = '';
+            """).ConfigureAwait(false);
+
+        try
+        {
+            await db.Database.ExecuteSqlRawAsync(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS "IX_CrabLots_LotCode"
+                ON be."CrabLots" ("LotCode");
+                """).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "CrabLot LotCode unique index skipped.");
+        }
+
+        logger.LogInformation("Ensured CrabLot inbound columns.");
     }
 
     /// <summary>
