@@ -32,6 +32,7 @@ public class FarmingServiceFilterTests
         var userRepo = new Mock<IRepository<AppUser>>();
         userRepo.Setup(r => r.GetAllAsync(It.IsAny<CancellationToken>())).ReturnsAsync(Array.Empty<AppUser>());
         _uow.Setup(u => u.Users).Returns(userRepo.Object);
+        StubEmptyAreaStatsDeps();
 
         var result = await Create().GetAreasAsync(new FarmingAreaFilter("Khu", true, null, 1, 50));
         result.Data!.TotalCount.Should().Be(1);
@@ -133,8 +134,34 @@ public class FarmingServiceFilterTests
         var alertRepo = new Mock<IRepository<Alert>>();
         alertRepo.Setup(r => r.GetAllAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(Array.Empty<Alert>());
+        alertRepo.Setup(r => r.FindAsync(
+                It.IsAny<System.Linq.Expressions.Expression<Func<Alert, bool>>>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Array.Empty<Alert>());
         _uow.Setup(u => u.Crabs).Returns(crabRepo.Object);
         _uow.Setup(u => u.Alerts).Returns(alertRepo.Object);
+    }
+
+    private void StubEmptyAreaStatsDeps()
+    {
+        var rowRepo = new Mock<IRepository<FarmingRow>>();
+        rowRepo.Setup(r => r.GetAllAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Array.Empty<FarmingRow>());
+        var boxRepo = new Mock<IRepository<Box>>();
+        boxRepo.Setup(r => r.GetAllAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Array.Empty<Box>());
+        var wsRepo = new Mock<IRepository<WaterSystem>>();
+        wsRepo.Setup(r => r.GetAllAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Array.Empty<WaterSystem>());
+        var sensorRepo = new Mock<IRepository<Sensor>>();
+        sensorRepo.Setup(r => r.GetAllAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Array.Empty<Sensor>());
+
+        _uow.Setup(u => u.FarmingRows).Returns(rowRepo.Object);
+        _uow.Setup(u => u.Boxes).Returns(boxRepo.Object);
+        _uow.Setup(u => u.WaterSystems).Returns(wsRepo.Object);
+        _uow.Setup(u => u.Sensors).Returns(sensorRepo.Object);
+        StubEmptyCrabsAndAlerts();
     }
 
     [Fact]

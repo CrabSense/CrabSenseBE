@@ -1276,7 +1276,7 @@ public class FarmingService : IFarmingService
         var result = ids.ToDictionary(id => id, _ => AreaStats.Empty);
         if (ids.Count == 0) return result;
 
-        var rows = (await _uow.FarmingRows.GetAllAsync(ct))
+        var rows = (await _uow.FarmingRows.GetAllAsync(ct) ?? Enumerable.Empty<FarmingRow>())
             .Where(r => ids.Contains(r.FarmingAreaId))
             .ToList();
         var rowToArea = rows.ToDictionary(r => r.Id, r => r.FarmingAreaId);
@@ -1284,16 +1284,18 @@ public class FarmingService : IFarmingService
 
         var boxes = rowIds.Count == 0
             ? new List<Box>()
-            : (await _uow.Boxes.GetAllAsync(ct)).Where(b => rowIds.Contains(b.FarmingRowId)).ToList();
+            : (await _uow.Boxes.GetAllAsync(ct) ?? Enumerable.Empty<Box>())
+                .Where(b => rowIds.Contains(b.FarmingRowId))
+                .ToList();
 
         var boxIds = boxes.Select(b => b.Id).ToHashSet();
         var crabs = boxIds.Count == 0
             ? new List<Crab>()
-            : (await _uow.Crabs.GetAllAsync(ct))
+            : (await _uow.Crabs.GetAllAsync(ct) ?? Enumerable.Empty<Crab>())
                 .Where(c => IsCrabAlive(c) && CurrentBoxId(c) != Guid.Empty && boxIds.Contains(CurrentBoxId(c)))
                 .ToList();
 
-        var waterSystems = (await _uow.WaterSystems.GetAllAsync(ct))
+        var waterSystems = (await _uow.WaterSystems.GetAllAsync(ct) ?? Enumerable.Empty<WaterSystem>())
             .Where(w => w.FarmingAreaId is Guid aid && ids.Contains(aid))
             .ToList();
         var wsToArea = waterSystems
@@ -1301,7 +1303,7 @@ public class FarmingService : IFarmingService
             .ToDictionary(w => w.Id, w => w.FarmingAreaId!.Value);
         var sensors = wsToArea.Count == 0
             ? new List<Sensor>()
-            : (await _uow.Sensors.GetAllAsync(ct))
+            : (await _uow.Sensors.GetAllAsync(ct) ?? Enumerable.Empty<Sensor>())
                 .Where(s => s.WaterSystemId is Guid wid && wsToArea.ContainsKey(wid))
                 .ToList();
         var sensorToArea = sensors
