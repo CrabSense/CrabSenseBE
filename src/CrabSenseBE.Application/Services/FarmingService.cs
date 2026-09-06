@@ -875,9 +875,11 @@ public class FarmingService : IFarmingService
         else if (req.MoltingStage is not null)
             crab.Condition = CrabConditions.FromMoltingAndStatus(req.MoltingStage, crab.Status);
 
-        if (!req.IsAlive && crab.Condition is not CrabCondition.Harvested)
+        if (!req.IsAlive
+            && crab.Condition is not CrabCondition.Harvested
+            && crab.Condition is not CrabCondition.Sold)
             crab.Condition = CrabCondition.Dead;
-        if (req.IsAlive && crab.Condition is CrabCondition.Dead or CrabCondition.Harvested)
+        if (req.IsAlive && crab.Condition == CrabCondition.Dead)
             crab.Condition = CrabConditions.FromMoltingAndStatus(crab.MoltingStage, CrabStatus.Alive);
 
         crab.Status = CrabConditions.ToLifecycle(crab.Condition);

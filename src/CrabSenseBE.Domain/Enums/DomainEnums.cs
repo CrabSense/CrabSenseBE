@@ -40,7 +40,8 @@ public enum OrderStatus
     Packing,
     Shipping,
     Completed,
-    Cancelled
+    Cancelled,
+    Draft
 }
 
 public enum PaymentStatus
@@ -48,7 +49,8 @@ public enum PaymentStatus
     Pending,
     Paid,
     Overdue,
-    Cancelled
+    Cancelled,
+    Partial
 }
 
 public enum AlertSeverity
