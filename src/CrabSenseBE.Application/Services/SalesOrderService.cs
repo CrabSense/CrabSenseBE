@@ -84,113 +84,121 @@ public class SalesOrderService : ISalesOrderService
 
         var duplicate = lines.GroupBy(l => l.CrabId).FirstOrDefault(g => g.Count() > 1);
         if (duplicate is not null)
-            throw AppException.BadRequest($"Cua '{duplicate.Key}' bị chọn trùng.");
+            throw AppException.Conflict($"Cua '{duplicate.Key}' bị chọn trùng.");
 
         var customer = await FindOrCreateCustomerAsync(
             request.CustomerName,
             request.CustomerPhone,
             null,
-            null,
+            request.CustomerAddress,
             null,
             ct);
 
-        var payment = ParsePayment(request.PaymentStatus);
+        var orderStatus = ParseOrderStatus(request.OrderStatus);
+        var payment = ParsePayment(request.PaymentStatus, request.PaymentMethod);
+        var method = NormalizePaymentMethod(request.PaymentMethod, payment);
+        var delivery = NormalizeDelivery(request.DeliveryStatus);
         var seller = string.IsNullOrWhiteSpace(request.SellerName)
             ? await ResolveUserNameAsync(ct)
             : request.SellerName.Trim();
+        var discount = decimal.Round(Math.Max(0, request.DiscountAmount ?? 0), 0, MidpointRounding.AwayFromZero);
+        var shipping = decimal.Round(Math.Max(0, request.ShippingFee ?? 0), 0, MidpointRounding.AwayFromZero);
 
         var order = new SalesOrder
         {
             OrderCode = await GenerateOrderCodeAsync(ct),
             CustomerId = customer.Id,
             OrderDate = NormalizeUtc(request.OrderDate ?? DateTime.UtcNow),
-            Status = payment == PaymentStatus.Paid
-                ? OrderStatus.Completed
-                : OrderStatus.Confirmed,
+            Status = orderStatus,
             PaymentStatus = payment,
+            PaymentMethod = method,
+            DeliveryStatus = delivery,
             Notes = string.IsNullOrWhiteSpace(request.Notes) ? null : request.Notes.Trim(),
             CreatedBy = _currentUser.UserId,
             FarmingAreaId = request.FarmingAreaId,
-            SellerName = seller
+            SellerName = seller,
+            DiscountAmount = discount,
+            ShippingFee = shipping
         };
 
-        decimal total = 0;
+        decimal subtotal = 0;
         foreach (var lineReq in lines)
         {
-            var crab = await _uow.Crabs.GetByIdAsync(lineReq.CrabId, ct)
-                ?? throw AppException.BadRequest($"Cua '{lineReq.CrabId}' không tồn tại.");
-            if (crab.Status != CrabStatus.Harvested)
-                throw AppException.Conflict(
-                    $"Cua '{crab.Code}' chưa ở tồn kho (Đã thu hoạch). Không bán cua đang nuôi.");
-
-            var alreadySold = await _uow.SalesOrderLines.AnyAsync(
-                l => l.CrabId == crab.Id, ct);
-            if (alreadySold)
-                throw AppException.Conflict($"Cua '{crab.Code}' đã nằm trong đơn khác.");
-
-            var weight = lineReq.WeightGram ?? crab.WeightGram ?? 0;
-            if (weight <= 0)
-                throw AppException.BadRequest($"Cua '{crab.Code}' thiếu trọng lượng.");
-            var price = lineReq.UnitPricePerKg ?? 0;
-            if (price < 0)
-                throw AppException.BadRequest("Đơn giá phải >= 0.");
-
-            var qtyKg = decimal.Round(weight / 1000m, 3, MidpointRounding.AwayFromZero);
-            var amount = decimal.Round(qtyKg * price, 0, MidpointRounding.AwayFromZero);
-            total += amount;
-
-            order.Lines.Add(new SalesOrderLine
-            {
-                SalesOrderId = order.Id,
-                CrabId = crab.Id,
-                CrabCode = crab.Code,
-                Grade = string.IsNullOrWhiteSpace(lineReq.Grade) ? null : lineReq.Grade.Trim(),
-                Quantity = 1,
-                QuantityKg = qtyKg,
-                UnitPricePerKg = price,
-                TotalAmount = amount
-            });
-
-            var oldStatus = crab.Status;
-            var oldCondition = crab.Condition;
-            crab.Status = CrabStatus.Sold;
-            crab.Condition = CrabCondition.Sold;
-            crab.WeightGram = weight;
-            _uow.Crabs.Update(crab);
-
-            await _uow.CrabStatusHistories.AddAsync(new CrabStatusHistory
-            {
-                CrabId = crab.Id,
-                OldStatus = oldStatus,
-                NewStatus = CrabStatus.Sold,
-                OldCondition = oldCondition,
-                NewCondition = CrabCondition.Sold,
-                ChangedAt = DateTime.UtcNow,
-                Source = "sale",
-                Reason = order.OrderCode,
-                ChangedByUserId = _currentUser.UserId
-            }, ct);
+            var (line, amount) = await BuildLineAsync(order.Id, lineReq, ct);
+            subtotal += amount;
+            order.Lines.Add(line);
         }
 
-        order.TotalAmount = total;
+        ApplyTotals(order, subtotal, request.PaidAmount);
         await _uow.SalesOrders.AddAsync(order, ct);
 
-        if (payment == PaymentStatus.Paid)
+        if (orderStatus == OrderStatus.Completed)
+            await MarkLinesSoldAsync(order, ct);
+
+        if (order.PaymentStatus == PaymentStatus.Paid || order.PaymentStatus == PaymentStatus.Partial)
         {
             await _uow.Payments.AddAsync(new Payment
             {
                 SalesOrderId = order.Id,
-                Amount = total,
-                Method = "cash",
+                Amount = order.PaidAmount,
+                Method = method ?? "cash",
                 PaidAt = order.OrderDate,
-                Status = PaymentStatus.Paid
+                Status = order.PaymentStatus
             }, ct);
         }
 
         await _uow.SaveChangesAsync(ct);
+        var message = orderStatus == OrderStatus.Draft
+            ? $"Đơn '{order.OrderCode}' đã lưu nháp. Cua vẫn còn trong kho."
+            : $"Đơn '{order.OrderCode}' đã xác nhận. Cua chuyển sang Đã bán.";
+        return ApiResponse<SalesOrderDto>.Ok(await MapOrderAsync(order, ct), message);
+    }
+
+    public async Task<ApiResponse<SalesOrderDto>> CompleteOrderAsync(
+        Guid id,
+        CancellationToken ct = default)
+    {
+        var order = await _uow.SalesOrders.GetByIdAsync(id, ct)
+            ?? throw AppException.NotFound("SalesOrder");
+        if (order.Status == OrderStatus.Cancelled)
+            throw AppException.Conflict($"Đơn '{order.OrderCode}' đã hủy.");
+        if (order.Status == OrderStatus.Completed)
+            return ApiResponse<SalesOrderDto>.Ok(await MapOrderAsync(order, ct), "Đơn đã hoàn thành.");
+
+        await LoadLinesAsync(order, ct);
+        if (order.Lines.Count == 0)
+            throw AppException.BadRequest("Đơn chưa có cua.");
+
+        await MarkLinesSoldAsync(order, ct);
+        order.Status = OrderStatus.Completed;
+        _uow.SalesOrders.Update(order);
+        await _uow.SaveChangesAsync(ct);
         return ApiResponse<SalesOrderDto>.Ok(
             await MapOrderAsync(order, ct),
-            $"Đơn '{order.OrderCode}' đã tạo. Cua chuyển sang Đã bán.");
+            $"Đơn '{order.OrderCode}' đã xác nhận. Cua chuyển sang Đã bán.");
+    }
+
+    public async Task<ApiResponse<SalesOrderDto>> CancelOrderAsync(
+        Guid id,
+        CancellationToken ct = default)
+    {
+        var order = await _uow.SalesOrders.GetByIdAsync(id, ct)
+            ?? throw AppException.NotFound("SalesOrder");
+        if (order.Status == OrderStatus.Cancelled)
+            return ApiResponse<SalesOrderDto>.Ok(await MapOrderAsync(order, ct), "Đơn đã hủy.");
+
+        await LoadLinesAsync(order, ct);
+        if (order.Status == OrderStatus.Completed)
+            await RestoreLinesToInventoryAsync(order, ct);
+
+        order.Status = OrderStatus.Cancelled;
+        if (order.PaymentStatus is PaymentStatus.Paid or PaymentStatus.Partial)
+            order.PaymentStatus = PaymentStatus.Cancelled;
+        _uow.SalesOrders.Update(order);
+        await _uow.SaveChangesAsync(ct);
+        return ApiResponse<SalesOrderDto>.Ok(
+            await MapOrderAsync(order, ct),
+            $"Đơn '{order.OrderCode}' đã hủy. Cua trở lại tồn kho nếu đã bán.");
     }
 
     public async Task<ApiResponse<SalesOverviewDto>> GetOverviewAsync(
@@ -201,7 +209,7 @@ public class SalesOrderService : ISalesOrderService
         var tomorrow = today.AddDays(1);
         var orders = (await _uow.SalesOrders.GetAllAsync(ct))
             .Where(o =>
-                o.Status != OrderStatus.Cancelled
+                o.Status == OrderStatus.Completed
                 && (farmingAreaId is null
                     || farmingAreaId == Guid.Empty
                     || o.FarmingAreaId == farmingAreaId))
@@ -229,7 +237,9 @@ public class SalesOrderService : ISalesOrderService
         Guid? farmingAreaId = null,
         CancellationToken ct = default)
     {
+        var reserved = await ReservedCrabIdsAsync(null, ct);
         var harvested = (await _uow.Crabs.FindAsync(c => c.Status == CrabStatus.Harvested, ct))
+            .Where(c => !reserved.Contains(c.Id))
             .ToList();
         if (farmingAreaId is Guid areaId && areaId != Guid.Empty)
         {
@@ -272,10 +282,158 @@ public class SalesOrderService : ISalesOrderService
                     c.WeightGram ?? hist?.WeightGram,
                     hist?.Grade,
                     c.Condition.ToString(),
+                    c.CrabType,
                     hist?.HarvestedAt);
             })
             .ToList();
         return ApiResponse<IEnumerable<InventoryCrabDto>>.Ok(rows);
+    }
+
+    private async Task<(SalesOrderLine Line, decimal Amount)> BuildLineAsync(
+        Guid orderId,
+        CreateSalesOrderLineRequest lineReq,
+        CancellationToken ct)
+    {
+        var crab = await _uow.Crabs.GetByIdAsync(lineReq.CrabId, ct)
+            ?? throw AppException.BadRequest($"Cua '{lineReq.CrabId}' không tồn tại.");
+        if (crab.Status != CrabStatus.Harvested)
+            throw AppException.Conflict(
+                $"Cua '{crab.Code}' chưa ở tồn kho (Đã thu hoạch). Không bán cua đang nuôi.");
+
+        var reserved = await ReservedCrabIdsAsync(null, ct);
+        if (reserved.Contains(crab.Id))
+            throw AppException.Conflict($"Cua '{crab.Code}' đã nằm trong đơn khác.");
+
+        var weight = lineReq.WeightGram ?? crab.WeightGram ?? 0;
+        if (weight <= 0)
+            throw AppException.BadRequest($"Cua '{crab.Code}' thiếu trọng lượng.");
+        var price = lineReq.UnitPricePerKg ?? 0;
+        if (price < 0)
+            throw AppException.BadRequest("Đơn giá phải >= 0.");
+
+        var qtyKg = decimal.Round(weight / 1000m, 3, MidpointRounding.AwayFromZero);
+        var amount = decimal.Round(qtyKg * price, 0, MidpointRounding.AwayFromZero);
+        var line = new SalesOrderLine
+        {
+            SalesOrderId = orderId,
+            CrabId = crab.Id,
+            CrabCode = crab.Code,
+            CrabType = string.IsNullOrWhiteSpace(crab.CrabType) ? null : crab.CrabType.Trim(),
+            Grade = string.IsNullOrWhiteSpace(lineReq.Grade) ? null : lineReq.Grade.Trim(),
+            WeightGram = weight,
+            Quantity = 1,
+            QuantityKg = qtyKg,
+            UnitPricePerKg = price,
+            TotalAmount = amount
+        };
+        return (line, amount);
+    }
+
+    private async Task MarkLinesSoldAsync(SalesOrder order, CancellationToken ct)
+    {
+        foreach (var line in order.Lines)
+        {
+            if (line.CrabId is not Guid crabId) continue;
+            var crab = await _uow.Crabs.GetByIdAsync(crabId, ct)
+                ?? throw AppException.BadRequest($"Cua '{line.CrabCode}' không tồn tại.");
+            if (crab.Status == CrabStatus.Sold) continue;
+            if (crab.Status != CrabStatus.Harvested)
+                throw AppException.Conflict(
+                    $"Cua '{crab.Code}' không còn trong kho để xác nhận bán.");
+
+            var oldStatus = crab.Status;
+            var oldCondition = crab.Condition;
+            crab.Status = CrabStatus.Sold;
+            crab.Condition = CrabCondition.Sold;
+            if (line.WeightGram is decimal w && w > 0)
+                crab.WeightGram = w;
+            _uow.Crabs.Update(crab);
+
+            await _uow.CrabStatusHistories.AddAsync(new CrabStatusHistory
+            {
+                CrabId = crab.Id,
+                OldStatus = oldStatus,
+                NewStatus = CrabStatus.Sold,
+                OldCondition = oldCondition,
+                NewCondition = CrabCondition.Sold,
+                ChangedAt = DateTime.UtcNow,
+                Source = "sale",
+                Reason = order.OrderCode,
+                ChangedByUserId = _currentUser.UserId
+            }, ct);
+        }
+    }
+
+    private async Task RestoreLinesToInventoryAsync(SalesOrder order, CancellationToken ct)
+    {
+        foreach (var line in order.Lines)
+        {
+            if (line.CrabId is not Guid crabId) continue;
+            var crab = await _uow.Crabs.GetByIdAsync(crabId, ct);
+            if (crab is null || crab.Status != CrabStatus.Sold) continue;
+
+            var oldStatus = crab.Status;
+            var oldCondition = crab.Condition;
+            crab.Status = CrabStatus.Harvested;
+            crab.Condition = CrabCondition.Harvested;
+            _uow.Crabs.Update(crab);
+
+            await _uow.CrabStatusHistories.AddAsync(new CrabStatusHistory
+            {
+                CrabId = crab.Id,
+                OldStatus = oldStatus,
+                NewStatus = CrabStatus.Harvested,
+                OldCondition = oldCondition,
+                NewCondition = CrabCondition.Harvested,
+                ChangedAt = DateTime.UtcNow,
+                Source = "sale-cancel",
+                Reason = order.OrderCode,
+                ChangedByUserId = _currentUser.UserId
+            }, ct);
+        }
+    }
+
+    private async Task<HashSet<Guid>> ReservedCrabIdsAsync(Guid? exceptOrderId, CancellationToken ct)
+    {
+        var activeIds = (await _uow.SalesOrders.GetAllAsync(ct))
+            .Where(o =>
+                o.Status != OrderStatus.Cancelled
+                && (exceptOrderId is null || o.Id != exceptOrderId))
+            .Select(o => o.Id)
+            .ToHashSet();
+        if (activeIds.Count == 0) return [];
+        return (await _uow.SalesOrderLines.FindAsync(
+                l => l.CrabId != null && activeIds.Contains(l.SalesOrderId), ct))
+            .Select(l => l.CrabId!.Value)
+            .ToHashSet();
+    }
+
+    private async Task LoadLinesAsync(SalesOrder order, CancellationToken ct)
+    {
+        if (order.Lines.Count > 0) return;
+        foreach (var line in await _uow.SalesOrderLines.FindAsync(l => l.SalesOrderId == order.Id, ct))
+            order.Lines.Add(line);
+    }
+
+    private static void ApplyTotals(SalesOrder order, decimal subtotal, decimal? paidAmount)
+    {
+        var grand = decimal.Round(
+            Math.Max(0, subtotal - order.DiscountAmount + order.ShippingFee),
+            0,
+            MidpointRounding.AwayFromZero);
+        order.SubtotalAmount = subtotal;
+        order.TotalAmount = grand;
+        order.PaidAmount = order.PaymentStatus switch
+        {
+            PaymentStatus.Paid => grand,
+            PaymentStatus.Partial => decimal.Round(
+                Math.Clamp(paidAmount ?? 0, 0, grand), 0, MidpointRounding.AwayFromZero),
+            _ => 0
+        };
+        if (order.PaymentStatus == PaymentStatus.Partial && order.PaidAmount <= 0)
+            throw AppException.BadRequest("Thanh toán một phần cần số tiền đã thu > 0.");
+        if (order.PaymentStatus == PaymentStatus.Partial && order.PaidAmount >= grand)
+            order.PaymentStatus = PaymentStatus.Paid;
     }
 
     private async Task<Customer> FindOrCreateCustomerAsync(
@@ -322,17 +480,29 @@ public class SalesOrderService : ISalesOrderService
         var lines = order.Lines.Count > 0
             ? order.Lines
             : (await _uow.SalesOrderLines.FindAsync(l => l.SalesOrderId == order.Id, ct)).ToList();
+        var weightKg = decimal.Round(lines.Sum(l =>
+            l.QuantityKg > 0
+                ? l.QuantityKg
+                : (l.WeightGram ?? 0) / 1000m), 3);
         return new SalesOrderDto(
             order.Id,
             order.OrderCode,
             order.OrderDate,
             order.Status.ToString(),
             order.PaymentStatus.ToString(),
+            order.PaymentMethod,
+            order.DeliveryStatus,
+            order.SubtotalAmount,
+            order.DiscountAmount,
+            order.ShippingFee,
             order.TotalAmount,
+            order.PaidAmount,
+            weightKg,
             lines.Sum(l => l.Quantity <= 0 ? 1 : l.Quantity),
             order.CustomerId,
             customer?.Name ?? "",
             customer?.Phone,
+            customer?.Address,
             order.SellerName,
             order.FarmingAreaId,
             order.Notes,
@@ -340,9 +510,10 @@ public class SalesOrderService : ISalesOrderService
                 l.Id,
                 l.CrabId,
                 l.CrabCode,
+                l.CrabType,
                 l.Grade,
                 l.Quantity <= 0 ? 1 : l.Quantity,
-                decimal.Round(l.QuantityKg * 1000m, 1),
+                l.WeightGram ?? decimal.Round(l.QuantityKg * 1000m, 1),
                 l.QuantityKg,
                 l.UnitPricePerKg,
                 l.TotalAmount)).ToList());
@@ -351,21 +522,76 @@ public class SalesOrderService : ISalesOrderService
     private static CustomerDto MapCustomer(Customer c) =>
         new(c.Id, c.Name, c.Phone, c.Email, c.Address, c.CustomerType, c.IsActive);
 
-    private static PaymentStatus ParsePayment(string? raw)
+    private static OrderStatus ParseOrderStatus(string? raw)
     {
+        var key = (raw ?? "completed").Trim().ToLowerInvariant();
+        return key switch
+        {
+            "draft" or "nhap" or "nháp" or "quotation" => OrderStatus.Draft,
+            "cancelled" or "canceled" or "huy" or "đã hủy" => OrderStatus.Cancelled,
+            _ => OrderStatus.Completed
+        };
+    }
+
+    private static PaymentStatus ParsePayment(string? raw, string? method)
+    {
+        var methodKey = (method ?? "").Trim().ToLowerInvariant();
+        if (methodKey is "unpaid" or "chua" or "chưa thanh toán")
+            return PaymentStatus.Pending;
         if (string.IsNullOrWhiteSpace(raw)) return PaymentStatus.Pending;
-        return Enum.TryParse<PaymentStatus>(raw.Trim(), true, out var parsed)
-            ? parsed
-            : PaymentStatus.Pending;
+        var key = raw.Trim().ToLowerInvariant();
+        return key switch
+        {
+            "paid" or "dathanhtoan" or "đã thanh toán" => PaymentStatus.Paid,
+            "partial" or "motphan" or "một phần" or "thanh toán một phần" => PaymentStatus.Partial,
+            "overdue" => PaymentStatus.Overdue,
+            _ => PaymentStatus.Pending
+        };
+    }
+
+    private static string? NormalizePaymentMethod(string? raw, PaymentStatus payment)
+    {
+        if (payment == PaymentStatus.Pending) return raw is null ? null : "unpaid";
+        var key = (raw ?? "cash").Trim().ToLowerInvariant();
+        return key switch
+        {
+            "transfer" or "bank" or "chuyển khoản" or "chuyenkhoan" => "transfer",
+            "unpaid" or "chua" => "unpaid",
+            _ => "cash"
+        };
+    }
+
+    private static string? NormalizeDelivery(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return "pickup";
+        var key = raw.Trim().ToLowerInvariant();
+        return key switch
+        {
+            "delivery" or "giao" or "giao hàng" => "delivery",
+            "shipping" or "danggiao" or "đang giao" => "shipping",
+            "delivered" or "dagiao" or "đã giao" => "delivered",
+            _ => "pickup"
+        };
     }
 
     private async Task<string> GenerateOrderCodeAsync(CancellationToken ct)
     {
-        for (var i = 0; i < 5; i++)
+        var codes = (await _uow.SalesOrders.GetAllAsync(ct))
+            .Select(o => o.OrderCode)
+            .Where(c => c.StartsWith("SALE-", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        var max = 0;
+        foreach (var code in codes)
         {
-            var code = $"HD-{DateTime.UtcNow:yyyyMMdd}-{Guid.NewGuid().ToString("N")[..4].ToUpperInvariant()}";
-            if (!await _uow.SalesOrders.AnyAsync(o => o.OrderCode == code, ct))
-                return code;
+            var tail = code["SALE-".Length..];
+            if (int.TryParse(tail, out var n) && n > max) max = n;
+        }
+
+        for (var attempt = 1; attempt <= 20; attempt++)
+        {
+            var next = $"SALE-{(max + attempt):000}";
+            if (!await _uow.SalesOrders.AnyAsync(o => o.OrderCode == next, ct))
+                return next;
         }
 
         throw AppException.Conflict("Không tạo được mã đơn hàng.");

@@ -724,11 +724,19 @@ public static class DevDbBootstrap
             ALTER TABLE be."SalesOrders"
             ADD COLUMN IF NOT EXISTS "FarmingAreaId" uuid NULL,
             ADD COLUMN IF NOT EXISTS "SellerName" text NULL,
-            ADD COLUMN IF NOT EXISTS "PaymentStatus" text NOT NULL DEFAULT 'Pending';
+            ADD COLUMN IF NOT EXISTS "PaymentStatus" text NOT NULL DEFAULT 'Pending',
+            ADD COLUMN IF NOT EXISTS "SubtotalAmount" numeric NOT NULL DEFAULT 0,
+            ADD COLUMN IF NOT EXISTS "DiscountAmount" numeric NOT NULL DEFAULT 0,
+            ADD COLUMN IF NOT EXISTS "ShippingFee" numeric NOT NULL DEFAULT 0,
+            ADD COLUMN IF NOT EXISTS "PaidAmount" numeric NOT NULL DEFAULT 0,
+            ADD COLUMN IF NOT EXISTS "PaymentMethod" text NULL,
+            ADD COLUMN IF NOT EXISTS "DeliveryStatus" text NULL;
 
             ALTER TABLE be."SalesOrderLines"
             ADD COLUMN IF NOT EXISTS "CrabId" uuid NULL,
             ADD COLUMN IF NOT EXISTS "CrabCode" text NULL,
+            ADD COLUMN IF NOT EXISTS "CrabType" text NULL,
+            ADD COLUMN IF NOT EXISTS "WeightGram" numeric NULL,
             ADD COLUMN IF NOT EXISTS "Quantity" integer NOT NULL DEFAULT 1;
 
             CREATE INDEX IF NOT EXISTS "IX_HarvestVouchers_FarmingAreaId"

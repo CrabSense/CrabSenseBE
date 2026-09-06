@@ -66,4 +66,14 @@ public class SalesOrdersController : ControllerBase
         [FromBody] CreateSalesOrderRequest request,
         CancellationToken ct)
         => Ok(await _service.CreateOrderAsync(request, ct));
+
+    [HttpPost("{id:guid}/complete")]
+    [Authorize(Roles = AppRoles.FarmWrite)]
+    public async Task<IActionResult> Complete(Guid id, CancellationToken ct)
+        => Ok(await _service.CompleteOrderAsync(id, ct));
+
+    [HttpPost("{id:guid}/cancel")]
+    [Authorize(Roles = AppRoles.FarmWrite)]
+    public async Task<IActionResult> Cancel(Guid id, CancellationToken ct)
+        => Ok(await _service.CancelOrderAsync(id, ct));
 }

@@ -21,6 +21,10 @@ public interface ISalesOrderService
         CreateSalesOrderRequest request,
         CancellationToken ct = default);
 
+    Task<ApiResponse<SalesOrderDto>> CompleteOrderAsync(Guid id, CancellationToken ct = default);
+
+    Task<ApiResponse<SalesOrderDto>> CancelOrderAsync(Guid id, CancellationToken ct = default);
+
     Task<ApiResponse<SalesOverviewDto>> GetOverviewAsync(
         Guid? farmingAreaId = null,
         CancellationToken ct = default);
