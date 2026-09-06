@@ -96,8 +96,9 @@ public class SensorsController : ControllerBase
 
 [ApiController]
 [Route("api/devices")]
+[Route("api/controllers")]
 [Authorize]
-[Tags("09. IoT — Devices (ESP32)")]
+[Tags("09. IoT — Controllers (ESP32)")]
 [Produces("application/json")]
 public class DevicesController : ControllerBase
 {

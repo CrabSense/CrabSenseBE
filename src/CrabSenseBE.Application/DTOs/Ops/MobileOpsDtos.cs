@@ -14,18 +14,22 @@ public record FarmOperationDto(
     IReadOnlyList<string> PhotoUrls,
     DateTime Timestamp,
     Guid OperatorId,
-    string OperatorName);
+    string OperatorName,
+    string Source = "manual",
+    string? LocationLabel = null);
 
 public record CreateFarmOperationRequest(
     string Type,
-    IReadOnlyList<string> BoxIds,
+    IReadOnlyList<string>? BoxIds = null,
     string? Notes = null,
     decimal? Quantity = null,
     string? Unit = null,
     IReadOnlyList<string>? PhotoUrls = null,
     DateTime? Timestamp = null,
     Guid? OperatorId = null,
-    string? OperatorName = null);
+    string? OperatorName = null,
+    string? Source = null,
+    string? LocationLabel = null);
 
 public record UpdateFarmOperationRequest(
     string? Type = null,

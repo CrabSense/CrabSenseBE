@@ -9,18 +9,6 @@ namespace CrabSenseBE.Api.Controllers;
 
 
 [ApiController]
-[Route("api/customers")]
-[Authorize]
-[Tags("22. CRUD — Customers (stub)")]
-[Produces("application/json")]
-public class CustomersController : ControllerBase
-{
-    /// <summary>[READ] List customers (TODO)</summary>
-    [HttpGet]
-    public IActionResult GetAll() => Ok(new { success = true, data = Array.Empty<object>() });
-}
-
-[ApiController]
 [Route("api/price-lists")]
 [Authorize]
 [Tags("23. CRUD — Price Lists (stub)")]
@@ -28,18 +16,6 @@ public class CustomersController : ControllerBase
 public class PriceListsController : ControllerBase
 {
     /// <summary>[READ] List price lists (TODO)</summary>
-    [HttpGet]
-    public IActionResult GetAll() => Ok(new { success = true, data = Array.Empty<object>() });
-}
-
-[ApiController]
-[Route("api/sales-orders")]
-[Authorize]
-[Tags("24. CRUD — Sales Orders (stub)")]
-[Produces("application/json")]
-public class SalesOrdersController : ControllerBase
-{
-    /// <summary>[READ] List sales orders (TODO)</summary>
     [HttpGet]
     public IActionResult GetAll() => Ok(new { success = true, data = Array.Empty<object>() });
 }

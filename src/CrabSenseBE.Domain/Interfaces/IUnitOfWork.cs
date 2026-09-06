@@ -27,6 +27,7 @@ public interface IUnitOfWork : IDisposable
     IRepository<Sensor> Sensors { get; }
     IRepository<Device> Devices { get; }
     IRepository<WaterMeasurement> WaterMeasurements { get; }
+    IRepository<WaterAnalysisRun> WaterAnalysisRuns { get; }
     IRepository<Hdf5Upload> Hdf5Uploads { get; }
     IRepository<AlertThreshold> AlertThresholds { get; }
     IRepository<Alert> Alerts { get; }

@@ -20,6 +20,7 @@ public static class DependencyInjection
         services.AddScoped<IBoxQrService, BoxQrService>();
         services.AddScoped<IIotService, IotService>();
         services.AddScoped<IRasFlowService, RasFlowService>();
+        services.AddScoped<IWaterAnalysisService, WaterAnalysisService>();
         // Notification trước Alert vì AlertService phụ thuộc INotificationService
         services.AddScoped<INotificationService, NotificationService>();
         services.AddScoped<IAlertService, AlertService>();
@@ -39,6 +40,7 @@ public static class DependencyInjection
         services.AddScoped<IAiOpsService, AiOpsService>();
         services.AddScoped<IOperationLogService, OperationLogService>();
         services.AddScoped<ISalesService, SalesService>();
+        services.AddScoped<ISalesOrderService, SalesOrderService>();
         services.AddScoped<IBoxCameraService, BoxCameraService>();
 
         services.AddHttpClient("telegram");

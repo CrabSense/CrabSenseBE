@@ -3,6 +3,8 @@ using CrabSenseBE.Application.Interfaces;
 using CrabSenseBE.Domain.Enums;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using System.IdentityModel.Tokens.Jwt;
+using System.Security.Claims;
 
 namespace CrabSenseBE.Api.Controllers;
 
@@ -44,7 +46,15 @@ public class AreaRasFlowController : ControllerBase
     [Authorize(Roles = AppRoles.FarmWrite)]
     public async Task<IActionResult> Command(
         Guid areaId, Guid nodeId, [FromBody] RasFlowCommandRequest req, CancellationToken ct)
-        => Ok(await _service.CommandAsync(areaId, nodeId, req, ct));
+        => Ok(await _service.CommandAsync(areaId, nodeId, req, TryGetUserId(), ct));
+
+    private Guid? TryGetUserId()
+    {
+        var raw = User.FindFirstValue(JwtRegisteredClaimNames.Sub)
+            ?? User.FindFirstValue(ClaimTypes.NameIdentifier)
+            ?? User.FindFirstValue("sub");
+        return raw is not null && Guid.TryParse(raw, out var id) && id != Guid.Empty ? id : null;
+    }
 }
 
 [ApiController]

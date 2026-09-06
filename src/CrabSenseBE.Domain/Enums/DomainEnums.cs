@@ -121,7 +121,9 @@ public enum CrabStatus
     /// <summary>Cua đã được thu hoạch.</summary>
     Harvested = 4,
     /// <summary>Không xác định được tình trạng/vị trí cua.</summary>
-    Missing = 5
+    Missing = 5,
+    /// <summary>Cua đã bán — không gán lúc thu hoạch.</summary>
+    Sold = 6
 }
 
 /// <summary>Trạng thái Owner trên card cua — 1 trường chính.</summary>
@@ -140,7 +142,9 @@ public enum CrabCondition
     /// <summary>⚫ Đã chết</summary>
     Dead = 5,
     /// <summary>⚪ Đã thu hoạch</summary>
-    Harvested = 6
+    Harvested = 6,
+    /// <summary>💰 Đã bán</summary>
+    Sold = 7
 }
 
 public enum CrabGender
@@ -155,6 +159,7 @@ public static class CrabConditions
     public static CrabCondition FromMoltingAndStatus(string? moltingStage, CrabStatus status)
     {
         if (status == CrabStatus.Dead) return CrabCondition.Dead;
+        if (status == CrabStatus.Sold) return CrabCondition.Sold;
         if (status == CrabStatus.Harvested) return CrabCondition.Harvested;
         if (status is CrabStatus.Quarantined or CrabStatus.Missing) return CrabCondition.Problem;
         if (status == CrabStatus.Molting) return CrabCondition.Molting;
@@ -176,6 +181,7 @@ public static class CrabConditions
     public static CrabStatus ToLifecycle(CrabCondition condition) => condition switch
     {
         CrabCondition.Dead => CrabStatus.Dead,
+        CrabCondition.Sold => CrabStatus.Sold,
         CrabCondition.Harvested => CrabStatus.Harvested,
         CrabCondition.Problem => CrabStatus.Quarantined,
         CrabCondition.Molting => CrabStatus.Molting,
@@ -190,6 +196,7 @@ public static class CrabConditions
         CrabCondition.Problem => "problem",
         CrabCondition.Dead => "dead",
         CrabCondition.Harvested => "harvested",
+        CrabCondition.Sold => "sold",
         _ => "normal"
     };
 
@@ -207,6 +214,7 @@ public static class CrabConditions
             "problem" or "alert" or "quarantined" or "missing" or "covande" => CrabCondition.Problem,
             "dead" or "deceased" or "chet" => CrabCondition.Dead,
             "harvested" or "harvest" or "dathuhoach" => CrabCondition.Harvested,
+            "sold" or "daban" => CrabCondition.Sold,
             _ => fallback
         };
     }

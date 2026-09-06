@@ -14,6 +14,9 @@ public class HarvestVoucher : BaseEntity
     public decimal TotalWeightKg { get; set; }
     public string? Notes { get; set; }
     public Guid CreatedBy { get; set; }
+    public Guid? FarmingAreaId { get; set; }
+    public string? PerformedByName { get; set; }
+    public string PhotoUrlsJson { get; set; } = "[]";
 
     // Navigation
     public ICollection<HarvestLine> Lines { get; set; } = new List<HarvestLine>();
@@ -28,6 +31,15 @@ public class HarvestLine : BaseEntity
     public string? Grade { get; set; } // S, M, L
     public bool IsSoftshell { get; set; } = true;
     public string? Notes { get; set; }
+    public string? ConditionLabel { get; set; }
+    public string PhotoUrlsJson { get; set; } = "[]";
+    public string? CrabCode { get; set; }
+    public string? AreaName { get; set; }
+    public string? RowName { get; set; }
+    public string? BoxCode { get; set; }
+    public string? LotCode { get; set; }
+    /// <summary>passed | failed</summary>
+    public string Result { get; set; } = "passed";
     
     // Navigation
     public HarvestVoucher? HarvestVoucher { get; set; }

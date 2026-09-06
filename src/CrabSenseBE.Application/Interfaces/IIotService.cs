@@ -24,7 +24,7 @@ public interface IIotService
     Task<ApiResponse<IEnumerable<DeviceDto>>> GetDevicesAsync(
         Guid? farmingAreaId = null,
         CancellationToken ct = default);
-    Task<ApiResponse<DeviceDto>> GetDeviceAsync(Guid id, CancellationToken ct = default);
+    Task<ApiResponse<DeviceDetailDto>> GetDeviceAsync(Guid id, CancellationToken ct = default);
     Task<ApiResponse<DeviceDto>> CreateDeviceAsync(CreateDeviceRequest request, CancellationToken ct = default);
     Task<ApiResponse<DeviceDto>> UpdateDeviceAsync(Guid id, UpdateDeviceRequest request, CancellationToken ct = default);
     Task<ApiResponse> DeleteDeviceAsync(Guid id, CancellationToken ct = default);

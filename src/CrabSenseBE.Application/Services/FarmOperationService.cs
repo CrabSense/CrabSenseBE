@@ -63,22 +63,22 @@ public class FarmOperationService : IFarmOperationService
     public async Task<ApiResponse<FarmOperationDto>> CreateAsync(
         CreateFarmOperationRequest req, CancellationToken ct = default)
     {
-        if (req.BoxIds is null || req.BoxIds.Count == 0)
-            throw AppException.BadRequest("At least one boxId is required.");
         if (string.IsNullOrWhiteSpace(req.Type))
             throw AppException.BadRequest("Type is required.");
 
         var op = new FarmOperation
         {
             Type = req.Type.Trim(),
-            BoxIdsJson = JsonSerializer.Serialize(req.BoxIds, JsonOpts),
+            BoxIdsJson = JsonSerializer.Serialize(req.BoxIds ?? Array.Empty<string>(), JsonOpts),
             Quantity = req.Quantity,
             Unit = req.Unit,
             Notes = req.Notes ?? "",
             PhotoUrlsJson = JsonSerializer.Serialize(req.PhotoUrls ?? Array.Empty<string>(), JsonOpts),
             Timestamp = req.Timestamp ?? DateTime.UtcNow,
             OperatorId = req.OperatorId ?? Guid.Empty,
-            OperatorName = req.OperatorName ?? "Operator"
+            OperatorName = req.OperatorName ?? "Operator",
+            Source = string.IsNullOrWhiteSpace(req.Source) ? "manual" : req.Source.Trim(),
+            LocationLabel = req.LocationLabel
         };
         await _uow.FarmOperations.AddAsync(op, ct);
         await _uow.SaveChangesAsync(ct);
@@ -113,7 +113,7 @@ public class FarmOperationService : IFarmOperationService
         var photos = ParseStringList(o.PhotoUrlsJson);
         return new FarmOperationDto(
             o.Id, o.Type, boxIds, o.Quantity, o.Unit, o.Notes, photos,
-            o.Timestamp, o.OperatorId, o.OperatorName);
+            o.Timestamp, o.OperatorId, o.OperatorName, o.Source, o.LocationLabel);
     }
 
     private static IReadOnlyList<string> ParseStringList(string? json)

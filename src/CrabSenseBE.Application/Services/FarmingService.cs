@@ -1842,6 +1842,7 @@ public class FarmingService : IFarmingService
     private static string ConditionTimelineTitle(CrabCondition condition, CrabStatus status)
     {
         if (status == CrabStatus.Harvested) return "Thu hoạch";
+        if (status == CrabStatus.Sold) return "Đã bán";
         if (status == CrabStatus.Dead) return "Đã chết";
         return condition switch
         {

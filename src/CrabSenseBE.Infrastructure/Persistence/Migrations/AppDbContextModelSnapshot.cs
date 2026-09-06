@@ -917,11 +917,25 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                         .IsRequired()
                         .HasColumnType("text");
 
+                    b.Property<Guid?>("FarmingAreaId")
+                        .HasColumnType("uuid");
+
                     b.Property<string>("FirmwareVersion")
                         .HasColumnType("text");
 
+                    b.Property<string>("IpAddress")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
                     b.Property<DateTime?>("LastSeenAt")
                         .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("MacAddress")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<string>("Name")
+                        .HasColumnType("text");
 
                     b.Property<decimal?>("RssiDbm")
                         .HasColumnType("numeric");
@@ -934,6 +948,8 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                         .HasColumnType("timestamp with time zone");
 
                     b.HasKey("Id");
+
+                    b.HasIndex("FarmingAreaId");
 
                     b.ToTable("Devices", "be");
                 });
@@ -2898,6 +2914,13 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
 
             modelBuilder.Entity("CrabSenseBE.Domain.Entities.Device", b =>
                 {
+                    b.HasOne("CrabSenseBE.Domain.Entities.FarmingArea", "FarmingArea")
+                        .WithMany()
+                        .HasForeignKey("FarmingAreaId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
+                    b.Navigation("FarmingArea");
+
                     b.Navigation("Sensors");
                 });
 

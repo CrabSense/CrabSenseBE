@@ -73,6 +73,8 @@ public class RasComponent : BaseEntity
     public bool HasRelay { get; set; }
     public bool IsOn { get; set; }
     public string? ControlMode { get; set; }
+    public DateTime? LastCommandAt { get; set; }
+    public DateTime? RunStartedAt { get; set; }
 
     public WaterSystem? WaterSystem { get; set; }
     public Device? RelayDevice { get; set; }
@@ -97,13 +99,23 @@ public class WaterFlow : BaseEntity
     public RasComponent? ToComponent { get; set; }
 }
 
-/// <summary>Thiết bị gateway/edge — MOD-IOT</summary>
+/// <summary>
+/// Controller / ESP32 — mỗi board là 1 Device.
+/// Sensor.DeviceId và RasComponent.RelayDeviceId trỏ về đây (nhiều ESP / khu).
+/// </summary>
 public class Device : BaseEntity
 {
     public string DeviceCode { get; set; } = string.Empty;
 
-    /// <summary>esp32 | camera | gateway | other</summary>
+    /// <summary>Tên hiển thị: ESP32 RAS Chính.</summary>
+    public string? Name { get; set; }
+
+    /// <summary>esp32 | esp32-s3 | camera | gateway | other</summary>
     public string DeviceType { get; set; } = "esp32";
+
+    public string? MacAddress { get; set; }
+    public string? IpAddress { get; set; }
+    public Guid? FarmingAreaId { get; set; }
 
     public string? FirmwareVersion { get; set; }
     public decimal? BatteryLevel { get; set; }
@@ -113,6 +125,7 @@ public class Device : BaseEntity
     public string? ApiKey { get; set; } // API key for edge sync
 
     // Navigation
+    public FarmingArea? FarmingArea { get; set; }
     public ICollection<Sensor> Sensors { get; set; } = new List<Sensor>();
 }
 
