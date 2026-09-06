@@ -452,7 +452,22 @@ public static class DemoDataSeeder
             var sensorIds = await db.Sensors.Where(s => s.WaterSystemId != null && wsIds.Contains(s.WaterSystemId.Value))
                 .Select(s => s.Id).ToListAsync(ct);
             if (sensorIds.Count > 0)
-                db.WaterMeasurements.RemoveRange(await db.WaterMeasurements.Where(m => sensorIds.Contains(m.SensorId)).ToListAsync(ct));
+            {
+                var alerts = await db.Alerts
+                    .Where(a => a.SensorId != null && sensorIds.Contains(a.SensorId.Value))
+                    .ToListAsync(ct);
+                var alertIds = alerts.Select(a => a.Id).ToHashSet();
+                if (alertIds.Count > 0)
+                {
+                    db.Notifications.RemoveRange(
+                        await db.Notifications
+                            .Where(n => n.AlertId != null && alertIds.Contains(n.AlertId.Value))
+                            .ToListAsync(ct));
+                    db.Alerts.RemoveRange(alerts);
+                }
+                db.WaterMeasurements.RemoveRange(
+                    await db.WaterMeasurements.Where(m => sensorIds.Contains(m.SensorId)).ToListAsync(ct));
+            }
             db.Sensors.RemoveRange(await db.Sensors.Where(s => s.WaterSystemId != null && wsIds.Contains(s.WaterSystemId.Value)).ToListAsync(ct));
             db.WaterSystems.RemoveRange(await db.WaterSystems.Where(w => wsIds.Contains(w.Id)).ToListAsync(ct));
         }

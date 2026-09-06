@@ -55,7 +55,9 @@ public record RasFlowNodeDto(
     decimal? LevelPercent,
     string Type,
     string Status,
-    decimal? Capacity);
+    decimal? Capacity,
+    DateTime? LastCommandAt = null,
+    DateTime? RunStartedAt = null);
 
 public record RasFlowDiagramDto(
     Guid AreaId,
@@ -69,7 +71,16 @@ public record RasFlowDiagramDto(
     decimal TotalPowerW,
     int RunningCount,
     int ControllableCount,
-    int OnlineCount);
+    int OnlineCount,
+    int OffCount = 0,
+    int FaultCount = 0,
+    IReadOnlyList<RasControlEventDto>? Activity = null);
+
+public record RasControlEventDto(
+    DateTime At,
+    string Kind,
+    string Title,
+    string? Detail = null);
 
 public record CreateRasFlowNodeRequest(
     string NodeCode,

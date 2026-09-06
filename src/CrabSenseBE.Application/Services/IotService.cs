@@ -98,7 +98,7 @@ public class IotService : IIotService
 
         var total = all.Count();
         var items = all.OrderByDescending(m => m.MeasuredAt)
-            .Skip((page - 1) * Math.Max(1, pageSize)).Take(Math.Clamp(pageSize, 1, 500))
+            .Skip((page - 1) * Math.Max(1, pageSize)).Take(Math.Clamp(pageSize, 1, 2000))
             .Select(m => new SensorDataDto(m.Id, m.SensorId, m.Value, m.Unit, m.MeasuredAt, m.Source));
 
         return ApiResponse<PagedResult<SensorDataDto>>.Ok(new PagedResult<SensorDataDto>
@@ -137,6 +137,7 @@ public class IotService : IIotService
         }
 
         var devices = (await _uow.Devices.GetAllAsync(ct)).ToDictionary(d => d.Id);
+        var components = (await _uow.RasComponents.GetAllAsync(ct)).ToDictionary(c => c.Id);
         var allMeas = await _uow.WaterMeasurements.GetAllAsync(ct);
         var latestBySensor = allMeas
             .GroupBy(m => m.SensorId)
@@ -147,6 +148,7 @@ public class IotService : IIotService
         {
             devices.TryGetValue(s.DeviceId ?? Guid.Empty, out var dev);
             latestBySensor.TryGetValue(s.Id, out var latest);
+            components.TryGetValue(s.RasComponentId ?? Guid.Empty, out var loc);
             string? alarm = null;
             if (latest is not null)
             {
@@ -159,7 +161,8 @@ public class IotService : IIotService
                 s.Id, s.SensorCode, s.SensorType, s.Unit,
                 s.MinThreshold, s.MaxThreshold, s.IsActive,
                 s.DeviceId, dev?.DeviceCode, dev?.Status.ToString(),
-                latest?.Value, latest?.MeasuredAt, s.LastSeenAt, alarm));
+                latest?.Value, latest?.MeasuredAt, s.LastSeenAt, alarm,
+                loc?.Name, loc?.Type));
         }
         return ApiResponse<IEnumerable<SensorLiveDto>>.Ok(list);
     }
@@ -253,6 +256,8 @@ public class IotService : IIotService
     {
         var devices = (await _uow.Devices.GetAllAsync(ct)).AsEnumerable();
         var sensors = (await _uow.Sensors.GetAllAsync(ct)).ToList();
+        var actuators = (await _uow.RasComponents.FindAsync(c => c.RelayDeviceId != null, ct)).ToList();
+        var areas = (await _uow.FarmingAreas.GetAllAsync(ct)).ToDictionary(a => a.Id);
 
         if (farmingAreaId is Guid areaId && areaId != Guid.Empty)
         {
@@ -263,24 +268,50 @@ public class IotService : IIotService
                 .Where(s => s.WaterSystemId != null && wsIds.Contains(s.WaterSystemId.Value) && s.DeviceId != null)
                 .Select(s => s.DeviceId!.Value)
                 .ToHashSet();
-            devices = devices.Where(d => deviceIds.Contains(d.Id));
+            foreach (var id in actuators
+                         .Where(c => c.RelayDeviceId != null)
+                         .Select(c => c.RelayDeviceId!.Value))
+                deviceIds.Add(id);
+            devices = devices.Where(d =>
+                d.FarmingAreaId == areaId || deviceIds.Contains(d.Id));
             sensors = sensors
-                .Where(s => s.WaterSystemId != null && wsIds.Contains(s.WaterSystemId.Value))
+                .Where(s => s.DeviceId != null && (
+                    (s.WaterSystemId != null && wsIds.Contains(s.WaterSystemId.Value))
+                    || deviceIds.Contains(s.DeviceId.Value)))
                 .ToList();
         }
 
         var countBy = sensors.Where(s => s.DeviceId.HasValue)
             .GroupBy(s => s.DeviceId!.Value)
             .ToDictionary(g => g.Key, g => g.Count());
+        var actBy = actuators
+            .Where(c => c.RelayDeviceId != null)
+            .GroupBy(c => c.RelayDeviceId!.Value)
+            .ToDictionary(g => g.Key, g => g.Count());
         return ApiResponse<IEnumerable<DeviceDto>>.Ok(
-            devices.Select(d => MapDevice(d, countBy.GetValueOrDefault(d.Id))));
+            devices.Select(d => MapDevice(
+                d,
+                countBy.GetValueOrDefault(d.Id),
+                actBy.GetValueOrDefault(d.Id),
+                d.FarmingAreaId is Guid aid ? areas.GetValueOrDefault(aid) : null)));
     }
 
-    public async Task<ApiResponse<DeviceDto>> GetDeviceAsync(Guid id, CancellationToken ct = default)
+    public async Task<ApiResponse<DeviceDetailDto>> GetDeviceAsync(Guid id, CancellationToken ct = default)
     {
         var d = await _uow.Devices.GetByIdAsync(id, ct) ?? throw AppException.NotFound("Device");
-        var n = await _uow.Sensors.CountAsync(s => s.DeviceId == id, ct);
-        return ApiResponse<DeviceDto>.Ok(MapDevice(d, n));
+        var sensors = (await _uow.Sensors.FindAsync(s => s.DeviceId == id, ct))
+            .OrderBy(s => s.SensorCode)
+            .Select(MapSensor)
+            .ToList();
+        var actuators = (await _uow.RasComponents.FindAsync(c => c.RelayDeviceId == id, ct))
+            .OrderBy(c => c.Position)
+            .Select(c => new DeviceActuatorDto(
+                c.Id, c.Code, c.Name, c.Type, c.IsOn, c.ControlMode, c.RelayChannel))
+            .ToList();
+        FarmingArea? area = null;
+        if (d.FarmingAreaId is Guid aid)
+            area = await _uow.FarmingAreas.GetByIdAsync(aid, ct);
+        return ApiResponse<DeviceDetailDto>.Ok(MapDeviceDetail(d, sensors, actuators, area));
     }
 
     public async Task<ApiResponse<DeviceDto>> CreateDeviceAsync(CreateDeviceRequest req, CancellationToken ct = default)
@@ -291,17 +322,28 @@ public class IotService : IIotService
         if (await _uow.Devices.AnyAsync(d => d.DeviceCode == code, ct))
             throw AppException.Conflict($"DeviceCode '{code}' already exists.");
 
+        if (req.FarmingAreaId is Guid areaId && areaId != Guid.Empty)
+            _ = await _uow.FarmingAreas.GetByIdAsync(areaId, ct)
+                ?? throw AppException.NotFound("FarmingArea");
+
         var device = new Device
         {
             DeviceCode = code,
+            Name = string.IsNullOrWhiteSpace(req.Name) ? null : req.Name.Trim(),
             DeviceType = string.IsNullOrWhiteSpace(req.DeviceType) ? "esp32" : req.DeviceType.Trim().ToLowerInvariant(),
+            MacAddress = string.IsNullOrWhiteSpace(req.MacAddress) ? null : req.MacAddress.Trim(),
+            IpAddress = string.IsNullOrWhiteSpace(req.IpAddress) ? null : req.IpAddress.Trim(),
+            FarmingAreaId = req.FarmingAreaId is Guid a && a != Guid.Empty ? a : null,
             FirmwareVersion = req.FirmwareVersion,
             ApiKey = req.ApiKey,
             Status = DeviceStatus.Offline
         };
         await _uow.Devices.AddAsync(device, ct);
         await _uow.SaveChangesAsync(ct);
-        return ApiResponse<DeviceDto>.Ok(MapDevice(device, 0), "ESP32/device registered.");
+        FarmingArea? area = null;
+        if (device.FarmingAreaId is Guid aid)
+            area = await _uow.FarmingAreas.GetByIdAsync(aid, ct);
+        return ApiResponse<DeviceDto>.Ok(MapDevice(device, 0, 0, area), "Controller/ESP32 registered.");
     }
 
     public async Task<ApiResponse<DeviceDto>> UpdateDeviceAsync(
@@ -313,13 +355,33 @@ public class IotService : IIotService
         if (req.BatteryLevel.HasValue) device.BatteryLevel = req.BatteryLevel;
         if (req.RssiDbm.HasValue) device.RssiDbm = req.RssiDbm;
         if (req.ApiKey is not null) device.ApiKey = req.ApiKey;
+        if (req.Name is not null) device.Name = string.IsNullOrWhiteSpace(req.Name) ? null : req.Name.Trim();
+        if (req.MacAddress is not null)
+            device.MacAddress = string.IsNullOrWhiteSpace(req.MacAddress) ? null : req.MacAddress.Trim();
+        if (req.IpAddress is not null)
+            device.IpAddress = string.IsNullOrWhiteSpace(req.IpAddress) ? null : req.IpAddress.Trim();
+        if (req.FarmingAreaId.HasValue)
+        {
+            if (req.FarmingAreaId.Value == Guid.Empty)
+                device.FarmingAreaId = null;
+            else
+            {
+                _ = await _uow.FarmingAreas.GetByIdAsync(req.FarmingAreaId.Value, ct)
+                    ?? throw AppException.NotFound("FarmingArea");
+                device.FarmingAreaId = req.FarmingAreaId;
+            }
+        }
         if (!string.IsNullOrWhiteSpace(req.Status)
             && Enum.TryParse<DeviceStatus>(req.Status, true, out var st))
             device.Status = st;
         _uow.Devices.Update(device);
         await _uow.SaveChangesAsync(ct);
         var n = await _uow.Sensors.CountAsync(s => s.DeviceId == id, ct);
-        return ApiResponse<DeviceDto>.Ok(MapDevice(device, n), "Device updated.");
+        var acts = await _uow.RasComponents.CountAsync(c => c.RelayDeviceId == id, ct);
+        FarmingArea? area = null;
+        if (device.FarmingAreaId is Guid aid)
+            area = await _uow.FarmingAreas.GetByIdAsync(aid, ct);
+        return ApiResponse<DeviceDto>.Ok(MapDevice(device, n, acts, area), "Controller updated.");
     }
 
     public async Task<ApiResponse> DeleteDeviceAsync(Guid id, CancellationToken ct = default)
@@ -327,7 +389,10 @@ public class IotService : IIotService
         var device = await _uow.Devices.GetByIdAsync(id, ct) ?? throw AppException.NotFound("Device");
         var linked = await _uow.Sensors.AnyAsync(s => s.DeviceId == id, ct);
         if (linked)
-            throw AppException.Conflict("Device still has sensors — unlink/delete sensors first.");
+            throw AppException.Conflict("Controller still has sensors — unlink sensors first.");
+        var relays = await _uow.RasComponents.AnyAsync(c => c.RelayDeviceId == id, ct);
+        if (relays)
+            throw AppException.Conflict("Controller still has RAS outputs — unlink relays first.");
         _uow.Devices.Remove(device);
         await _uow.SaveChangesAsync(ct);
         return ApiResponse.Ok("Device deleted.");
@@ -341,11 +406,17 @@ public class IotService : IIotService
             device.Status = status;
         device.BatteryLevel = req.BatteryLevel ?? device.BatteryLevel;
         device.RssiDbm = req.RssiDbm ?? device.RssiDbm;
+        if (!string.IsNullOrWhiteSpace(req.IpAddress)) device.IpAddress = req.IpAddress.Trim();
+        if (!string.IsNullOrWhiteSpace(req.MacAddress)) device.MacAddress = req.MacAddress.Trim();
         device.LastSeenAt = DateTime.UtcNow;
         _uow.Devices.Update(device);
         await _uow.SaveChangesAsync(ct);
         var n = await _uow.Sensors.CountAsync(s => s.DeviceId == deviceId, ct);
-        return ApiResponse<DeviceDto>.Ok(MapDevice(device, n));
+        var acts = await _uow.RasComponents.CountAsync(c => c.RelayDeviceId == deviceId, ct);
+        FarmingArea? area = null;
+        if (device.FarmingAreaId is Guid aid)
+            area = await _uow.FarmingAreas.GetByIdAsync(aid, ct);
+        return ApiResponse<DeviceDto>.Ok(MapDevice(device, n, acts, area));
     }
 
     // ─── Water systems ──────────────────────────────────────────────────────
@@ -441,9 +512,27 @@ public class IotService : IIotService
         new(s.Id, s.WaterSystemId, s.DeviceId, s.SensorCode, s.SensorType, s.Unit,
             s.MinThreshold, s.MaxThreshold, s.IsActive, s.LastSeenAt, s.RasComponentId);
 
-    private static DeviceDto MapDevice(Device d, int sensorCount) =>
-        new(d.Id, d.DeviceCode, string.IsNullOrWhiteSpace(d.DeviceType) ? "esp32" : d.DeviceType, d.FirmwareVersion, d.BatteryLevel, d.RssiDbm,
-            d.Status.ToString(), d.LastSeenAt, sensorCount);
+    private static DeviceDto MapDevice(Device d, int sensorCount, int actuatorCount = 0, FarmingArea? area = null) =>
+        new(d.Id, d.DeviceCode, string.IsNullOrWhiteSpace(d.DeviceType) ? "esp32" : d.DeviceType,
+            d.FirmwareVersion, d.BatteryLevel, d.RssiDbm,
+            d.Status.ToString(), d.LastSeenAt, sensorCount,
+            string.IsNullOrWhiteSpace(d.Name) ? d.DeviceCode : d.Name,
+            d.MacAddress, d.IpAddress, d.FarmingAreaId,
+            area?.Name, area?.Code, actuatorCount);
+
+    private static DeviceDetailDto MapDeviceDetail(
+        Device d,
+        IReadOnlyList<SensorDto> sensors,
+        IReadOnlyList<DeviceActuatorDto> actuators,
+        FarmingArea? area) =>
+        new(d.Id, d.DeviceCode,
+            string.IsNullOrWhiteSpace(d.DeviceType) ? "esp32" : d.DeviceType,
+            d.FirmwareVersion, d.Status.ToString(), d.LastSeenAt,
+            sensors.Count, actuators.Count,
+            string.IsNullOrWhiteSpace(d.Name) ? d.DeviceCode : d.Name,
+            d.MacAddress, d.IpAddress, d.FarmingAreaId,
+            area?.Name, area?.Code, d.BatteryLevel, d.RssiDbm,
+            sensors, actuators);
 
     private static WaterSystemDto MapWs(WaterSystem w) =>
         new(w.Id, w.FarmingAreaId, w.Name, w.Type, w.IsActive,

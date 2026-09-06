@@ -92,6 +92,10 @@ public class UnitOfWork : IUnitOfWork
     private IRepository<WaterMeasurement>? _waterMeasurements;
     public IRepository<WaterMeasurement> WaterMeasurements => _waterMeasurements ??= new GenericRepository<WaterMeasurement>(_context);
 
+    private IRepository<WaterAnalysisRun>? _waterAnalysisRuns;
+    public IRepository<WaterAnalysisRun> WaterAnalysisRuns =>
+        _waterAnalysisRuns ??= new GenericRepository<WaterAnalysisRun>(_context);
+
     private IRepository<Hdf5Upload>? _hdf5Uploads;
     public IRepository<Hdf5Upload> Hdf5Uploads => _hdf5Uploads ??= new GenericRepository<Hdf5Upload>(_context);
 

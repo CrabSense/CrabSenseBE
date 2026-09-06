@@ -34,7 +34,7 @@ public record UpdateSensorRequest(
     bool? IsActive,
     Guid? RasComponentId = null);
 
-// --- Device (ESP32 / camera gateway) ---
+// --- Device = Controller (một ESP32). Sensor + relay/actuator thuộc Device. ---
 public record DeviceDto(
     Guid Id,
     string DeviceCode,
@@ -44,13 +44,53 @@ public record DeviceDto(
     decimal? RssiDbm,
     string Status,
     DateTime? LastSeenAt,
-    int SensorCount);
+    int SensorCount,
+    string? Name = null,
+    string? MacAddress = null,
+    string? IpAddress = null,
+    Guid? FarmingAreaId = null,
+    string? AreaName = null,
+    string? AreaCode = null,
+    int ActuatorCount = 0);
+
+public record DeviceActuatorDto(
+    Guid Id,
+    string Code,
+    string Name,
+    string Type,
+    bool IsOn,
+    string? ControlMode,
+    string? RelayChannel);
+
+public record DeviceDetailDto(
+    Guid Id,
+    string DeviceCode,
+    string DeviceType,
+    string? FirmwareVersion,
+    string Status,
+    DateTime? LastSeenAt,
+    int SensorCount,
+    int ActuatorCount,
+    string? Name,
+    string? MacAddress,
+    string? IpAddress,
+    Guid? FarmingAreaId,
+    string? AreaName,
+    string? AreaCode,
+    decimal? BatteryLevel,
+    decimal? RssiDbm,
+    IReadOnlyList<SensorDto> Sensors,
+    IReadOnlyList<DeviceActuatorDto> Actuators);
 
 public record CreateDeviceRequest(
     string DeviceCode,
     string? DeviceType = "esp32",
     string? FirmwareVersion = null,
-    string? ApiKey = null);
+    string? ApiKey = null,
+    string? Name = null,
+    string? MacAddress = null,
+    string? IpAddress = null,
+    Guid? FarmingAreaId = null);
 
 public record UpdateDeviceRequest(
     string? DeviceType,
@@ -58,9 +98,18 @@ public record UpdateDeviceRequest(
     string? Status,
     decimal? BatteryLevel,
     decimal? RssiDbm,
-    string? ApiKey);
+    string? ApiKey,
+    string? Name = null,
+    string? MacAddress = null,
+    string? IpAddress = null,
+    Guid? FarmingAreaId = null);
 
-public record UpdateDeviceStatusRequest(string Status, decimal? BatteryLevel, decimal? RssiDbm);
+public record UpdateDeviceStatusRequest(
+    string Status,
+    decimal? BatteryLevel,
+    decimal? RssiDbm,
+    string? IpAddress = null,
+    string? MacAddress = null);
 
 // --- Live monitor (kiosk) ---
 public record SensorLiveDto(
@@ -77,7 +126,9 @@ public record SensorLiveDto(
     decimal? LatestValue,
     DateTime? LatestMeasuredAt,
     DateTime? SensorLastSeenAt,
-    string? Alarm);
+    string? Alarm,
+    string? LocationName = null,
+    string? LocationType = null);
 
 // --- Sensor Data Ingest (ESP32 → BE) ---
 public record SensorDataRequest(

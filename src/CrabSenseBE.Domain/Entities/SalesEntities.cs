@@ -40,6 +40,9 @@ public class SalesOrder : BaseEntity
     public decimal TotalAmount { get; set; }
     public string? Notes { get; set; }
     public Guid CreatedBy { get; set; }
+    public Guid? FarmingAreaId { get; set; }
+    public string? SellerName { get; set; }
+    public PaymentStatus PaymentStatus { get; set; } = PaymentStatus.Pending;
 
     // Navigation
     public Customer? Customer { get; set; }
@@ -54,7 +57,10 @@ public class SalesOrderLine : BaseEntity
 {
     public Guid SalesOrderId { get; set; }
     public Guid? FrozenLotId { get; set; }
+    public Guid? CrabId { get; set; }
+    public string? CrabCode { get; set; }
     public string? Grade { get; set; }
+    public int Quantity { get; set; } = 1;
     public decimal QuantityKg { get; set; }
     public decimal UnitPricePerKg { get; set; }
     public decimal TotalAmount { get; set; }

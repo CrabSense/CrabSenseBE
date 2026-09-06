@@ -39,6 +39,11 @@ public static class DevDbBootstrap
                 await EnsureCrabProfileSchemaAsync(db, logger);
                 await EnsureCrabLotInboundSchemaAsync(db, logger);
                 await EnsureRasFlowSchemaAsync(db, logger);
+                await EnsureDeviceControllerSchemaAsync(db, logger);
+                await EnsureWaterAnalysisSchemaAsync(db, logger);
+                await EnsureFarmOperationLogColumnsAsync(db, logger);
+                await EnsureHarvestSalesWorkflowSchemaAsync(db, logger);
+                await EnsureOrphanAlertCleanupAsync(db, logger);
                 logger.LogInformation("Schema ready (attempt {A}).", attempt);
 
                 await RemapLegacyRolesAsync(db, logger);
@@ -62,6 +67,7 @@ public static class DevDbBootstrap
             catch (Exception ex)
             {
                 logger.LogWarning(ex, "DevDbBootstrap attempt {A} failed.", attempt);
+                db.ChangeTracker.Clear();
                 if (attempt == 3)
                     logger.LogError("DevDbBootstrap bỏ qua sau 3 lần — API vẫn chạy; kiểm tra connection Supabase.");
                 else
@@ -540,6 +546,8 @@ public static class DevDbBootstrap
                 "HasRelay" boolean NOT NULL,
                 "IsOn" boolean NOT NULL,
                 "ControlMode" text NULL,
+                "LastCommandAt" timestamp with time zone NULL,
+                "RunStartedAt" timestamp with time zone NULL,
                 CONSTRAINT "PK_RasComponents" PRIMARY KEY ("Id"),
                 CONSTRAINT "FK_RasComponents_WaterSystems_WaterSystemId"
                     FOREIGN KEY ("WaterSystemId") REFERENCES be."WaterSystems" ("Id") ON DELETE CASCADE,
@@ -574,6 +582,10 @@ public static class DevDbBootstrap
             CREATE INDEX IF NOT EXISTS "IX_WaterFlows_WaterSystemId" ON be."WaterFlows" ("WaterSystemId");
             CREATE INDEX IF NOT EXISTS "IX_WaterFlows_FromComponentId" ON be."WaterFlows" ("FromComponentId");
             CREATE INDEX IF NOT EXISTS "IX_WaterFlows_ToComponentId" ON be."WaterFlows" ("ToComponentId");
+
+            ALTER TABLE be."RasComponents"
+            ADD COLUMN IF NOT EXISTS "LastCommandAt" timestamp with time zone NULL,
+            ADD COLUMN IF NOT EXISTS "RunStartedAt" timestamp with time zone NULL;
             """).ConfigureAwait(false);
 
         try
@@ -594,6 +606,169 @@ public static class DevDbBootstrap
         }
 
         logger.LogInformation("Ensured RAS component / water-flow schema.");
+    }
+
+    private static async Task EnsureDeviceControllerSchemaAsync(AppDbContext db, ILogger logger)
+    {
+        await db.Database.ExecuteSqlRawAsync(
+            """
+            ALTER TABLE be."Devices"
+            ADD COLUMN IF NOT EXISTS "Name" text NULL,
+            ADD COLUMN IF NOT EXISTS "MacAddress" character varying(64) NULL,
+            ADD COLUMN IF NOT EXISTS "IpAddress" character varying(64) NULL,
+            ADD COLUMN IF NOT EXISTS "FarmingAreaId" uuid NULL;
+
+            CREATE INDEX IF NOT EXISTS "IX_Devices_FarmingAreaId"
+                ON be."Devices" ("FarmingAreaId");
+            """).ConfigureAwait(false);
+
+        try
+        {
+            await db.Database.ExecuteSqlRawAsync(
+                """
+                ALTER TABLE be."Devices"
+                DROP CONSTRAINT IF EXISTS "FK_Devices_FarmingAreas_FarmingAreaId";
+                ALTER TABLE be."Devices"
+                ADD CONSTRAINT "FK_Devices_FarmingAreas_FarmingAreaId"
+                    FOREIGN KEY ("FarmingAreaId") REFERENCES be."FarmingAreas" ("Id") ON DELETE SET NULL;
+                """).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Devices.FarmingAreaId FK skipped.");
+        }
+
+        logger.LogInformation("Ensured Device/Controller columns (Name, MAC, IP, khu).");
+    }
+
+    private static async Task EnsureWaterAnalysisSchemaAsync(AppDbContext db, ILogger logger)
+    {
+        await db.Database.ExecuteSqlRawAsync(
+            """
+            CREATE TABLE IF NOT EXISTS be."WaterAnalysisRuns" (
+                "Id" uuid NOT NULL,
+                "CreatedAt" timestamp with time zone NOT NULL,
+                "UpdatedAt" timestamp with time zone NULL,
+                "FarmingAreaId" uuid NOT NULL,
+                "Status" character varying(32) NOT NULL,
+                "CurrentStep" integer NOT NULL,
+                "StartedAt" timestamp with time zone NOT NULL,
+                "LastStepAt" timestamp with time zone NOT NULL,
+                "CompletedAt" timestamp with time zone NULL,
+                "Ph" numeric(8,3) NULL,
+                "Nh3" numeric(8,4) NULL,
+                "No2" numeric(8,4) NULL,
+                "No3" numeric(8,2) NULL,
+                "ImageUrl" text NULL,
+                "Error" text NULL,
+                "Source" character varying(64) NOT NULL,
+                CONSTRAINT "PK_WaterAnalysisRuns" PRIMARY KEY ("Id")
+            );
+
+            CREATE INDEX IF NOT EXISTS "IX_WaterAnalysisRuns_FarmingAreaId_StartedAt"
+                ON be."WaterAnalysisRuns" ("FarmingAreaId", "StartedAt");
+            """).ConfigureAwait(false);
+
+        try
+        {
+            await db.Database.ExecuteSqlRawAsync(
+                """
+                ALTER TABLE be."WaterAnalysisRuns"
+                DROP CONSTRAINT IF EXISTS "FK_WaterAnalysisRuns_FarmingAreas_FarmingAreaId";
+                ALTER TABLE be."WaterAnalysisRuns"
+                ADD CONSTRAINT "FK_WaterAnalysisRuns_FarmingAreas_FarmingAreaId"
+                    FOREIGN KEY ("FarmingAreaId") REFERENCES be."FarmingAreas" ("Id") ON DELETE CASCADE;
+                """).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "WaterAnalysisRuns.FarmingAreaId FK skipped.");
+        }
+
+        logger.LogInformation("Ensured WaterAnalysisRuns (colorimetric).");
+    }
+
+    private static async Task EnsureFarmOperationLogColumnsAsync(AppDbContext db, ILogger logger)
+    {
+        await db.Database.ExecuteSqlRawAsync(
+            """
+            ALTER TABLE be."FarmOperations"
+            ADD COLUMN IF NOT EXISTS "Source" text NOT NULL DEFAULT 'manual',
+            ADD COLUMN IF NOT EXISTS "LocationLabel" text NULL;
+            """).ConfigureAwait(false);
+        logger.LogInformation("Ensured FarmOperations.Source / LocationLabel.");
+    }
+
+    /// <summary>
+    /// Additive columns for harvest → inventory → sale. Không xóa cột cũ.
+    /// </summary>
+    private static async Task EnsureHarvestSalesWorkflowSchemaAsync(AppDbContext db, ILogger logger)
+    {
+        await db.Database.ExecuteSqlRawAsync(
+            """
+            ALTER TABLE be."HarvestVouchers"
+            ADD COLUMN IF NOT EXISTS "FarmingAreaId" uuid NULL,
+            ADD COLUMN IF NOT EXISTS "PerformedByName" text NULL,
+            ADD COLUMN IF NOT EXISTS "PhotoUrlsJson" text NOT NULL DEFAULT '[]';
+
+            ALTER TABLE be."HarvestLines"
+            ADD COLUMN IF NOT EXISTS "ConditionLabel" text NULL,
+            ADD COLUMN IF NOT EXISTS "PhotoUrlsJson" text NOT NULL DEFAULT '[]',
+            ADD COLUMN IF NOT EXISTS "CrabCode" text NULL,
+            ADD COLUMN IF NOT EXISTS "AreaName" text NULL,
+            ADD COLUMN IF NOT EXISTS "RowName" text NULL,
+            ADD COLUMN IF NOT EXISTS "BoxCode" text NULL,
+            ADD COLUMN IF NOT EXISTS "LotCode" text NULL,
+            ADD COLUMN IF NOT EXISTS "Result" text NOT NULL DEFAULT 'passed';
+
+            ALTER TABLE be."SalesOrders"
+            ADD COLUMN IF NOT EXISTS "FarmingAreaId" uuid NULL,
+            ADD COLUMN IF NOT EXISTS "SellerName" text NULL,
+            ADD COLUMN IF NOT EXISTS "PaymentStatus" text NOT NULL DEFAULT 'Pending';
+
+            ALTER TABLE be."SalesOrderLines"
+            ADD COLUMN IF NOT EXISTS "CrabId" uuid NULL,
+            ADD COLUMN IF NOT EXISTS "CrabCode" text NULL,
+            ADD COLUMN IF NOT EXISTS "Quantity" integer NOT NULL DEFAULT 1;
+
+            CREATE INDEX IF NOT EXISTS "IX_HarvestVouchers_FarmingAreaId"
+            ON be."HarvestVouchers" ("FarmingAreaId");
+            CREATE INDEX IF NOT EXISTS "IX_SalesOrders_FarmingAreaId"
+            ON be."SalesOrders" ("FarmingAreaId");
+            CREATE INDEX IF NOT EXISTS "IX_SalesOrderLines_CrabId"
+            ON be."SalesOrderLines" ("CrabId");
+            """).ConfigureAwait(false);
+        logger.LogInformation("Ensured harvest/sales workflow columns.");
+    }
+
+    /// <summary>
+    /// Alert còn SensorId nhưng sensor đã bị xóa (seed dở) — gỡ trước khi SaveChanges.
+    /// </summary>
+    private static async Task EnsureOrphanAlertCleanupAsync(AppDbContext db, ILogger logger)
+    {
+        try
+        {
+            await db.Database.ExecuteSqlRawAsync(
+                """
+                DELETE FROM be."Notifications" n
+                WHERE n."AlertId" IN (
+                    SELECT a."Id" FROM be."Alerts" a
+                    WHERE a."SensorId" IS NOT NULL
+                      AND NOT EXISTS (
+                          SELECT 1 FROM be."Sensors" s WHERE s."Id" = a."SensorId")
+                );
+
+                DELETE FROM be."Alerts" a
+                WHERE a."SensorId" IS NOT NULL
+                  AND NOT EXISTS (
+                      SELECT 1 FROM be."Sensors" s WHERE s."Id" = a."SensorId");
+                """).ConfigureAwait(false);
+            logger.LogInformation("Orphan Alerts/Notifications cleanup done.");
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Orphan alert cleanup skipped.");
+        }
     }
 
     /// <summary>

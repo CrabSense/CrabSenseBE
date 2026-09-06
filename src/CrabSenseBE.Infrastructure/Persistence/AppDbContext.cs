@@ -34,6 +34,7 @@ public class AppDbContext : DbContext
     public DbSet<Sensor> Sensors => Set<Sensor>();
     public DbSet<Device> Devices => Set<Device>();
     public DbSet<WaterMeasurement> WaterMeasurements => Set<WaterMeasurement>();
+    public DbSet<WaterAnalysisRun> WaterAnalysisRuns => Set<WaterAnalysisRun>();
     public DbSet<Hdf5Upload> Hdf5Uploads => Set<Hdf5Upload>();
 
     // Alerts
@@ -95,6 +96,33 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<Device>()
             .Property(d => d.Status)
             .HasConversion<string>();
+        modelBuilder.Entity<Device>()
+            .HasOne(d => d.FarmingArea)
+            .WithMany()
+            .HasForeignKey(d => d.FarmingAreaId)
+            .OnDelete(DeleteBehavior.SetNull);
+        modelBuilder.Entity<Device>()
+            .HasIndex(d => d.FarmingAreaId);
+        modelBuilder.Entity<Device>()
+            .Property(d => d.MacAddress)
+            .HasMaxLength(64);
+        modelBuilder.Entity<Device>()
+            .Property(d => d.IpAddress)
+            .HasMaxLength(64);
+
+        modelBuilder.Entity<WaterAnalysisRun>()
+            .HasIndex(r => new { r.FarmingAreaId, r.StartedAt });
+        modelBuilder.Entity<WaterAnalysisRun>()
+            .HasOne(r => r.FarmingArea)
+            .WithMany()
+            .HasForeignKey(r => r.FarmingAreaId)
+            .OnDelete(DeleteBehavior.Cascade);
+        modelBuilder.Entity<WaterAnalysisRun>()
+            .Property(r => r.Status)
+            .HasMaxLength(32);
+        modelBuilder.Entity<WaterAnalysisRun>()
+            .Property(r => r.Source)
+            .HasMaxLength(64);
 
         modelBuilder.Entity<SalesOrder>()
             .Property(o => o.Status)
@@ -115,6 +143,14 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<HarvestVoucher>()
             .Property(h => h.Status)
             .HasConversion<string>();
+        modelBuilder.Entity<HarvestVoucher>()
+            .HasIndex(h => h.FarmingAreaId);
+
+        modelBuilder.Entity<SalesOrder>()
+            .Property(o => o.PaymentStatus)
+            .HasConversion<string>();
+        modelBuilder.Entity<SalesOrder>()
+            .HasIndex(o => o.FarmingAreaId);
 
         modelBuilder.Entity<FarmingArea>()
             .Property(a => a.Status)

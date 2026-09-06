@@ -16,7 +16,15 @@ public record HarvestVoucherDto(
     decimal SoftshellRate,
     string? Notes,
     Guid CreatedBy,
-    DateTime CreatedAt
+    DateTime CreatedAt,
+    Guid? FarmingAreaId = null,
+    string? PerformedByName = null,
+    string? AreaName = null,
+    int PassedCount = 0,
+    int FailedCount = 0,
+    decimal AverageWeightGram = 0,
+    IReadOnlyList<string>? PhotoUrls = null,
+    IReadOnlyCollection<HarvestLineDto>? Lines = null
 );
 
 public record HarvestVoucherDetailDto(
@@ -32,7 +40,14 @@ public record HarvestVoucherDetailDto(
     string? Notes,
     Guid CreatedBy,
     DateTime CreatedAt,
-    IReadOnlyCollection<HarvestLineDto> Lines
+    IReadOnlyCollection<HarvestLineDto> Lines,
+    Guid? FarmingAreaId = null,
+    string? PerformedByName = null,
+    string? AreaName = null,
+    int PassedCount = 0,
+    int FailedCount = 0,
+    decimal AverageWeightGram = 0,
+    IReadOnlyList<string>? PhotoUrls = null
 );
 
 public record HarvestLineDto(
@@ -41,14 +56,25 @@ public record HarvestLineDto(
     decimal WeightGram,
     string? Grade,
     bool IsSoftshell,
-    string? Notes
+    string? Notes,
+    string? CrabCode = null,
+    string? BoxCode = null,
+    string? ConditionLabel = null,
+    IReadOnlyList<string>? PhotoUrls = null,
+    string? AreaName = null,
+    string? RowName = null,
+    string? LotCode = null,
+    string? Result = null
 );
 
 public record CreateHarvestVoucherRequest(
     Guid? CropBatchId,
     DateTime HarvestDate,
     string? Notes,
-    IEnumerable<HarvestLineRequest> Lines
+    IEnumerable<HarvestLineRequest> Lines,
+    Guid? FarmingAreaId = null,
+    string? PerformedByName = null,
+    IEnumerable<string>? PhotoUrls = null
 );
 
 public record HarvestLineRequest(
@@ -56,7 +82,17 @@ public record HarvestLineRequest(
     decimal WeightGram,
     string? Grade,
     bool IsSoftshell,
-    string? Notes = null
+    string? Notes = null,
+    string? ConditionLabel = null,
+    IEnumerable<string>? PhotoUrls = null,
+    string? Result = null
+);
+
+public record HarvestOverviewDto(
+    int HarvestableCount,
+    int HarvestedToday,
+    int WaitingSale,
+    decimal TotalHarvestWeightKg
 );
 
 public record UpdateHarvestStatusRequest(

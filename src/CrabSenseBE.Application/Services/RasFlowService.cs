@@ -139,7 +139,7 @@ public class RasFlowService : IRasFlowService
     }
 
     public async Task<ApiResponse<RasFlowDiagramDto>> CommandAsync(
-        Guid areaId, Guid nodeId, RasFlowCommandRequest req, CancellationToken ct = default)
+        Guid areaId, Guid nodeId, RasFlowCommandRequest req, Guid? actorId = null, CancellationToken ct = default)
     {
         var area = await RequireAreaAsync(areaId, ct);
         var ws = await EnsureSystemAsync(area, ct);
@@ -151,9 +151,55 @@ public class RasFlowService : IRasFlowService
             throw AppException.BadRequest("Node has no relay.");
 
         var cmd = (req.Command ?? "").Trim().ToLowerInvariant();
-        node.IsOn = cmd is "on" or "start" or "open" || (cmd == "toggle" && !node.IsOn);
-        if (cmd is "off" or "stop" or "close") node.IsOn = false;
+        var now = DateTime.UtcNow;
+        var title = $"{node.Name}: {cmd}";
+        if (cmd is "auto")
+        {
+            node.ControlMode = "auto";
+            title = $"Auto kích hoạt {node.Name}";
+        }
+        else if (cmd is "manual")
+        {
+            node.ControlMode = "manual";
+            title = $"Chuyển {node.Name} sang Manual";
+        }
+        else if (cmd is "on" or "start" or "open")
+        {
+            node.ControlMode = "manual";
+            if (!node.IsOn) node.RunStartedAt = now;
+            node.IsOn = true;
+            title = $"Bật {node.Name}";
+        }
+        else if (cmd is "off" or "stop" or "close")
+        {
+            node.ControlMode = "manual";
+            node.IsOn = false;
+            node.RunStartedAt = null;
+            title = $"Tắt {node.Name}";
+        }
+        else if (cmd == "toggle")
+        {
+            node.ControlMode = "manual";
+            node.IsOn = !node.IsOn;
+            node.RunStartedAt = node.IsOn ? now : null;
+            title = node.IsOn ? $"Bật {node.Name}" : $"Tắt {node.Name}";
+        }
+        else
+            throw AppException.BadRequest("Command must be auto, manual, on, off, start, stop, or toggle.");
+
+        node.LastCommandAt = now;
         _uow.RasComponents.Update(node);
+        if (actorId is Guid uid && uid != Guid.Empty)
+        {
+            await _uow.OperationLogs.AddAsync(new OperationLog
+            {
+                UserId = uid,
+                Action = cmd,
+                EntityType = "RasComponent",
+                EntityId = node.Id,
+                Details = $"{area.Id:N}|{title}"
+            }, ct);
+        }
         await _uow.SaveChangesAsync(ct);
         return ApiResponse<RasFlowDiagramDto>.Ok(await BuildDiagramAsync(area, ws, ct), "Command applied.");
     }
@@ -280,6 +326,17 @@ public class RasFlowService : IRasFlowService
                 .ToDictionary(g => g.Key, g => g.OrderByDescending(x => x.MeasuredAt).First());
 
         var nodes = comps.Select(c => MapNode(c, sensors, latest, flows)).ToList();
+        var ids = comps.Select(c => c.Id).ToHashSet();
+        var logs = (await _uow.OperationLogs.FindAsync(
+                l => l.EntityType == "RasComponent" && l.EntityId != null && ids.Contains(l.EntityId.Value), ct))
+            .OrderByDescending(l => l.CreatedAt)
+            .Take(20)
+            .Select(l => new RasControlEventDto(
+                l.CreatedAt,
+                l.Action,
+                l.Details is { } d && d.Contains('|') ? d[(d.IndexOf('|') + 1)..] : $"{l.Action}",
+                l.Details))
+            .ToList();
         return new RasFlowDiagramDto(
             area.Id,
             area.Code,
@@ -292,7 +349,10 @@ public class RasFlowService : IRasFlowService
             nodes.Sum(n => n.PowerW ?? 0),
             nodes.Count(n => n.IsOn == true),
             nodes.Count(n => n.HasRelay),
-            nodes.Count(n => n.IsOnline != false));
+            nodes.Count(n => n.IsOnline != false),
+            nodes.Count(n => n.HasRelay && n.IsOn != true),
+            nodes.Count(n => n.Status is "alarm" or "error" || n.IsOnline == false),
+            logs);
     }
 
     private static RasFlowNodeDto MapNode(
@@ -335,7 +395,9 @@ public class RasFlowService : IRasFlowService
             LevelPercent: level,
             Type: c.Type,
             Status: c.Status,
-            Capacity: c.Capacity);
+            Capacity: c.Capacity,
+            LastCommandAt: c.LastCommandAt,
+            RunStartedAt: c.RunStartedAt);
     }
 
     private static (string label, string? secondary) BuildMetric(

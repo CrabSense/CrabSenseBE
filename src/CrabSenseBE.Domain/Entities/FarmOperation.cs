@@ -24,4 +24,8 @@ public class FarmOperation : BaseEntity
     public DateTime Timestamp { get; set; } = DateTime.UtcNow;
     public Guid OperatorId { get; set; }
     public string OperatorName { get; set; } = string.Empty;
+
+    /// <summary>manual | auto — không xóa cột cũ, chỉ thêm.</summary>
+    public string Source { get; set; } = "manual";
+    public string? LocationLabel { get; set; }
 }
