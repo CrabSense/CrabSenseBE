@@ -1,117 +1,53 @@
 namespace CrabSenseBE.Application.DTOs.Dashboard;
 
-// ============================================================
-// FARM SUMMARY
-// ============================================================
-
-public record FarmSummaryDto
-(
-    int TotalAreas,
-    int TotalRows,
+public record DashboardOverviewDto(
     int TotalBoxes,
     int TotalCrabs,
-    int TotalCrabLots
+    int ActiveBoxes,
+    int OpenAlerts,
+    double IotOnlinePercentage,
+    DateTime LastUpdated
 );
 
-// ============================================================
-// BOX UTILIZATION
-// ============================================================
-
-public record BoxUtilizationDto
-(
-    int Occupied,
-    int Empty,
-    decimal UtilizationRate
+public record DashboardMetricsDto(
+    int Score,
+    string StatusLevel,
+    string StatusLabel,
+    double DeltaVsYesterday,
+    DateTime LastAiUpdated,
+    int WaterQualityScore,
+    int CrabHealthScore,
+    int DeviceStatusScore,
+    string Explanation
 );
 
-// ============================================================
-// CRAB STATUS (loại trừ nhau)
-// ============================================================
-
-public record CrabStatusDto
-(
-    int Alive,        // MoltedAt == null && (Alive || Quarantined)
-    int Molting,      // Status == Molting && MoltedAt == null
-    int Molted,       // MoltedAt != null
-    int Harvested,    // Status == Harvested
-    int Dead          // Status == Dead
+public record AiRecommendationDto(
+    string Id,
+    string Type,
+    string Title,
+    string Description,
+    string TargetBoxOrArea,
+    int ConfidencePercentage,
+    string Priority,
+    string Reason,
+    string OptimalTimeframe,
+    string ExpectedImpact,
+    bool HasActiveRecommendation
 );
 
-// ============================================================
-// RECENT ACTIVITY
-// ============================================================
-
-public record RecentActivityDto
-(
-    int DeathsLast7Days,
-    int HarvestsLast7Days,
-    int ActiveAlerts
+public record OperationTaskDto(
+    string Id,
+    string Title,
+    string Target,
+    DateTime Deadline,
+    string Priority,
+    bool IsCompleted
 );
 
-// ============================================================
-// FROZEN INVENTORY SUMMARY
-// ============================================================
-
-public record FrozenInventorySummaryDto
-(
-    int TotalLots,
-    decimal TotalWeightKg,
-    int ExpiringSoon   // ExpiryDate <= now + 30 ngày
-);
-
-// ============================================================
-// CHART DATA
-// ============================================================
-
-public record HarvestTrendPointDto
-(
-    DateTime Date,
-    int Quantity,
-    decimal WeightKg
-);
-
-public record MortalityTrendPointDto
-(
-    DateTime Date,
-    int Count
-);
-
-public record BoxUtilizationByAreaDto
-(
-    Guid AreaId,
-    string AreaName,
-    int Occupied,
-    int Empty
-);
-
-public record MortalityByCauseDto
-(
-    string Cause,
-    int Count
-);
-
-// ============================================================
-// CHARTS CONTAINER
-// ============================================================
-
-public record DashboardChartsDto
-(
-    List<HarvestTrendPointDto> HarvestTrend,
-    List<MortalityTrendPointDto> MortalityTrend,
-    List<BoxUtilizationByAreaDto> BoxUtilizationByArea,
-    List<MortalityByCauseDto> MortalityByCause
-);
-
-// ============================================================
-// DASHBOARD (root DTO)
-// ============================================================
-
-public record DashboardDto
-(
-    FarmSummaryDto FarmSummary,
-    BoxUtilizationDto BoxUtilization,
-    CrabStatusDto CrabStatus,
-    RecentActivityDto RecentActivity,
-    FrozenInventorySummaryDto FrozenInventory,
-    DashboardChartsDto Charts
+public record RecentActivityDto(
+    string Id,
+    string Title,
+    string Description,
+    string Type,
+    DateTime Timestamp
 );

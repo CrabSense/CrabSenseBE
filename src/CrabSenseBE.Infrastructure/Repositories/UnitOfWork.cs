@@ -51,6 +51,22 @@ public class UnitOfWork : IUnitOfWork
     public IRepository<BoxStatusHistory> BoxStatusHistories =>
         _boxStatusHistories ??= new GenericRepository<BoxStatusHistory>(_context);
 
+    private IRepository<CrabStatusHistory>? _crabStatusHistories;
+    public IRepository<CrabStatusHistory> CrabStatusHistories =>
+        _crabStatusHistories ??= new GenericRepository<CrabStatusHistory>(_context);
+
+    private IRepository<CrabWeightHistory>? _crabWeightHistories;
+    public IRepository<CrabWeightHistory> CrabWeightHistories =>
+        _crabWeightHistories ??= new GenericRepository<CrabWeightHistory>(_context);
+
+    private IRepository<CrabAiAnalysis>? _crabAiAnalyses;
+    public IRepository<CrabAiAnalysis> CrabAiAnalyses =>
+        _crabAiAnalyses ??= new GenericRepository<CrabAiAnalysis>(_context);
+
+    private IRepository<CrabHarvestHistory>? _crabHarvestHistories;
+    public IRepository<CrabHarvestHistory> CrabHarvestHistories =>
+        _crabHarvestHistories ??= new GenericRepository<CrabHarvestHistory>(_context);
+
 
     private IRepository<CrabMortalityRecord>? _crabMortalityRecords;
     public IRepository<CrabMortalityRecord> CrabMortalityRecords =>
@@ -60,6 +76,13 @@ public class UnitOfWork : IUnitOfWork
     private IRepository<WaterSystem>? _waterSystems;
     public IRepository<WaterSystem> WaterSystems => _waterSystems ??= new GenericRepository<WaterSystem>(_context);
 
+    private IRepository<RasComponent>? _rasComponents;
+    public IRepository<RasComponent> RasComponents =>
+        _rasComponents ??= new GenericRepository<RasComponent>(_context);
+
+    private IRepository<WaterFlow>? _waterFlows;
+    public IRepository<WaterFlow> WaterFlows => _waterFlows ??= new GenericRepository<WaterFlow>(_context);
+
     private IRepository<Sensor>? _sensors;
     public IRepository<Sensor> Sensors => _sensors ??= new GenericRepository<Sensor>(_context);
 
@@ -68,6 +91,10 @@ public class UnitOfWork : IUnitOfWork
 
     private IRepository<WaterMeasurement>? _waterMeasurements;
     public IRepository<WaterMeasurement> WaterMeasurements => _waterMeasurements ??= new GenericRepository<WaterMeasurement>(_context);
+
+    private IRepository<WaterAnalysisRun>? _waterAnalysisRuns;
+    public IRepository<WaterAnalysisRun> WaterAnalysisRuns =>
+        _waterAnalysisRuns ??= new GenericRepository<WaterAnalysisRun>(_context);
 
     private IRepository<Hdf5Upload>? _hdf5Uploads;
     public IRepository<Hdf5Upload> Hdf5Uploads => _hdf5Uploads ??= new GenericRepository<Hdf5Upload>(_context);
@@ -89,6 +116,10 @@ public class UnitOfWork : IUnitOfWork
     private IRepository<NotificationDelivery>? _notificationDeliveries;
     public IRepository<NotificationDelivery> NotificationDeliveries =>
         _notificationDeliveries ??= new GenericRepository<NotificationDelivery>(_context);
+
+    private IRepository<UserPushToken>? _userPushTokens;
+    public IRepository<UserPushToken> UserPushTokens =>
+        _userPushTokens ??= new GenericRepository<UserPushToken>(_context);
 
     private IRepository<MediaAsset>? _mediaAssets;
     public IRepository<MediaAsset> MediaAssets =>
@@ -147,6 +178,14 @@ public class UnitOfWork : IUnitOfWork
 
     private IRepository<Inspection>? _inspections;
     public IRepository<Inspection> Inspections => _inspections ??= new GenericRepository<Inspection>(_context);
+
+    private IRepository<FarmOperation>? _farmOperations;
+    public IRepository<FarmOperation> FarmOperations =>
+        _farmOperations ??= new GenericRepository<FarmOperation>(_context);
+
+    private IRepository<SaleTransaction>? _saleTransactions;
+    public IRepository<SaleTransaction> SaleTransactions =>
+        _saleTransactions ??= new GenericRepository<SaleTransaction>(_context);
 
     public Task<int> SaveChangesAsync(CancellationToken ct = default)
         => _context.SaveChangesAsync(ct);

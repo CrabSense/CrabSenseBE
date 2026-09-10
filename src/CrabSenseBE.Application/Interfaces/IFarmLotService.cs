@@ -8,6 +8,7 @@ public interface IFarmLotService
 {
     Task<ApiResponse<IEnumerable<CrabLotDto>>> GetLotsAsync(CancellationToken ct = default);
     Task<ApiResponse<CrabLotDto>> GetLotByIdAsync(Guid id, CancellationToken ct = default);
+    Task<ApiResponse<NextCrabLotCodeDto>> GetNextLotCodeAsync(DateTime? importDate = null, CancellationToken ct = default);
     Task<ApiResponse<CrabLotDto>> CreateLotAsync(CreateCrabLotRequest req, CancellationToken ct = default);
     Task<ApiResponse<CrabLotDto>> UpdateLotAsync(Guid id, UpdateCrabLotRequest req, CancellationToken ct = default);
     Task<ApiResponse> DeleteLotAsync(Guid id, CancellationToken ct = default);

@@ -168,7 +168,10 @@
       id: "crabs",
       title: "4. Cua (crabs)",
       listPath: "/api/crabs",
-      filters: [],
+      filters: [
+        { key: "crabId", label: "crabId (upload sau tạo)", listIgnore: true },
+        { key: "imageFiles", label: "ảnh cua", type: "file", multiple: true, listIgnore: true },
+      ],
       create: {
         path: "/api/crabs",
         fields: [
@@ -182,6 +185,7 @@
           { key: "weightGram", label: "weightGram", type: "number" },
           { key: "moltingStage", label: "moltingStage", type: "select", def: "hard",
             options: ["hard", "premolt", "softshell", "papershell"] },
+          { key: "imageUrls", label: "imageUrls (JSON array link S3)", type: "textarea", parseJson: true },
         ],
       },
       update: {
@@ -192,9 +196,34 @@
           { key: "weightGram", label: "weightGram", type: "number" },
           { key: "isAlive", label: "isAlive", type: "bool", def: true },
           { key: "moltedAt", label: "moltedAt (ISO)" },
+          { key: "imageUrls", label: "imageUrls (JSON array — replace)", type: "textarea", parseJson: true },
         ],
       },
       remove: (id) => `/api/crabs/${id}`,
+      extras: [
+        {
+          label: "Upload ảnh S3 (lấy URL trước khi tạo)",
+          run: async (api, f) => {
+            const files = f.imageFiles;
+            if (!files || !files.length) throw new Error("Chọn ảnh ở filter 'ảnh cua'");
+            const fd = new FormData();
+            for (const file of files) fd.append("files", file);
+            return api("POST", "/api/crabs/images", fd);
+          },
+        },
+        {
+          label: "Upload ảnh S3 vào cua đã tạo",
+          run: async (api, f, id) => {
+            const crabId = f.crabId || id;
+            if (!crabId) throw new Error("Điền crabId hoặc Pick id");
+            const files = f.imageFiles;
+            if (!files || !files.length) throw new Error("Chọn ảnh ở filter 'ảnh cua'");
+            const fd = new FormData();
+            for (const file of files) fd.append("files", file);
+            return api("POST", `/api/crabs/${crabId}/images`, fd);
+          },
+        },
+      ],
     },
     {
       id: "lots",
@@ -1212,6 +1241,11 @@
         { label: "settings", run: (api) => api("GET", "/api/settings") },
         { label: "ai/detections", run: (api) => api("GET", "/api/ai/detections") },
         { label: "ai/recommendations", run: (api) => api("GET", "/api/ai/recommendations") },
+        { label: "GET /api/sync/queue", run: (api) => api("GET", "/api/sync/queue") },
+        { label: "GET /api/v1/sync/pull", run: (api) => api("GET", "/api/v1/sync/pull") },
+        { label: "GET /api/v1/sync/changes", run: (api) => api("GET", "/api/v1/sync/changes") },
+        { label: "GET /api/v1/sync/download", run: (api) => api("GET", "/api/v1/sync/download") },
+        { label: "GET /api/v1/synchronization/queue", run: (api) => api("GET", "/api/v1/synchronization/queue") },
       ],
     },
     {
@@ -1284,6 +1318,51 @@
             return api("POST", `/api/notifications/channels/${id}/test`, body);
           },
         },
+        {
+          label: "POST register FCM token",
+          run: async (api) =>
+            api("POST", "/api/notifications/register", {
+              token: "demo-fcm-token-" + Date.now(),
+              platform: "android",
+              deviceId: "local-ui-device",
+            }),
+        },
+        {
+          label: "GET push tokens (current user)",
+          run: async (api) => api("GET", "/api/notifications/register"),
+        },
+        {
+          label: "GET notification settings",
+          run: async (api) => api("GET", "/api/notifications/settings"),
+        },
+        {
+          label: "PUT notification settings (Telegram stub)",
+          run: async (api) =>
+            api("PUT", "/api/notifications/settings", {
+              pushEnabled: true,
+              telegram: {
+                enabled: false,
+                configJson: JSON.stringify({ bot_token: "", chat_id: "" }),
+              },
+              zalo: {
+                enabled: false,
+                configJson: JSON.stringify({ access_token: "", user_id: "" }),
+              },
+            }),
+        },
+        {
+          label: "GET v1 notification settings (Mobile alias)",
+          run: async (api) => api("GET", "/api/v1/notifications/settings"),
+        },
+        {
+          label: "POST v1 register FCM (Mobile alias)",
+          run: async (api) =>
+            api("POST", "/api/v1/notifications/register", {
+              token: "demo-fcm-v1-" + Date.now(),
+              platform: "android",
+              deviceId: "local-ui-v1",
+            }),
+        },
       ],
     },
   ];
@@ -1295,14 +1374,24 @@
     return ($("apiBase").value || "http://localhost:5080").replace(/\/$/, "");
   }
 
+  function clearSession(message) {
+    token = "";
+    user = null;
+    refs.loaded = false;
+    localStorage.removeItem("cs_token");
+    $("app").style.display = "none";
+    $("loginInfo").textContent = message || "Đăng nhập lại";
+  }
+
   async function api(method, path, body) {
     const headers = { Accept: "application/json" };
     if (token) headers.Authorization = `Bearer ${token}`;
-    if (body !== undefined) headers["Content-Type"] = "application/json";
+    const isForm = typeof FormData !== "undefined" && body instanceof FormData;
+    if (body !== undefined && !isForm) headers["Content-Type"] = "application/json";
     const res = await fetch(baseUrl() + path, {
       method,
       headers,
-      body: body === undefined ? undefined : JSON.stringify(body),
+      body: body === undefined ? undefined : isForm ? body : JSON.stringify(body),
     });
     const text = await res.text();
     let data;
@@ -1312,6 +1401,9 @@
       data = text;
     }
     if (!res.ok) {
+      if (res.status === 401 && path !== "/api/auth/login") {
+        clearSession("Token hết hạn — bấm Login lại");
+      }
       const err = new Error(`${res.status} ${method} ${path}`);
       err.payload = data;
       throw err;
@@ -1460,6 +1552,9 @@
       if (el.value === "") return undefined;
       return el.value === "true";
     }
+    if (f.type === "file") {
+      return el.files && el.files.length ? el.files : undefined;
+    }
     if (f.type === "number") {
       if (el.value === "") return undefined;
       return Number(el.value);
@@ -1506,6 +1601,8 @@
 
     if (f.type === "textarea") {
       wrap.innerHTML = `<label>${f.label}<br/><textarea data-f="${f.key}" rows="3" cols="60">${escapeHtml(def)}</textarea></label>`;
+    } else if (f.type === "file") {
+      wrap.innerHTML = `<label>${f.label}<br/><input type="file" data-f="${f.key}" accept="image/*" ${f.multiple ? "multiple" : ""} /></label>`;
     } else if (f.type === "datetime") {
       wrap.innerHTML = `<label>${f.label} <input type="datetime-local" data-f="${f.key}" value="${escapeAttr(def)}" /></label>`;
     } else if (f.type === "bool") {
@@ -2344,7 +2441,7 @@
           if (f.key === "_raw") continue;
           const el = panel.querySelector(`[data-form="update"] [data-f="${f.key}"]`);
           if (!el || row[f.key] == null) continue;
-          el.value = String(row[f.key]);
+          el.value = Array.isArray(row[f.key]) ? JSON.stringify(row[f.key]) : String(row[f.key]);
         }
       };
     });
@@ -2617,11 +2714,7 @@
   }
 
   function doLogout() {
-    token = "";
-    user = null;
-    localStorage.removeItem("cs_token");
-    $("app").style.display = "none";
-    $("loginInfo").textContent = "logged out";
+    clearSession("logged out");
     msg("logged out");
   }
 
@@ -2638,10 +2731,22 @@
   const savedApi = localStorage.getItem("cs_api");
   if (savedApi) $("apiBase").value = savedApi;
 
-  if (token) {
-    $("app").style.display = "block";
-    $("loginInfo").textContent = "token cached";
-    renderTabs();
-    renderPanel();
+  async function bootWithCachedToken() {
+    if (!token) return;
+    try {
+      const me = await api("GET", "/api/auth/me");
+      user = me?.data || null;
+      $("app").style.display = "block";
+      $("loginInfo").textContent = "token OK";
+      $("userLine").textContent = user
+        ? ` — ${user.username} / ${user.role} / ${user.id}`
+        : "";
+      renderTabs();
+      renderPanel();
+    } catch {
+      clearSession("Token hết hạn — bấm Login lại");
+    }
   }
+
+  bootWithCachedToken();
 })();

@@ -10,12 +10,36 @@ public record CreateAlertThresholdRequest(
 public record UpdateAlertThresholdRequest(
     decimal MinValue, decimal MaxValue, string Severity, bool IsActive);
 
-// --- Cảnh báo ---
+// --- Cảnh báo (enriched for Mobile Alerts Command Center) ---
 public record AlertDto(
-    Guid Id, Guid? SensorId, string Message, string Severity, string Status,
-    decimal? TriggerValue, DateTime CreatedAt, DateTime? AcknowledgedAt);
+    Guid Id,
+    Guid? SensorId,
+    string Message,
+    string Severity,
+    string Status,
+    decimal? TriggerValue,
+    DateTime CreatedAt,
+    DateTime? AcknowledgedAt,
+    string Title,
+    string Category,
+    string? SensorCode,
+    string? SensorType,
+    string? Unit,
+    Guid? FarmingAreaId,
+    string? FarmingAreaName,
+    string? LocationLabel,
+    decimal? ThresholdMin,
+    decimal? ThresholdMax,
+    int PriorityScore,
+    string PriorityExplanation,
+    string SlaLabel,
+    string? AiRecommendation,
+    int? AiConfidence,
+    Guid? AcknowledgedBy);
 
 public record AcknowledgeAlertRequest(Guid? UserId);
+
+public record AlertUnreadCountDto(int Count, int UnreadCount);
 
 // --- Thông báo ---
 public record NotificationDto(
@@ -32,3 +56,21 @@ public record UpdateNotificationChannelRequest(
     bool IsEnabled, string? ConfigJson = null, string? DisplayName = null);
 
 public record TestNotificationChannelRequest(string? Title = null, string? Body = null);
+
+public record RegisterPushTokenRequest(
+    string Token, string Platform = "android", string? DeviceId = null);
+
+public record PushTokenDto(
+    Guid Id, Guid UserId, string Token, string Platform, string? DeviceId, bool IsActive, DateTime LastSeenAt);
+
+public record NotificationChannelSettingDto(bool Enabled, string? ConfigJson);
+
+public record NotificationSettingsDto(
+    bool PushEnabled,
+    NotificationChannelSettingDto Telegram,
+    NotificationChannelSettingDto Zalo);
+
+public record UpdateNotificationSettingsRequest(
+    bool? PushEnabled = null,
+    NotificationChannelSettingDto? Telegram = null,
+    NotificationChannelSettingDto? Zalo = null);

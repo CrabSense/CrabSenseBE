@@ -6,48 +6,127 @@ namespace CrabSenseBE.Application.DTOs.Farm;
 //   Box   → FarmingRowId  (Area auto from row)
 //   Crab  → BoxId (+ auto Row/Area) + CrabLotId + CropBatchId
 
-// --- FarmingArea ---
+// --- FarmingArea (Khu) ---
 public record FarmingAreaDto(
     Guid Id,
     Guid OwnerId,
     string? OwnerName,
+    string Code,
     string Name,
+    string? Location,
+    string Address,
+    string? Region,
+    decimal? AreaSquareMeters,
+    DateTime? EstablishedAt,
+    DateTime CreatedAt,
     string? Description,
+    string? AvatarUrl,
+    string Status,
     bool IsActive,
-    int RowCount);
+    int RowCount,
+    int BoxCount,
+    int CrabCount,
+    int HealthyBoxCount,
+    int AlertBoxCount);
 
 /// <summary>
-/// Create khu. Body: Name (+ Description).
-/// Owner is NOT in body — API sets OwnerId from the logged-in JWT user.
+/// Tạo khu. Code hệ thống tự sinh AREA-A01… — không gửi trong body.
+/// OwnerId lấy từ JWT. Bắt buộc: Name.
 /// </summary>
-public record CreateFarmingAreaRequest(string Name, string? Description);
-public record UpdateFarmingAreaRequest(string Name, string? Description, bool IsActive);
+public record CreateFarmingAreaRequest(
+    string Name,
+    string? Location = null,
+    decimal? AreaSquareMeters = null,
+    string? Description = null,
+    string? Status = null,
+    string? Address = null,
+    string? Region = null,
+    DateTime? EstablishedAt = null,
+    string? AvatarUrl = null);
+
+/// <summary>Sửa khu. Code không đổi.</summary>
+public record UpdateFarmingAreaRequest(
+    string Name,
+    string? Location = null,
+    decimal? AreaSquareMeters = null,
+    string? Description = null,
+    string? Status = null,
+    bool? IsActive = null,
+    string? Address = null,
+    string? Region = null,
+    DateTime? EstablishedAt = null,
+    string? AvatarUrl = null);
+
+public record NextFarmCodeDto(string Code);
+
+public record FarmAvatarDto(
+    string Url,
+    string StorageKey,
+    string FileName,
+    string Provider,
+    long SizeBytes);
 
 /// <summary>Area list filter. PageSize null = GET ALL.</summary>
 public record FarmingAreaFilter(
     string? Search = null,
     bool? IsActive = null,
+    string? Status = null,
     int Page = 1,
-    int? PageSize = null);
+    int? PageSize = null,
+    Guid? OwnerId = null);
 
-// --- FarmingRow ---
+// --- FarmingRow (Dãy) ---
 public record FarmingRowDto(
-    Guid Id, Guid FarmingAreaId, string? AreaName, string Name, int Capacity, bool IsActive, int BoxCount);
+    Guid Id,
+    Guid FarmingAreaId,
+    string? AreaName,
+    string? AreaLocation,
+    string Code,
+    string Name,
+    string? Location,
+    string? Description,
+    int Capacity,
+    int SortOrder,
+    string Status,
+    bool IsActive,
+    int BoxCount,
+    int CrabCount,
+    int HealthyBoxCount,
+    int AlertBoxCount);
 
-/// <summary>Create dãy. Required: FarmingAreaId (khu) + Name. Capacity = số hộp tối đa; nếu &gt; 0 thì tạo luôn đúng số hộp đó.</summary>
+/// <summary>
+/// Tạo dãy. Code hệ thống tự sinh DAY-A01… — không gửi trong body.
+/// Required: FarmingAreaId + Name. Capacity = số hộp tối đa (0 = không giới hạn); không tạo hộp sẵn.
+/// </summary>
 public record CreateFarmingRowRequest(
     /// <summary>Parent khu id (GET /api/farming-areas).</summary>
     Guid FarmingAreaId,
     string Name,
-    /// <summary>Số hộp của dãy. &gt; 0 → tạo sẵn đúng số hộp (BOX-xxxx). 0 → chưa tạo hộp (unlimited).</summary>
-    int Capacity = 0);
-public record UpdateFarmingRowRequest(string Name, int Capacity, bool IsActive);
+    string? Location = null,
+    /// <summary>Số hộp tối đa. 0 = không giới hạn. Không tạo hộp khi tạo dãy.</summary>
+    int Capacity = 0,
+    string? Description = null,
+    string? Status = null,
+    int? SortOrder = null);
+
+/// <summary>Sửa dãy. Code không đổi.</summary>
+public record UpdateFarmingRowRequest(
+    string Name,
+    string? Location = null,
+    int? Capacity = null,
+    string? Description = null,
+    string? Status = null,
+    bool? IsActive = null,
+    int? SortOrder = null);
+
+public record NextRowCodeDto(string Code);
 
 /// <summary>Row list filter. PageSize null = GET ALL.</summary>
 public record FarmingRowFilter(
     Guid? FarmingAreaId = null,
     string? Search = null,
     bool? IsActive = null,
+    string? Status = null,
     int Page = 1,
     int? PageSize = null);
 
@@ -60,7 +139,18 @@ public record BoxDto(
     string? AreaName,
     string Code,
     string? Status,
-    bool IsOccupied);
+    bool IsOccupied,
+    string? DisplayName = null,
+    string? AreaCode = null,
+    string? RowCode = null,
+    Guid? CrabId = null,
+    string? CrabTag = null,
+    string? CrabMoltingStage = null,
+    string? CrabStatus = null,
+    /// <summary>empty | normal | premolt | molting | softshell | problem</summary>
+    string? CrabCondition = null,
+    int AlertCount = 0,
+    string? AiSummary = null);
 
 /// <summary>
 /// Create hộp. Required: FarmingRowId (dãy).
@@ -124,12 +214,124 @@ public record CrabDto(
     string? MoltingStage,
     bool IsAlive,
     DateTime? MoltedAt,
-    DateTime StockedAt);
+    DateTime StockedAt,
+    IReadOnlyList<string> ImageUrls,
+    string? Code = null,
+    string? QrCode = null,
+    string? CrabType = null,
+    string? Gender = null,
+    decimal? InitialWeightGram = null,
+    decimal? CarapaceWidthMm = null,
+    string? InitialCondition = null,
+    string? Notes = null,
+    string? Condition = null,
+    string? Status = null,
+    string? AiPrediction = null,
+    decimal? AiConfidence = null,
+    decimal? CarapaceLengthMm = null,
+    string? RowName = null,
+    string? RowCode = null,
+    string? AreaName = null,
+    string? AreaCode = null,
+    string? LotCode = null,
+    string? LotName = null,
+    DateTime? ImportDate = null,
+    DateTime? AiAnalyzedAt = null,
+    string? AiRecommendation = null,
+    string? AvatarUrl = null);
+
+/// <summary>Hồ sơ vòng đời cua — gom snapshot + lịch sử, không ghi đè bảng Crabs.</summary>
+public record CrabProfileDto(
+    CrabDto Crab,
+    CrabProfileLocationDto Location,
+    CrabProfileLotDto Lot,
+    CrabProfileAiDto Ai,
+    IReadOnlyList<string> ImageUrls,
+    IReadOnlyList<CrabTimelineEventDto> Timeline,
+    IReadOnlyList<CrabProfileAlertDto> Alerts);
+
+public record CrabProfileLocationDto(
+    Guid FarmingAreaId,
+    Guid FarmingRowId,
+    Guid BoxId,
+    string? AreaName,
+    string? AreaCode,
+    string? RowName,
+    string? RowCode,
+    string? BoxCode);
+
+public record CrabProfileLotDto(
+    Guid Id,
+    string LotCode,
+    string? Name,
+    DateTime? ImportDate);
+
+public record CrabProfileAiDto(
+    string? Prediction,
+    decimal? Confidence,
+    DateTime? AnalyzedAt,
+    string? Recommendation,
+    string? ActivityLevel,
+    string? MediaUrl);
+
+public record CrabTimelineEventDto(
+    DateTime At,
+    string Kind,
+    string Title,
+    string? Detail);
+
+public record CrabProfileAlertDto(
+    DateTime At,
+    string Title,
+    string? Detail,
+    string Severity);
+
+public record NextCrabCodeDto(string Code, string QrCode);
+
+public record CrabStatusHistoryDto(
+    Guid Id,
+    Guid CrabId,
+    string? OldCondition,
+    string NewCondition,
+    string? OldStatus,
+    string NewStatus,
+    DateTime ChangedAt,
+    string Source,
+    string? Reason);
+
+public record CrabWeightHistoryDto(
+    Guid Id,
+    Guid CrabId,
+    decimal WeightGram,
+    DateTime MeasuredAt,
+    string Source,
+    string? Notes);
+
+public record CrabAiAnalysisDto(
+    Guid Id,
+    Guid CrabId,
+    Guid? BoxId,
+    string Prediction,
+    decimal Confidence,
+    string? ActivityLevel,
+    string? AnomalyNote,
+    string? MediaUrl,
+    string? ModelVersion,
+    DateTime AnalyzedAt);
+
+public record CrabHarvestHistoryDto(
+    Guid Id,
+    Guid CrabId,
+    Guid? HarvestLineId,
+    DateTime HarvestedAt,
+    decimal? WeightGram,
+    string? Grade,
+    string? Notes);
 
 /// <summary>
-/// Place crab. Required: CrabLotId + CropBatchId, and BoxId
+/// Place crab. Required: CrabLotId + BoxId
 /// (or autoAssignEmptyBox + farmingRowId/farmingAreaId).
-/// Row/Area auto-fill from the box — do not invent parents.
+/// Code / QR auto. Row/Area auto-fill from the box.
 /// </summary>
 public record CreateCrabRequest(
     Guid CrabLotId,
@@ -139,6 +341,27 @@ public record CreateCrabRequest(
     bool AutoAssignEmptyBox = false,
     string? Tag = null,
     decimal? WeightGram = null,
-    string? MoltingStage = null);
+    string? MoltingStage = null,
+    IReadOnlyList<string>? ImageUrls = null,
+    DateTime? StockedAt = null,
+    string? CrabType = null,
+    string? Gender = null,
+    decimal? InitialWeightGram = null,
+    decimal? CarapaceWidthMm = null,
+    string? InitialCondition = null,
+    string? Notes = null,
+    string? Condition = null,
+    decimal? CarapaceLengthMm = null);
 
-public record UpdateCrabRequest(string? MoltingStage, decimal? WeightGram, bool IsAlive, DateTime? MoltedAt);
+public record UpdateCrabRequest(
+    string? MoltingStage,
+    decimal? WeightGram,
+    bool IsAlive,
+    DateTime? MoltedAt,
+    IReadOnlyList<string>? ImageUrls = null,
+    string? Condition = null,
+    string? Notes = null,
+    string? CrabType = null,
+    string? Gender = null,
+    decimal? CarapaceWidthMm = null,
+    decimal? CarapaceLengthMm = null);

@@ -25,6 +25,8 @@ public class QrCode : BaseEntity
 
     public Guid? HarvestVoucherId { get; set; }
 
+    public Guid? CrabId { get; set; }
+
     /// <summary>
     /// Dữ liệu JSON phụ như deep-link hoặc metadata.
     /// </summary>
@@ -40,6 +42,8 @@ public class QrCode : BaseEntity
     public Box? Box { get; set; }
 
     public FrozenLot? FrozenLot { get; set; }
+
+    public Crab? Crab { get; set; }
 
     public ICollection<TraceabilityLink> TraceabilityLinks { get; set; }
         = new List<TraceabilityLink>();

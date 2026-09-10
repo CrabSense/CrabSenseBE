@@ -36,12 +36,19 @@ public class BoxQrService : IBoxQrService
         if (existing is not null)
             return ApiResponse<BoxQrDto>.Ok(MapQr(existing));
 
-        // Mã tem: {boxCode}-{shortGuid} — unique, dễ in sticker
-        var shortId = boxId.ToString("N")[..8].ToUpperInvariant();
-        var code = $"{box.Code}-{shortId}";
+        // Prefer stable sticker code = box.Code (mobile can also send CRABSENSE:BOX:{code}).
+        var code = box.Code.Trim();
+        if (string.IsNullOrWhiteSpace(code))
+        {
+            var shortId = boxId.ToString("N")[..8].ToUpperInvariant();
+            code = $"BOX-{shortId}";
+        }
 
         if (await _uow.QrCodes.AnyAsync(q => q.Code == code, ct))
-            code = $"BOX-{shortId}-{Random.Shared.Next(100, 999)}";
+        {
+            var shortId = boxId.ToString("N")[..8].ToUpperInvariant();
+            code = $"{box.Code}-{shortId}";
+        }
 
         var qr = new QrCode
         {
@@ -49,12 +56,12 @@ public class BoxQrService : IBoxQrService
             EntityType = "box",
             BoxId = boxId,
             IsActive = true,
-            // Deep-link gợi ý cho App (FE/App tự map scheme)
             Payload = JsonSerializer.Serialize(new
             {
                 type = "box",
                 boxId,
                 boxCode = box.Code,
+                crabsense = $"CRABSENSE:BOX:{box.Code}",
                 path = $"/scan/box/{code}"
             })
         };
@@ -92,9 +99,24 @@ public class BoxQrService : IBoxQrService
             throw AppException.BadRequest("QR code is required.");
 
         var normalized = code.Trim();
+        // Accept CRABSENSE:BOX:<code> stickers from mobile.
+        if (normalized.StartsWith("CRABSENSE:BOX:", StringComparison.OrdinalIgnoreCase))
+            normalized = normalized["CRABSENSE:BOX:".Length..].Trim();
+
         var qr = await _uow.QrCodes.FirstOrDefaultAsync(
-            q => q.Code == normalized && q.IsActive, ct)
-            ?? throw AppException.NotFound("QrCode");
+            q => q.Code == normalized && q.IsActive, ct);
+
+        // Fallback: allow scanning by box.Code when QR row missing / not printed yet.
+        if (qr is null)
+        {
+            var boxByCode = await _uow.Boxes.FirstOrDefaultAsync(b => b.Code == normalized, ct)
+                ?? throw AppException.NotFound("QrCode");
+            var ensured = await EnsureBoxQrAsync(boxByCode.Id, ct);
+            if (!ensured.Success || ensured.Data is null)
+                throw AppException.NotFound("QrCode");
+            qr = await _uow.QrCodes.GetByIdAsync(ensured.Data.Id, ct)
+                ?? throw AppException.NotFound("QrCode");
+        }
 
         if (qr.EntityType != "box" || qr.BoxId is null)
             throw AppException.BadRequest("QR này không gắn với hộp nuôi.");
@@ -132,7 +154,8 @@ public class BoxQrService : IBoxQrService
     c.MoltingStage,
     c.Status == CrabStatus.Alive || c.Status == CrabStatus.Molting || c.Status == CrabStatus.Quarantined,
     c.MoltedAt, c.CrabLotId,
-    allocByCrab.TryGetValue(c.Id, out var start) ? start : null
+    allocByCrab.TryGetValue(c.Id, out var start) ? start : null,
+    JsonStringList.Parse(c.ImageUrlsJson)
 )).ToList();
 
         // Đếm số lần quét (analytics hiện trường)
@@ -186,7 +209,8 @@ public class BoxQrService : IBoxQrService
             crab.MoltingStage,
             crab.Status == CrabStatus.Alive || crab.Status == CrabStatus.Molting || crab.Status == CrabStatus.Quarantined,
             crab.MoltedAt,
-            crab.StockedAt), "Updated.");
+            crab.StockedAt,
+            JsonStringList.Parse(crab.ImageUrlsJson)), "Updated.");
     }
 
     public async Task<ApiResponse<CrabBoxAllocationDto>> MoveCrabAsync(
@@ -226,10 +250,10 @@ public class BoxQrService : IBoxQrService
         // Tái sử dụng logic allocation (đóng cũ / mở mới / cập nhật box)
         return await _history.AllocateCrabAsync(
             new AllocateCrabRequest(
-                targetRow.FarmingAreaId,
-                targetRow.Id,
                 req.CrabId,
                 targetBoxId,
+                targetRow.FarmingAreaId,
+                targetRow.Id,
                 req.Notes ?? $"Move via QR {sourceBoxQrCode}"),
             ct);
     }

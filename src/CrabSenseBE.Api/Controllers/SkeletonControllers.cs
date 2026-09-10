@@ -1,21 +1,12 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using CrabSenseBE.Application.Common;
+using CrabSenseBE.Application.DTOs.Ops;
 using CrabSenseBE.Application.Interfaces;
+using CrabSenseBE.Domain.Enums;
 
 namespace CrabSenseBE.Api.Controllers;
 
-
-[ApiController]
-[Route("api/customers")]
-[Authorize]
-[Tags("22. CRUD — Customers (stub)")]
-[Produces("application/json")]
-public class CustomersController : ControllerBase
-{
-    /// <summary>[READ] List customers (TODO)</summary>
-    [HttpGet]
-    public IActionResult GetAll() => Ok(new { success = true, data = Array.Empty<object>() });
-}
 
 [ApiController]
 [Route("api/price-lists")]
@@ -25,18 +16,6 @@ public class CustomersController : ControllerBase
 public class PriceListsController : ControllerBase
 {
     /// <summary>[READ] List price lists (TODO)</summary>
-    [HttpGet]
-    public IActionResult GetAll() => Ok(new { success = true, data = Array.Empty<object>() });
-}
-
-[ApiController]
-[Route("api/sales-orders")]
-[Authorize]
-[Tags("24. CRUD — Sales Orders (stub)")]
-[Produces("application/json")]
-public class SalesOrdersController : ControllerBase
-{
-    /// <summary>[READ] List sales orders (TODO)</summary>
     [HttpGet]
     public IActionResult GetAll() => Ok(new { success = true, data = Array.Empty<object>() });
 }
@@ -81,21 +60,52 @@ public class SettingsController : ControllerBase
 [ApiController]
 [Route("api/ai")]
 [Authorize]
-[Tags("33. AI (stub)")]
+[Tags("33. AI")]
 [Produces("application/json")]
 public class AiController : ControllerBase
 {
-    /// <summary>[READ] List AI detections</summary>
+    private readonly IDashboardService _dashboard;
+    private readonly IAiOpsService _ai;
+
+    public AiController(IDashboardService dashboard, IAiOpsService ai)
+    {
+        _dashboard = dashboard;
+        _ai = ai;
+    }
+
+    /// <summary>[READ] List AI detections — optional boxId / mediaId (videoId alias)</summary>
     [HttpGet("detections")]
-    public IActionResult Detections() => Ok(new { success = true, data = Array.Empty<object>() });
+    public async Task<IActionResult> Detections(
+        [FromQuery] Guid? boxId = null,
+        [FromQuery] Guid? mediaId = null,
+        [FromQuery] Guid? videoId = null,
+        CancellationToken ct = default)
+        => Ok(await _ai.ListDetectionsAsync(boxId, mediaId ?? videoId, ct));
+
+    /// <summary>[CREATE] Trigger AI analysis on media/video</summary>
+    [HttpPost("analyze")]
+    [Authorize(Roles = AppRoles.FarmWrite)]
+    public async Task<IActionResult> Analyze(
+        [FromBody] AiAnalyzeRequest req, CancellationToken ct = default)
+        => Ok(await _ai.AnalyzeAsync(req, ct));
 
     /// <summary>[CREATE] Submit AI feedback</summary>
     [HttpPost("feedback")]
-    public IActionResult Feedback() => Ok(new { success = true });
+    public async Task<IActionResult> Feedback(
+        [FromBody] AiFeedbackRequest req, CancellationToken ct = default)
+    {
+        var userIdClaim = User.FindFirst("sub")?.Value
+            ?? User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+        _ = Guid.TryParse(userIdClaim, out var userId);
+        return Ok(await _ai.SubmitFeedbackAsync(req, userId, ct));
+    }
 
-    /// <summary>[READ] AI recommendations</summary>
+    /// <summary>[READ] AI recommendations for Home — optional farmingAreaId</summary>
     [HttpGet("recommendations")]
-    public IActionResult Recommendations() => Ok(new { success = true, data = Array.Empty<object>() });
+    public async Task<IActionResult> Recommendations(
+        [FromQuery] Guid? farmingAreaId = null,
+        CancellationToken ct = default)
+        => Ok(await _dashboard.GetRecommendationsAsync(farmingAreaId, ct));
 }
 
 [ApiController]

@@ -36,12 +36,22 @@ public sealed class FarmCreateSchemaFilter : ISchemaFilter
         {
             schema.Description =
                 "Create KHU.\n" +
-                "Body: name (+ description).\n" +
-                "OwnerId is NOT in body — API assigns from JWT; response returns ownerId.";
+                "Required: name.\n" +
+                "Code is NOT in body — API assigns AREA-A01, AREA-A02… from existing areas in DB.\n" +
+                "OwnerId is NOT in body — API assigns from JWT.\n" +
+                "Status: Active | Suspended | Closed (default Active).";
             SetRequired(schema, "name");
             schema.Example = Obj(
-                ("name", new OpenApiString("Khu North")),
-                ("description", new OpenApiString("Zone 1")));
+                ("name", new OpenApiString("Khu nuôi nhà 1")),
+                ("location", new OpenApiString("Nhà nuôi số 1 - Tầng 1")),
+                ("areaSquareMeters", new OpenApiDouble(100)),
+                ("description", new OpenApiString("Khu nuôi cua lột")),
+                ("status", new OpenApiString("Active")));
+            Describe(schema, "name", "Tên khu — bắt buộc.");
+            Describe(schema, "location", "Vị trí trong cơ sở. Ví dụ: Nhà nuôi số 1 - Tầng 1. Tùy chọn.");
+            Describe(schema, "areaSquareMeters", "Diện tích khu (m²). Tùy chọn.");
+            Describe(schema, "description", "Mô tả ngắn. Tùy chọn.");
+            Describe(schema, "status", "Active = đang hoạt động; Suspended = tạm ngưng; Closed = ngừng hoạt động.");
             return;
         }
 
@@ -50,16 +60,24 @@ public sealed class FarmCreateSchemaFilter : ISchemaFilter
             schema.Description =
                 "Create DÃY.\n" +
                 "Required: farmingAreaId + name.\n" +
-                "capacity = số hộp: nếu > 0 thì tạo sẵn đúng số hộp (BOX-xxxx + QR). 0 = chưa tạo hộp.";
+                "Code is NOT in body — API assigns DAY-A01, DAY-A02…\n" +
+                "capacity = số hộp tối đa (0 = không giới hạn). Không tạo hộp sẵn.";
             SetRequired(schema, "farmingAreaId", "name");
             schema.Example = Obj(
                 ("farmingAreaId", Uuid(sample.AreaId)),
-                ("name", new OpenApiString("R-01")),
-                ("capacity", new OpenApiInteger(10)));
+                ("name", new OpenApiString("Dãy A")),
+                ("location", new OpenApiString("Bên trái")),
+                ("capacity", new OpenApiInteger(20)),
+                ("description", new OpenApiString("Dãy nuôi cua lột")),
+                ("status", new OpenApiString("Active")));
             Describe(schema, "farmingAreaId",
                 $"Parent khu id — required. Sample: {sample.AreaName} ({sample.AreaId})");
+            Describe(schema, "name", "Tên dãy — bắt buộc.");
+            Describe(schema, "location", "Vị trí trong khu. Ví dụ: Bên trái. Tùy chọn.");
             Describe(schema, "capacity",
-                "Số hộp của dãy. >0 → tạo sẵn đúng số hộp đó. 0 → dãy trống (unlimited).");
+                "Số hộp tối đa. 0 = không giới hạn. Không tạo hộp khi tạo dãy.");
+            Describe(schema, "description", "Mô tả ngắn. Tùy chọn.");
+            Describe(schema, "status", "Active | Suspended | Closed (default Active).");
             ForceUuid(schema, "farmingAreaId");
             return;
         }
@@ -90,20 +108,25 @@ public sealed class FarmCreateSchemaFilter : ISchemaFilter
         {
             schema.Description =
                 "Place CUA.\n" +
-                "Required: crabLotId + cropBatchId + boxId (or autoAssignEmptyBox).\n" +
-                "With boxId: API assigns farmingRowId + farmingAreaId from hộp.\n" +
-                "Example shows linked row/area ids — not null.";
-            SetRequired(schema, "crabLotId", "cropBatchId");
+                "Required: crabLotId + boxId (or autoAssignEmptyBox).\n" +
+                "Code + QR tự sinh CRAB-0001 / QR-CRAB-0001.\n" +
+                "condition: normal | premolt | molting | softshell | problem | dead | harvested.";
+            SetRequired(schema, "crabLotId", "weightGram", "carapaceWidthMm", "carapaceLengthMm");
             schema.Example = Obj(
                 ("crabLotId", Uuid(sample.LotId)),
-                // ("cropBatchId", Uuid(sample.BatchId)),
                 ("boxId", Uuid(sample.BoxId)),
                 ("farmingRowId", Uuid(sample.RowId)),
                 ("farmingAreaId", Uuid(sample.AreaId)),
                 ("autoAssignEmptyBox", new OpenApiBoolean(false)),
-                ("tag", new OpenApiString("C-001")),
-                ("weightGram", new OpenApiDouble(150)),
-                ("moltingStage", new OpenApiString("hard")));
+                ("weightGram", new OpenApiDouble(120)),
+                ("carapaceWidthMm", new OpenApiDouble(85)),
+                ("carapaceLengthMm", new OpenApiDouble(72)),
+                ("crabType", new OpenApiString("Cua biển")),
+                ("gender", new OpenApiString("male")),
+                ("initialCondition", new OpenApiString("Khỏe mạnh")),
+                ("notes", new OpenApiString("Thả nuôi hộp A-001")),
+                ("condition", new OpenApiString("normal")),
+                ("moltingStage", new OpenApiString("hard-shell")));
             Describe(schema, "crabLotId", $"Required — lô. Sample: {sample.LotCode}");
             // Describe(schema, "cropBatchId", $"Required — vụ nuôi. Sample: {sample.BatchCode}");
             Describe(schema, "boxId", $"Hộp — Row/Area auto. Sample: {sample.BoxCode}");
@@ -113,6 +136,11 @@ public sealed class FarmCreateSchemaFilter : ISchemaFilter
                 $"Auto from box if omitted. Sample: {sample.AreaName} ({sample.AreaId})");
             Describe(schema, "moltingStage",
                 "Shell stage of the crab: hard (default) = hard shell; after successful molt → softshell. Used to track softshell harvest readiness.");
+            Describe(schema, "weightGram", "Required — cân nặng (g) > 0.");
+            Describe(schema, "carapaceWidthMm", "Required — bề rộng mai (mm) > 0.");
+            Describe(schema, "carapaceLengthMm", "Required — bề ngang mai (mm) > 0.");
+            Describe(schema, "imageUrls",
+                "Optional. Public S3 URLs from POST /api/crabs/images. Multiple photos OK.");
             ForceUuid(schema, "crabLotId");
             ForceUuid(schema, "cropBatchId");
             ForceUuid(schema, "boxId");

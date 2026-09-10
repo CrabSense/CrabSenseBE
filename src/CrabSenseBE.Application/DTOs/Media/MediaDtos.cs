@@ -29,3 +29,11 @@ public record MediaUploadMeta(
     bool SharePublic = true);
 
 public record MediaShareResultDto(Guid Id, string ShareLink, bool IsShared);
+
+/// <summary>One uploaded crab image (S3 public URL).</summary>
+public record CrabImageDto(
+    string Url,
+    string StorageKey,
+    string FileName,
+    string Provider,
+    long SizeBytes);

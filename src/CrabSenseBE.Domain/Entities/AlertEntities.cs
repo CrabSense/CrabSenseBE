@@ -78,3 +78,16 @@ public class NotificationDelivery : BaseEntity
 
     public Notification? Notification { get; set; }
 }
+
+/// <summary>FCM device token đăng ký từ Mobile App.</summary>
+public class UserPushToken : BaseEntity
+{
+    public Guid UserId { get; set; }
+    public string Token { get; set; } = string.Empty;
+    public string Platform { get; set; } = "android";
+    public string? DeviceId { get; set; }
+    public bool IsActive { get; set; } = true;
+    public DateTime LastSeenAt { get; set; } = DateTime.UtcNow;
+
+    public AppUser? User { get; set; }
+}

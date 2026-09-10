@@ -16,6 +16,17 @@ public interface INotificationService
     Task<ApiResponse> DeleteChannelAsync(Guid id, CancellationToken ct = default);
     Task<ApiResponse> TestChannelAsync(Guid id, TestNotificationChannelRequest req, CancellationToken ct = default);
 
+    Task<ApiResponse<PushTokenDto>> RegisterPushTokenAsync(
+        Guid userId, RegisterPushTokenRequest req, CancellationToken ct = default);
+    Task<ApiResponse> UnregisterPushTokenAsync(
+        Guid userId, string token, CancellationToken ct = default);
+    Task<ApiResponse<IEnumerable<PushTokenDto>>> GetPushTokensAsync(
+        Guid userId, CancellationToken ct = default);
+
+    Task<ApiResponse<NotificationSettingsDto>> GetSettingsAsync(CancellationToken ct = default);
+    Task<ApiResponse<NotificationSettingsDto>> UpdateSettingsAsync(
+        UpdateNotificationSettingsRequest req, CancellationToken ct = default);
+
     /// <summary>Tạo notification + ghi delivery theo các kênh đang bật.</summary>
     Task NotifyUsersAsync(IEnumerable<Guid> userIds, string title, string body, Guid? alertId = null, CancellationToken ct = default);
 }

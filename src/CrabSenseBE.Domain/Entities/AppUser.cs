@@ -10,6 +10,11 @@ public class AppUser : BaseEntity
     public string Email { get; set; } = string.Empty;
     public string PasswordHash { get; set; } = string.Empty;
     public string FullName { get; set; } = string.Empty;
+    public string? Phone { get; set; }
+    public string? EmployeeId { get; set; }
+    public string? AvatarUrl { get; set; }
+    /// <summary>JSON prefs cho thông báo cá nhân (Account tab).</summary>
+    public string? NotificationPrefsJson { get; set; }
     public UserRole Role { get; set; } = UserRole.Staff;
     public bool IsActive { get; set; } = true;
     public DateTime? LastLoginAt { get; set; }

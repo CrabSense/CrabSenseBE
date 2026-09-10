@@ -1,292 +1,242 @@
+using CrabSenseBE.Application.Common;
 using CrabSenseBE.Application.DTOs.Dashboard;
 using CrabSenseBE.Application.Interfaces;
 using CrabSenseBE.Domain.Enums;
 using CrabSenseBE.Domain.Interfaces;
-using Microsoft.EntityFrameworkCore;
 
 namespace CrabSenseBE.Application.Services;
 
-/// <summary>
-/// Dashboard tổng quan trang trại.
-///
-/// Aggregate data từ nhiều repository:
-/// - FarmingAreas, FarmingRows, Boxes, Crabs
-/// - CrabMortalityRecords
-/// - HarvestVouchers
-/// - FrozenLots
-/// - Alerts
-///
-/// Charts:
-/// - HarvestTrend: 30 ngày, group by tuần
-/// - MortalityTrend: 30 ngày, group by tuần
-/// - BoxUtilizationByArea: tỷ lệ lấp đầy theo khu vực
-/// - MortalityByCause: nguyên nhân chết
-///
-/// Alive (đang nuôi):
-///     MoltedAt == null && (Alive || Quarantined)
-///     Không bao gồm Molting.
-///
-/// DateTime filter:
-///     Dùng in-memory filter để tránh
-///     PostgreSQL DateTime Kind mismatch.
-/// </summary>
 public class DashboardService : IDashboardService
 {
     private readonly IUnitOfWork _uow;
 
-    public DashboardService(IUnitOfWork uow)
+    public DashboardService(IUnitOfWork uow) => _uow = uow;
+
+    public async Task<ApiResponse<DashboardOverviewDto>> GetOverviewAsync(
+        Guid? farmingAreaId = null, CancellationToken ct = default)
     {
-        _uow = uow;
+        var scope = await ResolveScopeAsync(farmingAreaId, ct);
+        var boxes = scope.Boxes;
+        var crabs = (await _uow.Crabs.GetAllAsync(ct))
+            .Where(c => c.BoxId is Guid bid && scope.BoxIds.Contains(bid))
+            .ToList();
+        var alerts = await FilterAlertsAsync(scope, ct);
+        var devices = scope.Devices;
+
+        var totalBoxes = boxes.Count;
+        var activeBoxes = boxes.Count(b =>
+            string.Equals(b.Status, BoxStatuses.Active, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(b.Status, BoxStatuses.Molting, StringComparison.OrdinalIgnoreCase)
+            || b.IsOccupied);
+        var totalCrabs = crabs.Count(c => c.Status == CrabStatus.Alive);
+        var openAlerts = alerts.Count;
+        var online = devices.Count(d => d.Status == DeviceStatus.Online);
+        var iotPct = devices.Count == 0 ? 0 : Math.Round(online * 100.0 / devices.Count, 1);
+
+        return ApiResponse<DashboardOverviewDto>.Ok(new DashboardOverviewDto(
+            totalBoxes,
+            totalCrabs,
+            activeBoxes,
+            openAlerts,
+            iotPct,
+            DateTime.UtcNow));
     }
 
-    public async Task<DashboardDto> GetDashboardOverviewAsync(
-        CancellationToken ct = default)
+    public async Task<ApiResponse<DashboardMetricsDto>> GetMetricsAsync(
+        Guid? farmingAreaId = null, CancellationToken ct = default)
     {
-        // ============================================================
-        // 1. LOAD TẤT CẢ DATA CẦN THIẾT
-        // ============================================================
-        // Load 1 lần, dùng In-Memory filter
-        // để tránh DateTime Kind mismatch.
-        // ============================================================
+        var scope = await ResolveScopeAsync(farmingAreaId, ct);
+        var devices = scope.Devices;
+        var boxes = scope.Boxes;
+        var sensors = scope.Sensors;
+        var activeAlerts = await FilterAlertsAsync(scope, ct);
 
-        var areas = await _uow.FarmingAreas.Query().ToListAsync(ct);
-        var rows = await _uow.FarmingRows.Query().ToListAsync(ct);
-        var boxes = await _uow.Boxes.Query().ToListAsync(ct);
-        var crabLots = await _uow.CrabLots.Query().ToListAsync(ct);
+        var deviceScore = devices.Count == 0
+            ? 80
+            : (int)Math.Round(devices.Count(d => d.Status == DeviceStatus.Online) * 100.0 / devices.Count);
 
-        var crabs = await _uow.Crabs
-            .Query()
-            .Include(c => c.BoxAllocations)
-            .Include(c => c.MoltingRecords)
-            .ToListAsync(ct);
+        var occupied = boxes.Count(b => b.IsOccupied
+            || !string.Equals(b.Status, BoxStatuses.Empty, StringComparison.OrdinalIgnoreCase));
+        var healthyBoxes = boxes.Count(b =>
+            string.Equals(b.Status, BoxStatuses.Active, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(b.Status, BoxStatuses.Molting, StringComparison.OrdinalIgnoreCase));
+        var crabScore = occupied == 0
+            ? 85
+            : (int)Math.Round(healthyBoxes * 100.0 / Math.Max(occupied, 1));
 
-        var mortalityRecords =
-            await _uow.CrabMortalityRecords.Query().ToListAsync(ct);;
+        var quarantine = boxes.Count(b =>
+            string.Equals(b.Status, BoxStatuses.Quarantine, StringComparison.OrdinalIgnoreCase));
+        crabScore = Math.Clamp(crabScore - quarantine * 5 - activeAlerts.Count(a => a.Severity == AlertSeverity.Critical) * 8, 0, 100);
 
-        var harvestVouchers =
-            await _uow.HarvestVouchers.Query().ToListAsync(ct);;
+        var activeSensors = sensors.Count(s => s.IsActive);
+        var staleCutoff = DateTime.UtcNow.AddHours(-2);
+        var freshSensors = sensors.Count(s => s.IsActive && s.LastSeenAt != null && s.LastSeenAt > staleCutoff);
+        var waterScore = activeSensors == 0
+            ? 82
+            : (int)Math.Round(Math.Max(freshSensors, activeSensors * 0.7) * 100.0 / activeSensors);
+        waterScore = Math.Clamp(waterScore - activeAlerts.Count(a => a.Severity >= AlertSeverity.Warning) * 4, 0, 100);
 
-        var frozenLots =
-            await _uow.FrozenLots.Query().ToListAsync(ct);;
+        var score = (int)Math.Round(waterScore * 0.35 + crabScore * 0.40 + deviceScore * 0.25);
+        score = Math.Clamp(score, 0, 100);
 
-        var alerts =
-            await _uow.Alerts.Query().ToListAsync(ct);
+        var (level, label) = score switch
+        {
+            >= 85 => ("excellent", "Excellent"),
+            >= 70 => ("good", "Good"),
+            >= 50 => ("warning", "Warning"),
+            _ => ("danger", "Critical")
+        };
 
-        var boxesWithDetails = await _uow.Boxes
-            .Query()
-            .Include(b => b.FarmingRow)
-                .ThenInclude(r => r!.FarmingArea)
-            .ToListAsync(ct);
+        var areaLabel = farmingAreaId.HasValue ? "khu đang chọn" : "trang trại";
+        var explanation = activeAlerts.Count > 0
+            ? $"Có {activeAlerts.Count} cảnh báo đang mở trên {areaLabel}; điểm thiết bị {deviceScore}%, nước {waterScore}%, cua {crabScore}%."
+            : $"{(farmingAreaId.HasValue ? "Khu" : "Trang trại")} ổn định — nước {waterScore}%, cua {crabScore}%, thiết bị {deviceScore}%.";
 
-        // ============================================================
-        // 2. FARM SUMMARY
-        // ============================================================
-
-        var farmSummary = new FarmSummaryDto(
-            TotalAreas: areas.Count,
-            TotalRows: rows.Count,
-            TotalBoxes: boxes.Count,
-            TotalCrabs: crabs.Count,
-            TotalCrabLots: crabLots.Count);
-
-        // ============================================================
-        // 3. BOX UTILIZATION
-        // ============================================================
-
-        var occupied = boxes.Count(b => b.IsOccupied);
-        var empty = boxes.Count - occupied;
-
-        var boxUtilization = new BoxUtilizationDto(
-            Occupied: occupied,
-            Empty: empty,
-            UtilizationRate: CalculateRate(occupied, boxes.Count));
-
-        // ============================================================
-        // 4. CRAB STATUS (loại trừ nhau)
-        // ============================================================
-        //
-        // Alive:   MoltedAt == null && (Alive || Quarantined)
-        // Molting: Status == Molting && MoltedAt == null
-        // Molted:  MoltedAt != null
-        // Harvested: Status == Harvested
-        // Dead:    Status == Dead
-        // ============================================================
-
-        var alive = crabs.Count(c =>
-            c.MoltedAt == null
-            && (c.Status == CrabStatus.Alive
-                || c.Status == CrabStatus.Quarantined));
-
-        var molting = crabs.Count(c =>
-            c.MoltedAt == null
-            && c.Status == CrabStatus.Molting);
-
-        var molted = crabs.Count(c =>
-            c.MoltedAt != null);
-
-        var harvested = crabs.Count(c =>
-            c.Status == CrabStatus.Harvested);
-
-        var dead = crabs.Count(c =>
-            c.Status == CrabStatus.Dead);
-
-        var crabStatus = new CrabStatusDto(
-            alive, molting, molted, harvested, dead);
-
-        // ============================================================
-        // 5. RECENT ACTIVITY
-        // ============================================================
-        //
-        // DeathsLast7Days:
-        //     CrabMortalityRecords có MortalityDate >= 7 ngày trước.
-        //
-        // HarvestsLast7Days:
-        //     HarvestVouchers có HarvestDate >= 7 ngày trước
-        //     và Status == Completed.
-        //
-        // ActiveAlerts:
-        //     Alerts có Status == Active.
-        // ============================================================
-
-        var now = DateTime.UtcNow;
-        var sevenDaysAgo = now.AddDays(-7);
-
-        var deathsLast7Days = mortalityRecords
-            .Count(m => m.MortalityDate >= sevenDaysAgo);
-
-        var harvestsLast7Days = harvestVouchers
-            .Count(v => v.HarvestDate >= sevenDaysAgo
-                     && v.Status == HarvestStatus.Completed);
-
-        var activeAlerts = alerts
-            .Count(a => a.Status == AlertStatus.Active);
-
-        var recentActivity = new RecentActivityDto(
-            deathsLast7Days,
-            harvestsLast7Days,
-            activeAlerts);
-
-        // ============================================================
-        // 6. FROZEN INVENTORY SUMMARY
-        // ============================================================
-        //
-        // ExpiringSoon:
-        //     ExpiryDate <= now + 30 ngày
-        //     và ExpiryDate > now (chưa hết hạn).
-        // ============================================================
-
-        var expiryThreshold = now.AddDays(30);
-
-        var totalFrozenLots = frozenLots.Count;
-        var totalFrozenWeight = frozenLots
-            .Sum(l => l.WeightKg);
-        var expiringSoon = frozenLots
-            .Count(l => l.ExpiryDate <= expiryThreshold
-                     && l.ExpiryDate > now);
-
-        var frozenInventory = new FrozenInventorySummaryDto(
-            totalFrozenLots,
-            totalFrozenWeight,
-            expiringSoon);
-
-        // ============================================================
-        // 7. CHARTS
-        // ============================================================
-
-        // ── 7a. Harvest Trend (30 ngày, group by tuần) ──────────
-
-        var thirtyDaysAgo = now.AddDays(-30);
-
-        var harvestTrend = harvestVouchers
-            .Where(v => v.HarvestDate >= thirtyDaysAgo
-                     && v.Status == HarvestStatus.Completed)
-            .GroupBy(v => GetWeekStart(v.HarvestDate))
-            .OrderBy(g => g.Key)
-            .Select(g => new HarvestTrendPointDto(
-                Date: g.Key,
-                Quantity: g.Sum(v => v.TotalQuantity),
-                WeightKg: g.Sum(v => v.TotalWeightKg)))
-            .ToList();
-
-        // ── 7b. Mortality Trend (30 ngày, group by tuần) ────────
-
-        var mortalityTrend = mortalityRecords
-            .Where(m => m.MortalityDate >= thirtyDaysAgo)
-            .GroupBy(m => GetWeekStart(m.MortalityDate))
-            .OrderBy(g => g.Key)
-            .Select(g => new MortalityTrendPointDto(
-                Date: g.Key,
-                Count: g.Count()))
-            .ToList();
-
-        // ── 7c. Box Utilization By Area ─────────────────────────
-
-        var boxUtilByArea = boxesWithDetails
-            .Where(b => b.FarmingRow?.FarmingArea != null)
-            .GroupBy(b => new
-            {
-                AreaId = b.FarmingRow!.FarmingAreaId,
-                AreaName = b.FarmingRow.FarmingArea!.Name
-            })
-            .OrderBy(g => g.Key.AreaName)
-            .Select(g => new BoxUtilizationByAreaDto(
-                AreaId: g.Key.AreaId,
-                AreaName: g.Key.AreaName,
-                Occupied: g.Count(b => b.IsOccupied),
-                Empty: g.Count(b => !b.IsOccupied)))
-            .ToList();
-
-        // ── 7d. Mortality By Cause ──────────────────────────────
-
-        var mortalityByCause = mortalityRecords
-            .GroupBy(m => m.Cause)
-            .OrderByDescending(g => g.Count())
-            .Select(g => new MortalityByCauseDto(
-                Cause: g.Key.ToString(),
-                Count: g.Count()))
-            .ToList();
-
-        var charts = new DashboardChartsDto(
-            harvestTrend,
-            mortalityTrend,
-            boxUtilByArea,
-            mortalityByCause);
-
-        // ============================================================
-        // 8. TRẢ KẾT QUẢ
-        // ============================================================
-
-        return new DashboardDto(
-            farmSummary,
-            boxUtilization,
-            crabStatus,
-            recentActivity,
-            frozenInventory,
-            charts);
+        return ApiResponse<DashboardMetricsDto>.Ok(new DashboardMetricsDto(
+            score,
+            level,
+            label,
+            DeltaVsYesterday: 0,
+            DateTime.UtcNow,
+            waterScore,
+            crabScore,
+            deviceScore,
+            explanation));
     }
 
-    // ================================================================
-    // HÀM TÍNH TỶ LỆ PHẦN TRĂM
-    // ================================================================
-
-    private static decimal CalculateRate(int count, int total)
+    public async Task<ApiResponse<List<AiRecommendationDto>>> GetRecommendationsAsync(
+        Guid? farmingAreaId = null, CancellationToken ct = default)
     {
-        return total > 0
-            ? decimal.Round((decimal)count / total * 100, 2)
-            : 0;
+        var list = new List<AiRecommendationDto>();
+        var scope = await ResolveScopeAsync(farmingAreaId, ct);
+        var boxes = scope.Boxes;
+        var alerts = await FilterAlertsAsync(scope, ct);
+
+        foreach (var box in boxes.Where(b =>
+                     string.Equals(b.Status, BoxStatuses.Molting, StringComparison.OrdinalIgnoreCase)).Take(5))
+        {
+            list.Add(new AiRecommendationDto(
+                Id: box.Id.ToString(),
+                Type: "harvest",
+                Title: $"Thu hoạch box {box.Code}",
+                Description: $"Box {box.Code} đang ở trạng thái lột — nên kiểm tra cửa sổ softshell và thu hoạch khi đạt.",
+                TargetBoxOrArea: box.Code,
+                ConfidencePercentage: 88,
+                Priority: "high",
+                Reason: "Box status = molting",
+                OptimalTimeframe: "Trong 6 giờ",
+                ExpectedImpact: "Tăng tỷ lệ cua lột loại A",
+                HasActiveRecommendation: true));
+        }
+
+        foreach (var alert in alerts.Where(a => a.Severity >= AlertSeverity.Warning).Take(3))
+        {
+            list.Add(new AiRecommendationDto(
+                Id: alert.Id.ToString(),
+                Type: alert.Severity == AlertSeverity.Critical ? "waterTreatment" : "inspect",
+                Title: alert.Severity == AlertSeverity.Critical ? "Xử lý cảnh báo nghiêm trọng" : "Kiểm tra cảnh báo",
+                Description: string.IsNullOrWhiteSpace(alert.Message)
+                    ? "Cần kiểm tra thông số môi trường / thiết bị."
+                    : alert.Message,
+                TargetBoxOrArea: farmingAreaId.HasValue ? "Khu đang chọn" : "Trang trại",
+                ConfidencePercentage: alert.Severity == AlertSeverity.Critical ? 95 : 80,
+                Priority: alert.Severity == AlertSeverity.Critical ? "high" : "medium",
+                Reason: $"Cảnh báo {alert.Severity}",
+                OptimalTimeframe: "Ngay khi có thể",
+                ExpectedImpact: "Ổn định chất lượng nước / thiết bị",
+                HasActiveRecommendation: true));
+        }
+
+        if (list.Count == 0)
+        {
+            list.Add(new AiRecommendationDto(
+                Id: "none",
+                Type: "observe",
+                Title: "Không có hành động khẩn cấp",
+                Description: "Hệ thống đang hoạt động ổn định",
+                TargetBoxOrArea: farmingAreaId.HasValue ? "Khu đang chọn" : "Toàn trang trại",
+                ConfidencePercentage: 99,
+                Priority: "low",
+                Reason: "Không có box lột hoặc cảnh báo ưu tiên",
+                OptimalTimeframe: "Duy trì giám sát",
+                ExpectedImpact: "Ổn định vận hành",
+                HasActiveRecommendation: false));
+        }
+
+        return ApiResponse<List<AiRecommendationDto>>.Ok(list);
     }
 
-    // ================================================================
-    // LẤY NGÀY BẮT ĐẦU TUẦN (THỨ HAI)
-    // ================================================================
-    //
-    // Dùng để group dữ liệu theo tuần.
-    // Monday = start of week.
-    // ================================================================
-
-    private static DateTime GetWeekStart(DateTime date)
+    private async Task<List<Domain.Entities.Alert>> FilterAlertsAsync(AreaScope scope, CancellationToken ct)
     {
-        var diff = (7 + (date.DayOfWeek - DayOfWeek.Monday)) % 7;
-        return date.AddDays(-diff).Date;
+        var alerts = (await _uow.Alerts.FindAsync(a => a.Status == AlertStatus.Active, ct)).ToList();
+        if (!scope.IsFiltered) return alerts;
+        return alerts
+            .Where(a => a.SensorId is Guid sid && scope.SensorIds.Contains(sid))
+            .ToList();
+    }
+
+    private async Task<AreaScope> ResolveScopeAsync(Guid? farmingAreaId, CancellationToken ct)
+    {
+        if (farmingAreaId is null || farmingAreaId == Guid.Empty)
+        {
+            var allBoxes = (await _uow.Boxes.GetAllAsync(ct)).ToList();
+            var allSensors = (await _uow.Sensors.GetAllAsync(ct)).ToList();
+            var allDevices = (await _uow.Devices.GetAllAsync(ct)).ToList();
+            return AreaScope.Unfiltered(allBoxes, allSensors, allDevices);
+        }
+
+        var rowIds = (await _uow.FarmingRows.FindAsync(r => r.FarmingAreaId == farmingAreaId.Value, ct))
+            .Select(r => r.Id)
+            .ToHashSet();
+        var boxes = (await _uow.Boxes.FindAsync(b => rowIds.Contains(b.FarmingRowId), ct)).ToList();
+        var boxIds = boxes.Select(b => b.Id).ToHashSet();
+
+        var waterSystemIds = (await _uow.WaterSystems.FindAsync(
+                w => w.FarmingAreaId == farmingAreaId.Value, ct))
+            .Select(w => w.Id)
+            .ToHashSet();
+        var sensors = (await _uow.Sensors.FindAsync(
+                s => s.WaterSystemId != null && waterSystemIds.Contains(s.WaterSystemId.Value), ct))
+            .ToList();
+        var sensorIds = sensors.Select(s => s.Id).ToHashSet();
+        var deviceIds = sensors.Where(s => s.DeviceId != null).Select(s => s.DeviceId!.Value).ToHashSet();
+        var devices = (await _uow.Devices.GetAllAsync(ct))
+            .Where(d => deviceIds.Contains(d.Id))
+            .ToList();
+
+        return new AreaScope(true, boxes, boxIds, sensors, sensorIds, devices);
+    }
+
+    private sealed class AreaScope
+    {
+        public bool IsFiltered { get; }
+        public List<Domain.Entities.Box> Boxes { get; }
+        public HashSet<Guid> BoxIds { get; }
+        public List<Domain.Entities.Sensor> Sensors { get; }
+        public HashSet<Guid> SensorIds { get; }
+        public List<Domain.Entities.Device> Devices { get; }
+
+        public AreaScope(
+            bool isFiltered,
+            List<Domain.Entities.Box> boxes,
+            HashSet<Guid> boxIds,
+            List<Domain.Entities.Sensor> sensors,
+            HashSet<Guid> sensorIds,
+            List<Domain.Entities.Device> devices)
+        {
+            IsFiltered = isFiltered;
+            Boxes = boxes;
+            BoxIds = boxIds;
+            Sensors = sensors;
+            SensorIds = sensorIds;
+            Devices = devices;
+        }
+
+        public static AreaScope Unfiltered(
+            List<Domain.Entities.Box> boxes,
+            List<Domain.Entities.Sensor> sensors,
+            List<Domain.Entities.Device> devices) =>
+            new(false, boxes, boxes.Select(b => b.Id).ToHashSet(),
+                sensors, sensors.Select(s => s.Id).ToHashSet(), devices);
     }
 }

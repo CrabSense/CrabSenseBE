@@ -1,6 +1,7 @@
 using CrabSenseBE.Application.DTOs.Alert;
 using CrabSenseBE.Application.Interfaces;
 using CrabSenseBE.Domain.Enums;
+using CrabSenseBE.Api.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -18,8 +19,30 @@ public class AlertsController : ControllerBase
 
     /// <summary>[READ] List alerts</summary>
     [HttpGet]
-    public async Task<IActionResult> GetAll([FromQuery] bool? activeOnly = true, CancellationToken ct = default)
-        => Ok(await _service.GetAlertsAsync(activeOnly, ct));
+    public async Task<IActionResult> GetAll(
+        [FromQuery] bool? activeOnly = true,
+        [FromQuery] Guid? farmingAreaId = null,
+        [FromQuery] Guid? boxId = null,
+        CancellationToken ct = default)
+        => Ok(await _service.GetAlertsAsync(activeOnly, farmingAreaId, boxId, ct));
+
+    /// <summary>[READ] Unread / active alert count (Mobile)</summary>
+    [HttpGet("unread/count")]
+    public async Task<IActionResult> UnreadCount(CancellationToken ct)
+        => Ok(await _service.GetUnreadCountAsync(ct));
+
+    /// <summary>[READ] Resolved / acknowledged alert history (Mobile)</summary>
+    [HttpGet("history")]
+    public async Task<IActionResult> History(
+        [FromQuery] int days = 30,
+        [FromQuery] Guid? farmingAreaId = null,
+        CancellationToken ct = default)
+        => Ok(await _service.GetHistoryAsync(days, farmingAreaId, ct));
+
+    /// <summary>[READ] Alert by id</summary>
+    [HttpGet("{id:guid}")]
+    public async Task<IActionResult> GetById(Guid id, CancellationToken ct)
+        => Ok(await _service.GetByIdAsync(id, ct));
 
     /// <summary>[UPDATE] Acknowledge alert</summary>
     [HttpPatch("{id:guid}/acknowledge")]
@@ -27,10 +50,22 @@ public class AlertsController : ControllerBase
     public async Task<IActionResult> Acknowledge(Guid id, [FromBody] AcknowledgeAlertRequest? req, CancellationToken ct = default)
         => Ok(await _service.AcknowledgeAsync(id, req ?? new AcknowledgeAlertRequest(null), ct));
 
+    /// <summary>[UPDATE] Acknowledge alias for Mobile clients using POST</summary>
+    [HttpPost("{id:guid}/acknowledge")]
+    [Authorize(Roles = AppRoles.FarmWrite)]
+    public async Task<IActionResult> AcknowledgePost(Guid id, [FromBody] AcknowledgeAlertRequest? req, CancellationToken ct = default)
+        => Ok(await _service.AcknowledgeAsync(id, req ?? new AcknowledgeAlertRequest(null), ct));
+
     /// <summary>[UPDATE] Resolve alert</summary>
     [HttpPatch("{id:guid}/resolve")]
     [Authorize(Roles = AppRoles.FarmWrite)]
     public async Task<IActionResult> Resolve(Guid id, CancellationToken ct)
+        => Ok(await _service.ResolveAsync(id, ct));
+
+    /// <summary>[UPDATE] Resolve / dismiss alias (POST)</summary>
+    [HttpPost("{id:guid}/resolve")]
+    [Authorize(Roles = AppRoles.FarmWrite)]
+    public async Task<IActionResult> ResolvePost(Guid id, CancellationToken ct)
         => Ok(await _service.ResolveAsync(id, ct));
 
     /// <summary>[ACTION] Scan disconnected devices/sensors</summary>
@@ -82,7 +117,12 @@ public class AlertThresholdsController : ControllerBase
 public class NotificationsController : ControllerBase
 {
     private readonly INotificationService _service;
-    public NotificationsController(INotificationService service) => _service = service;
+    private readonly ICurrentUserService _currentUser;
+    public NotificationsController(INotificationService service, ICurrentUserService currentUser)
+    {
+        _service = service;
+        _currentUser = currentUser;
+    }
 
     /// <summary>[READ] Notifications by user</summary>
     [HttpGet("user/{userId:guid}")]
@@ -128,4 +168,33 @@ public class NotificationsController : ControllerBase
     public async Task<IActionResult> TestChannel(
         Guid id, [FromBody] TestNotificationChannelRequest? req, CancellationToken ct)
         => Ok(await _service.TestChannelAsync(id, req ?? new TestNotificationChannelRequest(), ct));
+
+    /// <summary>[CREATE] Register FCM push token (Mobile)</summary>
+    [HttpPost("register")]
+    public async Task<IActionResult> RegisterPushToken(
+        [FromBody] RegisterPushTokenRequest req, CancellationToken ct)
+        => Ok(await _service.RegisterPushTokenAsync(_currentUser.UserId, req, ct));
+
+    /// <summary>[DELETE] Unregister FCM push token</summary>
+    [HttpDelete("register")]
+    public async Task<IActionResult> UnregisterPushToken([FromQuery] string token, CancellationToken ct)
+        => Ok(await _service.UnregisterPushTokenAsync(_currentUser.UserId, token, ct));
+
+    /// <summary>[READ] Active push tokens for current user</summary>
+    [HttpGet("register")]
+    public async Task<IActionResult> GetPushTokens(CancellationToken ct)
+        => Ok(await _service.GetPushTokensAsync(_currentUser.UserId, ct));
+
+    /// <summary>[READ] Notification settings (push / Telegram / Zalo)</summary>
+    [HttpGet("settings")]
+    [Authorize(Roles = AppRoles.FarmWrite)]
+    public async Task<IActionResult> GetSettings(CancellationToken ct)
+        => Ok(await _service.GetSettingsAsync(ct));
+
+    /// <summary>[UPDATE] Notification settings (push / Telegram / Zalo)</summary>
+    [HttpPut("settings")]
+    [Authorize(Roles = AppRoles.FarmWrite)]
+    public async Task<IActionResult> UpdateSettings(
+        [FromBody] UpdateNotificationSettingsRequest req, CancellationToken ct)
+        => Ok(await _service.UpdateSettingsAsync(req, ct));
 }

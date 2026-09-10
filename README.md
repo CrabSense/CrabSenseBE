@@ -70,7 +70,8 @@ Kiosk tại trại **không** chỉ gọi CRUD nghiệp vụ — còn:
 - Hot path tùy chọn: `POST /api/iot/sensor-data` khi Kiosk online
 
 Luồng: **IoT + AI WQ → Kiosk (HDF5) → BE**.
-
+dotnet run --project src/CrabSenseBE.Api
+dotnet run --project src/CrabSenseBE.Api --no-launch-profile --urls http://0.0.0.0:5080
 ## Stack đề xuất
 
 - ASP.NET Core 8 (N-Layer: Api / Application / Domain / Infrastructure)
@@ -92,3 +93,8 @@ Luồng: **IoT + AI WQ → Kiosk (HDF5) → BE**.
 ## Nguồn Excel
 
 `CrabGuardian_Spec_Workbook.xlsx` — sheets: `01_Chuc_nang_FR`, `03_Module`, `04_Bang_DB`, `06_API`, `08_Vai_tro`.
+# Dừng process cũ nếu đang chiếm port/DLL
+Stop-Process -Name "CrabSenseBE.Api" -Force -ErrorAction SilentlyContinue
+
+# Chạy lại (LAN + port 5080)
+dotnet run --project src/CrabSenseBE.Api --no-launch-profile --urls http://0.0.0.0:5080

@@ -22,6 +22,11 @@ public interface IHarvestService
     /// Gets all harvest vouchers.
     /// </summary>
     Task<ApiResponse<IEnumerable<HarvestVoucherDto>>> GetAllAsync(
+        Guid? farmingAreaId = null,
+        CancellationToken ct = default);
+
+    Task<ApiResponse<HarvestOverviewDto>> GetOverviewAsync(
+        Guid? farmingAreaId = null,
         CancellationToken ct = default);
 
     /// <summary>

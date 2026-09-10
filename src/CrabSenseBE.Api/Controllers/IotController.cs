@@ -45,11 +45,14 @@ public class IotController : ControllerBase
     public async Task<IActionResult> GetLatest(Guid sensorId, CancellationToken ct)
         => Ok(await _service.GetLatestSensorDataAsync(sensorId, ct));
 
-    /// <summary>[READ] Kiosk live snapshot — all sensors + latest values</summary>
+    /// <summary>[READ] Kiosk live snapshot — optional deviceId / farmingAreaId</summary>
     [HttpGet("live")]
     [Authorize]
-    public async Task<IActionResult> Live([FromQuery] Guid? deviceId = null, CancellationToken ct = default)
-        => Ok(await _service.GetLiveSnapshotAsync(deviceId, ct));
+    public async Task<IActionResult> Live(
+        [FromQuery] Guid? deviceId = null,
+        [FromQuery] Guid? farmingAreaId = null,
+        CancellationToken ct = default)
+        => Ok(await _service.GetLiveSnapshotAsync(deviceId, farmingAreaId, ct));
 }
 
 [ApiController]
@@ -93,18 +96,19 @@ public class SensorsController : ControllerBase
 
 [ApiController]
 [Route("api/devices")]
+[Route("api/controllers")]
 [Authorize]
-[Tags("09. IoT — Devices (ESP32)")]
+[Tags("09. IoT — Controllers (ESP32)")]
 [Produces("application/json")]
 public class DevicesController : ControllerBase
 {
     private readonly IIotService _service;
     public DevicesController(IIotService service) => _service = service;
 
-    /// <summary>[READ] List ESP32 / gateways</summary>
+    /// <summary>[READ] List ESP32 / gateways — optional farmingAreaId</summary>
     [HttpGet]
-    public async Task<IActionResult> GetAll(CancellationToken ct)
-        => Ok(await _service.GetDevicesAsync(ct));
+    public async Task<IActionResult> GetAll([FromQuery] Guid? farmingAreaId = null, CancellationToken ct = default)
+        => Ok(await _service.GetDevicesAsync(farmingAreaId, ct));
 
     /// <summary>[READ] Device by id</summary>
     [HttpGet("{id:guid}")]

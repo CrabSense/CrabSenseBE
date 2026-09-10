@@ -29,12 +29,21 @@ public class HarvestController : ControllerBase
     [ProducesResponseType(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status401Unauthorized)]
     public async Task<IActionResult> GetAll(
+        [FromQuery] Guid? farmingAreaId,
         CancellationToken ct)
     {
-        var result = await _harvestService.GetAllAsync(ct);
+        var result = await _harvestService.GetAllAsync(farmingAreaId, ct);
 
         return Ok(result);
     }
+
+    /// <summary>[READ] KPI thu hoạch: có thể thu, hôm nay, chờ bán.</summary>
+    [HttpGet("overview")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    public async Task<IActionResult> Overview(
+        [FromQuery] Guid? farmingAreaId,
+        CancellationToken ct)
+        => Ok(await _harvestService.GetOverviewAsync(farmingAreaId, ct));
 
     /// <summary>
     /// [READ] Lấy chi tiết một phiếu thu hoạch.

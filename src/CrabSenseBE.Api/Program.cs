@@ -11,7 +11,10 @@ using CrabSenseBE.Application.Interfaces;
 using CrabSenseBE.Application.Services;
 
 var builder = WebApplication.CreateBuilder(args);
+LoadDotEnv(builder.Environment.ContentRootPath);
+LoadDotEnv(Directory.GetCurrentDirectory());
 builder.Configuration.AddJsonFile("appsettings.Local.json", optional: true, reloadOnChange: true);
+builder.Configuration.AddEnvironmentVariables();
 
 // ─── Serilog ────────────────────────────────────────────────────────────────
 Log.Logger = new LoggerConfiguration()
@@ -24,7 +27,7 @@ Log.Logger = new LoggerConfiguration()
 builder.Host.UseSerilog();
 
 // ─── Application + Infrastructure DI ───────────────────────────────────────
-builder.Services.AddApplication();
+builder.Services.AddApplication(builder.Configuration);
 builder.Services.AddInfrastructure(builder.Configuration);
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddScoped<ICurrentUserService, CurrentUserService>();
@@ -117,9 +120,15 @@ builder.Services.AddCors(options =>
 {
     options.AddPolicy("AllowFrontend", policy =>
     {
-        policy.WithOrigins(
-            builder.Configuration.GetSection("AllowedOrigins").Get<string[]>()
-            ?? new[] { "http://localhost:3000", "http://localhost:5173" })
+        policy.SetIsOriginAllowed(origin =>
+            {
+                if (string.IsNullOrWhiteSpace(origin)) return false;
+                if (!Uri.TryCreate(origin, UriKind.Absolute, out var uri)) return false;
+                if (uri.Host is "localhost" or "127.0.0.1") return true;
+                var configured = builder.Configuration.GetSection("AllowedOrigins").Get<string[]>()
+                    ?? new[] { "http://localhost:3000", "http://localhost:5173" };
+                return configured.Contains(origin, StringComparer.OrdinalIgnoreCase);
+            })
             .AllowAnyHeader()
             .AllowAnyMethod()
             .AllowCredentials();
@@ -156,3 +165,27 @@ app.MapHealthChecks("/health");
 await DevDbBootstrap.InitializeAsync(app);
 
 app.Run();
+
+static void LoadDotEnv(string startDir)
+{
+    if (string.IsNullOrWhiteSpace(startDir)) return;
+    var dir = new DirectoryInfo(Path.GetFullPath(startDir));
+    for (var i = 0; i < 6 && dir is not null; i++, dir = dir.Parent)
+    {
+        var path = Path.Combine(dir.FullName, ".env");
+        if (!File.Exists(path)) continue;
+        foreach (var raw in File.ReadAllLines(path))
+        {
+            var line = raw.Trim();
+            if (line.Length == 0 || line.StartsWith('#')) continue;
+            var eq = line.IndexOf('=');
+            if (eq <= 0) continue;
+            var key = line[..eq].Trim();
+            var value = line[(eq + 1)..].Trim().Trim('"').Trim('\'');
+            if (key.Length == 0) continue;
+            if (string.IsNullOrEmpty(Environment.GetEnvironmentVariable(key)))
+                Environment.SetEnvironmentVariable(key, value);
+        }
+        return;
+    }
+}

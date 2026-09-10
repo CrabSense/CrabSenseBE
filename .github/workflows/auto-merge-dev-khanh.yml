@@ -1,0 +1,33 @@
+name: Auto-merge DEV-Khanh into main
+
+on:
+  push:
+    branches: [DEV-Khanh]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: auto-merge-dev-khanh
+  cancel-in-progress: false
+
+jobs:
+  merge-to-main:
+    name: Merge DEV-Khanh → main
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: DEV-Khanh
+
+      - name: Merge into main and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch origin main
+          git checkout main
+          git merge --no-ff origin/DEV-Khanh -m "ci: auto-merge DEV-Khanh into main"
+          git push origin main

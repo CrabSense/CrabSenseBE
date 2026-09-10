@@ -35,7 +35,8 @@ public record BoxScanCrabDto(
     bool IsAlive,
     DateTime? MoltedAt,
     Guid CrabLotId,
-    DateTime? CurrentAllocationStart);
+    DateTime? CurrentAllocationStart,
+    IReadOnlyList<string> ImageUrls);
 
 /// <summary>NV cập nhật nhanh thông tin cua ngay trên màn quét QR.</summary>
 public record UpdateCrabFromScanRequest(
@@ -51,3 +52,30 @@ public record MoveCrabByScanRequest(
     Guid? TargetBoxId,
     string? TargetQrCode,
     string? Notes);
+
+/// <summary>
+/// Mobile Scan QR Quick Result — one payload after a successful scan
+/// (box snapshot + health/AI scores + water + alerts + recommendation).
+/// </summary>
+public record BoxQrQuickResultDto(
+    Guid BoxId,
+    string Code,
+    string RawValue,
+    Guid FarmId,
+    string FarmName,
+    string RowName,
+    string StatusLabel,
+    string HealthStatus,
+    int HealthScore,
+    int AiScore,
+    int CrabCount,
+    decimal? Temperature,
+    decimal? Ph,
+    DateTime? UpdatedAt,
+    string? AiRecommendation,
+    double? AiConfidence,
+    IReadOnlyList<BoxQrQuickAlertDto> Alerts);
+
+public record BoxQrQuickAlertDto(
+    string Title,
+    string Severity);

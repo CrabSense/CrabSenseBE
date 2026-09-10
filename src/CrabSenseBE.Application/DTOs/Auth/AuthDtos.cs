@@ -6,6 +6,24 @@ public record LoginRequest(string Username, string Password);
 public record RegisterRequest(string Username, string Email, string Password, string FullName, string Role);
 public record RefreshTokenRequest(string RefreshToken);
 public record ChangePasswordRequest(string CurrentPassword, string NewPassword);
+public record UpdateProfileRequest(
+    string? FullName,
+    string? Email,
+    string? Phone,
+    string? EmployeeId,
+    string? AvatarUrl
+);
+public record NotificationPreferencesDto(
+    bool WarningsEnabled = true,
+    bool TaskRemindersEnabled = true,
+    bool SystemUpdatesEnabled = true,
+    bool SoundEnabled = true,
+    bool VibrationEnabled = true,
+    bool LedIndicatorEnabled = true
+)
+{
+    public bool CriticalAlertsEnabled => true;
+}
 
 // --- Response DTOs ---
 public record LoginResponse(
@@ -22,5 +40,9 @@ public record UserDto(
     string FullName,
     string Role,
     bool IsActive,
-    DateTime? LastLoginAt
+    DateTime? LastLoginAt,
+    string? Phone = null,
+    string? EmployeeId = null,
+    string? AvatarUrl = null,
+    DateTime? CreatedAt = null
 );

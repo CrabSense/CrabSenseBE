@@ -18,7 +18,12 @@ public class HarvestService : IHarvestService
         {
             "S",
             "M",
-            "L"
+            "L",
+            "XL",
+            "XXL",
+            "A",
+            "B",
+            "C"
         };
 
     private readonly IUnitOfWork _uow;
@@ -38,13 +43,12 @@ public class HarvestService : IHarvestService
     {
         var voucher = await GetVoucherOrThrowAsync(id, ct);
 
-        var lines = await _uow.HarvestLines
-            .Query()
-            .Include(l => l.Box)
-            .Where(l => l.HarvestVoucherId == id)
-            .ToListAsync(ct);
-        return ApiResponse<HarvestVoucherDetailDto>.Ok(
-            MapVoucherDetail(voucher, lines));
+    var lines = await _uow.HarvestLines.FindAsync(
+        line => line.HarvestVoucherId == id,
+        ct);
+
+    return ApiResponse<HarvestVoucherDetailDto>.Ok(
+        MapVoucherDetail(voucher, lines, await AreaNameAsync(voucher.FarmingAreaId, ct)));
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -52,31 +56,53 @@ public class HarvestService : IHarvestService
     // ─────────────────────────────────────────────────────────────────────────
 
     public async Task<ApiResponse<IEnumerable<HarvestVoucherDto>>> GetAllAsync(
-    CancellationToken ct = default)
+        Guid? farmingAreaId = null,
+        CancellationToken ct = default)
     {
-        var vouchers = (
-            await _uow.HarvestVouchers.GetAllAsync(ct))
-            .OrderByDescending(voucher => voucher.HarvestDate)
-            .ThenByDescending(voucher => voucher.CreatedAt)
+    var vouchers = (await _uow.HarvestVouchers.GetAllAsync(ct))
+        .Where(voucher =>
+            farmingAreaId is null
+            || farmingAreaId == Guid.Empty
+            || voucher.FarmingAreaId == farmingAreaId)
+        .OrderByDescending(voucher => voucher.HarvestDate)
+        .ThenByDescending(voucher => voucher.CreatedAt)
+        .ToList();
+
+    var voucherIds = vouchers
+        .Select(voucher => voucher.Id)
+        .ToList();
+
+    var lines = voucherIds.Count == 0
+        ? new List<HarvestLine>()
+        : (
+            await _uow.HarvestLines.FindAsync(
+                line => voucherIds.Contains(line.HarvestVoucherId),
+                ct))
             .ToList();
 
         var voucherIds = vouchers
             .Select(voucher => voucher.Id)
             .ToList();
 
-        var lines = voucherIds.Count == 0
-            ? new List<HarvestLine>()
-            : (
-                await _uow.HarvestLines.FindAsync(
-                    line => voucherIds.Contains(line.HarvestVoucherId),
-                    ct))
-                .ToList();
+    var areaNames = await LoadAreaNamesAsync(
+        vouchers.Select(v => v.FarmingAreaId),
+        ct);
 
-        var linesByVoucher = lines
-            .GroupBy(line => line.HarvestVoucherId)
-            .ToDictionary(
-                group => group.Key,
-                group => group.AsEnumerable());
+    var result = vouchers
+        .Select(voucher =>
+        {
+            var voucherLines = linesByVoucher.TryGetValue(
+                voucher.Id,
+                out var foundLines)
+                    ? foundLines
+                    : Enumerable.Empty<HarvestLine>();
+
+            return MapVoucher(
+                voucher,
+                voucherLines,
+                areaNames.GetValueOrDefault(voucher.FarmingAreaId ?? Guid.Empty));
+        })
+        .ToList();
 
         var result = vouchers
             .Select(voucher =>
@@ -92,6 +118,55 @@ public class HarvestService : IHarvestService
             .ToList();
 
         return ApiResponse<IEnumerable<HarvestVoucherDto>>.Ok(result);
+    }
+
+    public async Task<ApiResponse<HarvestOverviewDto>> GetOverviewAsync(
+        Guid? farmingAreaId = null,
+        CancellationToken ct = default)
+    {
+        var boxIdsInArea = await BoxIdsInAreaAsync(farmingAreaId, ct);
+        var crabs = (await _uow.Crabs.GetAllAsync(ct)).ToList();
+        var harvestable = crabs.Count(c =>
+            (c.Status is CrabStatus.Alive or CrabStatus.Molting or CrabStatus.Quarantined)
+            && (boxIdsInArea is null
+                || (c.BoxId is Guid bid && boxIdsInArea.Contains(bid))));
+
+        var today = DateTime.UtcNow.Date;
+        var tomorrow = today.AddDays(1);
+        var areaVouchers = (await _uow.HarvestVouchers.GetAllAsync(ct))
+            .Where(v =>
+                farmingAreaId is null
+                || farmingAreaId == Guid.Empty
+                || v.FarmingAreaId == farmingAreaId)
+            .ToList();
+        var harvestedToday = areaVouchers
+            .Where(v =>
+                v.Status == HarvestStatus.Completed
+                && v.HarvestDate >= today
+                && v.HarvestDate < tomorrow)
+            .Sum(v => v.TotalQuantity);
+
+        var completedIds = areaVouchers
+            .Where(v => v.Status == HarvestStatus.Completed)
+            .Select(v => v.Id)
+            .ToHashSet();
+        var harvestedCrabIds = completedIds.Count == 0
+            ? new HashSet<Guid>()
+            : (await _uow.HarvestLines.FindAsync(
+                    l => l.CrabId != null && completedIds.Contains(l.HarvestVoucherId),
+                    ct))
+                .Select(l => l.CrabId!.Value)
+                .ToHashSet();
+        var waitingCrabs = crabs
+            .Where(c => c.Status == CrabStatus.Harvested
+                && (boxIdsInArea is null || harvestedCrabIds.Contains(c.Id)))
+            .ToList();
+
+        return ApiResponse<HarvestOverviewDto>.Ok(new HarvestOverviewDto(
+            harvestable,
+            harvestedToday,
+            waitingCrabs.Count,
+            decimal.Round(waitingCrabs.Sum(c => c.WeightGram ?? 0) / 1000m, 3)));
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -146,30 +221,31 @@ public class HarvestService : IHarvestService
 
         await ValidateCrabsAsync(suppliedCrabIds, ct);
 
+        var areaId = request.FarmingAreaId;
+        if (areaId is null && suppliedCrabIds.Count > 0)
+            areaId = await InferAreaFromCrabAsync(suppliedCrabIds[0], ct);
+
+        var performer = NormalizeNullable(request.PerformedByName)
+            ?? await ResolveUserNameAsync(ct);
+
+        var completeNow = suppliedCrabIds.Count > 0;
+
         var voucher = new HarvestVoucher
         {
             VoucherCode = await GenerateVoucherCodeAsync(ct),
             // CropBatchId = request.CropBatchId,
             HarvestDate = NormalizeUtc(request.HarvestDate),
-            Status = HarvestStatus.Planned,
+            Status = completeNow ? HarvestStatus.Completed : HarvestStatus.Planned,
             Notes = NormalizeNullable(request.Notes),
-            CreatedBy = _currentUser.UserId
+            CreatedBy = _currentUser.UserId,
+            FarmingAreaId = areaId,
+            PerformedByName = performer,
+            PhotoUrlsJson = JsonStringList.Serialize(request.PhotoUrls)
         };
 
         foreach (var requestLine in requestLines)
         {
-            Guid? boxId = null;
-            if (requestLine.CrabId.HasValue)
-            {
-                var crab = await _uow.Crabs.GetByIdAsync(requestLine.CrabId.Value, ct);
-                if (crab != null)
-                {
-                    var lastAllocation = crab.BoxAllocations
-                        .OrderByDescending(a => a.StartTime)
-                        .FirstOrDefault();
-                    boxId = lastAllocation?.BoxId;
-                }
-            }
+            var snap = await SnapshotCrabAsync(requestLine.CrabId, ct);
             voucher.Lines.Add(new HarvestLine
             {
                 HarvestVoucherId = voucher.Id,
@@ -178,7 +254,15 @@ public class HarvestService : IHarvestService
                 WeightGram = requestLine.WeightGram,
                 Grade = NormalizeGrade(requestLine.Grade),
                 IsSoftshell = requestLine.IsSoftshell,
-                Notes = NormalizeNullable(requestLine.Notes)
+                Notes = NormalizeNullable(requestLine.Notes),
+                ConditionLabel = NormalizeNullable(requestLine.ConditionLabel),
+                PhotoUrlsJson = JsonStringList.Serialize(requestLine.PhotoUrls),
+                CrabCode = snap.CrabCode,
+                AreaName = snap.AreaName,
+                RowName = snap.RowName,
+                BoxCode = snap.BoxCode,
+                LotCode = snap.LotCode,
+                Result = NormalizeResult(requestLine.Result)
             });
         }
 
@@ -186,10 +270,14 @@ public class HarvestService : IHarvestService
         voucher.TotalWeightKg = CalculateTotalWeightKg(voucher.Lines);
 
         await _uow.HarvestVouchers.AddAsync(voucher, ct);
+
+        if (completeNow)
+            await ApplyHarvestToCrabsAsync(voucher, ct);
+
         await _uow.SaveChangesAsync(ct);
 
         return ApiResponse<HarvestVoucherDetailDto>.Ok(
-            MapVoucherDetail(voucher, voucher.Lines),
+            MapVoucherDetail(voucher, voucher.Lines, await AreaNameAsync(voucher.FarmingAreaId, ct)),
             $"Harvest voucher '{voucher.VoucherCode}' created.");
     }
 
@@ -226,8 +314,17 @@ public class HarvestService : IHarvestService
         ValidateStatusTransition(voucher.Status, targetStatus);
 
         voucher.Status = targetStatus;
-
         _uow.HarvestVouchers.Update(voucher);
+
+        if (targetStatus == HarvestStatus.Completed)
+        {
+            var pendingLines = await _uow.HarvestLines.FindAsync(
+                line => line.HarvestVoucherId == voucher.Id,
+                ct);
+            voucher.Lines = pendingLines.ToList();
+            await ApplyHarvestToCrabsAsync(voucher, ct);
+        }
+
         await _uow.SaveChangesAsync(ct);
 
         var lines = await _uow.HarvestLines.FindAsync(
@@ -235,7 +332,7 @@ public class HarvestService : IHarvestService
             ct);
 
         return ApiResponse<HarvestVoucherDetailDto>.Ok(
-            MapVoucherDetail(voucher, lines),
+            MapVoucherDetail(voucher, lines, await AreaNameAsync(voucher.FarmingAreaId, ct)),
             $"Harvest voucher status updated to '{targetStatus}'.");
     }
 
@@ -501,7 +598,7 @@ public class HarvestService : IHarvestService
             {
                 throw AppException.BadRequest(
                     $"Invalid grade at line {lineNumber}. " +
-                    "Allowed values: S, M, L.");
+                    "Allowed values: S, M, L, XL, XXL, A, B, C.");
             }
         }
     }
@@ -581,32 +678,49 @@ public class HarvestService : IHarvestService
     // ─────────────────────────────────────────────────────────────────────────
 
     private static HarvestVoucherDto MapVoucher(
-    HarvestVoucher voucher,
-    IEnumerable<HarvestLine> lines)
+        HarvestVoucher voucher,
+        IEnumerable<HarvestLine> lines,
+        string? areaName = null)
     {
         var softshellQuantity = lines.Count(
             line => line.IsSoftshell);
 
-        return new HarvestVoucherDto(
-            Id: voucher.Id,
-            VoucherCode: voucher.VoucherCode,
-            // CropBatchId: voucher.CropBatchId,
-            HarvestDate: voucher.HarvestDate,
-            Status: voucher.Status.ToString(),
-            TotalQuantity: voucher.TotalQuantity,
-            TotalWeightKg: voucher.TotalWeightKg,
-            SoftshellQuantity: softshellQuantity,
-            SoftshellRate: CalculateRate(
-                softshellQuantity,
-                voucher.TotalQuantity),
-            Notes: voucher.Notes,
-            CreatedBy: voucher.CreatedBy,
-            CreatedAt: voucher.CreatedAt);
+    var lineDtos = lines.Select(MapLine).ToList();
+    var passed = lineDtos.Count(l => IsPassed(l.Result));
+    var failed = lineDtos.Count - passed;
+    var avg = voucher.TotalQuantity <= 0
+        ? 0
+        : decimal.Round(voucher.TotalWeightKg * 1000m / voucher.TotalQuantity, 1);
+
+    return new HarvestVoucherDto(
+        Id: voucher.Id,
+        VoucherCode: voucher.VoucherCode,
+        // CropBatchId: voucher.CropBatchId,
+        HarvestDate: voucher.HarvestDate,
+        Status: voucher.Status.ToString(),
+        TotalQuantity: voucher.TotalQuantity,
+        TotalWeightKg: voucher.TotalWeightKg,
+        SoftshellQuantity: softshellQuantity,
+        SoftshellRate: CalculateRate(
+            softshellQuantity,
+            voucher.TotalQuantity),
+        Notes: voucher.Notes,
+        CreatedBy: voucher.CreatedBy,
+        CreatedAt: voucher.CreatedAt,
+        FarmingAreaId: voucher.FarmingAreaId,
+        PerformedByName: voucher.PerformedByName,
+        AreaName: areaName,
+        PassedCount: passed,
+        FailedCount: failed,
+        AverageWeightGram: avg,
+        PhotoUrls: JsonStringList.Parse(voucher.PhotoUrlsJson),
+        Lines: lineDtos);
     }
 
     private static HarvestVoucherDetailDto MapVoucherDetail(
         HarvestVoucher voucher,
-        IEnumerable<HarvestLine> lines)
+        IEnumerable<HarvestLine> lines,
+        string? areaName = null)
     {
         var lineList = lines
             .OrderBy(line => line.CreatedAt)
@@ -615,6 +729,11 @@ public class HarvestService : IHarvestService
 
         var softshellQuantity = lineList.Count(
             line => line.IsSoftshell);
+        var passed = lineList.Count(l => IsPassed(l.Result));
+        var failed = lineList.Count - passed;
+        var avg = voucher.TotalQuantity <= 0
+            ? 0
+            : decimal.Round(voucher.TotalWeightKg * 1000m / voucher.TotalQuantity, 1);
 
         return new HarvestVoucherDetailDto(
             Id: voucher.Id,
@@ -631,7 +750,14 @@ public class HarvestService : IHarvestService
             Notes: voucher.Notes,
             CreatedBy: voucher.CreatedBy,
             CreatedAt: voucher.CreatedAt,
-            Lines: lineList);
+            Lines: lineList,
+            FarmingAreaId: voucher.FarmingAreaId,
+            PerformedByName: voucher.PerformedByName,
+            AreaName: areaName,
+            PassedCount: passed,
+            FailedCount: failed,
+            AverageWeightGram: avg,
+            PhotoUrls: JsonStringList.Parse(voucher.PhotoUrlsJson));
     }
 
     private static HarvestLineDto MapLine(
@@ -645,7 +771,15 @@ public class HarvestService : IHarvestService
             WeightGram: line.WeightGram,
             Grade: line.Grade,
             IsSoftshell: line.IsSoftshell,
-            Notes: line.Notes);
+            Notes: line.Notes,
+            CrabCode: line.CrabCode,
+            BoxCode: line.BoxCode,
+            ConditionLabel: line.ConditionLabel,
+            PhotoUrls: JsonStringList.Parse(line.PhotoUrlsJson),
+            AreaName: line.AreaName,
+            RowName: line.RowName,
+            LotCode: line.LotCode,
+            Result: line.Result);
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -663,26 +797,70 @@ public class HarvestService : IHarvestService
     private async Task<string> GenerateVoucherCodeAsync(
         CancellationToken ct)
     {
-        for (var attempt = 0; attempt < 5; attempt++)
+        var codes = (await _uow.HarvestVouchers.GetAllAsync(ct))
+            .Select(v => v.VoucherCode)
+            .Where(c => c.StartsWith("HAR-", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        var max = 0;
+        foreach (var code in codes)
         {
-            var suffix = Guid.NewGuid()
-                .ToString("N")[..6]
-                .ToUpperInvariant();
+            var tail = code["HAR-".Length..];
+            if (int.TryParse(tail, out var n) && n > max) max = n;
+        }
 
-            var code = $"HV-{DateTime.UtcNow:yyyyMMdd}-{suffix}";
-
-            var exists = await _uow.HarvestVouchers.AnyAsync(
-                voucher => voucher.VoucherCode == code,
-                ct);
-
-            if (!exists)
-            {
-                return code;
-            }
+        for (var attempt = 1; attempt <= 20; attempt++)
+        {
+            var next = $"HAR-{(max + attempt):000}";
+            if (!await _uow.HarvestVouchers.AnyAsync(v => v.VoucherCode == next, ct))
+                return next;
         }
 
         throw AppException.Conflict(
             "Unable to generate a unique harvest voucher code.");
+    }
+
+    private static string NormalizeResult(string? raw)
+    {
+        var key = (raw ?? "passed").Trim().ToLowerInvariant();
+        if (key is "failed" or "fail" or "khongdat" or "không đạt" or "reject")
+            return "failed";
+        return "passed";
+    }
+
+    private static bool IsPassed(string? result) =>
+        !string.Equals(result, "failed", StringComparison.OrdinalIgnoreCase);
+
+    private async Task<(string? CrabCode, string? AreaName, string? RowName, string? BoxCode, string? LotCode)>
+        SnapshotCrabAsync(Guid? crabId, CancellationToken ct)
+    {
+        if (crabId is not Guid id) return (null, null, null, null, null);
+        var crab = await _uow.Crabs.GetByIdAsync(id, ct);
+        if (crab is null) return (null, null, null, null, null);
+
+        string? boxCode = null, rowName = null, areaName = null, lotCode = null;
+        if (crab.BoxId is Guid boxId)
+        {
+            var box = await _uow.Boxes.GetByIdAsync(boxId, ct);
+            boxCode = box?.Code;
+            if (box is not null)
+            {
+                var row = await _uow.FarmingRows.GetByIdAsync(box.FarmingRowId, ct);
+                rowName = string.IsNullOrWhiteSpace(row?.Name) ? row?.Code : row?.Name;
+                if (row is not null)
+                {
+                    var area = await _uow.FarmingAreas.GetByIdAsync(row.FarmingAreaId, ct);
+                    areaName = string.IsNullOrWhiteSpace(area?.Name) ? area?.Code : area?.Name;
+                }
+            }
+        }
+
+        if (crab.CrabLotId != Guid.Empty)
+        {
+            var lot = await _uow.CrabLots.GetByIdAsync(crab.CrabLotId, ct);
+            lotCode = lot?.LotCode ?? lot?.Name;
+        }
+
+        return (crab.Code, areaName, rowName, boxCode, lotCode);
     }
 
     private static decimal CalculateTotalWeightKg(
@@ -801,5 +979,142 @@ public class HarvestService : IHarvestService
         return string.IsNullOrWhiteSpace(grade)
             ? null
             : grade.Trim().ToUpperInvariant();
+    }
+
+    private async Task ApplyHarvestToCrabsAsync(HarvestVoucher voucher, CancellationToken ct)
+    {
+        foreach (var line in voucher.Lines.Where(l => l.CrabId.HasValue))
+        {
+            var crab = await _uow.Crabs.GetByIdAsync(line.CrabId!.Value, ct);
+            if (crab is null) continue;
+            if (crab.Status is CrabStatus.Harvested or CrabStatus.Sold)
+                continue;
+
+            var oldStatus = crab.Status;
+            var oldCondition = crab.Condition;
+            var previousBoxId = crab.BoxId;
+
+            crab.Status = CrabStatus.Harvested;
+            crab.Condition = CrabCondition.Harvested;
+            crab.WeightGram = line.WeightGram;
+            crab.BoxId = null;
+            _uow.Crabs.Update(crab);
+
+            var open = await _uow.CrabBoxAllocations.FindAsync(
+                a => a.CrabId == crab.Id && a.EndTime == null, ct);
+            foreach (var alloc in open)
+            {
+                alloc.EndTime = DateTime.UtcNow;
+                _uow.CrabBoxAllocations.Update(alloc);
+            }
+
+            if (previousBoxId is Guid boxId)
+            {
+                var box = await _uow.Boxes.GetByIdAsync(boxId, ct);
+                if (box is not null)
+                {
+                    var stillLive = (await _uow.Crabs.FindAsync(
+                            c => c.BoxId == boxId
+                                 && c.Id != crab.Id
+                                 && (c.Status == CrabStatus.Alive
+                                     || c.Status == CrabStatus.Molting
+                                     || c.Status == CrabStatus.Quarantined),
+                            ct))
+                        .Any();
+                    if (!stillLive)
+                    {
+                        box.IsOccupied = false;
+                        box.Status = "empty";
+                        _uow.Boxes.Update(box);
+                    }
+                }
+            }
+
+            await _uow.CrabStatusHistories.AddAsync(new CrabStatusHistory
+            {
+                CrabId = crab.Id,
+                OldStatus = oldStatus,
+                NewStatus = CrabStatus.Harvested,
+                OldCondition = oldCondition,
+                NewCondition = CrabCondition.Harvested,
+                ChangedAt = DateTime.UtcNow,
+                Source = "harvest",
+                Reason = voucher.VoucherCode,
+                ChangedByUserId = _currentUser.UserId
+            }, ct);
+
+            await _uow.CrabHarvestHistories.AddAsync(new CrabHarvestHistory
+            {
+                CrabId = crab.Id,
+                HarvestLineId = line.Id,
+                HarvestedAt = voucher.HarvestDate,
+                WeightGram = line.WeightGram,
+                Grade = line.Grade,
+                Notes = line.Notes
+            }, ct);
+        }
+    }
+
+    private async Task<Guid?> InferAreaFromCrabAsync(Guid crabId, CancellationToken ct)
+    {
+        var crab = await _uow.Crabs.GetByIdAsync(crabId, ct);
+        if (crab?.BoxId is not Guid boxId) return null;
+        var box = await _uow.Boxes.GetByIdAsync(boxId, ct);
+        if (box is null) return null;
+        var row = await _uow.FarmingRows.GetByIdAsync(box.FarmingRowId, ct);
+        return row?.FarmingAreaId;
+    }
+
+    private async Task<string?> AreaNameAsync(Guid? areaId, CancellationToken ct)
+    {
+        if (areaId is not Guid id || id == Guid.Empty) return null;
+        var area = await _uow.FarmingAreas.GetByIdAsync(id, ct);
+        if (area is null) return null;
+        return string.IsNullOrWhiteSpace(area.Name) ? area.Code : area.Name;
+    }
+
+    private async Task<Dictionary<Guid, string>> LoadAreaNamesAsync(
+        IEnumerable<Guid?> ids,
+        CancellationToken ct)
+    {
+        var set = ids.Where(id => id is Guid g && g != Guid.Empty)
+            .Select(id => id!.Value)
+            .ToHashSet();
+        if (set.Count == 0) return new Dictionary<Guid, string>();
+        var areas = await _uow.FarmingAreas.GetAllAsync(ct);
+        return areas
+            .Where(a => set.Contains(a.Id))
+            .ToDictionary(
+                a => a.Id,
+                a => string.IsNullOrWhiteSpace(a.Name) ? a.Code : a.Name);
+    }
+
+    private async Task<HashSet<Guid>?> BoxIdsInAreaAsync(Guid? farmingAreaId, CancellationToken ct)
+    {
+        if (farmingAreaId is not Guid areaId || areaId == Guid.Empty)
+            return null;
+        var rowIds = (await _uow.FarmingRows.FindAsync(r => r.FarmingAreaId == areaId, ct))
+            .Select(r => r.Id)
+            .ToHashSet();
+        return (await _uow.Boxes.GetAllAsync(ct))
+            .Where(b => rowIds.Contains(b.FarmingRowId))
+            .Select(b => b.Id)
+            .ToHashSet();
+    }
+
+    private async Task<string> ResolveUserNameAsync(CancellationToken ct)
+    {
+        try
+        {
+            var user = await _uow.Users.GetByIdAsync(_currentUser.UserId, ct);
+            if (user is not null && !string.IsNullOrWhiteSpace(user.FullName))
+                return user.FullName.Trim();
+        }
+        catch
+        {
+            // JWT without user row
+        }
+
+        return "Owner";
     }
 }

@@ -17,16 +17,24 @@ public interface IUnitOfWork : IDisposable
     IRepository<CrabBoxAllocation> CrabBoxAllocations { get; }
     IRepository<MoltingRecord> MoltingRecords { get; }
     IRepository<BoxStatusHistory> BoxStatusHistories { get; }
+    IRepository<CrabStatusHistory> CrabStatusHistories { get; }
+    IRepository<CrabWeightHistory> CrabWeightHistories { get; }
+    IRepository<CrabAiAnalysis> CrabAiAnalyses { get; }
+    IRepository<CrabHarvestHistory> CrabHarvestHistories { get; }
     IRepository<WaterSystem> WaterSystems { get; }
+    IRepository<RasComponent> RasComponents { get; }
+    IRepository<WaterFlow> WaterFlows { get; }
     IRepository<Sensor> Sensors { get; }
     IRepository<Device> Devices { get; }
     IRepository<WaterMeasurement> WaterMeasurements { get; }
+    IRepository<WaterAnalysisRun> WaterAnalysisRuns { get; }
     IRepository<Hdf5Upload> Hdf5Uploads { get; }
     IRepository<AlertThreshold> AlertThresholds { get; }
     IRepository<Alert> Alerts { get; }
     IRepository<Notification> Notifications { get; }
     IRepository<NotificationChannel> NotificationChannels { get; }
     IRepository<NotificationDelivery> NotificationDeliveries { get; }
+    IRepository<UserPushToken> UserPushTokens { get; }
     IRepository<MediaAsset> MediaAssets { get; }
     IRepository<HarvestVoucher> HarvestVouchers { get; }
     IRepository<HarvestLine> HarvestLines { get; }
@@ -45,7 +53,8 @@ public interface IUnitOfWork : IDisposable
     IRepository<AiFeedback> AiFeedbacks { get; }
     IRepository<AiRecommendation> AiRecommendations { get; }
     IRepository<Inspection> Inspections { get; }
-    
+    IRepository<FarmOperation> FarmOperations { get; }
+    IRepository<SaleTransaction> SaleTransactions { get; }
 
     Task<int> SaveChangesAsync(CancellationToken ct = default);
 

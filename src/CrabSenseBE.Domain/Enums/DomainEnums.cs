@@ -40,7 +40,8 @@ public enum OrderStatus
     Packing,
     Shipping,
     Completed,
-    Cancelled
+    Cancelled,
+    Draft
 }
 
 public enum PaymentStatus
@@ -48,7 +49,8 @@ public enum PaymentStatus
     Pending,
     Paid,
     Overdue,
-    Cancelled
+    Cancelled,
+    Partial
 }
 
 public enum AlertSeverity
@@ -71,6 +73,25 @@ public enum DeviceStatus
     Offline,
     Maintenance,
     Error
+}
+
+/// <summary>Trạng thái hoạt động của trại / khu nuôi (FarmingArea).</summary>
+public enum FarmStatus
+{
+    /// <summary>Đang hoạt động.</summary>
+    Active = 0,
+    /// <summary>Tạm ngưng.</summary>
+    Suspended = 1,
+    /// <summary>Ngừng hoạt động.</summary>
+    Closed = 2
+}
+
+/// <summary>Chuỗi Status trên API tạo/sửa trại.</summary>
+public static class FarmStatuses
+{
+    public const string Active = nameof(FarmStatus.Active);
+    public const string Suspended = nameof(FarmStatus.Suspended);
+    public const string Closed = nameof(FarmStatus.Closed);
 }
 
 public enum FrozenLotStatus
@@ -102,7 +123,114 @@ public enum CrabStatus
     /// <summary>Cua đã được thu hoạch.</summary>
     Harvested = 4,
     /// <summary>Không xác định được tình trạng/vị trí cua.</summary>
-    Missing = 5
+    Missing = 5,
+    /// <summary>Cua đã bán — không gán lúc thu hoạch.</summary>
+    Sold = 6
+}
+
+/// <summary>Trạng thái Owner trên card cua — 1 trường chính.</summary>
+public enum CrabCondition
+{
+    /// <summary>🟢 Bình thường</summary>
+    Normal = 0,
+    /// <summary>🟡 Sắp lột</summary>
+    Premolt = 1,
+    /// <summary>🔵 Đang lột</summary>
+    Molting = 2,
+    /// <summary>🟣 Cua mềm / cua lột</summary>
+    Softshell = 3,
+    /// <summary>🔴 Có vấn đề</summary>
+    Problem = 4,
+    /// <summary>⚫ Đã chết</summary>
+    Dead = 5,
+    /// <summary>⚪ Đã thu hoạch</summary>
+    Harvested = 6,
+    /// <summary>💰 Đã bán</summary>
+    Sold = 7
+}
+
+public enum CrabGender
+{
+    Unknown = 0,
+    Male = 1,
+    Female = 2
+}
+
+public static class CrabConditions
+{
+    public static CrabCondition FromMoltingAndStatus(string? moltingStage, CrabStatus status)
+    {
+        if (status == CrabStatus.Dead) return CrabCondition.Dead;
+        if (status == CrabStatus.Sold) return CrabCondition.Sold;
+        if (status == CrabStatus.Harvested) return CrabCondition.Harvested;
+        if (status is CrabStatus.Quarantined or CrabStatus.Missing) return CrabCondition.Problem;
+        if (status == CrabStatus.Molting) return CrabCondition.Molting;
+
+        var stage = (moltingStage ?? "")
+            .Trim()
+            .ToLowerInvariant()
+            .Replace("_", "", StringComparison.Ordinal)
+            .Replace("-", "", StringComparison.Ordinal);
+        return stage switch
+        {
+            "premolt" or "pre" => CrabCondition.Premolt,
+            "molting" or "molt" => CrabCondition.Molting,
+            "softshell" or "soft" or "postmolt" or "post" => CrabCondition.Softshell,
+            _ => CrabCondition.Normal
+        };
+    }
+
+    public static CrabStatus ToLifecycle(CrabCondition condition) => condition switch
+    {
+        CrabCondition.Dead => CrabStatus.Dead,
+        CrabCondition.Sold => CrabStatus.Sold,
+        CrabCondition.Harvested => CrabStatus.Harvested,
+        CrabCondition.Problem => CrabStatus.Quarantined,
+        CrabCondition.Molting => CrabStatus.Molting,
+        _ => CrabStatus.Alive
+    };
+
+    public static string ToApi(CrabCondition condition) => condition switch
+    {
+        CrabCondition.Premolt => "premolt",
+        CrabCondition.Molting => "molting",
+        CrabCondition.Softshell => "softshell",
+        CrabCondition.Problem => "problem",
+        CrabCondition.Dead => "dead",
+        CrabCondition.Harvested => "harvested",
+        CrabCondition.Sold => "sold",
+        _ => "normal"
+    };
+
+    public static CrabCondition Parse(string? raw, CrabCondition fallback = CrabCondition.Normal)
+    {
+        var key = (raw ?? "").Trim().ToLowerInvariant()
+            .Replace("_", "", StringComparison.Ordinal)
+            .Replace("-", "", StringComparison.Ordinal);
+        return key switch
+        {
+            "normal" or "binhthuong" or "hard" or "hardshell" => CrabCondition.Normal,
+            "premolt" or "pre" or "saplot" => CrabCondition.Premolt,
+            "molting" or "molt" or "danglot" => CrabCondition.Molting,
+            "softshell" or "soft" or "postmolt" or "post" or "cualotmem" => CrabCondition.Softshell,
+            "problem" or "alert" or "quarantined" or "missing" or "covande" => CrabCondition.Problem,
+            "dead" or "deceased" or "chet" => CrabCondition.Dead,
+            "harvested" or "harvest" or "dathuhoach" => CrabCondition.Harvested,
+            "sold" or "daban" => CrabCondition.Sold,
+            _ => fallback
+        };
+    }
+
+    public static CrabGender ParseGender(string? raw)
+    {
+        var key = (raw ?? "").Trim().ToLowerInvariant();
+        return key switch
+        {
+            "male" or "m" or "duc" or "đực" => CrabGender.Male,
+            "female" or "f" or "cai" or "cái" => CrabGender.Female,
+            _ => CrabGender.Unknown
+        };
+    }
 }
 
 /// <summary>

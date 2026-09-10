@@ -35,23 +35,47 @@ public static class DemoDataSeeder
         var staff = await db.AppUsers.FirstOrDefaultAsync(u => u.Username == "staff", ct);
         var now = DateTime.UtcNow;
 
-        // ── Lots ─────────────────────────────────────────────────────────────
+        // ── Lots & batch ─────────────────────────────────────────────────────
         var lot1 = new CrabLot
         {
             LotCode = "LOT-2026-001",
+            Name = "Lô cua tháng 9 — Cà Mau",
             ImportDate = now.AddDays(-45),
-            Quantity = 0,
+            Quantity = 50,
             AverageWeightGram = 180,
+            TotalWeightKg = 9,
+            WeightMinGram = 100,
+            WeightMaxGram = 150,
+            UnitPriceVndPerKg = 180000,
+            CrabCostVnd = 1620000,
+            ShippingCostVnd = 100000,
+            OtherCostVnd = 0,
+            TotalCostVnd = 1720000,
+            Condition = "Good",
+            Status = "Pending",
+            DeadOnArrival = 1,
             SupplierName = "Nhà cung cấp Cà Mau",
             Notes = "Lô giống demo A"
         };
         var lot2 = new CrabLot
         {
             LotCode = "LOT-2026-002",
+            Name = "Lô Cà Mau 01",
             ImportDate = now.AddDays(-20),
-            Quantity = 0,
+            Quantity = 40,
             AverageWeightGram = 195,
-            SupplierName = "Nhà cung cấp Bạc Liêu",
+            TotalWeightKg = 7.8m,
+            WeightMinGram = 110,
+            WeightMaxGram = 160,
+            UnitPriceVndPerKg = 185000,
+            CrabCostVnd = 1443000,
+            ShippingCostVnd = 80000,
+            OtherCostVnd = 0,
+            TotalCostVnd = 1523000,
+            Condition = "Average",
+            Status = "Pending",
+            DeadOnArrival = 2,
+            SupplierName = "Thương lái Bạc Liêu",
             Notes = "Lô giống demo B"
         };
         db.CrabLots.AddRange(lot1, lot2);
@@ -60,23 +84,65 @@ public static class DemoDataSeeder
         var areaA = new FarmingArea
         {
             OwnerId = owner.Id,
+            Code = "AREA-A01",
             Name = DemoAreaMarker,
+            Location = "Nhà nuôi số 1 - Tầng 1",
+            Address = "Ấp 1, xã Tân Thành",
+            Region = "Cà Mau",
+            AreaSquareMeters = 120,
+            EstablishedAt = now.AddYears(-2),
             Description = "Khu nuôi demo — có IoT + cua + thu hoạch",
+            Status = FarmStatus.Active,
             IsActive = true
         };
         var areaB = new FarmingArea
         {
             OwnerId = owner.Id,
+            Code = "AREA-A02",
             Name = "Khu Demo RAS-B",
+            Location = "Nhà nuôi số 2",
+            Address = "Ấp 3, xã Tân Thành",
+            Region = "Cà Mau",
+            AreaSquareMeters = 80,
+            EstablishedAt = now.AddYears(-1),
             Description = "Khu phụ — ít hộp hơn",
+            Status = FarmStatus.Active,
             IsActive = true
         };
         db.FarmingAreas.AddRange(areaA, areaB);
         await db.SaveChangesAsync(ct);
 
-        var rowA1 = new FarmingRow { FarmingAreaId = areaA.Id, Name = "Dãy A1", Capacity = 5, IsActive = true };
-        var rowA2 = new FarmingRow { FarmingAreaId = areaA.Id, Name = "Dãy A2", Capacity = 3, IsActive = true };
-        var rowB1 = new FarmingRow { FarmingAreaId = areaB.Id, Name = "Dãy B1", Capacity = 2, IsActive = true };
+        var rowA1 = new FarmingRow
+        {
+            FarmingAreaId = areaA.Id,
+            Code = "DAY-A01",
+            Name = "Dãy A",
+            Location = "Bên trái",
+            Description = "Dãy nuôi cua lột",
+            Capacity = 20,
+            Status = FarmStatus.Active,
+            IsActive = true
+        };
+        var rowA2 = new FarmingRow
+        {
+            FarmingAreaId = areaA.Id,
+            Code = "DAY-A02",
+            Name = "Dãy B",
+            Location = "Bên phải",
+            Capacity = 10,
+            Status = FarmStatus.Active,
+            IsActive = true
+        };
+        var rowB1 = new FarmingRow
+        {
+            FarmingAreaId = areaB.Id,
+            Code = "DAY-A03",
+            Name = "Dãy C",
+            Location = "Nhà nuôi A",
+            Capacity = 8,
+            Status = FarmStatus.Active,
+            IsActive = true
+        };
         db.FarmingRows.AddRange(rowA1, rowA2, rowB1);
         await db.SaveChangesAsync(ct);
 
@@ -118,12 +184,12 @@ public static class DemoDataSeeder
         // ── Crabs ──────────────────────────────────────────────────────────
         var crabs = new[]
         {
-            new Crab { CrabLotId = lot1.Id, Tag = "CRAB-A01", WeightGram = 210, StockedAt = now.AddDays(-30), MoltingStage = "hard-shell", Status = CrabStatus.Alive },
-            new Crab { CrabLotId = lot1.Id, Tag = "CRAB-A02", WeightGram = 195, StockedAt = now.AddDays(-25), MoltingStage = "molting", Status = CrabStatus.Molting, MoltedAt = now.AddHours(-6) },
-            new Crab { CrabLotId = lot1.Id, Tag = "CRAB-A03", WeightGram = 225, StockedAt = now.AddDays(-20), MoltingStage = "pre-molt", Status = CrabStatus.Alive },
-            new Crab { CrabLotId = lot2.Id, Tag = "CRAB-A04", WeightGram = 188, StockedAt = now.AddDays(-15), MoltingStage = "post-molt", Status = CrabStatus.Alive, MoltedAt = now.AddDays(-2) },
-            new Crab { CrabLotId = lot2.Id, Tag = "CRAB-A05", WeightGram = 240, StockedAt = now.AddDays(-10), MoltingStage = "hard-shell", Status = CrabStatus.Alive },
-            new Crab { CrabLotId = lot2.Id, Tag = "CRAB-B01", WeightGram = 200, StockedAt = now.AddDays(-8), MoltingStage = "hard-shell", Status = CrabStatus.Alive },
+            new Crab { BoxId = boxA01.Id, CrabLotId = lot1.Id, Code = "CRAB-0001", QrCode = "QR-CRAB-0001", Tag = "CRAB-A01", CrabType = "Cua biển", Gender = CrabGender.Male, WeightGram = 210, InitialWeightGram = 210, CarapaceWidthMm = 88, CarapaceLengthMm = 74, InitialCondition = "Khỏe mạnh", MoltingStage = "hard-shell", Status = CrabStatus.Alive, Condition = CrabCondition.Normal, StockedAt = now.AddDays(-30) },
+            new Crab { BoxId = boxA02.Id, CrabLotId = lot1.Id, Code = "CRAB-0002", QrCode = "QR-CRAB-0002", Tag = "CRAB-A02", CrabType = "Cua biển", Gender = CrabGender.Female, WeightGram = 195, InitialWeightGram = 190, CarapaceWidthMm = 82, CarapaceLengthMm = 70, InitialCondition = "Khỏe mạnh", MoltingStage = "molting", Status = CrabStatus.Molting, Condition = CrabCondition.Molting, StockedAt = now.AddDays(-25), MoltedAt = now.AddHours(-6) },
+            new Crab { BoxId = boxA03.Id, CrabLotId = lot1.Id, Code = "CRAB-0003", QrCode = "QR-CRAB-0003", Tag = "CRAB-A03", CrabType = "Cua biển", Gender = CrabGender.Male, WeightGram = 225, InitialWeightGram = 220, CarapaceWidthMm = 92, CarapaceLengthMm = 78, InitialCondition = "Khỏe mạnh", MoltingStage = "pre-molt", Status = CrabStatus.Alive, Condition = CrabCondition.Premolt, StockedAt = now.AddDays(-20) },
+            new Crab { BoxId = boxA05.Id, CrabLotId = lot2.Id, Code = "CRAB-0004", QrCode = "QR-CRAB-0004", Tag = "CRAB-A04", CrabType = "Cua biển", Gender = CrabGender.Unknown, WeightGram = 188, InitialWeightGram = 180, CarapaceWidthMm = 80, CarapaceLengthMm = 68, InitialCondition = "Khỏe mạnh", MoltingStage = "post-molt", Status = CrabStatus.Alive, Condition = CrabCondition.Softshell, StockedAt = now.AddDays(-18), MoltedAt = now.AddDays(-2) },
+            new Crab { BoxId = boxA06.Id, CrabLotId = lot2.Id, Code = "CRAB-0005", QrCode = "QR-CRAB-0005", Tag = "CRAB-A05", CrabType = "Cua biển", Gender = CrabGender.Female, WeightGram = 240, InitialWeightGram = 235, CarapaceWidthMm = 96, CarapaceLengthMm = 81, InitialCondition = "Khỏe mạnh", MoltingStage = "hard-shell", Status = CrabStatus.Alive, Condition = CrabCondition.Normal, StockedAt = now.AddDays(-15) },
+            new Crab { BoxId = boxB01.Id, CrabLotId = lot2.Id, Code = "CRAB-0006", QrCode = "QR-CRAB-0006", Tag = "CRAB-B01", CrabType = "Cua biển", Gender = CrabGender.Male, WeightGram = 200, InitialWeightGram = 200, CarapaceWidthMm = 84, CarapaceLengthMm = 71, InitialCondition = "Khỏe mạnh", MoltingStage = "hard-shell", Status = CrabStatus.Alive, Condition = CrabCondition.Normal, StockedAt = now.AddDays(-12) },
         };
         db.Crabs.AddRange(crabs);
         lot1.Quantity = 3;
@@ -132,20 +198,13 @@ public static class DemoDataSeeder
 
         var crabA01 = crabs[0];
         var crabA02 = crabs[1];
-        var crabA03 = crabs[2];
         var crabA04 = crabs[3];
-        var crabA05 = crabs[4];
 
-        // ── Box allocations (Crab ↔ Box history) ────────────────────────────
+        // ── History ──────────────────────────────────────────────────────────
         db.CrabBoxAllocations.AddRange(
             new CrabBoxAllocation { CrabId = crabA01.Id, BoxId = boxA01.Id, StartTime = now.AddDays(-30), Notes = "Thả nuôi ban đầu" },
             new CrabBoxAllocation { CrabId = crabA02.Id, BoxId = boxA02.Id, StartTime = now.AddDays(-25), Notes = "Chuyển từ BOX-A-01" },
-            new CrabBoxAllocation { CrabId = crabA02.Id, BoxId = boxA01.Id, StartTime = now.AddDays(-35), EndTime = now.AddDays(-25), Notes = "Hộp cũ" },
-            new CrabBoxAllocation { CrabId = crabA03.Id, BoxId = boxA03.Id, StartTime = now.AddDays(-20), Notes = "Thả nuôi" },
-            new CrabBoxAllocation { CrabId = crabA04.Id, BoxId = boxA05.Id, StartTime = now.AddDays(-15), Notes = "Cách ly theo dõi" },
-            new CrabBoxAllocation { CrabId = crabA05.Id, BoxId = boxA06.Id, StartTime = now.AddDays(-10), Notes = "Thả nuôi" },
-            new CrabBoxAllocation { CrabId = crabA01.Id, BoxId = boxA01.Id, StartTime = now.AddDays(-35), EndTime = now.AddDays(-30), Notes = "Hộp cũ" },
-            new CrabBoxAllocation { CrabId = crabs[5].Id, BoxId = boxB01.Id, StartTime = now.AddDays(-8), Notes = "Thả nuôi khu B" });
+            new CrabBoxAllocation { CrabId = crabA02.Id, BoxId = boxA01.Id, StartTime = now.AddDays(-35), EndTime = now.AddDays(-25), Notes = "Hộp cũ" });
 
         db.MoltingRecords.AddRange(
             new MoltingRecord { CrabId = crabA02.Id, BoxId = boxA02.Id, MoltTime = now.AddHours(-6), WeightAfterGram = 195, Result = "success", Source = "manual", Notes = "Lột thành công" },
@@ -256,8 +315,8 @@ public static class DemoDataSeeder
         await db.SaveChangesAsync(ct);
 
         db.HarvestLines.AddRange(
-            new HarvestLine { HarvestVoucherId = harvest.Id, CrabId = crabA01.Id, BoxId = boxA01.Id, WeightGram = 250, Grade = "M", IsSoftshell = true, Notes = "Size M" },
-            new HarvestLine { HarvestVoucherId = harvest.Id, CrabId = crabA04.Id, BoxId = boxA05.Id, WeightGram = 280, Grade = "L", IsSoftshell = false });
+            new HarvestLine { HarvestVoucherId = harvest.Id, CrabId = crabA01.Id, WeightGram = 250, Grade = "M", IsSoftshell = true, Notes = "Size M" },
+            new HarvestLine { HarvestVoucherId = harvest.Id, CrabId = crabA04.Id, WeightGram = 280, Grade = "L", IsSoftshell = false });
 
         db.FrozenLots.AddRange(
             new FrozenLot
@@ -285,15 +344,31 @@ public static class DemoDataSeeder
                 StorageLocation = "Kho A - Ngăn 2"
             });
 
-        // ── QR ─────────────────────────────────────────────────────────────
-        db.QrCodes.Add(new QrCode
+        // ── QR for every demo box (scannable = box.Code) ─────────────────────
+        foreach (var box in boxes)
         {
-            Code = "QR-BOX-A01",
-            EntityType = "box",
-            BoxId = boxA01.Id,
-            Payload = $"box:{boxA01.Id}",
+            var exists = await db.QrCodes.AnyAsync(
+                q => q.BoxId == box.Id && q.IsActive && q.EntityType == "box", ct);
+            if (exists) continue;
+            db.QrCodes.Add(new QrCode
+            {
+                Code = box.Code,
+                EntityType = "box",
+                BoxId = box.Id,
+                Payload = $"{{\"type\":\"box\",\"boxId\":\"{box.Id}\",\"crabsense\":\"CRABSENSE:BOX:{box.Code}\"}}",
+                IsActive = true,
+                ScanCount = box.Code == "BOX-A01" ? 3 : 0
+            });
+        }
+
+        db.UserPushTokens.Add(new UserPushToken
+        {
+            UserId = owner.Id,
+            Token = "demo-fcm-token-owner",
+            Platform = "android",
+            DeviceId = "demo-seed-device",
             IsActive = true,
-            ScanCount = 3
+            LastSeenAt = now
         });
 
         db.OperationLogs.Add(new OperationLog
@@ -304,6 +379,35 @@ public static class DemoDataSeeder
             EntityId = areaA.Id,
             Details = "Demo dataset seeded",
             IpAddress = "127.0.0.1"
+        });
+        db.OperationLogs.Add(new OperationLog
+        {
+            UserId = owner.Id,
+            Action = "qr_scan",
+            EntityType = "Box",
+            EntityId = boxA01.Id,
+            Details = $"Quét QR box {boxA01.Code}",
+            IpAddress = "127.0.0.1",
+            CreatedAt = now.AddHours(-2)
+        });
+        db.OperationLogs.Add(new OperationLog
+        {
+            UserId = owner.Id,
+            Action = "sensor_update",
+            EntityType = "Sensor",
+            Details = "Cập nhật chỉ số nước RAS-A",
+            IpAddress = "127.0.0.1",
+            CreatedAt = now.AddHours(-1)
+        });
+        db.OperationLogs.Add(new OperationLog
+        {
+            UserId = staff?.Id ?? owner.Id,
+            Action = "harvest_check",
+            EntityType = "Box",
+            EntityId = boxA02.Id,
+            Details = $"Kiểm tra cửa sổ softshell {boxA02.Code}",
+            IpAddress = "127.0.0.1",
+            CreatedAt = now.AddMinutes(-35)
         });
 
         await db.SaveChangesAsync(ct);
@@ -325,15 +429,15 @@ public static class DemoDataSeeder
         var boxes = await db.Boxes.Where(b => rowIds.Contains(b.FarmingRowId)).ToListAsync(ct);
         var boxIds = boxes.Select(b => b.Id).ToHashSet();
 
-        var crabAllocations = await db.CrabBoxAllocations.Where(a => boxIds.Contains(a.BoxId)).ToListAsync(ct);
-        var crabIds = crabAllocations.Select(a => a.CrabId).ToHashSet();
+        var crabs = await db.Crabs.Where(c => c.BoxId != null && boxIds.Contains(c.BoxId.Value)).ToListAsync(ct);
+        var crabIds = crabs.Select(c => c.Id).ToHashSet();
 
         if (crabIds.Count > 0)
         {
             db.MoltingRecords.RemoveRange(await db.MoltingRecords.Where(m => crabIds.Contains(m.CrabId)).ToListAsync(ct));
-            db.CrabBoxAllocations.RemoveRange(crabAllocations);
+            db.CrabBoxAllocations.RemoveRange(await db.CrabBoxAllocations.Where(a => crabIds.Contains(a.CrabId)).ToListAsync(ct));
             db.HarvestLines.RemoveRange(await db.HarvestLines.Where(h => h.CrabId != null && crabIds.Contains(h.CrabId.Value)).ToListAsync(ct));
-            db.Crabs.RemoveRange(await db.Crabs.Where(c => crabIds.Contains(c.Id)).ToListAsync(ct));
+            db.Crabs.RemoveRange(crabs);
         }
 
         db.BoxStatusHistories.RemoveRange(await db.BoxStatusHistories.Where(h => boxIds.Contains(h.BoxId)).ToListAsync(ct));
@@ -348,7 +452,22 @@ public static class DemoDataSeeder
             var sensorIds = await db.Sensors.Where(s => s.WaterSystemId != null && wsIds.Contains(s.WaterSystemId.Value))
                 .Select(s => s.Id).ToListAsync(ct);
             if (sensorIds.Count > 0)
-                db.WaterMeasurements.RemoveRange(await db.WaterMeasurements.Where(m => sensorIds.Contains(m.SensorId)).ToListAsync(ct));
+            {
+                var alerts = await db.Alerts
+                    .Where(a => a.SensorId != null && sensorIds.Contains(a.SensorId.Value))
+                    .ToListAsync(ct);
+                var alertIds = alerts.Select(a => a.Id).ToHashSet();
+                if (alertIds.Count > 0)
+                {
+                    db.Notifications.RemoveRange(
+                        await db.Notifications
+                            .Where(n => n.AlertId != null && alertIds.Contains(n.AlertId.Value))
+                            .ToListAsync(ct));
+                    db.Alerts.RemoveRange(alerts);
+                }
+                db.WaterMeasurements.RemoveRange(
+                    await db.WaterMeasurements.Where(m => sensorIds.Contains(m.SensorId)).ToListAsync(ct));
+            }
             db.Sensors.RemoveRange(await db.Sensors.Where(s => s.WaterSystemId != null && wsIds.Contains(s.WaterSystemId.Value)).ToListAsync(ct));
             db.WaterSystems.RemoveRange(await db.WaterSystems.Where(w => wsIds.Contains(w.Id)).ToListAsync(ct));
         }

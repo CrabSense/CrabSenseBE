@@ -11,4 +11,7 @@ public interface IAuthService
     Task<ApiResponse<UserDto>> RegisterAsync(RegisterRequest request, CancellationToken ct = default);
     Task<ApiResponse> ChangePasswordAsync(Guid userId, ChangePasswordRequest request, CancellationToken ct = default);
     Task<ApiResponse<UserDto>> GetMeAsync(Guid userId, CancellationToken ct = default);
+    Task<ApiResponse<UserDto>> UpdateProfileAsync(Guid userId, UpdateProfileRequest request, CancellationToken ct = default);
+    Task<ApiResponse<NotificationPreferencesDto>> GetNotificationPreferencesAsync(Guid userId, CancellationToken ct = default);
+    Task<ApiResponse<NotificationPreferencesDto>> UpdateNotificationPreferencesAsync(Guid userId, NotificationPreferencesDto request, CancellationToken ct = default);
 }
