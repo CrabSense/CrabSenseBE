@@ -59,50 +59,36 @@ public class HarvestService : IHarvestService
         Guid? farmingAreaId = null,
         CancellationToken ct = default)
     {
-    var vouchers = (await _uow.HarvestVouchers.GetAllAsync(ct))
-        .Where(voucher =>
-            farmingAreaId is null
-            || farmingAreaId == Guid.Empty
-            || voucher.FarmingAreaId == farmingAreaId)
-        .OrderByDescending(voucher => voucher.HarvestDate)
-        .ThenByDescending(voucher => voucher.CreatedAt)
-        .ToList();
-
-    var voucherIds = vouchers
-        .Select(voucher => voucher.Id)
-        .ToList();
-
-    var lines = voucherIds.Count == 0
-        ? new List<HarvestLine>()
-        : (
-            await _uow.HarvestLines.FindAsync(
-                line => voucherIds.Contains(line.HarvestVoucherId),
-                ct))
+        var vouchers = (await _uow.HarvestVouchers.GetAllAsync(ct))
+            .Where(voucher =>
+                farmingAreaId is null
+                || farmingAreaId == Guid.Empty
+                || voucher.FarmingAreaId == farmingAreaId)
+            .OrderByDescending(voucher => voucher.HarvestDate)
+            .ThenByDescending(voucher => voucher.CreatedAt)
             .ToList();
 
         var voucherIds = vouchers
             .Select(voucher => voucher.Id)
             .ToList();
 
-    var areaNames = await LoadAreaNamesAsync(
-        vouchers.Select(v => v.FarmingAreaId),
-        ct);
+        var lines = voucherIds.Count == 0
+            ? new List<HarvestLine>()
+            : (
+                await _uow.HarvestLines.FindAsync(
+                    line => voucherIds.Contains(line.HarvestVoucherId),
+                    ct))
+                .ToList();
 
-    var result = vouchers
-        .Select(voucher =>
-        {
-            var voucherLines = linesByVoucher.TryGetValue(
-                voucher.Id,
-                out var foundLines)
-                    ? foundLines
-                    : Enumerable.Empty<HarvestLine>();
+        var linesByVoucher = lines
+            .GroupBy(line => line.HarvestVoucherId)
+            .ToDictionary(
+                group => group.Key,
+                group => group.ToList());
 
-            return MapVoucher(
-                voucher,
-                voucherLines,
-                areaNames.GetValueOrDefault(voucher.FarmingAreaId ?? Guid.Empty));
-        })
-        .ToList();
+        var areaNames = await LoadAreaNamesAsync(
+            vouchers.Select(v => v.FarmingAreaId),
+            ct);
 
         var result = vouchers
             .Select(voucher =>
@@ -113,7 +99,10 @@ public class HarvestService : IHarvestService
                         ? foundLines
                         : Enumerable.Empty<HarvestLine>();
 
-                return MapVoucher(voucher, voucherLines);
+                return MapVoucher(
+                    voucher,
+                    voucherLines,
+                    areaNames.GetValueOrDefault(voucher.FarmingAreaId ?? Guid.Empty));
             })
             .ToList();
 
@@ -250,7 +239,7 @@ public class HarvestService : IHarvestService
             {
                 HarvestVoucherId = voucher.Id,
                 CrabId = requestLine.CrabId,
-                BoxId = boxId,
+                BoxId = snap.BoxId,
                 WeightGram = requestLine.WeightGram,
                 Grade = NormalizeGrade(requestLine.Grade),
                 IsSoftshell = requestLine.IsSoftshell,
@@ -767,13 +756,12 @@ public class HarvestService : IHarvestService
             Id: line.Id,
             CrabId: line.CrabId,
             BoxId: line.BoxId,
-        BoxCode: line.Box?.Code,
+            BoxCode: line.BoxCode ?? line.Box?.Code,
             WeightGram: line.WeightGram,
             Grade: line.Grade,
             IsSoftshell: line.IsSoftshell,
             Notes: line.Notes,
             CrabCode: line.CrabCode,
-            BoxCode: line.BoxCode,
             ConditionLabel: line.ConditionLabel,
             PhotoUrls: JsonStringList.Parse(line.PhotoUrlsJson),
             AreaName: line.AreaName,
@@ -830,12 +818,12 @@ public class HarvestService : IHarvestService
     private static bool IsPassed(string? result) =>
         !string.Equals(result, "failed", StringComparison.OrdinalIgnoreCase);
 
-    private async Task<(string? CrabCode, string? AreaName, string? RowName, string? BoxCode, string? LotCode)>
+    private async Task<(string? CrabCode, string? AreaName, string? RowName, string? BoxCode, string? LotCode, Guid? BoxId)>
         SnapshotCrabAsync(Guid? crabId, CancellationToken ct)
     {
-        if (crabId is not Guid id) return (null, null, null, null, null);
+        if (crabId is not Guid id) return (null, null, null, null, null, null);
         var crab = await _uow.Crabs.GetByIdAsync(id, ct);
-        if (crab is null) return (null, null, null, null, null);
+        if (crab is null) return (null, null, null, null, null, null);
 
         string? boxCode = null, rowName = null, areaName = null, lotCode = null;
         if (crab.BoxId is Guid boxId)
@@ -860,7 +848,7 @@ public class HarvestService : IHarvestService
             lotCode = lot?.LotCode ?? lot?.Name;
         }
 
-        return (crab.Code, areaName, rowName, boxCode, lotCode);
+        return (crab.Code, areaName, rowName, boxCode, lotCode, crab.BoxId);
     }
 
     private static decimal CalculateTotalWeightKg(

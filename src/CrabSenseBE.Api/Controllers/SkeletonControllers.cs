@@ -107,31 +107,3 @@ public class AiController : ControllerBase
         CancellationToken ct = default)
         => Ok(await _dashboard.GetRecommendationsAsync(farmingAreaId, ct));
 }
-
-[ApiController]
-[Route("api/dashboard")]
-[Authorize(Roles = "SystemAdmin,FarmOwner")]
-[Tags("31. Dashboard")]
-[Produces("application/json")]
-public class DashboardController : ControllerBase
-{
-    private readonly IDashboardService _dashboardService;
-
-    public DashboardController(IDashboardService dashboardService)
-        => _dashboardService = dashboardService;
-
-    /// <summary>[READ] Dashboard overview — tổng quan trang trại</summary>
-    [HttpGet("overview")]
-    public async Task<IActionResult> Overview(
-        CancellationToken cancellationToken)
-    {
-        var result = await _dashboardService
-            .GetDashboardOverviewAsync(cancellationToken);
-
-        return Ok(new
-        {
-            success = true,
-            data = result
-        });
-    }
-}
