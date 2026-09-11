@@ -151,16 +151,46 @@ public class CrabImageService : ICrabImageService
         if (string.IsNullOrWhiteSpace(key))
             key = TryExtractStorageKey(url);
 
-        if (!string.IsNullOrWhiteSpace(key))
+        foreach (var candidate in CandidateStorageKeys(url, key))
         {
             try
             {
-                var stream = await _storage.DownloadAsync(key, ct);
-                return new CrabImageContent(stream, contentType, fileName);
+                await using var stream = await _storage.DownloadAsync(candidate, ct);
+                var copy = new MemoryStream();
+                await stream.CopyToAsync(copy, ct);
+                copy.Position = 0;
+                if (copy.Length > 0)
+                    return new CrabImageContent(copy, contentType, fileName);
             }
             catch
             {
-                // Fall through to file:// or miss.
+                // Try next key / HTTP / file.
+            }
+        }
+
+        if (Uri.TryCreate(url, UriKind.Absolute, out var httpUri)
+            && (httpUri.Scheme == Uri.UriSchemeHttp || httpUri.Scheme == Uri.UriSchemeHttps))
+        {
+            try
+            {
+                using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(20) };
+                using var resp = await http.GetAsync(httpUri, HttpCompletionOption.ResponseHeadersRead, ct);
+                if (resp.IsSuccessStatusCode)
+                {
+                    var bytes = await resp.Content.ReadAsByteArrayAsync(ct);
+                    if (bytes.Length > 0)
+                    {
+                        var headerType = resp.Content.Headers.ContentType?.MediaType;
+                        return new CrabImageContent(
+                            new MemoryStream(bytes),
+                            string.IsNullOrWhiteSpace(headerType) ? contentType : headerType,
+                            fileName);
+                    }
+                }
+            }
+            catch
+            {
+                // Fall through to file://.
             }
         }
 
@@ -174,13 +204,35 @@ public class CrabImageService : ICrabImageService
         return null;
     }
 
-    private static string? TryExtractStorageKey(string url)
+    private static IEnumerable<string> CandidateStorageKeys(string url, string? assetKey)
     {
-        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri)) return null;
-        if (uri.IsFile) return null;
-        var path = Uri.UnescapeDataString(uri.AbsolutePath).TrimStart('/');
-        return string.IsNullOrWhiteSpace(path) ? null : path;
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (!string.IsNullOrWhiteSpace(assetKey) && seen.Add(assetKey))
+            yield return assetKey;
+
+        foreach (var extracted in ExtractKeysFromUrl(url))
+        {
+            if (seen.Add(extracted))
+                yield return extracted;
+        }
     }
+
+    private static IEnumerable<string> ExtractKeysFromUrl(string url)
+    {
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri) || uri.IsFile)
+            yield break;
+
+        var path = Uri.UnescapeDataString(uri.AbsolutePath).TrimStart('/');
+        if (string.IsNullOrWhiteSpace(path)) yield break;
+        yield return path;
+
+        var slash = path.IndexOf('/');
+        if (slash > 0)
+            yield return path[(slash + 1)..];
+    }
+
+    private static string? TryExtractStorageKey(string url)
+        => ExtractKeysFromUrl(url).FirstOrDefault();
 
     private static string GuessContentType(string url, string? fileName)
     {
