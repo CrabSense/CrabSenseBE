@@ -53,6 +53,8 @@ public record HarvestVoucherDetailDto(
 public record HarvestLineDto(
     Guid Id,
     Guid? CrabId,
+    Guid? BoxId,            // ← THÊM MỚI
+    string? BoxCode,
     decimal WeightGram,
     string? Grade,
     bool IsSoftshell,
@@ -151,4 +153,26 @@ public record TraceabilityPublicDto(
     DateTime? FrozenDate,
     DateTime? HarvestDate,
     string? Grade
+);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Box ↔ Harvest link
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// <summary>Thông tin box tham chiếu trong phiếu thu hoạch.</summary>
+public record HarvestBoxDto(
+    Guid BoxId,
+    string BoxCode,
+    int CrabCount,
+    decimal TotalWeightGram
+);
+
+/// <summary>Thông tin phiếu thu hoạch tham chiếu đến box.</summary>
+public record BoxHarvestVoucherDto(
+    Guid VoucherId,
+    string VoucherCode,
+    DateTime HarvestDate,
+    string Status,
+    int CrabCount,
+    decimal TotalWeightGram
 );

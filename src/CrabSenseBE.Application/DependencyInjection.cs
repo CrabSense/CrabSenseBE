@@ -18,6 +18,7 @@ public static class DependencyInjection
         services.AddScoped<IFrozenStorageService, FrozenStorageService>();
         services.AddScoped<IFarmHistoryService, FarmHistoryService>();
         services.AddScoped<IBoxQrService, BoxQrService>();
+        services.AddScoped<ITraceabilityService, TraceabilityService>();
         services.AddScoped<IIotService, IotService>();
         services.AddScoped<IRasFlowService, RasFlowService>();
         services.AddScoped<IWaterAnalysisService, WaterAnalysisService>();
@@ -26,7 +27,6 @@ public static class DependencyInjection
         services.AddScoped<IAlertService, AlertService>();
         services.AddScoped<IMediaService, MediaService>();
         services.AddScoped<ICrabImageService, CrabImageService>();
-
         services.AddScoped<IHarvestReportService, HarvestReportService>();
         services.AddScoped<IInventoryReportService, InventoryReportService>();
         services.AddScoped<ISurvivalRateReportService, SurvivalRateReportService>();

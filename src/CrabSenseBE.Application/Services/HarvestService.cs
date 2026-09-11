@@ -4,6 +4,7 @@ using CrabSenseBE.Application.Interfaces;
 using CrabSenseBE.Domain.Entities;
 using CrabSenseBE.Domain.Enums;
 using CrabSenseBE.Domain.Interfaces;
+using Microsoft.EntityFrameworkCore;
 
 namespace CrabSenseBE.Application.Services;
 
@@ -40,7 +41,7 @@ public class HarvestService : IHarvestService
     Guid id,
     CancellationToken ct = default)
     {
-    var voucher = await GetVoucherOrThrowAsync(id, ct);
+        var voucher = await GetVoucherOrThrowAsync(id, ct);
 
     var lines = await _uow.HarvestLines.FindAsync(
         line => line.HarvestVoucherId == id,
@@ -79,11 +80,9 @@ public class HarvestService : IHarvestService
                 ct))
             .ToList();
 
-    var linesByVoucher = lines
-        .GroupBy(line => line.HarvestVoucherId)
-        .ToDictionary(
-            group => group.Key,
-            group => group.AsEnumerable());
+        var voucherIds = vouchers
+            .Select(voucher => voucher.Id)
+            .ToList();
 
     var areaNames = await LoadAreaNamesAsync(
         vouchers.Select(v => v.FarmingAreaId),
@@ -105,7 +104,20 @@ public class HarvestService : IHarvestService
         })
         .ToList();
 
-    return ApiResponse<IEnumerable<HarvestVoucherDto>>.Ok(result);
+        var result = vouchers
+            .Select(voucher =>
+            {
+                var voucherLines = linesByVoucher.TryGetValue(
+                    voucher.Id,
+                    out var foundLines)
+                        ? foundLines
+                        : Enumerable.Empty<HarvestLine>();
+
+                return MapVoucher(voucher, voucherLines);
+            })
+            .ToList();
+
+        return ApiResponse<IEnumerable<HarvestVoucherDto>>.Ok(result);
     }
 
     public async Task<ApiResponse<HarvestOverviewDto>> GetOverviewAsync(
@@ -207,7 +219,7 @@ public class HarvestService : IHarvestService
             .Select(line => line.CrabId!.Value)
             .ToList();
 
-        await ValidateCrabsAsync(suppliedCrabIds,ct);
+        await ValidateCrabsAsync(suppliedCrabIds, ct);
 
         var areaId = request.FarmingAreaId;
         if (areaId is null && suppliedCrabIds.Count > 0)
@@ -238,6 +250,7 @@ public class HarvestService : IHarvestService
             {
                 HarvestVoucherId = voucher.Id,
                 CrabId = requestLine.CrabId,
+                BoxId = boxId,
                 WeightGram = requestLine.WeightGram,
                 Grade = NormalizeGrade(requestLine.Grade),
                 IsSoftshell = requestLine.IsSoftshell,
@@ -478,6 +491,72 @@ public class HarvestService : IHarvestService
     }
 
     // ─────────────────────────────────────────────────────────────────────────
+    // Box ↔ Harvest link
+    // ─────────────────────────────────────────────────────────────────────────
+
+    public async Task<ApiResponse<IEnumerable<HarvestBoxDto>>> GetBoxesByVoucherAsync(
+        Guid voucherId,
+        CancellationToken ct = default)
+    {
+        // Đảm bảo phiếu thu hoạch tồn tại
+        await GetVoucherOrThrowAsync(voucherId, ct);
+
+        var lines = await _uow.HarvestLines
+            .Query()
+            .Include(l => l.Box)
+            .Where(l => l.HarvestVoucherId == voucherId)
+            .ToListAsync(ct);
+
+        // Nhóm theo BoxId → mỗi box một dòng
+        var boxes = lines
+            .Where(l => l.BoxId.HasValue)
+            .GroupBy(l => l.BoxId!.Value)
+            .Select(g => new HarvestBoxDto(
+                BoxId: g.Key,
+                BoxCode: g.First().Box?.Code ?? "N/A",
+                CrabCount: g.Count(),
+                TotalWeightGram: decimal.Round(g.Sum(l => l.WeightGram), 2)))
+            .OrderBy(b => b.BoxCode)
+            .ToList();
+
+        return ApiResponse<IEnumerable<HarvestBoxDto>>.Ok(boxes);
+    }
+
+    public async Task<ApiResponse<IEnumerable<BoxHarvestVoucherDto>>> GetVouchersByBoxAsync(
+        Guid boxId,
+        CancellationToken ct = default)
+    {
+        // Đảm bảo box tồn tại
+        _ = await _uow.Boxes.GetByIdAsync(boxId, ct)
+            ?? throw AppException.NotFound("Box");
+
+        var lines = await _uow.HarvestLines
+            .Query()
+            .Include(l => l.HarvestVoucher)
+            .Where(l => l.BoxId == boxId)
+            .ToListAsync(ct);
+
+        // Nhóm theo VoucherId → mỗi phiếu thu hoạch một dòng
+        var vouchers = lines
+            .GroupBy(l => l.HarvestVoucherId)
+            .Select(g =>
+            {
+                var voucher = g.First().HarvestVoucher!;
+                return new BoxHarvestVoucherDto(
+                    VoucherId: voucher.Id,
+                    VoucherCode: voucher.VoucherCode,
+                    HarvestDate: voucher.HarvestDate,
+                    Status: voucher.Status.ToString(),
+                    CrabCount: g.Count(),
+                    TotalWeightGram: decimal.Round(g.Sum(l => l.WeightGram), 2));
+            })
+            .OrderByDescending(v => v.HarvestDate)
+            .ToList();
+
+        return ApiResponse<IEnumerable<BoxHarvestVoucherDto>>.Ok(vouchers);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
     // Validation
     // ─────────────────────────────────────────────────────────────────────────
 
@@ -603,8 +682,8 @@ public class HarvestService : IHarvestService
         IEnumerable<HarvestLine> lines,
         string? areaName = null)
     {
-    var softshellQuantity = lines.Count(
-        line => line.IsSoftshell);
+        var softshellQuantity = lines.Count(
+            line => line.IsSoftshell);
 
     var lineDtos = lines.Select(MapLine).ToList();
     var passed = lineDtos.Count(l => IsPassed(l.Result));
@@ -687,6 +766,8 @@ public class HarvestService : IHarvestService
         return new HarvestLineDto(
             Id: line.Id,
             CrabId: line.CrabId,
+            BoxId: line.BoxId,
+        BoxCode: line.Box?.Code,
             WeightGram: line.WeightGram,
             Grade: line.Grade,
             IsSoftshell: line.IsSoftshell,

@@ -27,6 +27,7 @@ public class HarvestLine : BaseEntity
 {
     public Guid HarvestVoucherId { get; set; }
     public Guid? CrabId { get; set; }
+    public Guid? BoxId { get; set; }
     public decimal WeightGram { get; set; }
     public string? Grade { get; set; } // S, M, L
     public bool IsSoftshell { get; set; } = true;
@@ -44,5 +45,6 @@ public class HarvestLine : BaseEntity
     // Navigation
     public HarvestVoucher? HarvestVoucher { get; set; }
     public Crab? Crab { get; set; }
+    public Box? Box { get; set; }
 }
 
