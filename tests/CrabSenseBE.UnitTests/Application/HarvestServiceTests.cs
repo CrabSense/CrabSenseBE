@@ -93,9 +93,25 @@ public class HarvestServiceTests
         lineRepoFind.Setup(r => r.AnyAsync(It.IsAny<System.Linq.Expressions.Expression<Func<HarvestLine, bool>>>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(false);
 
+        // ApplyHarvestToCrabsAsync closes open box allocations and writes history rows.
+        var allocationRepo = new Mock<IRepository<CrabBoxAllocation>>();
+        allocationRepo.Setup(r => r.FindAsync(It.IsAny<System.Linq.Expressions.Expression<Func<CrabBoxAllocation, bool>>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Enumerable.Empty<CrabBoxAllocation>());
+
+        var statusHistoryRepo = new Mock<IRepository<CrabStatusHistory>>();
+        statusHistoryRepo.Setup(r => r.AddAsync(It.IsAny<CrabStatusHistory>(), It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+
+        var harvestHistoryRepo = new Mock<IRepository<CrabHarvestHistory>>();
+        harvestHistoryRepo.Setup(r => r.AddAsync(It.IsAny<CrabHarvestHistory>(), It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+
         _uow.Setup(u => u.HarvestVouchers).Returns(voucherRepo.Object);
         _uow.Setup(u => u.HarvestLines).Returns(lineRepo.Object);
         _uow.Setup(u => u.Crabs).Returns(crabRepo.Object);
+        _uow.Setup(u => u.CrabBoxAllocations).Returns(allocationRepo.Object);
+        _uow.Setup(u => u.CrabStatusHistories).Returns(statusHistoryRepo.Object);
+        _uow.Setup(u => u.CrabHarvestHistories).Returns(harvestHistoryRepo.Object);
         _uow.Setup(u => u.SaveChangesAsync(It.IsAny<CancellationToken>())).ReturnsAsync(1);
 
         var request = new CreateHarvestVoucherRequest(
@@ -110,7 +126,7 @@ public class HarvestServiceTests
         var result = await Create().CreateAsync(request);
 
         result.Success.Should().BeTrue();
-        result.Data!.VoucherCode.Should().StartWith("HV-");
+        result.Data!.VoucherCode.Should().StartWith("HAR-");
         result.Data.Lines.Should().HaveCount(1);
     }
 }
