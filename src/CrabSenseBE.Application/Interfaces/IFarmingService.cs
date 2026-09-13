@@ -14,7 +14,7 @@ public interface IFarmingService
     Task<ApiResponse<FarmingAreaDto>> UpdateAreaAsync(Guid id, UpdateFarmingAreaRequest request, CancellationToken ct = default);
     Task<ApiResponse<FarmAvatarDto>> UploadAvatarAsync(
         Guid? areaId, Stream data, string fileName, string contentType, Guid? uploadedBy, CancellationToken ct = default);
-    Task<ApiResponse> DeleteAreaAsync(Guid id, CancellationToken ct = default);
+    Task<ApiResponse> DeleteAreaAsync(Guid id, bool cascade = false, CancellationToken ct = default);
 
     // ─── FarmingRow ────────────────────────────────────────────────────────
     Task<ApiResponse<PagedResult<FarmingRowDto>>> GetRowsAsync(FarmingRowFilter filter, CancellationToken ct = default);

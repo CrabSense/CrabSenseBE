@@ -1,3 +1,5 @@
+using System.Linq.Expressions;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using CrabSenseBE.Application.Common;
 using CrabSenseBE.Application.DTOs.Farm;
@@ -218,17 +220,58 @@ public class FarmingService : IFarmingService
             "Uploaded.");
     }
 
-    public async Task<ApiResponse> DeleteAreaAsync(Guid id, CancellationToken ct = default)
+    /// <summary>
+    /// Xoá khu.
+    /// Mặc định: chỉ xoá được khi khu đã hết hàng (giữ nguyên hành vi cũ).
+    /// cascade=true: xoá luôn cả cây con (cua → hộp → hàng) trong 1 transaction,
+    /// và dọn các tham chiếu mềm còn trỏ tới chúng.
+    /// </summary>
+    public async Task<ApiResponse> DeleteAreaAsync(
+        Guid id, bool cascade = false, CancellationToken ct = default)
     {
         var area = await RequireAreaAsync(id, requireActive: false, ct);
 
-        var hasRows = await _uow.FarmingRows.AnyAsync(r => r.FarmingAreaId == id, ct);
-        if (hasRows)
-            throw AppException.Conflict("Cannot delete area that still has rows. Delete rows first.");
+        if (!cascade)
+        {
+            var hasRows = await _uow.FarmingRows.AnyAsync(r => r.FarmingAreaId == id, ct);
+            if (hasRows)
+                throw AppException.Conflict("Cannot delete area that still has rows. Delete rows first.");
 
+            _uow.FarmingAreas.Remove(area);
+            await _uow.SaveChangesAsync(ct);
+            return ApiResponse.Ok("Deleted.");
+        }
+
+        // ── Cascade: gom khu → hàng → hộp → cua ────────────────────────────────
+        var rows = (await _uow.FarmingRows.FindAsync(r => r.FarmingAreaId == id, ct)).ToList();
+        var rowIds = rows.Select(r => r.Id).ToList();
+
+        var boxes = rowIds.Count == 0
+            ? new List<Box>()
+            : (await _uow.Boxes.FindAsync(b => rowIds.Contains(b.FarmingRowId), ct)).ToList();
+        var boxIds = boxes.Select(b => b.Id).ToList();
+
+        var crabs = boxIds.Count == 0
+            ? new List<Crab>()
+            : (await _uow.Crabs.FindAsync(
+                c => c.BoxId != null && boxIds.Contains(c.BoxId.Value), ct)).ToList();
+        var crabIds = crabs.Select(c => c.Id).ToList();
+
+        await RemoveDependentsAsync(crabIds, boxIds, ct);
+
+        foreach (var crab in crabs) _uow.Crabs.Remove(crab);
+        foreach (var box in boxes) _uow.Boxes.Remove(box);
+        foreach (var row in rows) _uow.FarmingRows.Remove(row);
         _uow.FarmingAreas.Remove(area);
+
+        await ClearOperationBoxRefsAsync(boxIds, ct);
+
+        // Một SaveChanges duy nhất => gói trong 1 transaction: lỗi giữa đường thì
+        // rollback, không để lại khu bị xoá dở.
         await _uow.SaveChangesAsync(ct);
-        return ApiResponse.Ok("Deleted.");
+
+        return ApiResponse.Ok(
+            $"Deleted area '{area.Code}': {rowIds.Count} rows, {boxIds.Count} boxes, {crabIds.Count} crabs.");
     }
 
     // ─── FarmingRow ─────────────────────────────────────────────────────────
@@ -1072,6 +1115,112 @@ public class FarmingService : IFarmingService
     }
 
     // ─── Hierarchy helpers ──────────────────────────────────────────────────
+
+    /// <summary>
+    /// Dọn mọi bản ghi con trỏ tới cua/hộp sắp bị xoá, trước khi xoá cha.
+    /// Gồm 2 loại:
+    ///  - FK "NO ACTION": không dọn trước thì DB chặn, cả transaction fail.
+    ///  - Cột tham chiếu KHÔNG có FK: không dọn thì thành bản ghi mồ côi.
+    /// Các FK đã là CASCADE (CrabBoxAllocations/BoxStatusHistories/MoltingRecords
+    /// theo CrabId, CrabMortalityRecords) vẫn liệt kê tường minh cho chắc.
+    /// ponytail: quét theo danh sách Id trong bộ nhớ — thao tác admin hiếm, phạm vi 1 khu.
+    /// </summary>
+    private async Task RemoveDependentsAsync(
+        IReadOnlyCollection<Guid> crabIds, IReadOnlyCollection<Guid> boxIds, CancellationToken ct)
+    {
+        var qrCodes = new List<QrCode>();
+
+        if (crabIds.Count > 0)
+        {
+            await RemoveWhereAsync(_uow.AiDetections, x => x.CrabId != null && crabIds.Contains(x.CrabId.Value), ct);
+            await RemoveWhereAsync(_uow.HarvestLines, x => x.CrabId != null && crabIds.Contains(x.CrabId.Value), ct);
+            await RemoveWhereAsync(_uow.Inspections, x => x.CrabId != null && crabIds.Contains(x.CrabId.Value), ct);
+            await RemoveWhereAsync(_uow.MediaAssets, x => x.CrabId != null && crabIds.Contains(x.CrabId.Value), ct);
+            await RemoveWhereAsync(_uow.SalesOrderLines, x => x.CrabId != null && crabIds.Contains(x.CrabId.Value), ct);
+
+            await RemoveWhereAsync(_uow.MoltingRecords, x => crabIds.Contains(x.CrabId), ct);
+            await RemoveWhereAsync(_uow.CrabBoxAllocations, x => crabIds.Contains(x.CrabId), ct);
+            await RemoveWhereAsync(_uow.CrabMortalityRecords, x => crabIds.Contains(x.CrabId), ct);
+            await RemoveWhereAsync(_uow.CrabStatusHistories, x => crabIds.Contains(x.CrabId), ct);
+            await RemoveWhereAsync(_uow.CrabWeightHistories, x => crabIds.Contains(x.CrabId), ct);
+            await RemoveWhereAsync(_uow.CrabHarvestHistories, x => crabIds.Contains(x.CrabId), ct);
+            await RemoveWhereAsync(_uow.CrabAiAnalyses, x => crabIds.Contains(x.CrabId), ct);
+
+            qrCodes.AddRange(await _uow.QrCodes.FindAsync(
+                q => q.CrabId != null && crabIds.Contains(q.CrabId.Value), ct));
+        }
+
+        if (boxIds.Count > 0)
+        {
+            await RemoveWhereAsync(_uow.HarvestLines, x => x.BoxId != null && boxIds.Contains(x.BoxId.Value), ct);
+            await RemoveWhereAsync(_uow.MediaAssets, x => x.BoxId != null && boxIds.Contains(x.BoxId.Value), ct);
+            await RemoveWhereAsync(_uow.MoltingRecords, x => x.BoxId != null && boxIds.Contains(x.BoxId.Value), ct);
+
+            await RemoveWhereAsync(_uow.BoxStatusHistories, x => boxIds.Contains(x.BoxId), ct);
+            await RemoveWhereAsync(_uow.CrabBoxAllocations, x => boxIds.Contains(x.BoxId), ct);
+            await RemoveWhereAsync(_uow.AiDetections, x => x.BoxId != null && boxIds.Contains(x.BoxId.Value), ct);
+            await RemoveWhereAsync(_uow.CrabAiAnalyses, x => x.BoxId != null && boxIds.Contains(x.BoxId.Value), ct);
+            await RemoveWhereAsync(_uow.Inspections, x => x.BoxId != null && boxIds.Contains(x.BoxId.Value), ct);
+            await RemoveWhereAsync(_uow.SaleTransactions, x => x.BoxId != null && boxIds.Contains(x.BoxId.Value), ct);
+
+            qrCodes.AddRange(await _uow.QrCodes.FindAsync(
+                q => q.BoxId != null && boxIds.Contains(q.BoxId.Value), ct));
+        }
+
+        // QR là cha của TraceabilityLink -> xoá liên kết trước rồi mới xoá QR.
+        var qrIds = qrCodes.Select(q => q.Id).Distinct().ToList();
+        if (qrIds.Count > 0)
+            await RemoveWhereAsync(_uow.TraceabilityLinks, x => qrIds.Contains(x.QrCodeId), ct);
+
+        foreach (var qr in qrCodes.DistinctBy(q => q.Id))
+            _uow.QrCodes.Remove(qr);
+    }
+
+    /// <summary>
+    /// FarmOperations.BoxIdsJson là tham chiếu mềm (không FK) tới hộp.
+    /// Không dọn thì JSON còn giữ Id của hộp vừa bị xoá.
+    /// </summary>
+    private async Task ClearOperationBoxRefsAsync(IReadOnlyCollection<Guid> boxIds, CancellationToken ct)
+    {
+        if (boxIds.Count == 0)
+            return;
+
+        var gone = boxIds.Select(b => b.ToString()).ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var op in await _uow.FarmOperations.GetAllAsync(ct))
+        {
+            if (string.IsNullOrWhiteSpace(op.BoxIdsJson))
+                continue;
+
+            List<string>? ids;
+            try
+            {
+                ids = JsonSerializer.Deserialize<List<string>>(op.BoxIdsJson);
+            }
+            catch (JsonException)
+            {
+                continue; // JSON hỏng: không đoán, để nguyên
+            }
+
+            if (ids == null)
+                continue;
+
+            var kept = ids.Where(x => !gone.Contains(x)).ToList();
+            if (kept.Count == ids.Count)
+                continue;
+
+            op.BoxIdsJson = JsonSerializer.Serialize(kept);
+            _uow.FarmOperations.Update(op);
+        }
+    }
+
+    private async Task RemoveWhereAsync<T>(
+        IRepository<T> repo, Expression<Func<T, bool>> predicate, CancellationToken ct)
+        where T : class
+    {
+        foreach (var entity in await repo.FindAsync(predicate, ct))
+            repo.Remove(entity);
+    }
 
     private async Task<FarmingArea> RequireAreaAsync(Guid id, bool requireActive, CancellationToken ct)
     {
