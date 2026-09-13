@@ -71,10 +71,32 @@ public class MortalityService : IMortalityService
         };
 
         // ============================================================
-        // 4. CẬP NHẬT TRẠNG THÁI CUA
+        // 4. CẬP NHẬT TRẠNG THÁI CUA + GIẢI PHÓNG HỘP
         // ============================================================
 
+        var oldStatus = crab.Status;
+        var oldCondition = crab.Condition;
+        var boxId = ResolveBoxId(crab);
+
         crab.Status = CrabStatus.Dead;
+        crab.Condition = CrabCondition.Dead;
+        crab.BoxId = null;
+        _uow.Crabs.Update(crab);
+
+        await _uow.CrabStatusHistories.AddAsync(new CrabStatusHistory
+        {
+            CrabId = crab.Id,
+            OldCondition = oldCondition,
+            NewCondition = CrabCondition.Dead,
+            OldStatus = oldStatus,
+            NewStatus = CrabStatus.Dead,
+            ChangedAt = DateTime.UtcNow,
+            Source = "mortality",
+            Reason = request.Notes,
+            ChangedByUserId = recordedBy
+        }, cancellationToken);
+
+        await ReleaseBoxAsync(crab.Id, boxId, cancellationToken);
 
         // ============================================================
         // 5. LƯU DATABASE
@@ -91,10 +113,6 @@ public class MortalityService : IMortalityService
         // ============================================================
         // 6. TRẢ KẾT QUẢ
         // ============================================================
-        var latestAlloc = crab.BoxAllocations
-    .OrderByDescending(a => a.StartTime)
-    .FirstOrDefault();
-var boxId = latestAlloc?.BoxId ?? Guid.Empty;
 var box = boxId != Guid.Empty ? await _uow.Boxes.GetByIdAsync(boxId, cancellationToken) : null;
 
         return new MortalityRecordDto(
@@ -171,13 +189,64 @@ var box = boxId != Guid.Empty ? await _uow.Boxes.GetByIdAsync(boxId, cancellatio
 }).ToList();
     }
 
-    private static bool IsCrabAlive(Crab c) =>
-    c.Status == CrabStatus.Alive
-    || c.Status == CrabStatus.Molting
-    || c.Status == CrabStatus.Quarantined;
+    private static Guid ResolveBoxId(Crab crab)
+    {
+        if (crab.BoxId is Guid boxId && boxId != Guid.Empty)
+            return boxId;
+        return crab.BoxAllocations
+            .OrderByDescending(a => a.StartTime)
+            .FirstOrDefault()?.BoxId ?? Guid.Empty;
+    }
 
-    private static Guid GetCrabBoxId(Crab c) =>
-        c.BoxAllocations
-         .OrderByDescending(a => a.StartTime)
-         .FirstOrDefault()?.BoxId ?? Guid.Empty;
+    private async Task ReleaseBoxAsync(Guid crabId, Guid boxId, CancellationToken cancellationToken)
+    {
+        var open = await _uow.CrabBoxAllocations.FindAsync(
+            a => a.CrabId == crabId && a.EndTime == null,
+            cancellationToken);
+        foreach (var alloc in open)
+        {
+            alloc.EndTime = DateTime.UtcNow;
+            _uow.CrabBoxAllocations.Update(alloc);
+        }
+
+        if (boxId == Guid.Empty)
+            return;
+
+        var box = await _uow.Boxes.GetByIdAsync(boxId, cancellationToken);
+        if (box is null)
+            return;
+
+        var stillLive = (await _uow.Crabs.FindAsync(
+                c => c.BoxId == boxId
+                     && c.Id != crabId
+                     && (c.Status == CrabStatus.Alive
+                         || c.Status == CrabStatus.Molting
+                         || c.Status == CrabStatus.Quarantined),
+                cancellationToken))
+            .Any();
+        if (stillLive)
+            return;
+
+        var oldBoxStatus = box.Status;
+        var oldOccupied = box.IsOccupied;
+        box.IsOccupied = false;
+        box.Status = BoxStatuses.Empty;
+        _uow.Boxes.Update(box);
+
+        if (!string.Equals(oldBoxStatus, BoxStatuses.Empty, StringComparison.OrdinalIgnoreCase)
+            || oldOccupied)
+        {
+            await _uow.BoxStatusHistories.AddAsync(new BoxStatusHistory
+            {
+                BoxId = box.Id,
+                OldStatus = oldBoxStatus,
+                NewStatus = BoxStatuses.Empty,
+                OldIsOccupied = oldOccupied,
+                NewIsOccupied = false,
+                ChangedAt = DateTime.UtcNow,
+                Reason = "Crab mortality",
+                ChangedByUserId = null
+            }, cancellationToken);
+        }
+    }
 }

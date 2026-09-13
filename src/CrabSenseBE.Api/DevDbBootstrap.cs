@@ -60,7 +60,7 @@ public static class DevDbBootstrap
                 logger.LogInformation(
                     "Users sẵn sàng: sysadmin/SysAdmin@123 | owner/Owner@123 | staff/Staff@123 (admin/Admin@123 = SystemAdmin).");
 
-                await DemoDataSeeder.SeedAsync(db, logger);
+                // DemoDataSeeder đã tắt — không auto-insert khu/dãy/hộp/cua khi start API.
                 await EnsureBoxQrsForAllBoxesAsync(db, logger);
                 return;
             }

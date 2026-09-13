@@ -93,9 +93,8 @@ public class BoxOverviewService : IBoxOverviewService
 
             crabsByBox.TryGetValue(box.Id, out var boxCrabs);
             boxCrabs ??= [];
-            var alive = boxCrabs.Where(c => c.Status == CrabStatus.Alive).ToList();
-            var primary = alive.OrderByDescending(c => c.CreatedAt).FirstOrDefault()
-                          ?? boxCrabs.OrderByDescending(c => c.CreatedAt).FirstOrDefault();
+            var alive = boxCrabs.Where(IsLiveCrab).ToList();
+            var primary = alive.OrderByDescending(c => c.CreatedAt).FirstOrDefault();
 
             string? batch = null;
             string? crabType = null;
@@ -107,6 +106,12 @@ public class BoxOverviewService : IBoxOverviewService
 
             openAllocs.TryGetValue(box.Id, out var alloc);
             lastMoltByBox.TryGetValue(box.Id, out var lastMolt);
+
+            var occupied = alive.Count > 0;
+            var boxStatus = occupied
+                            || string.Equals(box.Status, BoxStatuses.Maintenance, StringComparison.OrdinalIgnoreCase)
+                ? box.Status
+                : BoxStatuses.Empty;
 
             var health = ComputeBoxHealth(box, waterScore, deviceScore, alerts.Count, lastMolt);
             var healthStatus = MapHealthStatus(box, health.Score, deviceSnap.IsOnline);
@@ -143,15 +148,16 @@ public class BoxOverviewService : IBoxOverviewService
                 .Max();
 
             DateTime? harvestAt = null;
-            if (string.Equals(box.Status, BoxStatuses.Molting, StringComparison.OrdinalIgnoreCase))
+            if (occupied && string.Equals(boxStatus, BoxStatuses.Molting, StringComparison.OrdinalIgnoreCase))
                 harvestAt = DateTime.UtcNow.AddHours(6);
-            else if (alloc?.StartTime is DateTime started)
+            else if (occupied && alloc?.StartTime is DateTime started)
                 harvestAt = started.AddDays(21);
 
             var waterTestDue = water.Alarms.Count > 0
                 || (water.MeasuredAt is DateTime wm && wm < DateTime.UtcNow.AddHours(-12));
-            var videoDue = string.Equals(box.Status, BoxStatuses.Molting, StringComparison.OrdinalIgnoreCase)
-                || (lastMolt is null && box.IsOccupied);
+            var videoDue = occupied
+                && (string.Equals(boxStatus, BoxStatuses.Molting, StringComparison.OrdinalIgnoreCase)
+                    || lastMolt is null);
 
             items.Add(new BoxOverviewItemDto(
                 Id: box.Id,
@@ -163,11 +169,11 @@ public class BoxOverviewService : IBoxOverviewService
                 FarmingRowId: box.FarmingRowId,
                 RowName: row?.Name,
                 AreaName: area?.Name,
-                Status: box.Status,
-                IsOccupied: box.IsOccupied,
+                Status: boxStatus,
+                IsOccupied: occupied,
                 HealthStatus: healthStatus,
                 Health: health,
-                CrabCount: alive.Count > 0 ? alive.Count : (box.IsOccupied ? 1 : 0),
+                CrabCount: alive.Count,
                 CrabType: crabType,
                 Batch: batch,
                 MoltingStage: primary?.MoltingStage,
@@ -448,4 +454,7 @@ public class BoxOverviewService : IBoxOverviewService
         if (b is null) return a;
         return a > b ? a : b;
     }
+
+    private static bool IsLiveCrab(Crab c) =>
+        c.Status is CrabStatus.Alive or CrabStatus.Molting or CrabStatus.Quarantined;
 }
