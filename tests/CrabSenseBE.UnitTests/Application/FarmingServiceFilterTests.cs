@@ -126,6 +126,61 @@ public class FarmingServiceFilterTests
         dto.AiSummary.Should().Be("Sắp lột — tăng theo dõi");
     }
 
+    [Fact]
+    public async Task GetBoxes_DoesNotTreatDeadCrabAsOccupied()
+    {
+        var areaId = Guid.NewGuid();
+        var rowId = Guid.NewGuid();
+        var boxId = Guid.NewGuid();
+        var boxes = new[]
+        {
+            new Box { Id = boxId, FarmingRowId = rowId, Code = "BOX-0002", Status = "active", IsOccupied = true }
+        };
+        var boxRepo = new Mock<IRepository<Box>>();
+        boxRepo.Setup(r => r.GetAllAsync(It.IsAny<CancellationToken>())).ReturnsAsync(boxes);
+        var rowRepo = new Mock<IRepository<FarmingRow>>();
+        rowRepo.Setup(r => r.GetAllAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new[]
+            {
+                new FarmingRow { Id = rowId, FarmingAreaId = areaId, Name = "Dãy 01", Code = "DAY-A01" }
+            });
+        var areaRepo = new Mock<IRepository<FarmingArea>>();
+        areaRepo.Setup(r => r.GetAllAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new[]
+            {
+                new FarmingArea { Id = areaId, Name = "Khu A", Code = "AREA-A01" }
+            });
+        var crabRepo = new Mock<IRepository<Crab>>();
+        crabRepo.Setup(r => r.GetAllAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new[]
+            {
+                new Crab
+                {
+                    Id = Guid.NewGuid(),
+                    BoxId = boxId,
+                    Tag = "CRAB-DEAD",
+                    Status = CrabSenseBE.Domain.Enums.CrabStatus.Dead,
+                    Condition = CrabSenseBE.Domain.Enums.CrabCondition.Dead
+                }
+            });
+        var alertRepo = new Mock<IRepository<Alert>>();
+        alertRepo.Setup(r => r.GetAllAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Array.Empty<Alert>());
+
+        _uow.Setup(u => u.Boxes).Returns(boxRepo.Object);
+        _uow.Setup(u => u.FarmingRows).Returns(rowRepo.Object);
+        _uow.Setup(u => u.FarmingAreas).Returns(areaRepo.Object);
+        _uow.Setup(u => u.Crabs).Returns(crabRepo.Object);
+        _uow.Setup(u => u.Alerts).Returns(alertRepo.Object);
+
+        var result = await Create().GetBoxesAsync(new BoxFilter());
+        var dto = result.Data!.Items.Should().ContainSingle().Subject;
+        dto.IsOccupied.Should().BeFalse();
+        dto.Status.Should().Be("empty");
+        dto.CrabId.Should().BeNull();
+        dto.CrabTag.Should().BeNull();
+    }
+
     private void StubEmptyCrabsAndAlerts()
     {
         var crabRepo = new Mock<IRepository<Crab>>();

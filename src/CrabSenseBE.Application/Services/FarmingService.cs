@@ -923,30 +923,7 @@ public class FarmingService : IFarmingService
         // If crab dies / harvest → free box if no other live crabs
         if (!IsCrabAlive(crab))
         {
-            var boxId = GetCrabBoxId(crab);
-            var box = await _uow.Boxes.GetByIdAsync(boxId, ct);
-            if (box is not null)
-            {
-                var crabsInBox = await _uow.Crabs.Query()
-                    .Include(c => c.BoxAllocations)
-                    .Where(c => c.BoxAllocations.Any(a => a.BoxId == box.Id && a.EndTime == null))
-                    .ToListAsync(ct);
-                var stillLive = crabsInBox.Any(c => IsCrabAlive(c) && c.Id != id);
-                if (!stillLive)
-                {
-                    box.IsOccupied = false;
-                    box.Status = "empty";
-                    _uow.Boxes.Update(box);
-                }
-
-                var open = await _uow.CrabBoxAllocations.FindAsync(
-                    a => a.CrabId == id && a.EndTime == null, ct);
-                foreach (var a in open)
-                {
-                    a.EndTime = DateTime.UtcNow;
-                    _uow.CrabBoxAllocations.Update(a);
-                }
-            }
+            await ReleaseCrabFromBoxAsync(crab, "Crab no longer alive", ct);
         }
 
         await _uow.SaveChangesAsync(ct);
@@ -957,67 +934,36 @@ public class FarmingService : IFarmingService
     public async Task<ApiResponse> DeleteCrabAsync(Guid id, CancellationToken ct = default)
     {
         var crab = await _uow.Crabs.GetByIdAsync(id, ct) ?? throw AppException.NotFound("Crab");
-        if (!IsCrabAlive(crab))
-            return ApiResponse.Ok("Crab already inactive (soft-deleted).");
+        var alreadyInactive = !IsCrabAlive(crab);
 
-        var oldCondition = crab.Condition;
-        var oldStatus = crab.Status;
-        crab.Status = CrabStatus.Dead;
-        crab.Condition = CrabCondition.Dead;
-        await _uow.CrabStatusHistories.AddAsync(new CrabStatusHistory
+        if (!alreadyInactive)
         {
-            CrabId = crab.Id,
-            OldCondition = oldCondition,
-            NewCondition = CrabCondition.Dead,
-            OldStatus = oldStatus,
-            NewStatus = CrabStatus.Dead,
-            ChangedAt = DateTime.UtcNow,
-            Source = "system",
-            Reason = "Soft-delete"
-        }, ct);
-
-        var boxId = GetCrabBoxId(crab);
-        var box = await _uow.Boxes.GetByIdAsync(boxId, ct);
-        if (box is not null)
-        {
-            var crabsInBox = await _uow.Crabs.Query()
-                .Include(c => c.BoxAllocations)
-                .Where(c => c.BoxAllocations.Any(a => a.BoxId == box.Id && a.EndTime == null))
-                .ToListAsync(ct);
-            var stillLive = crabsInBox.Any(c => IsCrabAlive(c) && c.Id != id);
-            if (!stillLive)
+            var oldCondition = crab.Condition;
+            var oldStatus = crab.Status;
+            crab.Status = CrabStatus.Dead;
+            crab.Condition = CrabCondition.Dead;
+            await _uow.CrabStatusHistories.AddAsync(new CrabStatusHistory
             {
-                var oldBoxStatus = box.Status;
-                var oldOcc = box.IsOccupied;
-                box.IsOccupied = false;
-                box.Status = BoxStatuses.Empty;
-                _uow.Boxes.Update(box);
-                await _uow.BoxStatusHistories.AddAsync(new BoxStatusHistory
-                {
-                    BoxId = box.Id,
-                    OldStatus = oldBoxStatus,
-                    NewStatus = BoxStatuses.Empty,
-                    OldIsOccupied = oldOcc,
-                    NewIsOccupied = false,
-                    ChangedAt = DateTime.UtcNow,
-                    Reason = "Crab soft-deleted"
-                }, ct);
-            }
-
-            var open = await _uow.CrabBoxAllocations.FindAsync(
-                a => a.CrabId == id && a.EndTime == null, ct);
-            foreach (var a in open)
-            {
-                a.EndTime = DateTime.UtcNow;
-                a.Notes = string.IsNullOrWhiteSpace(a.Notes)
-                    ? "Closed by soft-delete"
-                    : a.Notes + " | Closed by soft-delete";
-                _uow.CrabBoxAllocations.Update(a);
-            }
+                CrabId = crab.Id,
+                OldCondition = oldCondition,
+                NewCondition = CrabCondition.Dead,
+                OldStatus = oldStatus,
+                NewStatus = CrabStatus.Dead,
+                ChangedAt = DateTime.UtcNow,
+                Source = "system",
+                Reason = "Soft-delete"
+            }, ct);
         }
 
+        var boxId = CurrentBoxId(crab);
+        await ReleaseCrabFromBoxAsync(crab, "Crab soft-deleted", ct);
+
         await _uow.SaveChangesAsync(ct);
-        return ApiResponse.Ok($"Crab soft-deleted (IsAlive=false); box '{box?.Code}' freed if empty.");
+        var box = boxId == Guid.Empty ? null : await _uow.Boxes.GetByIdAsync(boxId, ct);
+        return ApiResponse.Ok(
+            alreadyInactive
+                ? $"Crab already inactive; box '{box?.Code}' freed if empty."
+                : $"Crab soft-deleted (IsAlive=false); box '{box?.Code}' freed if empty.");
     }
 
     public async Task<ApiResponse<IReadOnlyList<CrabStatusHistoryDto>>> GetCrabStatusHistoryAsync(
@@ -1115,7 +1061,8 @@ public class FarmingService : IFarmingService
     .ToListAsync(ct);
 
         var liveBoxIds = aliveCrabs
-            .Select(c => GetCrabBoxId(c))
+            .Select(CurrentBoxId)
+            .Where(id => id != Guid.Empty)
             .ToHashSet();
 
         IEnumerable<Box> q = ctx.Boxes.Where(b => !liveBoxIds.Contains(b.Id));
@@ -1211,6 +1158,7 @@ public class FarmingService : IFarmingService
         var areas = (await _uow.FarmingAreas.GetAllAsync(ct)).ToDictionary(a => a.Id);
         var crabs = (await _uow.Crabs.GetAllAsync(ct)).ToList();
         var crabsByBox = crabs
+            .Where(IsCrabAlive)
             .Select(c => (BoxId: CurrentBoxId(c), Crab: c))
             .Where(x => x.BoxId != Guid.Empty)
             .GroupBy(x => x.BoxId)
@@ -1549,9 +1497,12 @@ public class FarmingService : IFarmingService
             ctx.Areas.TryGetValue(row.FarmingAreaId, out area);
 
         var crab = PrimaryCrab(ctx, b.Id);
-        var occupied = b.IsOccupied || crab is not null;
+        var occupied = crab is not null;
         var condition = MapCrabCondition(crab, occupied);
         var alerts = CountBoxAlerts(b, ctx.ActiveAlerts);
+        var status = occupied || KeepBoxStatusWhenEmpty(b.Status)
+            ? b.Status
+            : BoxStatuses.Empty;
 
         return new BoxDto(
             b.Id,
@@ -1560,7 +1511,7 @@ public class FarmingService : IFarmingService
             row?.Name,
             area?.Name,
             b.Code,
-            b.Status,
+            status,
             occupied,
             BuildBoxDisplayName(b, area),
             area?.Code,
@@ -1599,8 +1550,70 @@ public class FarmingService : IFarmingService
     {
         if (!ctx.CrabsByBox.TryGetValue(boxId, out var crabs) || crabs.Count == 0)
             return null;
-        return crabs.Where(IsCrabAlive).OrderByDescending(c => c.CreatedAt).FirstOrDefault()
-               ?? crabs.OrderByDescending(c => c.CreatedAt).FirstOrDefault();
+        return crabs.Where(IsCrabAlive).OrderByDescending(c => c.CreatedAt).FirstOrDefault();
+    }
+
+    private static bool KeepBoxStatusWhenEmpty(string? status)
+        => string.Equals(status, BoxStatuses.Maintenance, StringComparison.OrdinalIgnoreCase);
+
+    private async Task ReleaseCrabFromBoxAsync(Crab crab, string reason, CancellationToken ct)
+    {
+        var boxId = CurrentBoxId(crab);
+        crab.BoxId = null;
+        _uow.Crabs.Update(crab);
+
+        var open = await _uow.CrabBoxAllocations.FindAsync(
+            a => a.CrabId == crab.Id && a.EndTime == null, ct);
+        foreach (var alloc in open)
+        {
+            alloc.EndTime = DateTime.UtcNow;
+            if (!string.IsNullOrWhiteSpace(reason))
+            {
+                alloc.Notes = string.IsNullOrWhiteSpace(alloc.Notes)
+                    ? reason
+                    : alloc.Notes + " | " + reason;
+            }
+            _uow.CrabBoxAllocations.Update(alloc);
+        }
+
+        if (boxId == Guid.Empty)
+            return;
+
+        var stillLive = (await _uow.Crabs.FindAsync(
+                c => c.BoxId == boxId
+                     && c.Id != crab.Id
+                     && (c.Status == CrabStatus.Alive
+                         || c.Status == CrabStatus.Molting
+                         || c.Status == CrabStatus.Quarantined),
+                ct))
+            .Any();
+        if (stillLive)
+            return;
+
+        var box = await _uow.Boxes.GetByIdAsync(boxId, ct);
+        if (box is null)
+            return;
+
+        var oldBoxStatus = box.Status;
+        var oldOccupied = box.IsOccupied;
+        box.IsOccupied = false;
+        box.Status = BoxStatuses.Empty;
+        _uow.Boxes.Update(box);
+
+        if (!string.Equals(oldBoxStatus, BoxStatuses.Empty, StringComparison.OrdinalIgnoreCase)
+            || oldOccupied)
+        {
+            await _uow.BoxStatusHistories.AddAsync(new BoxStatusHistory
+            {
+                BoxId = box.Id,
+                OldStatus = oldBoxStatus,
+                NewStatus = BoxStatuses.Empty,
+                OldIsOccupied = oldOccupied,
+                NewIsOccupied = false,
+                ChangedAt = DateTime.UtcNow,
+                Reason = reason
+            }, ct);
+        }
     }
 
     private static string BuildBoxDisplayName(Box box, FarmingArea? area)
