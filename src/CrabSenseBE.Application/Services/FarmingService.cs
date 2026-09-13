@@ -264,7 +264,7 @@ public class FarmingService : IFarmingService
         foreach (var row in rows) _uow.FarmingRows.Remove(row);
         _uow.FarmingAreas.Remove(area);
 
-        await ClearOperationBoxRefsAsync(boxIds, ct);
+            await ClearOperationRefsAsync(boxIds, crabIds, ct);
 
         // Một SaveChanges duy nhất => gói trong 1 transaction: lỗi giữa đường thì
         // rollback, không để lại khu bị xoá dở.
@@ -1177,41 +1177,63 @@ public class FarmingService : IFarmingService
     }
 
     /// <summary>
-    /// FarmOperations.BoxIdsJson là tham chiếu mềm (không FK) tới hộp.
-    /// Không dọn thì JSON còn giữ Id của hộp vừa bị xoá.
+    /// FarmOperations.BoxIdsJson / CrabIdsJson là tham chiếu mềm (không FK).
+    /// Không dọn thì JSON còn giữ Id của hộp / cua vừa bị xoá.
     /// </summary>
-    private async Task ClearOperationBoxRefsAsync(IReadOnlyCollection<Guid> boxIds, CancellationToken ct)
+    private async Task ClearOperationRefsAsync(
+        IReadOnlyCollection<Guid> boxIds, IReadOnlyCollection<Guid> crabIds, CancellationToken ct)
     {
-        if (boxIds.Count == 0)
+        if (boxIds.Count == 0 && crabIds.Count == 0)
             return;
-
-        var gone = boxIds.Select(b => b.ToString()).ToHashSet(StringComparer.OrdinalIgnoreCase);
 
         foreach (var op in await _uow.FarmOperations.GetAllAsync(ct))
         {
-            if (string.IsNullOrWhiteSpace(op.BoxIdsJson))
-                continue;
+            var changed = false;
 
-            List<string>? ids;
-            try
+            if (boxIds.Count > 0 && TryRemoveRefs(op.BoxIdsJson, boxIds, out var boxesJson))
             {
-                ids = JsonSerializer.Deserialize<List<string>>(op.BoxIdsJson);
+                op.BoxIdsJson = boxesJson;
+                changed = true;
             }
-            catch (JsonException)
+            if (crabIds.Count > 0 && TryRemoveRefs(op.CrabIdsJson, crabIds, out var crabsJson))
             {
-                continue; // JSON hỏng: không đoán, để nguyên
+                op.CrabIdsJson = crabsJson;
+                changed = true;
             }
 
-            if (ids == null)
-                continue;
-
-            var kept = ids.Where(x => !gone.Contains(x)).ToList();
-            if (kept.Count == ids.Count)
-                continue;
-
-            op.BoxIdsJson = JsonSerializer.Serialize(kept);
-            _uow.FarmOperations.Update(op);
+            if (changed)
+                _uow.FarmOperations.Update(op);
         }
+    }
+
+    /// <summary>Bỏ các Id đã xoá khỏi mảng JSON. Trả về true nếu có thay đổi.</summary>
+    private static bool TryRemoveRefs(
+        string? json, IReadOnlyCollection<Guid> goneIds, out string updated)
+    {
+        updated = json ?? "[]";
+        if (string.IsNullOrWhiteSpace(json))
+            return false;
+
+        List<string>? ids;
+        try
+        {
+            ids = JsonSerializer.Deserialize<List<string>>(json);
+        }
+        catch (JsonException)
+        {
+            return false; // JSON hỏng: không đoán, để nguyên
+        }
+
+        if (ids == null)
+            return false;
+
+        var gone = goneIds.Select(g => g.ToString()).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var kept = ids.Where(x => !gone.Contains(x)).ToList();
+        if (kept.Count == ids.Count)
+            return false;
+
+        updated = JsonSerializer.Serialize(kept);
+        return true;
     }
 
     private async Task RemoveWhereAsync<T>(
@@ -1953,8 +1975,31 @@ public class FarmingService : IFarmingService
                 d.Notes ?? d.Cause.ToString()));
         }
 
+        // Phiếu cho ăn ghi theo cua (FarmOperations.CrabIdsJson — tham chiếu mềm).
+        var crabKey = crab.Id.ToString();
+        var feedings = (await _uow.FarmOperations.FindAsync(
+                o => o.CrabIdsJson.Contains(crabKey), ct))
+            .OrderBy(o => o.Timestamp)
+            .ToList();
+        foreach (var f in feedings)
+        {
+            var title = string.IsNullOrWhiteSpace(f.Appetite)
+                ? "Phiếu chăm sóc"
+                : $"Cho ăn — {AppetiteVi(f.Appetite)}";
+            events.Add(new CrabTimelineEventDto(
+                f.Timestamp, "feeding", title, f.Notes));
+        }
+
         return events.OrderBy(e => e.At).ToList();
     }
+
+    private static string AppetiteVi(string? appetite) => (appetite ?? "").Trim().ToLowerInvariant() switch
+    {
+        "many" => "ăn nhiều",
+        "little" => "ăn ít",
+        "none" => "không ăn",
+        _ => "chưa ghi"
+    };
 
     private static IReadOnlyList<CrabProfileAlertDto> BuildCrabProfileAlerts(
         Crab crab, CrabAiAnalysis? latestAi, IReadOnlyList<CrabTimelineEventDto> timeline)
@@ -2002,6 +2047,7 @@ public class FarmingService : IFarmingService
             CrabCondition.Molting => "Phát hiện đang lột",
             CrabCondition.Softshell => "Đã lột — cua mềm",
             CrabCondition.Problem => "Có vấn đề",
+            CrabCondition.Weak => "Cua yếu",
             CrabCondition.Dead => "Đã chết",
             CrabCondition.Harvested => "Thu hoạch",
             _ => condition.ToString()

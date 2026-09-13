@@ -694,9 +694,13 @@ public static class DevDbBootstrap
             """
             ALTER TABLE be."FarmOperations"
             ADD COLUMN IF NOT EXISTS "Source" text NOT NULL DEFAULT 'manual',
-            ADD COLUMN IF NOT EXISTS "LocationLabel" text NULL;
+            ADD COLUMN IF NOT EXISTS "LocationLabel" text NULL,
+            ADD COLUMN IF NOT EXISTS "CrabIdsJson" text NOT NULL DEFAULT '[]',
+            ADD COLUMN IF NOT EXISTS "Appetite" text NULL,
+            ADD COLUMN IF NOT EXISTS "FoodType" text NULL,
+            ADD COLUMN IF NOT EXISTS "Condition" text NULL;
             """).ConfigureAwait(false);
-        logger.LogInformation("Ensured FarmOperations.Source / LocationLabel.");
+        logger.LogInformation("Ensured FarmOperations.Source / LocationLabel / CrabIdsJson / Appetite / FoodType / Condition.");
     }
 
     /// <summary>

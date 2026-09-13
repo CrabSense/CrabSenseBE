@@ -16,7 +16,11 @@ public record FarmOperationDto(
     Guid OperatorId,
     string OperatorName,
     string Source = "manual",
-    string? LocationLabel = null);
+    string? LocationLabel = null,
+    IReadOnlyList<string>? CrabIds = null,
+    string? Appetite = null,
+    string? FoodType = null,
+    string? Condition = null);
 
 public record CreateFarmOperationRequest(
     string Type,
@@ -29,7 +33,11 @@ public record CreateFarmOperationRequest(
     Guid? OperatorId = null,
     string? OperatorName = null,
     string? Source = null,
-    string? LocationLabel = null);
+    string? LocationLabel = null,
+    IReadOnlyList<string>? CrabIds = null,
+    string? Appetite = null,
+    string? FoodType = null,
+    string? Condition = null);
 
 public record UpdateFarmOperationRequest(
     string? Type = null,
@@ -37,7 +45,11 @@ public record UpdateFarmOperationRequest(
     string? Notes = null,
     decimal? Quantity = null,
     string? Unit = null,
-    IReadOnlyList<string>? PhotoUrls = null);
+    IReadOnlyList<string>? PhotoUrls = null,
+    IReadOnlyList<string>? CrabIds = null,
+    string? Appetite = null,
+    string? FoodType = null,
+    string? Condition = null);
 
 public record ManualInspectionDto(
     Guid Id,
