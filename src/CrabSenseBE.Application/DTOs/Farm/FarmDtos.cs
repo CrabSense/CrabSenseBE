@@ -150,7 +150,8 @@ public record BoxDto(
     /// <summary>empty | normal | premolt | molting | softshell | problem</summary>
     string? CrabCondition = null,
     int AlertCount = 0,
-    string? AiSummary = null);
+    string? AiSummary = null,
+    int CrabCount = 0);
 
 /// <summary>
 /// Create hộp. Required: FarmingRowId (dãy).

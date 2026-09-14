@@ -195,6 +195,12 @@ public class FarmingServiceFilterTests
             .ReturnsAsync(Array.Empty<Alert>());
         _uow.Setup(u => u.Crabs).Returns(crabRepo.Object);
         _uow.Setup(u => u.Alerts).Returns(alertRepo.Object);
+        var allocRepo = new Mock<IRepository<CrabBoxAllocation>>();
+        allocRepo.Setup(r => r.FindAsync(
+                It.IsAny<System.Linq.Expressions.Expression<Func<CrabBoxAllocation, bool>>>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Array.Empty<CrabBoxAllocation>());
+        _uow.Setup(u => u.CrabBoxAllocations).Returns(allocRepo.Object);
     }
 
     private void StubEmptyAreaStatsDeps()

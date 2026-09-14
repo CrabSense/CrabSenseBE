@@ -597,7 +597,7 @@ public class FarmingService : IFarmingService
         {
             all = all.Where(c =>
             {
-                var boxId = GetCrabBoxId(c);
+                var boxId = LastKnownBoxId(c, ctx);
                 var box = ctx.Boxes.FirstOrDefault(b => b.Id == boxId);
                 if (box is null) return false;
                 return ctx.Rows.TryGetValue(box.FarmingRowId, out var row)
@@ -1061,7 +1061,7 @@ public class FarmingService : IFarmingService
     .ToListAsync(ct);
 
         var liveBoxIds = aliveCrabs
-            .Select(CurrentBoxId)
+            .Select(c => CurrentBoxId(c))
             .Where(id => id != Guid.Empty)
             .ToHashSet();
 
@@ -1148,6 +1148,7 @@ public class FarmingService : IFarmingService
         public Dictionary<Guid, FarmingRow> Rows { get; init; } = new();
         public Dictionary<Guid, FarmingArea> Areas { get; init; } = new();
         public Dictionary<Guid, List<Crab>> CrabsByBox { get; init; } = new();
+        public Dictionary<Guid, Guid> BoxByCrab { get; init; } = new();
         public List<Alert> ActiveAlerts { get; init; } = [];
     }
 
@@ -1156,13 +1157,7 @@ public class FarmingService : IFarmingService
         var boxes = (await _uow.Boxes.GetAllAsync(ct)).ToList();
         var rows = (await _uow.FarmingRows.GetAllAsync(ct)).ToDictionary(r => r.Id);
         var areas = (await _uow.FarmingAreas.GetAllAsync(ct)).ToDictionary(a => a.Id);
-        var crabs = (await _uow.Crabs.GetAllAsync(ct)).ToList();
-        var crabsByBox = crabs
-            .Where(IsCrabAlive)
-            .Select(c => (BoxId: CurrentBoxId(c), Crab: c))
-            .Where(x => x.BoxId != Guid.Empty)
-            .GroupBy(x => x.BoxId)
-            .ToDictionary(g => g.Key, g => g.Select(x => x.Crab).ToList());
+        var (crabsByBox, boxByCrab) = await LoadLiveCrabLocationsAsync(ct);
         var alerts = (await _uow.Alerts.GetAllAsync(ct))
             .Where(a => a.Status == AlertStatus.Active)
             .ToList();
@@ -1172,8 +1167,48 @@ public class FarmingService : IFarmingService
             Rows = rows,
             Areas = areas,
             CrabsByBox = crabsByBox,
+            BoxByCrab = boxByCrab,
             ActiveAlerts = alerts
         };
+    }
+
+    /// <summary>
+    /// Cua đang nuôi → hộp: ưu tiên Crab.BoxId, rồi allocation đang mở (EndTime=null).
+    /// Không dùng allocation đã đóng — tránh đếm nhầm cua đã thu hoạch.
+    /// </summary>
+    private async Task<(Dictionary<Guid, List<Crab>> ByBox, Dictionary<Guid, Guid> BoxByCrab)>
+        LoadLiveCrabLocationsAsync(CancellationToken ct)
+    {
+        var crabs = (await _uow.Crabs.GetAllAsync(ct) ?? Enumerable.Empty<Crab>())
+            .Where(IsCrabAlive)
+            .ToList();
+        var crabIds = crabs.Select(c => c.Id).ToHashSet();
+        var allocRepo = _uow.CrabBoxAllocations;
+        var openAllocs = (crabIds.Count == 0 || allocRepo is null)
+            ? new List<CrabBoxAllocation>()
+            : (await allocRepo.FindAsync(
+                a => a.EndTime == null && crabIds.Contains(a.CrabId), ct)
+              ?? Enumerable.Empty<CrabBoxAllocation>()).ToList();
+        var allocByCrab = openAllocs
+            .GroupBy(a => a.CrabId)
+            .ToDictionary(g => g.Key, g => g.OrderByDescending(a => a.StartTime).First().BoxId);
+
+        var boxByCrab = new Dictionary<Guid, Guid>();
+        var byBox = new Dictionary<Guid, List<Crab>>();
+        foreach (var crab in crabs)
+        {
+            var boxId = ResolveCurrentBoxId(crab, allocByCrab);
+            if (boxId == Guid.Empty) continue;
+            boxByCrab[crab.Id] = boxId;
+            if (!byBox.TryGetValue(boxId, out var list))
+            {
+                list = [];
+                byBox[boxId] = list;
+            }
+            list.Add(crab);
+        }
+
+        return (byBox, boxByCrab);
     }
 
     // ─── Paging / mapping ───────────────────────────────────────────────────
@@ -1239,11 +1274,9 @@ public class FarmingService : IFarmingService
                 .ToList();
 
         var boxIds = boxes.Select(b => b.Id).ToHashSet();
-        var crabs = boxIds.Count == 0
-            ? new List<Crab>()
-            : (await _uow.Crabs.GetAllAsync(ct) ?? Enumerable.Empty<Crab>())
-                .Where(c => IsCrabAlive(c) && CurrentBoxId(c) != Guid.Empty && boxIds.Contains(CurrentBoxId(c)))
-                .ToList();
+        var (crabsByBox, _) = boxIds.Count == 0
+            ? (new Dictionary<Guid, List<Crab>>(), new Dictionary<Guid, Guid>())
+            : await LoadLiveCrabLocationsAsync(ct);
 
         var waterSystems = (await _uow.WaterSystems.GetAllAsync(ct) ?? Enumerable.Empty<WaterSystem>())
             .Where(w => w.FarmingAreaId is Guid aid && ids.Contains(aid))
@@ -1274,7 +1307,8 @@ public class FarmingService : IFarmingService
                 .Where(b => rowToArea.TryGetValue(b.FarmingRowId, out var aid) && aid == areaId)
                 .ToList();
             var areaBoxIds = areaBoxes.Select(b => b.Id).ToHashSet();
-            var crabCount = crabs.Count(c => areaBoxIds.Contains(CurrentBoxId(c)));
+            var crabCount = areaBoxIds.Sum(id =>
+                crabsByBox.TryGetValue(id, out var list) ? list.Count : 0);
             var farmWarning = areaHasWarning.Contains(areaId);
             var alertBoxes = areaBoxes.Count(box => IsAlertBox(box, farmWarning, activeAlerts));
             var healthy = Math.Max(0, areaBoxes.Count - alertBoxes);
@@ -1297,8 +1331,34 @@ public class FarmingService : IFarmingService
         return farmHasWarning && box.IsOccupied;
     }
 
-    private static Guid CurrentBoxId(Crab c)
-        => c.BoxId is Guid bid && bid != Guid.Empty ? bid : GetCrabBoxId(c);
+    private static Guid CurrentBoxId(Crab c) => ResolveCurrentBoxId(c);
+
+    private static Guid ResolveCurrentBoxId(
+        Crab c, IReadOnlyDictionary<Guid, Guid>? openAllocByCrab = null)
+    {
+        if (c.BoxId is Guid snap && snap != Guid.Empty)
+            return snap;
+        if (openAllocByCrab is not null
+            && openAllocByCrab.TryGetValue(c.Id, out var fromDb)
+            && fromDb != Guid.Empty)
+            return fromDb;
+        return c.BoxAllocations
+            .Where(a => a.EndTime is null)
+            .OrderByDescending(a => a.StartTime)
+            .FirstOrDefault()?.BoxId ?? Guid.Empty;
+    }
+
+    /// <summary>Hộp hiện tại, hoặc hộp cuối (allocation đã đóng) để lọc khu.</summary>
+    private static Guid LastKnownBoxId(Crab c, BoxContext? ctx = null)
+    {
+        var current = ResolveCurrentBoxId(c);
+        if (current != Guid.Empty) return current;
+        if (ctx is not null && ctx.BoxByCrab.TryGetValue(c.Id, out var live) && live != Guid.Empty)
+            return live;
+        return c.BoxAllocations
+            .OrderByDescending(a => a.StartTime)
+            .FirstOrDefault()?.BoxId ?? Guid.Empty;
+    }
 
     private async Task<string> PeekNextFarmCodeAsync(CancellationToken ct)
     {
@@ -1469,18 +1529,17 @@ public class FarmingService : IFarmingService
             .Where(b => ids.Contains(b.FarmingRowId))
             .ToList();
         var boxIds = boxes.Select(b => b.Id).ToHashSet();
-        var crabs = boxIds.Count == 0
-            ? new List<Crab>()
-            : (await _uow.Crabs.GetAllAsync(ct))
-                .Where(c => IsCrabAlive(c) && CurrentBoxId(c) != Guid.Empty && boxIds.Contains(CurrentBoxId(c)))
-                .ToList();
+        var (crabsByBox, _) = boxIds.Count == 0
+            ? (new Dictionary<Guid, List<Crab>>(), new Dictionary<Guid, Guid>())
+            : await LoadLiveCrabLocationsAsync(ct);
         var activeAlerts = (await _uow.Alerts.FindAsync(a => a.Status == AlertStatus.Active, ct)).ToList();
 
         foreach (var rowId in ids)
         {
             var rowBoxes = boxes.Where(b => b.FarmingRowId == rowId).ToList();
             var rowBoxIds = rowBoxes.Select(b => b.Id).ToHashSet();
-            var crabCount = crabs.Count(c => rowBoxIds.Contains(CurrentBoxId(c)));
+            var crabCount = rowBoxIds.Sum(id =>
+                crabsByBox.TryGetValue(id, out var list) ? list.Count : 0);
             var alertBoxes = rowBoxes.Count(box => IsAlertBox(box, false, activeAlerts));
             var healthy = Math.Max(0, rowBoxes.Count - alertBoxes);
             result[rowId] = new AreaStats(0, rowBoxes.Count, crabCount, healthy, alertBoxes);
@@ -1497,7 +1556,10 @@ public class FarmingService : IFarmingService
             ctx.Areas.TryGetValue(row.FarmingAreaId, out area);
 
         var crab = PrimaryCrab(ctx, b.Id);
-        var occupied = crab is not null;
+        var crabCount = ctx.CrabsByBox.TryGetValue(b.Id, out var live)
+            ? live.Count(IsCrabAlive)
+            : 0;
+        var occupied = crabCount > 0;
         var condition = MapCrabCondition(crab, occupied);
         var alerts = CountBoxAlerts(b, ctx.ActiveAlerts);
         var status = occupied || KeepBoxStatusWhenEmpty(b.Status)
@@ -1522,7 +1584,8 @@ public class FarmingService : IFarmingService
             crab?.Status.ToString(),
             condition,
             alerts,
-            BuildAiSummary(occupied, condition, alerts));
+            BuildAiSummary(occupied, condition, alerts),
+            crabCount);
     }
 
     private static bool BoxMatchesSearch(Box box, BoxContext ctx, string query)
@@ -1692,19 +1755,16 @@ public class FarmingService : IFarmingService
     || c.Status == CrabStatus.Molting
     || c.Status == CrabStatus.Quarantined;
 
-    private static Guid GetCrabBoxId(Crab c) =>
-        c.BoxAllocations
-         .OrderByDescending(a => a.StartTime)
-         .FirstOrDefault()?.BoxId ?? Guid.Empty;
+    private static Guid GetCrabBoxId(Crab c) => ResolveCurrentBoxId(c);
+
     private static CrabDto MapCrab(
         Crab c, BoxContext ctx, CrabLot? lot = null, CrabAiAnalysis? latestAi = null)
     {
-        // Lấy allocation mới nhất (box hiện tại)
-        var lastAllocation = c.BoxAllocations
-            .OrderByDescending(a => a.StartTime)
-            .FirstOrDefault();
-
-        var boxId = lastAllocation?.BoxId ?? Guid.Empty;
+        var boxId = ResolveCurrentBoxId(c);
+        if (boxId == Guid.Empty && ctx.BoxByCrab.TryGetValue(c.Id, out var liveBox))
+            boxId = liveBox;
+        if (boxId == Guid.Empty && !IsCrabAlive(c))
+            boxId = LastKnownBoxId(c, ctx);
 
         var box = ctx.Boxes.FirstOrDefault(x => x.Id == boxId);
         FarmingRow? row = null;

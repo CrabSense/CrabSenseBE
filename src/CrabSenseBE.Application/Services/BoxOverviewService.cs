@@ -60,11 +60,30 @@ public class BoxOverviewService : IBoxOverviewService
         var deviceSnap = BuildDeviceSnapshot(devices);
         var (waterScore, deviceScore) = ComputeAreaScores(sensors, devices, alerts);
 
-        // Crabs currently in these boxes
-        var crabs = (await _uow.Crabs.GetAllAsync(ct))
-            .Where(c => c.BoxId is Guid bid && boxIds.Contains(bid))
-            .ToList();
-        var crabsByBox = crabs.GroupBy(c => c.BoxId!.Value).ToDictionary(g => g.Key, g => g.ToList());
+        // Crabs currently in these boxes: Crab.BoxId or open allocation
+        var liveCrabs = (await _uow.Crabs.GetAllAsync(ct)).Where(IsLiveCrab).ToList();
+        var liveIds = liveCrabs.Select(c => c.Id).ToHashSet();
+        var openAllocsForCrabs = liveIds.Count == 0
+            ? new List<CrabBoxAllocation>()
+            : (await _uow.CrabBoxAllocations.FindAsync(
+                a => a.EndTime == null && liveIds.Contains(a.CrabId), ct)).ToList();
+        var allocBoxByCrab = openAllocsForCrabs
+            .GroupBy(a => a.CrabId)
+            .ToDictionary(g => g.Key, g => g.OrderByDescending(a => a.StartTime).First().BoxId);
+        var crabsByBox = new Dictionary<Guid, List<Crab>>();
+        foreach (var crab in liveCrabs)
+        {
+            var boxId = crab.BoxId is Guid snap && snap != Guid.Empty
+                ? snap
+                : allocBoxByCrab.GetValueOrDefault(crab.Id);
+            if (boxId == Guid.Empty || !boxIds.Contains(boxId)) continue;
+            if (!crabsByBox.TryGetValue(boxId, out var list))
+            {
+                list = [];
+                crabsByBox[boxId] = list;
+            }
+            list.Add(crab);
+        }
 
         var lots = (await _uow.CrabLots.GetAllAsync(ct)).ToDictionary(l => l.Id);
 
