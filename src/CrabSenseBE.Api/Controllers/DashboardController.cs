@@ -81,6 +81,18 @@ public class OperationsController : ControllerBase
         CancellationToken ct = default)
         => Ok(await _farmOps.ListByBoxAsync(boxId, page, limit, type, startDate, endDate, ct));
 
+    /// <summary>[READ] Phiếu chăm sóc của một con cua — lịch sử ăn (Mobile)</summary>
+    [HttpGet("crab/{crabId:guid}")]
+    public async Task<IActionResult> ByCrab(
+        Guid crabId,
+        [FromQuery] int page = 1,
+        [FromQuery] int limit = 50,
+        [FromQuery] string? type = null,
+        [FromQuery] DateTime? startDate = null,
+        [FromQuery] DateTime? endDate = null,
+        CancellationToken ct = default)
+        => Ok(await _farmOps.ListByCrabAsync(crabId, page, limit, type, startDate, endDate, ct));
+
     /// <summary>[CREATE] Create farm operation / note / task</summary>
     [HttpPost]
     [Authorize(Roles = AppRoles.FarmWrite)]

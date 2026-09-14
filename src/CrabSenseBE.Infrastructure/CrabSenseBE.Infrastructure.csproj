@@ -28,4 +28,11 @@
     <ProjectReference Include="..\CrabSenseBE.Domain\CrabSenseBE.Domain.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- Test cho helper internal của DatabaseBackupService (chon phien ban pg_dump). -->
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleTo">
+      <_Parameter1>CrabSenseBE.UnitTests</_Parameter1>
+    </AssemblyAttribute>
+  </ItemGroup>
+
 </Project>

@@ -14,6 +14,24 @@ public class FarmOperation : BaseEntity
     /// <summary>JSON array of box Guid strings.</summary>
     public string BoxIdsJson { get; set; } = "[]";
 
+    /// <summary>
+    /// JSON array of crab Guid strings — con cua được ghi nhận trong phiếu này.
+    /// Tham chiếu mềm (không FK), cùng kiểu với <see cref="BoxIdsJson"/>.
+    /// </summary>
+    public string CrabIdsJson { get; set; } = "[]";
+
+    /// <summary>Mức ăn quan sát được: many | little | none (null = không ghi).</summary>
+    public string? Appetite { get; set; }
+
+    /// <summary>Loại thức ăn cho phiếu cho ăn (null với phiếu khác).</summary>
+    public string? FoodType { get; set; }
+
+    /// <summary>
+    /// Tình trạng đánh dấu khi cho ăn: normal | premolt | attention | weak.
+    /// Ghi vào FarmOperations; nếu có CrabIds thì cập nhật luôn Crabs.Condition.
+    /// </summary>
+    public string? Condition { get; set; }
+
     public decimal? Quantity { get; set; }
     public string? Unit { get; set; }
     public string Notes { get; set; } = string.Empty;

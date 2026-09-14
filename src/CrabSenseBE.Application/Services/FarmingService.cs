@@ -1,3 +1,5 @@
+using System.Linq.Expressions;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using CrabSenseBE.Application.Common;
 using CrabSenseBE.Application.DTOs.Farm;
@@ -218,17 +220,58 @@ public class FarmingService : IFarmingService
             "Uploaded.");
     }
 
-    public async Task<ApiResponse> DeleteAreaAsync(Guid id, CancellationToken ct = default)
+    /// <summary>
+    /// Xoá khu.
+    /// Mặc định: chỉ xoá được khi khu đã hết hàng (giữ nguyên hành vi cũ).
+    /// cascade=true: xoá luôn cả cây con (cua → hộp → hàng) trong 1 transaction,
+    /// và dọn các tham chiếu mềm còn trỏ tới chúng.
+    /// </summary>
+    public async Task<ApiResponse> DeleteAreaAsync(
+        Guid id, bool cascade = false, CancellationToken ct = default)
     {
         var area = await RequireAreaAsync(id, requireActive: false, ct);
 
-        var hasRows = await _uow.FarmingRows.AnyAsync(r => r.FarmingAreaId == id, ct);
-        if (hasRows)
-            throw AppException.Conflict("Cannot delete area that still has rows. Delete rows first.");
+        if (!cascade)
+        {
+            var hasRows = await _uow.FarmingRows.AnyAsync(r => r.FarmingAreaId == id, ct);
+            if (hasRows)
+                throw AppException.Conflict("Cannot delete area that still has rows. Delete rows first.");
 
+            _uow.FarmingAreas.Remove(area);
+            await _uow.SaveChangesAsync(ct);
+            return ApiResponse.Ok("Deleted.");
+        }
+
+        // ── Cascade: gom khu → hàng → hộp → cua ────────────────────────────────
+        var rows = (await _uow.FarmingRows.FindAsync(r => r.FarmingAreaId == id, ct)).ToList();
+        var rowIds = rows.Select(r => r.Id).ToList();
+
+        var boxes = rowIds.Count == 0
+            ? new List<Box>()
+            : (await _uow.Boxes.FindAsync(b => rowIds.Contains(b.FarmingRowId), ct)).ToList();
+        var boxIds = boxes.Select(b => b.Id).ToList();
+
+        var crabs = boxIds.Count == 0
+            ? new List<Crab>()
+            : (await _uow.Crabs.FindAsync(
+                c => c.BoxId != null && boxIds.Contains(c.BoxId.Value), ct)).ToList();
+        var crabIds = crabs.Select(c => c.Id).ToList();
+
+        await RemoveDependentsAsync(crabIds, boxIds, ct);
+
+        foreach (var crab in crabs) _uow.Crabs.Remove(crab);
+        foreach (var box in boxes) _uow.Boxes.Remove(box);
+        foreach (var row in rows) _uow.FarmingRows.Remove(row);
         _uow.FarmingAreas.Remove(area);
+
+            await ClearOperationRefsAsync(boxIds, crabIds, ct);
+
+        // Một SaveChanges duy nhất => gói trong 1 transaction: lỗi giữa đường thì
+        // rollback, không để lại khu bị xoá dở.
         await _uow.SaveChangesAsync(ct);
-        return ApiResponse.Ok("Deleted.");
+
+        return ApiResponse.Ok(
+            $"Deleted area '{area.Code}': {rowIds.Count} rows, {boxIds.Count} boxes, {crabIds.Count} crabs.");
     }
 
     // ─── FarmingRow ─────────────────────────────────────────────────────────
@@ -1018,6 +1061,134 @@ public class FarmingService : IFarmingService
     }
 
     // ─── Hierarchy helpers ──────────────────────────────────────────────────
+
+    /// <summary>
+    /// Dọn mọi bản ghi con trỏ tới cua/hộp sắp bị xoá, trước khi xoá cha.
+    /// Gồm 2 loại:
+    ///  - FK "NO ACTION": không dọn trước thì DB chặn, cả transaction fail.
+    ///  - Cột tham chiếu KHÔNG có FK: không dọn thì thành bản ghi mồ côi.
+    /// Các FK đã là CASCADE (CrabBoxAllocations/BoxStatusHistories/MoltingRecords
+    /// theo CrabId, CrabMortalityRecords) vẫn liệt kê tường minh cho chắc.
+    /// ponytail: quét theo danh sách Id trong bộ nhớ — thao tác admin hiếm, phạm vi 1 khu.
+    /// </summary>
+    private async Task RemoveDependentsAsync(
+        IReadOnlyCollection<Guid> crabIds, IReadOnlyCollection<Guid> boxIds, CancellationToken ct)
+    {
+        var qrCodes = new List<QrCode>();
+
+        if (crabIds.Count > 0)
+        {
+            await RemoveWhereAsync(_uow.AiDetections, x => x.CrabId != null && crabIds.Contains(x.CrabId.Value), ct);
+            await RemoveWhereAsync(_uow.HarvestLines, x => x.CrabId != null && crabIds.Contains(x.CrabId.Value), ct);
+            await RemoveWhereAsync(_uow.Inspections, x => x.CrabId != null && crabIds.Contains(x.CrabId.Value), ct);
+            await RemoveWhereAsync(_uow.MediaAssets, x => x.CrabId != null && crabIds.Contains(x.CrabId.Value), ct);
+            await RemoveWhereAsync(_uow.SalesOrderLines, x => x.CrabId != null && crabIds.Contains(x.CrabId.Value), ct);
+
+            await RemoveWhereAsync(_uow.MoltingRecords, x => crabIds.Contains(x.CrabId), ct);
+            await RemoveWhereAsync(_uow.CrabBoxAllocations, x => crabIds.Contains(x.CrabId), ct);
+            await RemoveWhereAsync(_uow.CrabMortalityRecords, x => crabIds.Contains(x.CrabId), ct);
+            await RemoveWhereAsync(_uow.CrabStatusHistories, x => crabIds.Contains(x.CrabId), ct);
+            await RemoveWhereAsync(_uow.CrabWeightHistories, x => crabIds.Contains(x.CrabId), ct);
+            await RemoveWhereAsync(_uow.CrabHarvestHistories, x => crabIds.Contains(x.CrabId), ct);
+            await RemoveWhereAsync(_uow.CrabAiAnalyses, x => crabIds.Contains(x.CrabId), ct);
+
+            qrCodes.AddRange(await _uow.QrCodes.FindAsync(
+                q => q.CrabId != null && crabIds.Contains(q.CrabId.Value), ct));
+        }
+
+        if (boxIds.Count > 0)
+        {
+            await RemoveWhereAsync(_uow.HarvestLines, x => x.BoxId != null && boxIds.Contains(x.BoxId.Value), ct);
+            await RemoveWhereAsync(_uow.MediaAssets, x => x.BoxId != null && boxIds.Contains(x.BoxId.Value), ct);
+            await RemoveWhereAsync(_uow.MoltingRecords, x => x.BoxId != null && boxIds.Contains(x.BoxId.Value), ct);
+
+            await RemoveWhereAsync(_uow.BoxStatusHistories, x => boxIds.Contains(x.BoxId), ct);
+            await RemoveWhereAsync(_uow.CrabBoxAllocations, x => boxIds.Contains(x.BoxId), ct);
+            await RemoveWhereAsync(_uow.AiDetections, x => x.BoxId != null && boxIds.Contains(x.BoxId.Value), ct);
+            await RemoveWhereAsync(_uow.CrabAiAnalyses, x => x.BoxId != null && boxIds.Contains(x.BoxId.Value), ct);
+            await RemoveWhereAsync(_uow.Inspections, x => x.BoxId != null && boxIds.Contains(x.BoxId.Value), ct);
+            await RemoveWhereAsync(_uow.SaleTransactions, x => x.BoxId != null && boxIds.Contains(x.BoxId.Value), ct);
+
+            qrCodes.AddRange(await _uow.QrCodes.FindAsync(
+                q => q.BoxId != null && boxIds.Contains(q.BoxId.Value), ct));
+        }
+
+        // QR là cha của TraceabilityLink -> xoá liên kết trước rồi mới xoá QR.
+        var qrIds = qrCodes.Select(q => q.Id).Distinct().ToList();
+        if (qrIds.Count > 0)
+            await RemoveWhereAsync(_uow.TraceabilityLinks, x => qrIds.Contains(x.QrCodeId), ct);
+
+        foreach (var qr in qrCodes.DistinctBy(q => q.Id))
+            _uow.QrCodes.Remove(qr);
+    }
+
+    /// <summary>
+    /// FarmOperations.BoxIdsJson / CrabIdsJson là tham chiếu mềm (không FK).
+    /// Không dọn thì JSON còn giữ Id của hộp / cua vừa bị xoá.
+    /// </summary>
+    private async Task ClearOperationRefsAsync(
+        IReadOnlyCollection<Guid> boxIds, IReadOnlyCollection<Guid> crabIds, CancellationToken ct)
+    {
+        if (boxIds.Count == 0 && crabIds.Count == 0)
+            return;
+
+        foreach (var op in await _uow.FarmOperations.GetAllAsync(ct))
+        {
+            var changed = false;
+
+            if (boxIds.Count > 0 && TryRemoveRefs(op.BoxIdsJson, boxIds, out var boxesJson))
+            {
+                op.BoxIdsJson = boxesJson;
+                changed = true;
+            }
+            if (crabIds.Count > 0 && TryRemoveRefs(op.CrabIdsJson, crabIds, out var crabsJson))
+            {
+                op.CrabIdsJson = crabsJson;
+                changed = true;
+            }
+
+            if (changed)
+                _uow.FarmOperations.Update(op);
+        }
+    }
+
+    /// <summary>Bỏ các Id đã xoá khỏi mảng JSON. Trả về true nếu có thay đổi.</summary>
+    private static bool TryRemoveRefs(
+        string? json, IReadOnlyCollection<Guid> goneIds, out string updated)
+    {
+        updated = json ?? "[]";
+        if (string.IsNullOrWhiteSpace(json))
+            return false;
+
+        List<string>? ids;
+        try
+        {
+            ids = JsonSerializer.Deserialize<List<string>>(json);
+        }
+        catch (JsonException)
+        {
+            return false; // JSON hỏng: không đoán, để nguyên
+        }
+
+        if (ids == null)
+            return false;
+
+        var gone = goneIds.Select(g => g.ToString()).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var kept = ids.Where(x => !gone.Contains(x)).ToList();
+        if (kept.Count == ids.Count)
+            return false;
+
+        updated = JsonSerializer.Serialize(kept);
+        return true;
+    }
+
+    private async Task RemoveWhereAsync<T>(
+        IRepository<T> repo, Expression<Func<T, bool>> predicate, CancellationToken ct)
+        where T : class
+    {
+        foreach (var entity in await repo.FindAsync(predicate, ct))
+            repo.Remove(entity);
+    }
 
     private async Task<FarmingArea> RequireAreaAsync(Guid id, bool requireActive, CancellationToken ct)
     {
@@ -1877,8 +2048,31 @@ public class FarmingService : IFarmingService
                 d.Notes ?? d.Cause.ToString()));
         }
 
+        // Phiếu cho ăn ghi theo cua (FarmOperations.CrabIdsJson — tham chiếu mềm).
+        var crabKey = crab.Id.ToString();
+        var feedings = (await _uow.FarmOperations.FindAsync(
+                o => o.CrabIdsJson.Contains(crabKey), ct))
+            .OrderBy(o => o.Timestamp)
+            .ToList();
+        foreach (var f in feedings)
+        {
+            var title = string.IsNullOrWhiteSpace(f.Appetite)
+                ? "Phiếu chăm sóc"
+                : $"Cho ăn — {AppetiteVi(f.Appetite)}";
+            events.Add(new CrabTimelineEventDto(
+                f.Timestamp, "feeding", title, f.Notes));
+        }
+
         return events.OrderBy(e => e.At).ToList();
     }
+
+    private static string AppetiteVi(string? appetite) => (appetite ?? "").Trim().ToLowerInvariant() switch
+    {
+        "many" => "ăn nhiều",
+        "little" => "ăn ít",
+        "none" => "không ăn",
+        _ => "chưa ghi"
+    };
 
     private static IReadOnlyList<CrabProfileAlertDto> BuildCrabProfileAlerts(
         Crab crab, CrabAiAnalysis? latestAi, IReadOnlyList<CrabTimelineEventDto> timeline)
@@ -1926,6 +2120,7 @@ public class FarmingService : IFarmingService
             CrabCondition.Molting => "Phát hiện đang lột",
             CrabCondition.Softshell => "Đã lột — cua mềm",
             CrabCondition.Problem => "Có vấn đề",
+            CrabCondition.Weak => "Cua yếu",
             CrabCondition.Dead => "Đã chết",
             CrabCondition.Harvested => "Thu hoạch",
             _ => condition.ToString()

@@ -79,11 +79,15 @@ public class FarmingAreasController : ControllerBase
     public async Task<IActionResult> Update(Guid id, [FromBody] UpdateFarmingAreaRequest req, CancellationToken ct)
         => Ok(await _service.UpdateAreaAsync(id, req, ct));
 
-    /// <summary>[DELETE] Delete area (only if no rows remain)</summary>
+    /// <summary>
+    /// [DELETE] Delete area. Mặc định chỉ xoá được khi khu đã hết hàng.
+    /// cascade=true: xoá cả cây con (cua → hộp → hàng) trong 1 transaction.
+    /// </summary>
     [HttpDelete("{id:guid}")]
     [Authorize(Roles = AppRoles.FarmManage)]
-    public async Task<IActionResult> Delete(Guid id, CancellationToken ct)
-        => Ok(await _service.DeleteAreaAsync(id, ct));
+    public async Task<IActionResult> Delete(
+        Guid id, [FromQuery] bool cascade = false, CancellationToken ct = default)
+        => Ok(await _service.DeleteAreaAsync(id, cascade, ct));
 
     /// <summary>[READ] List rows in area — no pageSize = GET ALL</summary>
     [HttpGet("{areaId:guid}/rows")]

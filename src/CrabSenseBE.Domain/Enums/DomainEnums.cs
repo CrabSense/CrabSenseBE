@@ -146,7 +146,9 @@ public enum CrabCondition
     /// <summary>⚪ Đã thu hoạch</summary>
     Harvested = 6,
     /// <summary>💰 Đã bán</summary>
-    Sold = 7
+    Sold = 7,
+    /// <summary>🟠 Cua yếu (bỏ ăn / ít ăn nhiều ngày)</summary>
+    Weak = 8
 }
 
 public enum CrabGender
@@ -199,6 +201,7 @@ public static class CrabConditions
         CrabCondition.Dead => "dead",
         CrabCondition.Harvested => "harvested",
         CrabCondition.Sold => "sold",
+        CrabCondition.Weak => "weak",
         _ => "normal"
     };
 
@@ -217,6 +220,7 @@ public static class CrabConditions
             "dead" or "deceased" or "chet" => CrabCondition.Dead,
             "harvested" or "harvest" or "dathuhoach" => CrabCondition.Harvested,
             "sold" or "daban" => CrabCondition.Sold,
+            "weak" or "yeu" or "cua yeu" or "coi" => CrabCondition.Weak,
             _ => fallback
         };
     }

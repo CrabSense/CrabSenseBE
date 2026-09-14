@@ -26,6 +26,9 @@ public interface IFarmOperationService
     Task<ApiResponse<IEnumerable<FarmOperationDto>>> ListByBoxAsync(
         Guid boxId, int page = 1, int limit = 50, string? type = null,
         DateTime? startDate = null, DateTime? endDate = null, CancellationToken ct = default);
+    Task<ApiResponse<IEnumerable<FarmOperationDto>>> ListByCrabAsync(
+        Guid crabId, int page = 1, int limit = 50, string? type = null,
+        DateTime? startDate = null, DateTime? endDate = null, CancellationToken ct = default);
     Task<ApiResponse<FarmOperationDto>> CreateAsync(CreateFarmOperationRequest req, CancellationToken ct = default);
     Task<ApiResponse<FarmOperationDto>> UpdateAsync(Guid id, UpdateFarmOperationRequest req, CancellationToken ct = default);
 }

@@ -69,7 +69,10 @@ public record BoxOverviewItemDto(
     DateTime? ExpectedHarvestAt,
     bool WaterTestDue,
     bool VideoDue,
-    string Priority);
+    string Priority,
+    /// Tình trạng xấu nhất trong số cua đang nuôi ở hộp (normal | premolt |
+    /// molting | softshell | problem | weak). Null = hộp trống/chưa đánh dấu.
+    string? CrabCondition = null);
 
 /// <summary>Farm-level summary counts for Boxes header.</summary>
 public record BoxesFarmSummaryDto(
