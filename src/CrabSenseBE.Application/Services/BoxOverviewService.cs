@@ -61,7 +61,8 @@ public class BoxOverviewService : IBoxOverviewService
         var (waterScore, deviceScore) = ComputeAreaScores(sensors, devices, alerts);
 
         // Crabs currently in these boxes: Crab.BoxId or open allocation
-        var liveCrabs = (await _uow.Crabs.GetAllAsync(ct)).Where(IsLiveCrab).ToList();
+        var allCrabs = (await _uow.Crabs.GetAllAsync(ct)).ToList();
+        var liveCrabs = allCrabs.Where(IsLiveCrab).ToList();
         var liveIds = liveCrabs.Select(c => c.Id).ToHashSet();
         var openAllocsForCrabs = liveIds.Count == 0
             ? new List<CrabBoxAllocation>()
@@ -71,7 +72,9 @@ public class BoxOverviewService : IBoxOverviewService
             .GroupBy(a => a.CrabId)
             .ToDictionary(g => g.Key, g => g.OrderByDescending(a => a.StartTime).First().BoxId);
         var crabsByBox = new Dictionary<Guid, List<Crab>>();
-        foreach (var crab in liveCrabs)
+        // Gom cả cua đã chết: CrabCount/IsOccupied vẫn lọc lại bằng IsLiveCrab ở dưới,
+        // còn màu hộp thì cần thấy cua chết để báo đỏ.
+        foreach (var crab in allCrabs)
         {
             var boxId = crab.BoxId is Guid snap && snap != Guid.Empty
                 ? snap
