@@ -61,7 +61,8 @@ public class BoxOverviewService : IBoxOverviewService
         var (waterScore, deviceScore) = ComputeAreaScores(sensors, devices, alerts);
 
         // Crabs currently in these boxes: Crab.BoxId or open allocation
-        var liveCrabs = (await _uow.Crabs.GetAllAsync(ct)).Where(IsLiveCrab).ToList();
+        var allCrabs = (await _uow.Crabs.GetAllAsync(ct)).ToList();
+        var liveCrabs = allCrabs.Where(IsLiveCrab).ToList();
         var liveIds = liveCrabs.Select(c => c.Id).ToHashSet();
         var openAllocsForCrabs = liveIds.Count == 0
             ? new List<CrabBoxAllocation>()
@@ -71,7 +72,9 @@ public class BoxOverviewService : IBoxOverviewService
             .GroupBy(a => a.CrabId)
             .ToDictionary(g => g.Key, g => g.OrderByDescending(a => a.StartTime).First().BoxId);
         var crabsByBox = new Dictionary<Guid, List<Crab>>();
-        foreach (var crab in liveCrabs)
+        // Gom cả cua đã chết: CrabCount/IsOccupied vẫn lọc lại bằng IsLiveCrab ở dưới,
+        // còn màu hộp thì cần thấy cua chết để báo đỏ.
+        foreach (var crab in allCrabs)
         {
             var boxId = crab.BoxId is Guid snap && snap != Guid.Empty
                 ? snap
@@ -207,7 +210,8 @@ public class BoxOverviewService : IBoxOverviewService
                 ExpectedHarvestAt: harvestAt,
                 WaterTestDue: waterTestDue,
                 VideoDue: videoDue,
-                Priority: priority));
+                Priority: priority,
+                CrabCondition: WorstCrabCondition(boxCrabs)));
         }
 
         var summary = new BoxesFarmSummaryDto(
@@ -378,6 +382,37 @@ public class BoxOverviewService : IBoxOverviewService
         if (score < 70 || string.Equals(status, BoxStatuses.Molting, StringComparison.OrdinalIgnoreCase))
             return "warning";
         return "healthy";
+    }
+
+    /// <summary>
+    /// Tình trạng đáng chú ý nhất trong số cua đang ở hộp — để màn Boxes tô màu
+    /// theo đúng thứ nông dân đánh dấu hằng ngày, không chỉ theo điểm sức khỏe.
+    /// Trả về key API (khớp CrabConditions.ToApi) hoặc null nếu hộp chưa có cua.
+    /// </summary>
+    private static string? WorstCrabCondition(IReadOnlyList<Crab> crabs)
+    {
+        CrabCondition? worst = null;
+        var worstRank = -1;
+        foreach (var crab in crabs)
+        {
+            var rank = crab.Condition switch
+            {
+                CrabCondition.Dead => 6,
+                CrabCondition.Problem => 5,
+                CrabCondition.Weak => 4,
+                CrabCondition.Molting => 3,
+                CrabCondition.Softshell => 2,
+                CrabCondition.Premolt => 1,
+                CrabCondition.Harvested or CrabCondition.Sold => -1,
+                _ => 0
+            };
+            if (rank > worstRank)
+            {
+                worstRank = rank;
+                worst = crab.Condition;
+            }
+        }
+        return worst is null ? null : CrabConditions.ToApi(worst.Value);
     }
 
     private static BoxAiTipDto? BuildAiTip(Box box, List<Alert> alerts, string healthStatus)

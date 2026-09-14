@@ -27,6 +27,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\CrabSenseBE.Application\CrabSenseBE.Application.csproj" />
     <ProjectReference Include="..\..\src\CrabSenseBE.Domain\CrabSenseBE.Domain.csproj" />
+    <ProjectReference Include="..\..\src\CrabSenseBE.Infrastructure\CrabSenseBE.Infrastructure.csproj" />
   </ItemGroup>
 
 </Project>

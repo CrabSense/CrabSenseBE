@@ -55,6 +55,9 @@ public static class DependencyInjection
             return new MediaStoragePublicImageAdapter(sp.GetRequiredService<IMediaStorageService>());
         });
 
+        // Sao lưu / phục hồi DB bằng pg_dump / pg_restore
+        services.AddSingleton<IDatabaseBackupService, DatabaseBackupService>();
+
         return services;
     }
 }
