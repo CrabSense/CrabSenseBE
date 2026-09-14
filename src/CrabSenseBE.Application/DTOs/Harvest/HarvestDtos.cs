@@ -53,14 +53,13 @@ public record HarvestVoucherDetailDto(
 public record HarvestLineDto(
     Guid Id,
     Guid? CrabId,
-    Guid? BoxId,            // ← THÊM MỚI
+    Guid? BoxId,
     string? BoxCode,
     decimal WeightGram,
     string? Grade,
     bool IsSoftshell,
     string? Notes,
     string? CrabCode = null,
-    string? BoxCode = null,
     string? ConditionLabel = null,
     IReadOnlyList<string>? PhotoUrls = null,
     string? AreaName = null,

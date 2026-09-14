@@ -174,19 +174,18 @@ public class FarmHistoryService : IFarmHistoryService
             ?? throw AppException.NotFound("Crab");
 
         var moltTime = req.MoltTime ?? DateTime.UtcNow;
-        var result = string.IsNullOrWhiteSpace(req.Result) ? "success" : req.Result!.Trim().ToLowerInvariant();
+        var result = NormalizeMoltResult(req.Result);
         var source = string.IsNullOrWhiteSpace(req.Source) ? "manual" : req.Source!.Trim().ToLowerInvariant();
-        var allowedResults = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-            { "success", "failed", "incomplete" };
-        if (!allowedResults.Contains(result))
-            throw AppException.BadRequest("Result must be success | failed | incomplete.");
 
-        var boxId = req.BoxId ?? GetCrabBoxId(crab);
-        if (boxId == Guid.Empty)
-            throw AppException.BadRequest("BoxId is required — crab must be in a box to record molting.");
-
-        var box = await _uow.Boxes.GetByIdAsync(boxId, ct)
-            ?? throw AppException.NotFound("Box");
+        Guid? boxId = req.BoxId is Guid requested && requested != Guid.Empty
+            ? requested
+            : GetCrabBoxIdOrNull(crab);
+        Box? box = null;
+        if (boxId is Guid resolvedBox)
+        {
+            box = await _uow.Boxes.GetByIdAsync(resolvedBox, ct)
+                ?? throw AppException.NotFound("Box");
+        }
 
         var record = new MoltingRecord
         {
@@ -234,7 +233,7 @@ public class FarmHistoryService : IFarmHistoryService
         }
         _uow.Crabs.Update(crab);
 
-        if (result == "success")
+        if (result == "success" && box is not null)
             await ApplyBoxStatusAsync(box, BoxStatuses.Molting, box.IsOccupied, "Molting success recorded", ct);
 
         await _uow.SaveChangesAsync(ct);
@@ -274,12 +273,7 @@ public class FarmHistoryService : IFarmHistoryService
         if (req.WeightAfterGram.HasValue)
             record.WeightAfterGram = req.WeightAfterGram.Value;
         if (req.Result is not null)
-        {
-            var result = req.Result.Trim().ToLowerInvariant();
-            if (result is not ("success" or "failed" or "incomplete"))
-                throw AppException.BadRequest("Result must be success | failed | incomplete.");
-            record.Result = result;
-        }
+            record.Result = NormalizeMoltResult(req.Result);
         if (req.Source is not null)
             record.Source = string.IsNullOrWhiteSpace(req.Source) ? "manual" : req.Source.Trim().ToLowerInvariant();
         if (req.Notes is not null)
@@ -541,9 +535,40 @@ public class FarmHistoryService : IFarmHistoryService
         c is not null && (c.Status == CrabStatus.Alive || c.Status == CrabStatus.Molting || c.Status == CrabStatus.Quarantined);
 
     private static Guid GetCrabBoxId(Crab c) =>
-        c.BoxAllocations
-         .OrderByDescending(a => a.StartTime)
-         .FirstOrDefault()?.BoxId ?? Guid.Empty;
+        GetCrabBoxIdOrNull(c) ?? Guid.Empty;
+
+    /// <summary>Box hiện tại: cột Crab.BoxId trước, rồi allocation đang mở (nếu đã load).</summary>
+    private static Guid? GetCrabBoxIdOrNull(Crab c)
+    {
+        if (c.BoxId is Guid snap && snap != Guid.Empty)
+            return snap;
+        var fromAlloc = c.BoxAllocations
+            .Where(a => a.EndTime is null)
+            .OrderByDescending(a => a.StartTime)
+            .FirstOrDefault()?.BoxId;
+        return fromAlloc is Guid id && id != Guid.Empty ? id : null;
+    }
+
+    /// <summary>
+    /// Desktop gửi normal / weak / needs_watch; API chuẩn là success | failed | incomplete.
+    /// </summary>
+    internal static string NormalizeMoltResult(string? raw)
+    {
+        var key = (raw ?? string.Empty)
+            .Trim()
+            .ToLowerInvariant()
+            .Replace("-", "_", StringComparison.Ordinal)
+            .Replace(" ", "", StringComparison.Ordinal);
+        return key switch
+        {
+            "" or "success" or "normal" or "good" or "ok" or "passed"
+                or "binhthuong" => "success",
+            "failed" or "fail" or "dead" or "died" or "death" or "thatbai" => "failed",
+            "incomplete" or "weak" or "needs_watch" or "needswatch" or "watch"
+                or "poor" or "yeu" => "incomplete",
+            _ => throw AppException.BadRequest("Result must be success | failed | incomplete.")
+        };
+    }
 
     private static IOrderedEnumerable<T> FilterByRange<T>(
         IEnumerable<T> source, Func<T, DateTime> at, DateTime? from, DateTime? to)

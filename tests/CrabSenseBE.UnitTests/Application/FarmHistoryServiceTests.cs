@@ -134,6 +134,80 @@ public class FarmHistoryServiceTests
     }
 
     [Fact]
+    public async Task CreateMolting_AcceptsDesktopNormalResult()
+    {
+        var crabId = Guid.NewGuid();
+        var boxId = Guid.NewGuid();
+        var crab = new Crab
+        {
+            Id = crabId,
+            BoxId = boxId,
+            WeightGram = 100
+        };
+        var box = new Box { Id = boxId, Status = "active", IsOccupied = true };
+        var crabRepo = new Mock<IRepository<Crab>>();
+        crabRepo.Setup(r => r.GetByIdAsync(crabId, It.IsAny<CancellationToken>())).ReturnsAsync(crab);
+        crabRepo.Setup(r => r.Update(It.IsAny<Crab>()));
+
+        var boxRepo = new Mock<IRepository<Box>>();
+        boxRepo.Setup(r => r.GetByIdAsync(boxId, It.IsAny<CancellationToken>())).ReturnsAsync(box);
+        boxRepo.Setup(r => r.Update(It.IsAny<Box>()));
+
+        var moltRepo = new Mock<IRepository<MoltingRecord>>();
+        moltRepo.Setup(r => r.AddAsync(It.IsAny<MoltingRecord>(), It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+
+        var statusHistRepo = new Mock<IRepository<BoxStatusHistory>>();
+        statusHistRepo.Setup(r => r.AddAsync(It.IsAny<BoxStatusHistory>(), It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+        var crabStatusRepo = new Mock<IRepository<CrabStatusHistory>>();
+        crabStatusRepo.Setup(r => r.AddAsync(It.IsAny<CrabStatusHistory>(), It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+
+        _uow.Setup(u => u.Crabs).Returns(crabRepo.Object);
+        _uow.Setup(u => u.Boxes).Returns(boxRepo.Object);
+        _uow.Setup(u => u.MoltingRecords).Returns(moltRepo.Object);
+        _uow.Setup(u => u.BoxStatusHistories).Returns(statusHistRepo.Object);
+        _uow.Setup(u => u.CrabStatusHistories).Returns(crabStatusRepo.Object);
+        _uow.Setup(u => u.SaveChangesAsync(It.IsAny<CancellationToken>())).ReturnsAsync(1);
+
+        var result = await Create().CreateMoltingAsync(new CreateMoltingRecordRequest(
+            crabId, null, null, null, "normal", "desktop", null));
+
+        result.Success.Should().BeTrue();
+        crab.MoltingStage.Should().Be("softshell");
+        crab.Condition.Should().Be(CrabCondition.Softshell);
+    }
+
+    [Fact]
+    public async Task CreateMolting_AllowsCrabWithoutBox()
+    {
+        var crabId = Guid.NewGuid();
+        var crab = new Crab { Id = crabId, WeightGram = 90 };
+        var crabRepo = new Mock<IRepository<Crab>>();
+        crabRepo.Setup(r => r.GetByIdAsync(crabId, It.IsAny<CancellationToken>())).ReturnsAsync(crab);
+        crabRepo.Setup(r => r.Update(It.IsAny<Crab>()));
+
+        var moltRepo = new Mock<IRepository<MoltingRecord>>();
+        moltRepo.Setup(r => r.AddAsync(It.IsAny<MoltingRecord>(), It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+        var crabStatusRepo = new Mock<IRepository<CrabStatusHistory>>();
+        crabStatusRepo.Setup(r => r.AddAsync(It.IsAny<CrabStatusHistory>(), It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+
+        _uow.Setup(u => u.Crabs).Returns(crabRepo.Object);
+        _uow.Setup(u => u.MoltingRecords).Returns(moltRepo.Object);
+        _uow.Setup(u => u.CrabStatusHistories).Returns(crabStatusRepo.Object);
+        _uow.Setup(u => u.SaveChangesAsync(It.IsAny<CancellationToken>())).ReturnsAsync(1);
+
+        var result = await Create().CreateMoltingAsync(new CreateMoltingRecordRequest(
+            crabId, null, null, null, "success", "desktop", null));
+
+        result.Success.Should().BeTrue();
+        crab.Condition.Should().Be(CrabCondition.Softshell);
+    }
+
+    [Fact]
     public async Task AllocateCrab_WhenCrabMissing_ThrowsNotFound()
     {
         var crabRepo = new Mock<IRepository<Crab>>();
