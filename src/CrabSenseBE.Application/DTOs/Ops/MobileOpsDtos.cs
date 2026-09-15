@@ -79,7 +79,11 @@ public record SubmitManualInspectionRequest(
     string? OperatorName = null,
     bool? AiAgreement = null);
 
-/// <summary>Mobile-friendly add crab under a box (auto-picks CrabLot when omitted).</summary>
+/// <summary>
+/// Mobile-friendly add crab under a box (auto-picks CrabLot when omitted).
+/// Owner fields (gender/type/condition/notes/carapace) mirror desktop CreateCrabRequest —
+/// they were previously absent, so mobile input was silently dropped by the binder.
+/// </summary>
 public record MobileAddCrabRequest(
     Guid? CrabLotId = null,
     string? Tag = null,
@@ -88,7 +92,13 @@ public record MobileAddCrabRequest(
     string? MoltingStatus = null,
     string? MoltingStage = null,
     string? Species = null,
-    IReadOnlyList<string>? ImageUrls = null);
+    IReadOnlyList<string>? ImageUrls = null,
+    string? Gender = null,
+    string? CrabType = null,
+    string? Condition = null,
+    string? Notes = null,
+    decimal? CarapaceLengthMm = null,
+    decimal? CarapaceWidthMm = null);
 
 public record AiAnalyzeRequest(Guid? MediaId = null, Guid? VideoId = null, Guid? BoxId = null);
 
