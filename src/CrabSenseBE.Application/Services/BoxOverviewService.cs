@@ -61,8 +61,7 @@ public class BoxOverviewService : IBoxOverviewService
         var (waterScore, deviceScore) = ComputeAreaScores(sensors, devices, alerts);
 
         // Crabs currently in these boxes: Crab.BoxId or open allocation
-        var allCrabs = (await _uow.Crabs.GetAllAsync(ct)).ToList();
-        var liveCrabs = allCrabs.Where(IsLiveCrab).ToList();
+        var liveCrabs = (await _uow.Crabs.GetAllAsync(ct)).Where(IsLiveCrab).ToList();
         var liveIds = liveCrabs.Select(c => c.Id).ToHashSet();
         var openAllocsForCrabs = liveIds.Count == 0
             ? new List<CrabBoxAllocation>()
@@ -72,9 +71,7 @@ public class BoxOverviewService : IBoxOverviewService
             .GroupBy(a => a.CrabId)
             .ToDictionary(g => g.Key, g => g.OrderByDescending(a => a.StartTime).First().BoxId);
         var crabsByBox = new Dictionary<Guid, List<Crab>>();
-        // Gom cả cua đã chết: CrabCount/IsOccupied vẫn lọc lại bằng IsLiveCrab ở dưới,
-        // còn màu hộp thì cần thấy cua chết để báo đỏ.
-        foreach (var crab in allCrabs)
+        foreach (var crab in liveCrabs)
         {
             var boxId = crab.BoxId is Guid snap && snap != Guid.Empty
                 ? snap
@@ -388,6 +385,8 @@ public class BoxOverviewService : IBoxOverviewService
     /// Tình trạng đáng chú ý nhất trong số cua đang ở hộp — để màn Boxes tô màu
     /// theo đúng thứ nông dân đánh dấu hằng ngày, không chỉ theo điểm sức khỏe.
     /// Trả về key API (khớp CrabConditions.ToApi) hoặc null nếu hộp chưa có cua.
+    /// Cua chết / đã bán không tính: BE tự trả hộp về trống, nên hộp không tô màu
+    /// theo cua đã rời hộp (chỉ còn lại khi dữ liệu cũ chưa được trả hộp).
     /// </summary>
     private static string? WorstCrabCondition(IReadOnlyList<Crab> crabs)
     {
@@ -397,13 +396,12 @@ public class BoxOverviewService : IBoxOverviewService
         {
             var rank = crab.Condition switch
             {
-                CrabCondition.Dead => 6,
                 CrabCondition.Problem => 5,
                 CrabCondition.Weak => 4,
                 CrabCondition.Molting => 3,
                 CrabCondition.Softshell => 2,
                 CrabCondition.Premolt => 1,
-                CrabCondition.Harvested or CrabCondition.Sold => -1,
+                CrabCondition.Dead or CrabCondition.Harvested or CrabCondition.Sold => -1,
                 _ => 0
             };
             if (rank > worstRank)
