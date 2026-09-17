@@ -654,7 +654,7 @@ public class FarmingService : IFarmingService
 
     public async Task<ApiResponse<NextCrabCodeDto>> GetNextCrabCodeAsync(CancellationToken ct = default)
     {
-        var code = await PeekNextCrabCodeAsync(ct);
+        var code = await CrabCodeAllocator.PeekNextAsync(_uow.Crabs, ct);
         return ApiResponse<NextCrabCodeDto>.Ok(new NextCrabCodeDto(code, $"QR-{code}"));
     }
 
@@ -2152,48 +2152,6 @@ public class FarmingService : IFarmingService
         return null;
     }
 
-    private async Task<string> PeekNextCrabCodeAsync(CancellationToken ct)
-    {
-        var n = await NextGlobalCrabNumberAsync(ct);
-        return $"CRAB-{n:D4}";
-    }
-
     private async Task<string> AllocateCrabCodeAsync(CancellationToken ct)
-    {
-        for (var attempt = 0; attempt < 8; attempt++)
-        {
-            var code = await PeekNextCrabCodeAsync(ct);
-            if (!await _uow.Crabs.AnyAsync(c => c.Code == code, ct))
-                return code;
-        }
-        throw AppException.Conflict("Could not allocate a unique crab code. Retry.");
-    }
-
-    private async Task<int> NextGlobalCrabNumberAsync(CancellationToken ct)
-    {
-        const string prefix = "CRAB-";
-        var crabs = await _uow.Crabs.GetAllAsync(ct);
-        var used = new HashSet<int>();
-        var max = 0;
-        foreach (var c in crabs)
-        {
-            foreach (var raw in new[] { c.Code, c.Tag })
-            {
-                if (string.IsNullOrWhiteSpace(raw)) continue;
-                if (!raw.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) continue;
-                var suffix = raw[prefix.Length..];
-                if (!int.TryParse(suffix, out var n)) continue;
-                used.Add(n);
-                if (n > max) max = n;
-            }
-        }
-
-        for (var i = 1; i <= max + 1; i++)
-        {
-            if (!used.Contains(i))
-                return i;
-        }
-
-        return max + 1;
-    }
+        => await CrabCodeAllocator.AllocateAsync(_uow.Crabs, ct);
 }

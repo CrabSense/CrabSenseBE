@@ -376,18 +376,48 @@ public class BoxDetailService : IBoxDetailService
         var weight = req.WeightGram ?? req.Weight;
         var molt = req.MoltingStage ?? req.MoltingStatus ?? "hardShell";
 
+        // Explicit owner stance wins; otherwise derive from molting stage — same rule as desktop CreateCrabAsync.
+        var condition = string.IsNullOrWhiteSpace(req.Condition)
+            ? CrabConditions.FromMoltingAndStatus(molt, CrabStatus.Alive)
+            : CrabConditions.Parse(req.Condition);
+
+        // Code có unique index và không được rỗng: thiếu bước này thì lần thả thứ hai trở đi
+        // vi phạm IX_Crabs_Code (Code = "") và trả 500. Mirror desktop CreateCrabAsync.
+        var code = await CrabCodeAllocator.AllocateAsync(_uow.Crabs, ct);
+
         var crab = new Crab
         {
             BoxId = boxId,
             CrabLotId = crabLotId,
-            Tag = string.IsNullOrWhiteSpace(req.Tag) ? null : req.Tag.Trim(),
+            Code = code,
+            QrCode = $"QR-{code}",
+            Tag = string.IsNullOrWhiteSpace(req.Tag) ? code : req.Tag.Trim(),
+            CrabType = string.IsNullOrWhiteSpace(req.CrabType) ? null : req.CrabType.Trim(),
+            Gender = CrabConditions.ParseGender(req.Gender),
             WeightGram = weight,
+            InitialWeightGram = weight,
+            CarapaceLengthMm = req.CarapaceLengthMm,
+            CarapaceWidthMm = req.CarapaceWidthMm,
+            Notes = string.IsNullOrWhiteSpace(req.Notes) ? null : req.Notes.Trim(),
             MoltingStage = molt,
             StockedAt = DateTime.UtcNow,
-            Status = CrabStatus.Alive,
+            Condition = condition,
+            Status = CrabConditions.ToLifecycle(condition),
             ImageUrlsJson = JsonStringList.Serialize(req.ImageUrls)
         };
         await _uow.Crabs.AddAsync(crab, ct);
+
+        // Tem QR cấp cho cá thể — desktop làm ở CreateCrabAsync; thiếu thì tem có mã nhưng quét không ra.
+        await _uow.QrCodes.AddAsync(new QrCode
+        {
+            Code = crab.QrCode!,
+            EntityType = "crab",
+            CrabId = crab.Id,
+            BoxId = boxId,
+            IsActive = true,
+            Payload =
+                $"{{\"type\":\"crab\",\"crabId\":\"{crab.Id}\",\"crabCode\":\"{code}\",\"crabsense\":\"CRABSENSE:CRAB:{code}\"}}"
+        }, ct);
 
         await _uow.CrabBoxAllocations.AddAsync(new CrabBoxAllocation
         {

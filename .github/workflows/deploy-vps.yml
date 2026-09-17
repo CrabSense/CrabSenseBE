@@ -77,6 +77,14 @@ jobs:
           port: 22
           script: |
             set -euo pipefail
+            # App publish cho net8.0 nhung VPS co the chi co runtime 9.x => exit 150.
+            # Cai san runtime 8.0 (idempotent, khong lam gi neu da co).
+            if ! dotnet --list-runtimes 2>/dev/null | grep -q 'Microsoft.NETCore.App 8\.'; then
+              echo "Thieu runtime .NET 8 tren VPS - dang cai..."
+              export DEBIAN_FRONTEND=noninteractive
+              apt-get install -y --no-install-recommends dotnet-runtime-8.0 aspnetcore-runtime-8.0
+              dotnet --list-runtimes
+            fi
             systemctl stop crabsense-api || true
             rm -rf /opt/crabsense-api
             mkdir -p /opt/crabsense-api
@@ -110,7 +118,11 @@ jobs:
                 break
               fi
             done
-            systemctl is-active crabsense-api
+            if ! systemctl is-active --quiet crabsense-api; then
+              echo "Service khong chay duoc - 40 dong log cuoi de xem nguyen nhan:"
+              journalctl -u crabsense-api -n 40 --no-pager
+              exit 1
+            fi
             curl -fsS http://127.0.0.1:5080/health
             echo
             echo DEPLOY_OK
