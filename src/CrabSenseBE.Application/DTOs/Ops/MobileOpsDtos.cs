@@ -111,7 +111,16 @@ public record AiDetectionDto(
     string Status,
     string? ResultJson,
     DateTime DetectedAt,
-    string ModelVersion);
+    string ModelVersion,
+    Guid? DeviceId = null,
+    string? DeviceCode = null,
+    string? ImagePath = null,
+    string? BoxCode = null,
+    Guid? CrabId = null,
+    string? CrabTag = null,
+    Guid? FarmingRowId = null,
+    string? RowName = null,
+    Guid? FarmingAreaId = null);
 
 public record AiFeedbackRequest(
     Guid? AiDetectionId = null,

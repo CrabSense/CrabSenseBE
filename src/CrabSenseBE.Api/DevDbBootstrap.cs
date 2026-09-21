@@ -36,10 +36,12 @@ public static class DevDbBootstrap
                 await EnsureBoxesMobileSchemaAsync(db, logger);
                 await EnsureFarmingAreaProfileSchemaAsync(db, logger);
                 await EnsureFarmingRowProfileSchemaAsync(db, logger);
+                await EnsureFarmMapLayoutSchemaAsync(db, logger);
                 await EnsureCrabProfileSchemaAsync(db, logger);
                 await EnsureCrabLotInboundSchemaAsync(db, logger);
                 await EnsureRasFlowSchemaAsync(db, logger);
                 await EnsureDeviceControllerSchemaAsync(db, logger);
+                await EnsureCameraAndSensorRowSchemaAsync(db, logger);
                 await EnsureWaterAnalysisSchemaAsync(db, logger);
                 await EnsureFarmOperationLogColumnsAsync(db, logger);
                 await EnsureHarvestSalesWorkflowSchemaAsync(db, logger);
@@ -606,6 +608,55 @@ public static class DevDbBootstrap
         }
 
         logger.LogInformation("Ensured RAS component / water-flow schema.");
+    }
+
+    /// <summary>Idempotent "Bản đồ trại" columns: khu bounds + ảnh nền, tâm dãy/hộp (tỉ lệ 0–1).</summary>
+    private static async Task EnsureFarmMapLayoutSchemaAsync(AppDbContext db, ILogger logger)
+    {
+        await db.Database.ExecuteSqlRawAsync(
+            """
+            ALTER TABLE be."FarmingAreas"
+            ADD COLUMN IF NOT EXISTS "MapImageUrl" text NULL,
+            ADD COLUMN IF NOT EXISTS "MapX1" numeric(7,4) NULL,
+            ADD COLUMN IF NOT EXISTS "MapY1" numeric(7,4) NULL,
+            ADD COLUMN IF NOT EXISTS "MapX2" numeric(7,4) NULL,
+            ADD COLUMN IF NOT EXISTS "MapY2" numeric(7,4) NULL;
+
+            ALTER TABLE be."FarmingRows"
+            ADD COLUMN IF NOT EXISTS "MapX" numeric(7,4) NULL,
+            ADD COLUMN IF NOT EXISTS "MapY" numeric(7,4) NULL;
+
+            ALTER TABLE be."Boxes"
+            ADD COLUMN IF NOT EXISTS "MapX" numeric(7,4) NULL,
+            ADD COLUMN IF NOT EXISTS "MapY" numeric(7,4) NULL;
+            """).ConfigureAwait(false);
+
+        logger.LogInformation("Ensured farm map layout columns (area bounds, row/box map points).");
+    }
+
+    /// <summary>
+    /// Idempotent: camera/cảm biến gắn theo dãy (FarmingRowId), URL stream/snapshot, độ phân giải.
+    /// Mirror của migration CameraAndSensorRowBinding cho DB đã có sẵn schema cũ.
+    /// </summary>
+    private static async Task EnsureCameraAndSensorRowSchemaAsync(AppDbContext db, ILogger logger)
+    {
+        await db.Database.ExecuteSqlRawAsync(
+            """
+            ALTER TABLE be."Devices"
+            ADD COLUMN IF NOT EXISTS "FarmingRowId" uuid NULL,
+            ADD COLUMN IF NOT EXISTS "StreamUrl" text NULL,
+            ADD COLUMN IF NOT EXISTS "SnapshotUrl" text NULL,
+            ADD COLUMN IF NOT EXISTS "Resolution" character varying(32) NULL;
+
+            CREATE INDEX IF NOT EXISTS "IX_Devices_FarmingRowId" ON be."Devices" ("FarmingRowId");
+
+            ALTER TABLE be."Sensors"
+            ADD COLUMN IF NOT EXISTS "FarmingRowId" uuid NULL;
+
+            CREATE INDEX IF NOT EXISTS "IX_Sensors_FarmingRowId" ON be."Sensors" ("FarmingRowId");
+            """).ConfigureAwait(false);
+
+        logger.LogInformation("Ensured camera/sensor row-binding columns (FarmingRowId, StreamUrl, SnapshotUrl, Resolution).");
     }
 
     private static async Task EnsureDeviceControllerSchemaAsync(AppDbContext db, ILogger logger)

@@ -109,6 +109,14 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<Device>()
             .Property(d => d.IpAddress)
             .HasMaxLength(64);
+        modelBuilder.Entity<Device>()
+            .Property(d => d.Resolution)
+            .HasMaxLength(32);
+        // Gắn theo dãy: không tạo FK để xoá dãy không kéo theo thiết bị/cảm biến.
+        modelBuilder.Entity<Device>()
+            .HasIndex(d => d.FarmingRowId);
+        modelBuilder.Entity<Sensor>()
+            .HasIndex(s => s.FarmingRowId);
 
         modelBuilder.Entity<WaterAnalysisRun>()
             .HasIndex(r => new { r.FarmingAreaId, r.StartedAt });
@@ -171,6 +179,25 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<FarmingArea>()
             .Property(a => a.AreaSquareMeters)
             .HasPrecision(12, 2);
+
+        // Farm map layout: ratios 0–1 on the map image.
+        modelBuilder.Entity<FarmingArea>(b =>
+        {
+            b.Property(a => a.MapX1).HasPrecision(7, 4);
+            b.Property(a => a.MapY1).HasPrecision(7, 4);
+            b.Property(a => a.MapX2).HasPrecision(7, 4);
+            b.Property(a => a.MapY2).HasPrecision(7, 4);
+        });
+        modelBuilder.Entity<FarmingRow>(b =>
+        {
+            b.Property(r => r.MapX).HasPrecision(7, 4);
+            b.Property(r => r.MapY).HasPrecision(7, 4);
+        });
+        modelBuilder.Entity<Box>(b =>
+        {
+            b.Property(x => x.MapX).HasPrecision(7, 4);
+            b.Property(x => x.MapY).HasPrecision(7, 4);
+        });
 
         modelBuilder.Entity<FarmingRow>()
             .Property(r => r.Status)

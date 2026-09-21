@@ -12,6 +12,8 @@ public interface IFarmingService
     Task<ApiResponse<NextFarmCodeDto>> GetNextAreaCodeAsync(CancellationToken ct = default);
     Task<ApiResponse<FarmingAreaDto>> CreateAreaAsync(CreateFarmingAreaRequest request, Guid ownerUserId, CancellationToken ct = default);
     Task<ApiResponse<FarmingAreaDto>> UpdateAreaAsync(Guid id, UpdateFarmingAreaRequest request, CancellationToken ct = default);
+    /// <summary>Đặt ảnh bản đồ + khung khu trên ảnh (tỉ lệ 0–1) cho màn "Bản đồ trại".</summary>
+    Task<ApiResponse<FarmingAreaDto>> UpdateAreaMapAsync(Guid id, UpdateAreaMapRequest request, CancellationToken ct = default);
     Task<ApiResponse<FarmAvatarDto>> UploadAvatarAsync(
         Guid? areaId, Stream data, string fileName, string contentType, Guid? uploadedBy, CancellationToken ct = default);
     Task<ApiResponse> DeleteAreaAsync(Guid id, bool cascade = false, CancellationToken ct = default);
@@ -22,6 +24,8 @@ public interface IFarmingService
     Task<ApiResponse<NextRowCodeDto>> GetNextRowCodeAsync(CancellationToken ct = default);
     Task<ApiResponse<FarmingRowDto>> CreateRowAsync(CreateFarmingRowRequest request, CancellationToken ct = default);
     Task<ApiResponse<FarmingRowDto>> UpdateRowAsync(Guid id, UpdateFarmingRowRequest request, CancellationToken ct = default);
+    /// <summary>Đặt tâm dãy trên ảnh bản đồ trại (tỉ lệ 0–1).</summary>
+    Task<ApiResponse<FarmingRowDto>> UpdateRowMapAsync(Guid id, UpdateMapPointRequest request, CancellationToken ct = default);
     Task<ApiResponse> DeleteRowAsync(Guid id, CancellationToken ct = default);
 
     // ─── Box ───────────────────────────────────────────────────────────────
@@ -31,6 +35,8 @@ public interface IFarmingService
     Task<ApiResponse<BoxDto>> CreateBoxAsync(CreateBoxRequest request, CancellationToken ct = default);
     Task<ApiResponse<BoxDto>> UpdateBoxAsync(Guid id, UpdateBoxRequest request, CancellationToken ct = default);
     Task<ApiResponse<BoxDto>> UpdateBoxStatusAsync(Guid boxId, UpdateBoxStatusRequest request, CancellationToken ct = default);
+    /// <summary>Đặt tâm hộp trên ảnh bản đồ trại (tỉ lệ 0–1).</summary>
+    Task<ApiResponse<BoxDto>> UpdateBoxMapAsync(Guid boxId, UpdateMapPointRequest request, CancellationToken ct = default);
     Task<ApiResponse> DeleteBoxAsync(Guid id, CancellationToken ct = default);
 
     // ─── Crab ──────────────────────────────────────────────────────────────
