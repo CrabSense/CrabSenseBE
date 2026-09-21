@@ -38,11 +38,16 @@ public class OperationsController : ControllerBase
 {
     private readonly IOperationLogService _ops;
     private readonly IFarmOperationService _farmOps;
+    private readonly IScheduledTaskService _scheduledTasks;
 
-    public OperationsController(IOperationLogService ops, IFarmOperationService farmOps)
+    public OperationsController(
+        IOperationLogService ops,
+        IFarmOperationService farmOps,
+        IScheduledTaskService scheduledTasks)
     {
         _ops = ops;
         _farmOps = farmOps;
+        _scheduledTasks = scheduledTasks;
     }
 
     /// <summary>[READ] Today's operational tasks for Home</summary>
@@ -57,6 +62,12 @@ public class OperationsController : ControllerBase
         [FromQuery] Guid? farmingAreaId = null,
         CancellationToken ct = default)
         => Ok(await _ops.GetRecentAsync(limit, farmingAreaId, ct));
+
+    /// <summary>[READ] Feeding history grouped by day and crab appetite.</summary>
+    [HttpGet("feeding-history")]
+    public async Task<IActionResult> FeedingHistory(
+        [FromQuery] int days = 7, CancellationToken ct = default)
+        => Ok(await _farmOps.GetFeedingHistoryAsync(days, ct));
 
     /// <summary>[READ] All farm operations, paginated (operation history)</summary>
     [HttpGet]
@@ -146,5 +157,45 @@ public class OperationsController : ControllerBase
         var uploaded = await media.UploadAsync(stream, file.FileName, file.ContentType, meta, userId, ct);
         var url = uploaded.Data?.ShareLink ?? uploaded.Data?.WebViewLink ?? uploaded.Data?.StorageKey;
         return Ok(ApiResponse<object>.Ok(new { url, mediaId = uploaded.Data?.Id }, "Uploaded."));
+    }
+
+    [HttpGet("scheduled-tasks")]
+    public async Task<IActionResult> ScheduledTasks(
+        [FromQuery] Guid? farmingAreaId = null, CancellationToken ct = default)
+        => Ok(await _scheduledTasks.ListAsync(OwnerId(), farmingAreaId, ct));
+
+    [HttpGet("scheduled-tasks/today")]
+    public async Task<IActionResult> ScheduledTasksToday(
+        [FromQuery] Guid? farmingAreaId = null, CancellationToken ct = default)
+        => Ok(await _scheduledTasks.TodayAsync(OwnerId(), farmingAreaId, ct));
+
+    [HttpPost("scheduled-tasks")]
+    [Authorize(Roles = AppRoles.FarmWrite)]
+    public async Task<IActionResult> CreateScheduledTask(
+        [FromBody] CreateScheduledTaskRequest req, CancellationToken ct = default)
+        => Ok(await _scheduledTasks.CreateAsync(OwnerId(), req, ct));
+
+    [HttpPut("scheduled-tasks/{id:guid}")]
+    [Authorize(Roles = AppRoles.FarmWrite)]
+    public async Task<IActionResult> UpdateScheduledTask(
+        Guid id, [FromBody] UpdateScheduledTaskRequest req, CancellationToken ct = default)
+        => Ok(await _scheduledTasks.UpdateAsync(OwnerId(), id, req, ct));
+
+    [HttpDelete("scheduled-tasks/{id:guid}")]
+    [Authorize(Roles = AppRoles.FarmWrite)]
+    public async Task<IActionResult> DeleteScheduledTask(Guid id, CancellationToken ct = default)
+        => Ok(await _scheduledTasks.DeleteAsync(OwnerId(), id, ct));
+
+    [HttpPost("scheduled-tasks/{id:guid}/toggle")]
+    [Authorize(Roles = AppRoles.FarmWrite)]
+    public async Task<IActionResult> ToggleScheduledTask(
+        Guid id, [FromQuery] bool enabled = true, CancellationToken ct = default)
+        => Ok(await _scheduledTasks.ToggleAsync(OwnerId(), id, enabled, ct));
+
+    private Guid OwnerId()
+    {
+        var value = User.FindFirst("sub")?.Value
+                    ?? User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+        return Guid.TryParse(value, out var id) ? id : throw AppException.Unauthorized();
     }
 }

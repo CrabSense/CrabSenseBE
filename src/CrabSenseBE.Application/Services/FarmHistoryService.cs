@@ -34,6 +34,7 @@ public class FarmHistoryService : IFarmHistoryService
         if (!IsCrabAlive(crab))
             throw AppException.BadRequest("Cannot allocate a dead/harvested crab.");
 
+        var previousBoxId = GetCrabBoxId(crab);
         var box = await _uow.Boxes.GetByIdAsync(boxId, ct)
             ?? throw AppException.NotFound("Box");
         var row = await _uow.FarmingRows.GetByIdAsync(box.FarmingRowId, ct)
@@ -100,6 +101,17 @@ public class FarmHistoryService : IFarmHistoryService
         _uow.Crabs.Update(crab);
 
         await ApplyBoxStatusAsync(box, BoxStatuses.Active, true, "Crab allocated", ct);
+
+        await _uow.OperationLogs.AddAsync(new OperationLog
+        {
+            UserId = area.OwnerId,
+            Action = previousBoxId == Guid.Empty ? "crab_assigned" : "crab_transferred",
+            EntityType = "Crab",
+            EntityId = crab.Id,
+            Details = previousBoxId == Guid.Empty
+                ? $"Gán cua {crab.Code} vào hộp {box.Code}"
+                : $"Chuyển cua {crab.Code} sang hộp {box.Code}"
+        }, ct);
 
         await _uow.SaveChangesAsync(ct);
         return ApiResponse<CrabBoxAllocationDto>.Ok(MapAlloc(alloc), "Allocated.");
@@ -340,6 +352,61 @@ public class FarmHistoryService : IFarmHistoryService
             FilterByRange(list, h => h.ChangedAt, from, to)
                 .Select(MapStatusHist));
     }
+
+    public async Task<ApiResponse<IEnumerable<BoxStatusHistoryDayDto>>> GetDailyBoxStatusHistoryAsync(
+        int days = 7, CancellationToken ct = default)
+    {
+        var dayCount = Math.Clamp(days, 1, 31);
+        var today = DateTime.UtcNow.Date;
+        var events = (await _uow.BoxStatusHistories.GetAllAsync(ct))
+            .Where(h => h.ChangedAt >= today.AddDays(-(dayCount - 1)))
+            .OrderByDescending(h => h.ChangedAt)
+            .ToList();
+        var result = new List<BoxStatusHistoryDayDto>(dayCount);
+
+        for (var offset = 0; offset < dayCount; offset++)
+        {
+            var date = today.AddDays(-offset);
+            var counts = new int[5];
+            foreach (var history in events.Where(h => h.ChangedAt.Date == date))
+                counts[StatusBucket(history.NewStatus, history.NewIsOccupied)]++;
+
+            result.Add(new BoxStatusHistoryDayDto(DateOnly.FromDateTime(date),
+                counts[0], counts[1], counts[2], counts[3], counts[4]));
+        }
+
+        return ApiResponse<IEnumerable<BoxStatusHistoryDayDto>>.Ok(
+            result.OrderBy(item => item.Date));
+    }
+
+    private static int StatusBucket(
+        string? status, bool occupied, CrabCondition? condition = null)
+    {
+        if (!occupied || string.Equals(status, BoxStatuses.Empty, StringComparison.OrdinalIgnoreCase))
+            return 4;
+        if (condition is CrabCondition.Problem)
+            return 3;
+        if (condition is CrabCondition.Premolt or CrabCondition.Weak)
+            return 1;
+        if (condition is CrabCondition.Molting or CrabCondition.Softshell)
+            return 2;
+        if (string.Equals(status, BoxStatuses.Molting, StringComparison.OrdinalIgnoreCase))
+            return 2;
+        if (string.Equals(status, BoxStatuses.Quarantine, StringComparison.OrdinalIgnoreCase))
+            return 3;
+        if (string.Equals(status, BoxStatuses.Maintenance, StringComparison.OrdinalIgnoreCase))
+            return 1;
+        return 0;
+    }
+
+    private static int ConditionPriority(CrabCondition? condition) => condition switch
+    {
+        CrabCondition.Problem => 5,
+        CrabCondition.Molting or CrabCondition.Softshell => 4,
+        CrabCondition.Premolt or CrabCondition.Weak => 3,
+        CrabCondition.Normal => 2,
+        _ => 0
+    };
 
     public async Task<ApiResponse<BoxStatusHistoryDto>> UpdateBoxStatusHistoryAsync(
         Guid id, UpdateBoxStatusHistoryRequest req, CancellationToken ct = default)

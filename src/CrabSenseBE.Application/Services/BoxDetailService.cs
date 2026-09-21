@@ -431,6 +431,23 @@ public class BoxDetailService : IBoxDetailService
         if (string.IsNullOrWhiteSpace(box.Status) || box.Status == "empty")
             box.Status = "active";
         _uow.Boxes.Update(box);
+
+        var row = await _uow.FarmingRows.GetByIdAsync(box.FarmingRowId, ct);
+        var area = row is null
+            ? null
+            : await _uow.FarmingAreas.GetByIdAsync(row.FarmingAreaId, ct);
+        if (area is not null)
+        {
+            await _uow.OperationLogs.AddAsync(new OperationLog
+            {
+                UserId = area.OwnerId,
+                Action = "crab_added",
+                EntityType = "Crab",
+                EntityId = crab.Id,
+                Details = $"Thêm cua {crab.Code} vào hộp {box.Code}"
+            }, ct);
+        }
+
         await _uow.SaveChangesAsync(ct);
 
         return ApiResponse<BoxCrabItemDto>.Ok(new BoxCrabItemDto(

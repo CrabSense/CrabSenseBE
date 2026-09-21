@@ -22,6 +22,12 @@ public record FarmOperationDto(
     string? FoodType = null,
     string? Condition = null);
 
+public record FeedingHistoryDayDto(
+    DateOnly Date,
+    int Many,
+    int Little,
+    int None);
+
 public record CreateFarmOperationRequest(
     string Type,
     IReadOnlyList<string>? BoxIds = null,

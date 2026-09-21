@@ -237,9 +237,9 @@ public class FarmingService : IFarmingService
             if (hasRows)
                 throw AppException.Conflict("Cannot delete area that still has rows. Delete rows first.");
 
-            _uow.FarmingAreas.Remove(area);
-            await _uow.SaveChangesAsync(ct);
-            return ApiResponse.Ok("Deleted.");
+        _uow.FarmingAreas.Remove(area);
+        await _uow.SaveChangesAsync(ct);
+        return ApiResponse.Ok("Deleted.");
         }
 
         // ── Cascade: gom khu → hàng → hộp → cua ────────────────────────────────
