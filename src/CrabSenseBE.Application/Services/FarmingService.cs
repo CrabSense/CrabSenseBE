@@ -165,6 +165,54 @@ public class FarmingService : IFarmingService
         return ApiResponse<FarmingAreaDto>.Ok(MapArea(area, owner?.FullName, stats.GetValueOrDefault(area.Id)));
     }
 
+    public async Task<ApiResponse<FarmingAreaDto>> UpdateAreaMapAsync(
+        Guid id, UpdateAreaMapRequest req, CancellationToken ct = default)
+    {
+        var area = await RequireAreaAsync(id, requireActive: false, ct);
+
+        var coords = new[] { req.MapX1, req.MapY1, req.MapX2, req.MapY2 };
+        var provided = coords.Count(c => c is not null);
+        if (provided is not (0 or 4))
+            throw AppException.BadRequest("MapX1, MapY1, MapX2, MapY2 must be sent together (all or none).");
+        if (provided == 4)
+        {
+            foreach (var c in coords)
+                ValidateMapRatio(c, "Map bounds");
+            if (req.MapX2 <= req.MapX1 || req.MapY2 <= req.MapY1)
+                throw AppException.BadRequest("Map bounds require MapX2 > MapX1 and MapY2 > MapY1.");
+        }
+
+        if (req.MapImageUrl is not null)
+            area.MapImageUrl = NormalizeOptional(req.MapImageUrl);
+
+        area.MapX1 = req.MapX1;
+        area.MapY1 = req.MapY1;
+        area.MapX2 = req.MapX2;
+        area.MapY2 = req.MapY2;
+
+        _uow.FarmingAreas.Update(area);
+        await _uow.SaveChangesAsync(ct);
+        var owner = await _uow.Users.GetByIdAsync(area.OwnerId, ct);
+        var stats = await BuildAreaStatsAsync(new[] { area.Id }, ct);
+        return ApiResponse<FarmingAreaDto>.Ok(
+            MapArea(area, owner?.FullName, stats.GetValueOrDefault(area.Id)), "Map layout updated.");
+    }
+
+    /// <summary>Toạ độ bản đồ là tỉ lệ 0–1 theo kích thước ảnh.</summary>
+    private static void ValidateMapRatio(decimal? value, string field)
+    {
+        if (value is < 0 or > 1)
+            throw AppException.BadRequest($"{field} must be within 0..1 (ratio of the map image).");
+    }
+
+    private static void ValidateMapPoint(UpdateMapPointRequest req)
+    {
+        if ((req.MapX is null) != (req.MapY is null))
+            throw AppException.BadRequest("MapX and MapY must be sent together (both or none).");
+        ValidateMapRatio(req.MapX, "MapX");
+        ValidateMapRatio(req.MapY, "MapY");
+    }
+
     public async Task<ApiResponse<FarmAvatarDto>> UploadAvatarAsync(
         Guid? areaId, Stream data, string fileName, string contentType, Guid? uploadedBy, CancellationToken ct = default)
     {
@@ -395,6 +443,23 @@ public class FarmingService : IFarmingService
         return ApiResponse<FarmingRowDto>.Ok(MapRow(row, area, stats.GetValueOrDefault(row.Id)));
     }
 
+    public async Task<ApiResponse<FarmingRowDto>> UpdateRowMapAsync(
+        Guid id, UpdateMapPointRequest req, CancellationToken ct = default)
+    {
+        var row = await RequireRowAsync(id, requireActive: false, ct);
+        ValidateMapPoint(req);
+
+        row.MapX = req.MapX;
+        row.MapY = req.MapY;
+        _uow.FarmingRows.Update(row);
+        await _uow.SaveChangesAsync(ct);
+
+        var area = await _uow.FarmingAreas.GetByIdAsync(row.FarmingAreaId, ct);
+        var stats = await BuildRowStatsAsync(new[] { row.Id }, ct);
+        return ApiResponse<FarmingRowDto>.Ok(
+            MapRow(row, area, stats.GetValueOrDefault(row.Id)), "Map position updated.");
+    }
+
     public async Task<ApiResponse> DeleteRowAsync(Guid id, CancellationToken ct = default)
     {
         var row = await RequireRowAsync(id, requireActive: false, ct);
@@ -602,6 +667,21 @@ public class FarmingService : IFarmingService
 
         var ctx = await LoadBoxContextAsync(ct);
         return ApiResponse<BoxDto>.Ok(MapBox(box, ctx));
+    }
+
+    public async Task<ApiResponse<BoxDto>> UpdateBoxMapAsync(
+        Guid boxId, UpdateMapPointRequest req, CancellationToken ct = default)
+    {
+        var box = await RequireBoxAsync(boxId, ct);
+        ValidateMapPoint(req);
+
+        box.MapX = req.MapX;
+        box.MapY = req.MapY;
+        _uow.Boxes.Update(box);
+        await _uow.SaveChangesAsync(ct);
+
+        var ctx = await LoadBoxContextAsync(ct);
+        return ApiResponse<BoxDto>.Ok(MapBox(box, ctx), "Map position updated.");
     }
 
     public async Task<ApiResponse> DeleteBoxAsync(Guid id, CancellationToken ct = default)
@@ -1418,7 +1498,15 @@ public class FarmingService : IFarmingService
         };
     }
 
-    private sealed record AreaStats(int RowCount, int BoxCount, int CrabCount, int HealthyBoxCount, int AlertBoxCount)
+    private sealed record AreaStats(
+        int RowCount,
+        int BoxCount,
+        int CrabCount,
+        int HealthyBoxCount,
+        int AlertBoxCount,
+        int OccupiedBoxCount = 0,
+        int WatchBoxCount = 0,
+        int EmptyBoxCount = 0)
     {
         public static AreaStats Empty { get; } = new(0, 0, 0, 0, 0);
     }
@@ -1430,7 +1518,18 @@ public class FarmingService : IFarmingService
             a.Id, a.OwnerId, ownerName, a.Code, a.Name, a.Location, a.Address, a.Region,
             a.AreaSquareMeters, a.EstablishedAt, a.CreatedAt, a.Description, a.AvatarUrl,
             a.Status.ToString(), a.IsActive, stats.RowCount,
-            stats.BoxCount, stats.CrabCount, stats.HealthyBoxCount, stats.AlertBoxCount);
+            stats.BoxCount, stats.CrabCount, stats.HealthyBoxCount, stats.AlertBoxCount,
+            a.MapImageUrl, a.MapX1, a.MapY1, a.MapX2, a.MapY2,
+            stats.OccupiedBoxCount, stats.WatchBoxCount, stats.EmptyBoxCount,
+            a.UpdatedAt ?? a.CreatedAt);
+    }
+
+    /// <summary>Hộp "Theo dõi": status watch/maintenance nhưng chưa tới mức cảnh báo.</summary>
+    private static bool IsWatchBox(Box box)
+    {
+        var status = box.Status ?? "";
+        return status.Equals(BoxStatuses.Watch, StringComparison.OrdinalIgnoreCase)
+            || status.Equals(BoxStatuses.Maintenance, StringComparison.OrdinalIgnoreCase);
     }
 
     private async Task<Dictionary<Guid, AreaStats>> BuildAreaStatsAsync(
@@ -1492,10 +1591,21 @@ public class FarmingService : IFarmingService
             var crabCount = areaBoxIds.Sum(id =>
                 crabsByBox.TryGetValue(id, out var list) ? list.Count : 0);
             var farmWarning = areaHasWarning.Contains(areaId);
-            var alertBoxes = areaBoxes.Count(box => IsAlertBox(box, farmWarning, activeAlerts));
-            var healthy = Math.Max(0, areaBoxes.Count - alertBoxes);
+            // Bình thường / Theo dõi / Cảnh báo chỉ tính trên hộp ĐANG CÓ CUA;
+            // hộp không có cua = Hộp trống → 4 nhóm cộng lại đúng bằng tổng hộp.
+            var occupiedList = areaBoxes
+                .Where(box => crabsByBox.TryGetValue(box.Id, out var list) && list.Count > 0)
+                .ToList();
+            var occupiedBoxes = occupiedList.Count;
+            var alertBoxes = occupiedList.Count(box => IsAlertBox(box, farmWarning, activeAlerts));
+            var watchBoxes = occupiedList.Count(box =>
+                !IsAlertBox(box, farmWarning, activeAlerts) && IsWatchBox(box));
+            var emptyBoxes = Math.Max(0, areaBoxes.Count - occupiedBoxes);
+            var healthy = Math.Max(0, occupiedBoxes - alertBoxes - watchBoxes);
             var rowCount = rows.Count(r => r.FarmingAreaId == areaId);
-            result[areaId] = new AreaStats(rowCount, areaBoxes.Count, crabCount, healthy, alertBoxes);
+            result[areaId] = new AreaStats(
+                rowCount, areaBoxes.Count, crabCount, healthy, alertBoxes,
+                occupiedBoxes, watchBoxes, emptyBoxes);
         }
 
         return result;
@@ -1504,8 +1614,7 @@ public class FarmingService : IFarmingService
     private static bool IsAlertBox(Box box, bool farmHasWarning, IEnumerable<Alert> alerts)
     {
         var status = box.Status ?? "";
-        if (status.Equals(BoxStatuses.Quarantine, StringComparison.OrdinalIgnoreCase)
-            || status.Equals(BoxStatuses.Maintenance, StringComparison.OrdinalIgnoreCase))
+        if (status.Equals(BoxStatuses.Quarantine, StringComparison.OrdinalIgnoreCase))
             return true;
         if (!string.IsNullOrWhiteSpace(box.Code)
             && alerts.Any(a => a.Message.Contains(box.Code, StringComparison.OrdinalIgnoreCase)))
@@ -1697,7 +1806,10 @@ public class FarmingService : IFarmingService
             r.Id, r.FarmingAreaId, area?.Name, area?.Location,
             r.Code, r.Name, r.Location, r.Description,
             r.Capacity, r.SortOrder, r.Status.ToString(), r.IsActive,
-            stats.BoxCount, stats.CrabCount, stats.HealthyBoxCount, stats.AlertBoxCount);
+            stats.BoxCount, stats.CrabCount, stats.HealthyBoxCount, stats.AlertBoxCount,
+            r.MapX, r.MapY,
+            stats.OccupiedBoxCount, stats.WatchBoxCount, stats.EmptyBoxCount,
+            r.UpdatedAt ?? r.CreatedAt);
     }
 
     private async Task<Dictionary<Guid, AreaStats>> BuildRowStatsAsync(
@@ -1725,9 +1837,16 @@ public class FarmingService : IFarmingService
             var rowBoxIds = rowBoxes.Select(b => b.Id).ToHashSet();
             var crabCount = rowBoxIds.Sum(id =>
                 crabsByBox.TryGetValue(id, out var list) ? list.Count : 0);
-            var alertBoxes = rowBoxes.Count(box => IsAlertBox(box, false, activeAlerts));
-            var healthy = Math.Max(0, rowBoxes.Count - alertBoxes);
-            result[rowId] = new AreaStats(0, rowBoxes.Count, crabCount, healthy, alertBoxes);
+            var occupiedList = rowBoxes
+                .Where(box => crabsByBox.TryGetValue(box.Id, out var list) && list.Count > 0)
+                .ToList();
+            var alertBoxes = occupiedList.Count(box => IsAlertBox(box, false, activeAlerts));
+            var watchBoxes = occupiedList.Count(box =>
+                !IsAlertBox(box, false, activeAlerts) && IsWatchBox(box));
+            var healthy = Math.Max(0, occupiedList.Count - alertBoxes - watchBoxes);
+            result[rowId] = new AreaStats(
+                0, rowBoxes.Count, crabCount, healthy, alertBoxes,
+                occupiedList.Count, watchBoxes, Math.Max(0, rowBoxes.Count - occupiedList.Count));
         }
 
         return result;
@@ -1789,7 +1908,9 @@ public class FarmingService : IFarmingService
             crabCount,
             crabInBoxSince,
             aiUpdatedAt,
-            emptySince);
+            emptySince,
+            b.MapX,
+            b.MapY);
     }
 
     private static bool BoxMatchesSearch(Box box, BoxContext ctx, string query)
@@ -1821,7 +1942,8 @@ public class FarmingService : IFarmingService
     }
 
     private static bool KeepBoxStatusWhenEmpty(string? status)
-        => string.Equals(status, BoxStatuses.Maintenance, StringComparison.OrdinalIgnoreCase);
+        => string.Equals(status, BoxStatuses.Maintenance, StringComparison.OrdinalIgnoreCase)
+           || string.Equals(status, BoxStatuses.Watch, StringComparison.OrdinalIgnoreCase);
 
     private async Task ReleaseCrabFromBoxAsync(Crab crab, string reason, CancellationToken ct)
     {

@@ -312,6 +312,14 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.Property<bool>("IsOccupied")
                         .HasColumnType("boolean");
 
+                    b.Property<decimal?>("MapX")
+                        .HasPrecision(7, 4)
+                        .HasColumnType("numeric(7,4)");
+
+                    b.Property<decimal?>("MapY")
+                        .HasPrecision(7, 4)
+                        .HasColumnType("numeric(7,4)");
+
                     b.Property<string>("Status")
                         .HasColumnType("text");
 
@@ -920,6 +928,9 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.Property<Guid?>("FarmingAreaId")
                         .HasColumnType("uuid");
 
+                    b.Property<Guid?>("FarmingRowId")
+                        .HasColumnType("uuid");
+
                     b.Property<string>("FirmwareVersion")
                         .HasColumnType("text");
 
@@ -937,11 +948,21 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.Property<string>("Name")
                         .HasColumnType("text");
 
+                    b.Property<string>("Resolution")
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
+
                     b.Property<decimal?>("RssiDbm")
                         .HasColumnType("numeric");
 
+                    b.Property<string>("SnapshotUrl")
+                        .HasColumnType("text");
+
                     b.Property<string>("Status")
                         .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("StreamUrl")
                         .HasColumnType("text");
 
                     b.Property<DateTime?>("UpdatedAt")
@@ -950,6 +971,8 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.HasKey("Id");
 
                     b.HasIndex("FarmingAreaId");
+
+                    b.HasIndex("FarmingRowId");
 
                     b.ToTable("Devices", "be");
                 });
@@ -1073,6 +1096,25 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                         .HasMaxLength(256)
                         .HasColumnType("character varying(256)");
 
+                    b.Property<string>("MapImageUrl")
+                        .HasColumnType("text");
+
+                    b.Property<decimal?>("MapX1")
+                        .HasPrecision(7, 4)
+                        .HasColumnType("numeric(7,4)");
+
+                    b.Property<decimal?>("MapX2")
+                        .HasPrecision(7, 4)
+                        .HasColumnType("numeric(7,4)");
+
+                    b.Property<decimal?>("MapY1")
+                        .HasPrecision(7, 4)
+                        .HasColumnType("numeric(7,4)");
+
+                    b.Property<decimal?>("MapY2")
+                        .HasPrecision(7, 4)
+                        .HasColumnType("numeric(7,4)");
+
                     b.Property<string>("Name")
                         .IsRequired()
                         .HasColumnType("text");
@@ -1129,6 +1171,14 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.Property<string>("Location")
                         .HasMaxLength(256)
                         .HasColumnType("character varying(256)");
+
+                    b.Property<decimal?>("MapX")
+                        .HasPrecision(7, 4)
+                        .HasColumnType("numeric(7,4)");
+
+                    b.Property<decimal?>("MapY")
+                        .HasPrecision(7, 4)
+                        .HasColumnType("numeric(7,4)");
 
                     b.Property<string>("Name")
                         .IsRequired()
@@ -2009,6 +2059,9 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.Property<Guid?>("DeviceId")
                         .HasColumnType("uuid");
 
+                    b.Property<Guid?>("FarmingRowId")
+                        .HasColumnType("uuid");
+
                     b.Property<Guid?>("RasComponentId")
                         .HasColumnType("uuid");
 
@@ -2044,6 +2097,8 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.HasKey("Id");
 
                     b.HasIndex("DeviceId");
+
+                    b.HasIndex("FarmingRowId");
 
                     b.HasIndex("RasComponentId");
 

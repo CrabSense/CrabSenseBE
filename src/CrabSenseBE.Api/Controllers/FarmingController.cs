@@ -80,6 +80,15 @@ public class FarmingAreasController : ControllerBase
         => Ok(await _service.UpdateAreaAsync(id, req, ct));
 
     /// <summary>
+    /// [UPDATE] Bản đồ trại: ảnh nền (mapImageUrl) + khung khu trên ảnh (mapX1..mapY2, tỉ lệ 0–1).
+    /// Gửi 4 toạ độ cùng lúc; bỏ trống cả 4 để xoá khung.
+    /// </summary>
+    [HttpPatch("{id:guid}/map")]
+    [Authorize(Roles = AppRoles.FarmWrite)]
+    public async Task<IActionResult> UpdateMap(Guid id, [FromBody] UpdateAreaMapRequest req, CancellationToken ct)
+        => Ok(await _service.UpdateAreaMapAsync(id, req, ct));
+
+    /// <summary>
     /// [DELETE] Delete area. Mặc định chỉ xoá được khi khu đã hết hàng.
     /// cascade=true: xoá cả cây con (cua → hộp → hàng) trong 1 transaction.
     /// </summary>
@@ -178,6 +187,12 @@ public class FarmingRowsController : ControllerBase
     [Authorize(Roles = AppRoles.FarmWrite)]
     public async Task<IActionResult> Update(Guid id, [FromBody] UpdateFarmingRowRequest req, CancellationToken ct)
         => Ok(await _service.UpdateRowAsync(id, req, ct));
+
+    /// <summary>[UPDATE] Bản đồ trại: tâm dãy trên ảnh (mapX, mapY tỉ lệ 0–1). Cả 2 null = xoá vị trí.</summary>
+    [HttpPatch("{id:guid}/map")]
+    [Authorize(Roles = AppRoles.FarmWrite)]
+    public async Task<IActionResult> UpdateMap(Guid id, [FromBody] UpdateMapPointRequest req, CancellationToken ct)
+        => Ok(await _service.UpdateRowMapAsync(id, req, ct));
 
     /// <summary>[DELETE] Delete row (only if no boxes remain)</summary>
     [HttpDelete("{id:guid}")]
@@ -320,6 +335,12 @@ public class BoxesController : ControllerBase
     [Authorize(Roles = AppRoles.FarmWrite)]
     public async Task<IActionResult> UpdateStatus(Guid boxId, [FromBody] UpdateBoxStatusRequest req, CancellationToken ct)
         => Ok(await _service.UpdateBoxStatusAsync(boxId, req, ct));
+
+    /// <summary>[UPDATE] Bản đồ trại: tâm hộp trên ảnh (mapX, mapY tỉ lệ 0–1). Cả 2 null = xoá vị trí.</summary>
+    [HttpPatch("{boxId:guid}/map")]
+    [Authorize(Roles = AppRoles.FarmWrite)]
+    public async Task<IActionResult> UpdateMap(Guid boxId, [FromBody] UpdateMapPointRequest req, CancellationToken ct)
+        => Ok(await _service.UpdateBoxMapAsync(boxId, req, ct));
 
     /// <summary>[DELETE] Delete box (no live crabs)</summary>
     [HttpDelete("{id:guid}")]

@@ -277,10 +277,12 @@ public static class BoxStatuses
     public const string Quarantine = "quarantine";
     public const string Maintenance = "maintenance";
     public const string Harvested = "harvested";
+    /// <summary>Theo dõi — hộp cần chú ý nhưng chưa tới mức cảnh báo (amber trên bản đồ).</summary>
+    public const string Watch = "watch";
 
     public static readonly HashSet<string> All = new(StringComparer.OrdinalIgnoreCase)
     {
-        Empty, Active, Molting, Quarantine, Maintenance, Harvested
+        Empty, Active, Molting, Quarantine, Maintenance, Harvested, Watch
     };
 
     public static bool IsValid(string? status) =>

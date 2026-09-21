@@ -47,5 +47,8 @@ public interface IAiOpsService
     Task<ApiResponse<AiDetectionDto>> AnalyzeAsync(AiAnalyzeRequest req, CancellationToken ct = default);
     Task<ApiResponse<IEnumerable<AiDetectionDto>>> ListDetectionsAsync(
         Guid? boxId = null, Guid? mediaId = null, CancellationToken ct = default);
+    /// <summary>Lọc theo khu (qua hộp→dãy→khu hoặc camera) và giới hạn số bản ghi mới nhất.</summary>
+    Task<ApiResponse<IEnumerable<AiDetectionDto>>> ListDetectionsAsync(
+        Guid? boxId, Guid? mediaId, Guid? farmingAreaId, int? take, CancellationToken ct = default);
     Task<ApiResponse<object>> SubmitFeedbackAsync(AiFeedbackRequest req, Guid userId, CancellationToken ct = default);
 }
