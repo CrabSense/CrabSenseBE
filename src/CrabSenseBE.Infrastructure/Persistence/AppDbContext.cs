@@ -70,6 +70,7 @@ public class AppDbContext : DbContext
     public DbSet<Inspection> Inspections => Set<Inspection>();
     public DbSet<FarmOperation> FarmOperations => Set<FarmOperation>();
     public DbSet<SaleTransaction> SaleTransactions => Set<SaleTransaction>();
+    public DbSet<ScheduledFarmTask> ScheduledFarmTasks => Set<ScheduledFarmTask>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {

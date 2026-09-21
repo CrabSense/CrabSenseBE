@@ -163,8 +163,17 @@ public class OperationLogService : IOperationLogService
         return "sync";
     }
 
-    private static string HumanizeAction(string action) =>
-        string.IsNullOrWhiteSpace(action)
-            ? "Hoạt động hệ thống"
-            : action.Replace('_', ' ');
+    private static string HumanizeAction(string action)
+    {
+        if (string.IsNullOrWhiteSpace(action))
+            return "Hoạt động hệ thống";
+
+        return action.ToLowerInvariant() switch
+        {
+            "crab_added" => "Thêm cua",
+            "crab_assigned" => "Gán cua vào hộp",
+            "crab_transferred" => "Chuyển hộp cua",
+            _ => action.Replace('_', ' ')
+        };
+    }
 }

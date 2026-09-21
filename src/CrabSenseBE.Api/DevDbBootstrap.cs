@@ -44,6 +44,7 @@ public static class DevDbBootstrap
                 await EnsureCameraAndSensorRowSchemaAsync(db, logger);
                 await EnsureWaterAnalysisSchemaAsync(db, logger);
                 await EnsureFarmOperationLogColumnsAsync(db, logger);
+                await EnsureScheduledFarmTasksSchemaAsync(db, logger);
                 await EnsureHarvestSalesWorkflowSchemaAsync(db, logger);
                 await EnsureOrphanAlertCleanupAsync(db, logger);
                 logger.LogInformation("Schema ready (attempt {A}).", attempt);
@@ -59,6 +60,7 @@ public static class DevDbBootstrap
                     "Staff@123", UserRole.Staff);
 
                 await db.SaveChangesAsync();
+                await EnsureScheduledTaskDemoDataAsync(db, logger);
                 logger.LogInformation(
                     "Users sẵn sàng: sysadmin/SysAdmin@123 | owner/Owner@123 | staff/Staff@123 (admin/Admin@123 = SystemAdmin).");
 
@@ -754,6 +756,35 @@ public static class DevDbBootstrap
         logger.LogInformation("Ensured FarmOperations.Source / LocationLabel / CrabIdsJson / Appetite / FoodType / Condition.");
     }
 
+    private static async Task EnsureScheduledFarmTasksSchemaAsync(
+        AppDbContext db, ILogger logger)
+    {
+        await db.Database.ExecuteSqlRawAsync(
+            """
+            CREATE TABLE IF NOT EXISTS be."ScheduledFarmTasks" (
+                "Id" uuid NOT NULL PRIMARY KEY,
+                "CreatedAt" timestamp with time zone NOT NULL,
+                "UpdatedAt" timestamp with time zone NULL,
+                "OwnerId" uuid NOT NULL,
+                "FarmingAreaId" uuid NULL,
+                "Title" character varying(200) NOT NULL,
+                "Description" character varying(1000) NULL,
+                "RecurrenceType" character varying(16) NOT NULL,
+                "DaysOfWeekJson" text NOT NULL,
+                "StartDate" timestamp with time zone NOT NULL,
+                "EndDate" timestamp with time zone NULL,
+                "ReminderMinuteOfDay" integer NOT NULL,
+                "IsEnabled" boolean NOT NULL,
+                "NextRunAt" timestamp with time zone NULL
+            );
+            CREATE INDEX IF NOT EXISTS "IX_ScheduledFarmTasks_OwnerId"
+                ON be."ScheduledFarmTasks" ("OwnerId");
+            CREATE INDEX IF NOT EXISTS "IX_ScheduledFarmTasks_FarmingAreaId"
+                ON be."ScheduledFarmTasks" ("FarmingAreaId");
+            """).ConfigureAwait(false);
+        logger.LogInformation("Ensured ScheduledFarmTasks.");
+    }
+
     /// <summary>
     /// Additive columns for harvest → inventory → sale. Không xóa cột cũ.
     /// </summary>
@@ -883,6 +914,82 @@ public static class DevDbBootstrap
         user.PasswordHash = BCrypt.Net.BCrypt.HashPassword(password);
         if (string.IsNullOrWhiteSpace(user.Email))
             user.Email = email;
+    }
+
+    private static async Task EnsureScheduledTaskDemoDataAsync(
+        AppDbContext db, ILogger logger)
+    {
+        var owner = await db.AppUsers
+            .FirstOrDefaultAsync(user => user.Username == "owner");
+        if (owner is null)
+            return;
+
+        var demoArea = await db.FarmingAreas
+            .Where(area => area.OwnerId == owner.Id)
+            .OrderByDescending(area => db.Boxes.Any(box =>
+                db.FarmingRows.Any(row =>
+                    row.Id == box.FarmingRowId && row.FarmingAreaId == area.Id)))
+            .FirstOrDefaultAsync();
+        var existingTasks = await db.ScheduledFarmTasks
+            .Where(task => task.OwnerId == owner.Id)
+            .ToListAsync();
+        if (existingTasks.Count > 0)
+        {
+            if (demoArea is not null)
+            {
+                foreach (var task in existingTasks.Where(task =>
+                             task.FarmingAreaId is null &&
+                             (task.Title == "Kiểm tra và cho ăn định kỳ" ||
+                              task.Title == "Kiểm tra chất lượng nước" ||
+                              task.Title == "Chăm sóc và kiểm tra hộp")))
+                    task.FarmingAreaId = demoArea.Id;
+                await db.SaveChangesAsync();
+            }
+            return;
+        }
+
+        var today = DateTime.UtcNow.Date;
+        db.ScheduledFarmTasks.AddRange(
+            new ScheduledFarmTask
+            {
+                OwnerId = owner.Id,
+                FarmingAreaId = demoArea?.Id,
+                Title = "Kiểm tra và cho ăn định kỳ",
+                Description = "Theo dõi lượng ăn của từng hộp",
+                RecurrenceType = "daily",
+                DaysOfWeekJson = "[1,2,3,4,5,6,7]",
+                StartDate = today,
+                ReminderMinuteOfDay = 420,
+                IsEnabled = true,
+                NextRunAt = today.AddHours(7)
+            },
+            new ScheduledFarmTask
+            {
+                OwnerId = owner.Id,
+                FarmingAreaId = demoArea?.Id,
+                Title = "Kiểm tra chất lượng nước",
+                Description = "Đo pH, độ mặn và NO2/NO3",
+                RecurrenceType = "weekly",
+                DaysOfWeekJson = "[1,4,7]",
+                StartDate = today,
+                ReminderMinuteOfDay = 900,
+                IsEnabled = true,
+                NextRunAt = today.AddHours(15)
+            },
+            new ScheduledFarmTask
+            {
+                OwnerId = owner.Id,
+                FarmingAreaId = demoArea?.Id,
+                Title = "Chăm sóc và kiểm tra hộp",
+                Description = "Kiểm tra cua yếu, lột xác và hộp trống",
+                RecurrenceType = "daily",
+                DaysOfWeekJson = "[1,2,3,4,5,6,7]",
+                StartDate = today,
+                ReminderMinuteOfDay = 1080,
+                IsEnabled = false
+            });
+        await db.SaveChangesAsync();
+        logger.LogInformation("Seeded recurring task demo data for owner.");
     }
 
     /// <summary>
