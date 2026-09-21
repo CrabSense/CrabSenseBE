@@ -289,18 +289,19 @@ public class DatabaseBackupService : IDatabaseBackupService
         return null;
     }
 
-    /// <summary>Lấy số major từ tên thư mục kiểu "PostgreSQL\17" để so sánh bản mới hơn.</summary>
     /// <summary>
     /// Lấy số major từ đường dẫn công cụ dạng &lt;...&gt;/&lt;major&gt;/bin/&lt;tool&gt;
     /// (Windows: PostgreSQL\17\bin\pg_dump.exe; Linux: postgresql/17/bin/pg_dump).
+    /// Path.GetDirectoryName theo OS — normalize `\` trước để path Windows vẫn parse trên Linux CI.
     /// </summary>
     internal static int MajorVersionOf(string toolPath)
     {
-        var binDir = Path.GetDirectoryName(toolPath);
-        if (binDir == null) return 0;
+        var normalized = toolPath.Replace('\\', '/');
+        var binDir = Path.GetDirectoryName(normalized);
+        if (string.IsNullOrEmpty(binDir)) return 0;
 
         var versionDir = Path.GetFileName(Path.GetDirectoryName(binDir));
-        if (versionDir == null) return 0;
+        if (string.IsNullOrEmpty(versionDir)) return 0;
 
         var m = Regex.Match(versionDir, @"(\d+)");
         return m.Success && int.TryParse(m.Groups[1].Value, out var v) ? v : 0;
