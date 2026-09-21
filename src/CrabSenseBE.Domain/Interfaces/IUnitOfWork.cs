@@ -55,6 +55,7 @@ public interface IUnitOfWork : IDisposable
     IRepository<Inspection> Inspections { get; }
     IRepository<FarmOperation> FarmOperations { get; }
     IRepository<SaleTransaction> SaleTransactions { get; }
+    IRepository<ScheduledFarmTask> ScheduledFarmTasks { get; }
 
     Task<int> SaveChangesAsync(CancellationToken ct = default);
 

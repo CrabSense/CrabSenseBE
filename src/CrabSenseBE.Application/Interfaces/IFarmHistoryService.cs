@@ -30,6 +30,8 @@ public interface IFarmHistoryService
         Guid? farmingAreaId = null, Guid? farmingRowId = null, string? status = null, CancellationToken ct = default);
     Task<ApiResponse<IEnumerable<BoxStatusHistoryDto>>> GetBoxStatusHistoryAsync(
         Guid boxId, DateTime? from = null, DateTime? to = null, CancellationToken ct = default);
+    Task<ApiResponse<IEnumerable<BoxStatusHistoryDayDto>>> GetDailyBoxStatusHistoryAsync(
+        int days = 7, CancellationToken ct = default);
     Task<ApiResponse<BoxStatusHistoryDto>> UpdateBoxStatusHistoryAsync(
         Guid id, UpdateBoxStatusHistoryRequest req, CancellationToken ct = default);
     Task<ApiResponse> DeleteBoxStatusHistoryAsync(Guid id, CancellationToken ct = default);

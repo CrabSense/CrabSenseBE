@@ -151,7 +151,13 @@ public record BoxDto(
     string? CrabCondition = null,
     int AlertCount = 0,
     string? AiSummary = null,
-    int CrabCount = 0);
+    int CrabCount = 0,
+    /// <summary>Thời điểm cua bắt đầu ở hộp hiện tại (allocation mở).</summary>
+    DateTime? CrabInBoxSince = null,
+    /// <summary>Thời điểm cập nhật tình trạng / AI gần nhất (UTC).</summary>
+    DateTime? AiUpdatedAt = null,
+    /// <summary>Thời điểm hộp trống gần nhất (khi không còn cua).</summary>
+    DateTime? EmptySince = null);
 
 /// <summary>
 /// Create hộp. Required: FarmingRowId (dãy).

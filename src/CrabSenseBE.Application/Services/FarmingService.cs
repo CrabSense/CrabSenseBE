@@ -237,9 +237,9 @@ public class FarmingService : IFarmingService
             if (hasRows)
                 throw AppException.Conflict("Cannot delete area that still has rows. Delete rows first.");
 
-            _uow.FarmingAreas.Remove(area);
-            await _uow.SaveChangesAsync(ct);
-            return ApiResponse.Ok("Deleted.");
+        _uow.FarmingAreas.Remove(area);
+        await _uow.SaveChangesAsync(ct);
+        return ApiResponse.Ok("Deleted.");
         }
 
         // ── Cascade: gom khu → hàng → hộp → cua ────────────────────────────────
@@ -1320,6 +1320,8 @@ public class FarmingService : IFarmingService
         public Dictionary<Guid, FarmingArea> Areas { get; init; } = new();
         public Dictionary<Guid, List<Crab>> CrabsByBox { get; init; } = new();
         public Dictionary<Guid, Guid> BoxByCrab { get; init; } = new();
+        /// <summary>CrabId → StartTime của allocation đang mở.</summary>
+        public Dictionary<Guid, DateTime> InBoxSinceByCrab { get; init; } = new();
         public List<Alert> ActiveAlerts { get; init; } = [];
     }
 
@@ -1328,7 +1330,7 @@ public class FarmingService : IFarmingService
         var boxes = (await _uow.Boxes.GetAllAsync(ct)).ToList();
         var rows = (await _uow.FarmingRows.GetAllAsync(ct)).ToDictionary(r => r.Id);
         var areas = (await _uow.FarmingAreas.GetAllAsync(ct)).ToDictionary(a => a.Id);
-        var (crabsByBox, boxByCrab) = await LoadLiveCrabLocationsAsync(ct);
+        var (crabsByBox, boxByCrab, inBoxSince) = await LoadLiveCrabLocationsAsync(ct);
         var alerts = (await _uow.Alerts.GetAllAsync(ct))
             .Where(a => a.Status == AlertStatus.Active)
             .ToList();
@@ -1339,6 +1341,7 @@ public class FarmingService : IFarmingService
             Areas = areas,
             CrabsByBox = crabsByBox,
             BoxByCrab = boxByCrab,
+            InBoxSinceByCrab = inBoxSince,
             ActiveAlerts = alerts
         };
     }
@@ -1347,7 +1350,10 @@ public class FarmingService : IFarmingService
     /// Cua đang nuôi → hộp: ưu tiên Crab.BoxId, rồi allocation đang mở (EndTime=null).
     /// Không dùng allocation đã đóng — tránh đếm nhầm cua đã thu hoạch.
     /// </summary>
-    private async Task<(Dictionary<Guid, List<Crab>> ByBox, Dictionary<Guid, Guid> BoxByCrab)>
+    private async Task<(
+            Dictionary<Guid, List<Crab>> ByBox,
+            Dictionary<Guid, Guid> BoxByCrab,
+            Dictionary<Guid, DateTime> InBoxSinceByCrab)>
         LoadLiveCrabLocationsAsync(CancellationToken ct)
     {
         var crabs = (await _uow.Crabs.GetAllAsync(ct) ?? Enumerable.Empty<Crab>())
@@ -1360,9 +1366,11 @@ public class FarmingService : IFarmingService
             : (await allocRepo.FindAsync(
                 a => a.EndTime == null && crabIds.Contains(a.CrabId), ct)
               ?? Enumerable.Empty<CrabBoxAllocation>()).ToList();
-        var allocByCrab = openAllocs
+        var latestOpenByCrab = openAllocs
             .GroupBy(a => a.CrabId)
-            .ToDictionary(g => g.Key, g => g.OrderByDescending(a => a.StartTime).First().BoxId);
+            .ToDictionary(g => g.Key, g => g.OrderByDescending(a => a.StartTime).First());
+        var allocByCrab = latestOpenByCrab.ToDictionary(kv => kv.Key, kv => kv.Value.BoxId);
+        var inBoxSinceByCrab = latestOpenByCrab.ToDictionary(kv => kv.Key, kv => kv.Value.StartTime);
 
         var boxByCrab = new Dictionary<Guid, Guid>();
         var byBox = new Dictionary<Guid, List<Crab>>();
@@ -1379,7 +1387,7 @@ public class FarmingService : IFarmingService
             list.Add(crab);
         }
 
-        return (byBox, boxByCrab);
+        return (byBox, boxByCrab, inBoxSinceByCrab);
     }
 
     // ─── Paging / mapping ───────────────────────────────────────────────────
@@ -1445,8 +1453,11 @@ public class FarmingService : IFarmingService
                 .ToList();
 
         var boxIds = boxes.Select(b => b.Id).ToHashSet();
-        var (crabsByBox, _) = boxIds.Count == 0
-            ? (new Dictionary<Guid, List<Crab>>(), new Dictionary<Guid, Guid>())
+        var (crabsByBox, _, _) = boxIds.Count == 0
+            ? (
+                new Dictionary<Guid, List<Crab>>(),
+                new Dictionary<Guid, Guid>(),
+                new Dictionary<Guid, DateTime>())
             : await LoadLiveCrabLocationsAsync(ct);
 
         var waterSystems = (await _uow.WaterSystems.GetAllAsync(ct) ?? Enumerable.Empty<WaterSystem>())
@@ -1700,8 +1711,11 @@ public class FarmingService : IFarmingService
             .Where(b => ids.Contains(b.FarmingRowId))
             .ToList();
         var boxIds = boxes.Select(b => b.Id).ToHashSet();
-        var (crabsByBox, _) = boxIds.Count == 0
-            ? (new Dictionary<Guid, List<Crab>>(), new Dictionary<Guid, Guid>())
+        var (crabsByBox, _, _) = boxIds.Count == 0
+            ? (
+                new Dictionary<Guid, List<Crab>>(),
+                new Dictionary<Guid, Guid>(),
+                new Dictionary<Guid, DateTime>())
             : await LoadLiveCrabLocationsAsync(ct);
         var activeAlerts = (await _uow.Alerts.FindAsync(a => a.Status == AlertStatus.Active, ct)).ToList();
 
@@ -1737,6 +1751,22 @@ public class FarmingService : IFarmingService
             ? b.Status
             : BoxStatuses.Empty;
 
+        DateTime? crabInBoxSince = null;
+        DateTime? aiUpdatedAt = null;
+        DateTime? emptySince = null;
+        if (occupied && crab is not null)
+        {
+            if (ctx.InBoxSinceByCrab.TryGetValue(crab.Id, out var since))
+                crabInBoxSince = since;
+            else
+                crabInBoxSince = crab.UpdatedAt ?? crab.CreatedAt;
+            aiUpdatedAt = crab.UpdatedAt ?? crab.CreatedAt;
+        }
+        else
+        {
+            emptySince = b.UpdatedAt ?? b.CreatedAt;
+        }
+
         return new BoxDto(
             b.Id,
             b.FarmingRowId,
@@ -1756,7 +1786,10 @@ public class FarmingService : IFarmingService
             condition,
             alerts,
             BuildAiSummary(occupied, condition, alerts),
-            crabCount);
+            crabCount,
+            crabInBoxSince,
+            aiUpdatedAt,
+            emptySince);
     }
 
     private static bool BoxMatchesSearch(Box box, BoxContext ctx, string query)
@@ -1913,11 +1946,11 @@ public class FarmingService : IFarmingService
             return "Cần kiểm tra cảnh báo";
         return condition switch
         {
-            "molting" => "Đang lột — theo dõi softshell",
+            "molting" => "Đang lột xác — theo dõi softshell",
             "softshell" => "Cua lột mềm — cửa sổ thu hoạch",
             "premolt" => "Sắp lột — tăng theo dõi",
-            "problem" => "Phát hiện bất thường",
-            _ => "Không có bất thường"
+            "problem" => "AI phát hiện bất thường",
+            _ => "Không phát hiện bất thường"
         };
     }
 

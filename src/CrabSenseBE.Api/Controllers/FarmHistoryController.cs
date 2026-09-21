@@ -104,6 +104,12 @@ public class FarmHistoryController : ControllerBase
         Guid boxId, [FromQuery] DateTime? from = null, [FromQuery] DateTime? to = null, CancellationToken ct = default)
         => Ok(await _service.GetBoxStatusHistoryAsync(boxId, from, to, ct));
 
+    /// <summary>[READ] Daily box status snapshots for charts.</summary>
+    [HttpGet("api/boxes/status-history-daily")]
+    public async Task<IActionResult> DailyBoxStatusHistory(
+        [FromQuery] int days = 7, CancellationToken ct = default)
+        => Ok(await _service.GetDailyBoxStatusHistoryAsync(days, ct));
+
     /// <summary>[UPDATE] Fix a box status history row</summary>
     [HttpPut("api/box-status-histories/{id:guid}")]
     [Authorize(Roles = AppRoles.FarmWrite)]
