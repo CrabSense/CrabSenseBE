@@ -67,8 +67,12 @@ public class SensorsController : ControllerBase
 
     /// <summary>[READ] List sensors (optional deviceId)</summary>
     [HttpGet]
-    public async Task<IActionResult> GetAll([FromQuery] Guid? deviceId = null, CancellationToken ct = default)
-        => Ok(await _service.GetSensorsAsync(deviceId, ct));
+    public async Task<IActionResult> GetAll(
+        [FromQuery] Guid? deviceId = null,
+        [FromQuery] Guid? farmingAreaId = null,
+        [FromQuery] Guid? farmingRowId = null,
+        CancellationToken ct = default)
+        => Ok(await _service.GetSensorsAsync(deviceId, farmingAreaId, farmingRowId, ct));
 
     /// <summary>[READ] Sensor by id</summary>
     [HttpGet("{id:guid}")]
@@ -107,8 +111,11 @@ public class DevicesController : ControllerBase
 
     /// <summary>[READ] List ESP32 / gateways — optional farmingAreaId</summary>
     [HttpGet]
-    public async Task<IActionResult> GetAll([FromQuery] Guid? farmingAreaId = null, CancellationToken ct = default)
-        => Ok(await _service.GetDevicesAsync(farmingAreaId, ct));
+    public async Task<IActionResult> GetAll(
+        [FromQuery] Guid? farmingAreaId = null,
+        [FromQuery] Guid? farmingRowId = null,
+        CancellationToken ct = default)
+        => Ok(await _service.GetDevicesAsync(farmingAreaId, farmingRowId, ct));
 
     /// <summary>[READ] Device by id</summary>
     [HttpGet("{id:guid}")]

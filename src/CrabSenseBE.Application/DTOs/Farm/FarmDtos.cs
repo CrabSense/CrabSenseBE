@@ -27,7 +27,36 @@ public record FarmingAreaDto(
     int BoxCount,
     int CrabCount,
     int HealthyBoxCount,
-    int AlertBoxCount);
+    int AlertBoxCount,
+    /// <summary>Ảnh bản đồ trại (Maps top-down). Null → FE dùng ảnh mặc định.</summary>
+    string? MapImageUrl = null,
+    /// <summary>Khung khu trên ảnh bản đồ, tỉ lệ 0–1 (null = FE tự neo).</summary>
+    decimal? MapX1 = null,
+    decimal? MapY1 = null,
+    decimal? MapX2 = null,
+    decimal? MapY2 = null,
+    /// <summary>Hộp đang có cua (Đang nuôi).</summary>
+    int OccupiedBoxCount = 0,
+    /// <summary>Hộp Theo dõi (status watch/maintenance, chưa tới mức cảnh báo).</summary>
+    int WatchBoxCount = 0,
+    /// <summary>Hộp trống (không có cua).</summary>
+    int EmptyBoxCount = 0,
+    /// <summary>Cập nhật cuối của bản ghi khu (UpdatedAt ?? CreatedAt).</summary>
+    DateTime? UpdatedAt = null);
+
+/// <summary>
+/// Cập nhật vị trí khu trên ảnh bản đồ trại. Tất cả tỉ lệ 0–1 theo chiều rộng/cao ảnh.
+/// Gửi null cho cả 4 toạ độ để xoá khung; MapImageUrl null = giữ nguyên, "" = xoá.
+/// </summary>
+public record UpdateAreaMapRequest(
+    string? MapImageUrl = null,
+    decimal? MapX1 = null,
+    decimal? MapY1 = null,
+    decimal? MapX2 = null,
+    decimal? MapY2 = null);
+
+/// <summary>Cập nhật tâm dãy/hộp trên ảnh bản đồ trại (tỉ lệ 0–1). Cả 2 null = xoá vị trí.</summary>
+public record UpdateMapPointRequest(decimal? MapX = null, decimal? MapY = null);
 
 /// <summary>
 /// Tạo khu. Code hệ thống tự sinh AREA-A01… — không gửi trong body.
@@ -92,7 +121,17 @@ public record FarmingRowDto(
     int BoxCount,
     int CrabCount,
     int HealthyBoxCount,
-    int AlertBoxCount);
+    int AlertBoxCount,
+    /// <summary>Tâm dãy trên ảnh bản đồ trại (tỉ lệ 0–1). Null = chưa đặt.</summary>
+    decimal? MapX = null,
+    decimal? MapY = null,
+    /// <summary>Số hộp đang có cua.</summary>
+    int OccupiedBoxCount = 0,
+    /// <summary>Số hộp đang ở trạng thái Theo dõi (watch/maintenance, chưa tới cảnh báo).</summary>
+    int WatchBoxCount = 0,
+    /// <summary>Số hộp không có cua.</summary>
+    int EmptyBoxCount = 0,
+    DateTime? UpdatedAt = null);
 
 /// <summary>
 /// Tạo dãy. Code hệ thống tự sinh DAY-A01… — không gửi trong body.
@@ -157,7 +196,10 @@ public record BoxDto(
     /// <summary>Thời điểm cập nhật tình trạng / AI gần nhất (UTC).</summary>
     DateTime? AiUpdatedAt = null,
     /// <summary>Thời điểm hộp trống gần nhất (khi không còn cua).</summary>
-    DateTime? EmptySince = null);
+    DateTime? EmptySince = null,
+    /// <summary>Tâm hộp trên ảnh bản đồ trại (tỉ lệ 0–1). Null = chưa đặt.</summary>
+    decimal? MapX = null,
+    decimal? MapY = null);
 
 /// <summary>
 /// Create hộp. Required: FarmingRowId (dãy).
