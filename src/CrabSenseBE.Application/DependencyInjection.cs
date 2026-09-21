@@ -42,6 +42,7 @@ public static class DependencyInjection
         services.AddScoped<ISalesService, SalesService>();
         services.AddScoped<ISalesOrderService, SalesOrderService>();
         services.AddScoped<IBoxCameraService, BoxCameraService>();
+        services.AddScoped<IOperationalEfficiencyReportService, OperationalEfficiencyReportService>();
 
         services.AddHttpClient("telegram");
         services.AddHttpClient("zalo");

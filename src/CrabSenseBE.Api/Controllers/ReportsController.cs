@@ -7,7 +7,7 @@ namespace CrabSenseBE.Api.Controllers;
 
 [ApiController]
 [Route("api/reports")]
-[Authorize(Roles = "SystemAdmin")]
+[Authorize(Roles = "SystemAdmin,FarmOwner")]
 public class ReportsController : ControllerBase
 {
     private readonly IHarvestReportService _harvestReportService;
@@ -42,6 +42,33 @@ public class ReportsController : ControllerBase
                 cancellationToken);
 
         return Ok(result);
+    }
+
+    /// <summary>
+    /// Báo cáo sản lượng theo ngày, tuần hoặc tháng.
+    ///
+    /// Ví dụ:
+    /// GET /api/reports/harvest/period?period=Day
+    /// GET /api/reports/harvest/period?period=Week
+    /// GET /api/reports/harvest/period?period=Month
+    /// </summary>
+    [HttpGet("harvest/period")]
+    public async Task<IActionResult> GetHarvestReportByPeriod(
+        [FromQuery] HarvestReportFilterDto filter,
+        CancellationToken cancellationToken)
+    {
+        var result =
+            await _harvestReportService
+                .GetHarvestReportByPeriodAsync(
+                    filter,
+                    cancellationToken);
+
+        return Ok(new
+        {
+            success = true,
+            message = (string?)null,
+            data = result
+        });
     }
 
     /// <summary>
@@ -117,4 +144,5 @@ public class ReportsController : ControllerBase
             data = result
         });
     }
+
 }
