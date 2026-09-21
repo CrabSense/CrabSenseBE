@@ -39,6 +39,7 @@ public static class DependencyInjection
         services.AddScoped<ICrabConditionService, CrabConditionService>();
         services.AddScoped<IAiOpsService, AiOpsService>();
         services.AddScoped<IOperationLogService, OperationLogService>();
+        services.AddScoped<IScheduledTaskService, ScheduledTaskService>();
         services.AddScoped<ISalesService, SalesService>();
         services.AddScoped<ISalesOrderService, SalesOrderService>();
         services.AddScoped<IBoxCameraService, BoxCameraService>();

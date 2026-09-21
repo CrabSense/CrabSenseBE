@@ -15,6 +15,52 @@ public class FarmOperationService : IFarmOperationService
 
     public FarmOperationService(IUnitOfWork uow) => _uow = uow;
 
+    public async Task<ApiResponse<IEnumerable<FeedingHistoryDayDto>>> GetFeedingHistoryAsync(
+        int days = 7, CancellationToken ct = default)
+    {
+        var end = DateTime.UtcNow.Date.AddDays(1);
+        var start = end.AddDays(-(Math.Clamp(days, 1, 31)));
+        var operations = await _uow.FarmOperations.GetAllAsync(ct);
+        var totals = Enumerable.Range(0, (end.Date - start.Date).Days)
+            .Select(offset => start.Date.AddDays(offset))
+            .ToDictionary(date => date, _ => new int[3]);
+
+        foreach (var operation in operations)
+        {
+            var isFeedingRecord =
+                string.Equals(operation.Type, "feeding", StringComparison.OrdinalIgnoreCase) ||
+                (string.Equals(operation.Type, "inspection", StringComparison.OrdinalIgnoreCase) &&
+                 !string.IsNullOrWhiteSpace(operation.Appetite));
+            if (!isFeedingRecord ||
+                operation.Timestamp < start ||
+                operation.Timestamp >= end)
+                continue;
+
+            var appetite = operation.Appetite?.Trim().ToLowerInvariant();
+            var bucket = appetite switch
+            {
+                "many" => 0,
+                "little" => 1,
+                "none" => 2,
+                _ => -1
+            };
+            if (bucket < 0) continue;
+
+            var crabIds = ParseStringList(operation.CrabIdsJson);
+            if (crabIds.Count == 0) continue;
+            totals[operation.Timestamp.Date][bucket] += crabIds.Count;
+        }
+
+        var result = totals
+            .OrderBy(item => item.Key)
+            .Select(item => new FeedingHistoryDayDto(
+                DateOnly.FromDateTime(item.Key),
+                item.Value[0],
+                item.Value[1],
+                item.Value[2]));
+        return ApiResponse<IEnumerable<FeedingHistoryDayDto>>.Ok(result);
+    }
+
     public async Task<ApiResponse<IEnumerable<FarmOperationDto>>> ListAllAsync(
         int page = 1, int limit = 50, string? type = null,
         DateTime? startDate = null, DateTime? endDate = null, CancellationToken ct = default)

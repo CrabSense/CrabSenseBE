@@ -187,6 +187,10 @@ public class UnitOfWork : IUnitOfWork
     public IRepository<SaleTransaction> SaleTransactions =>
         _saleTransactions ??= new GenericRepository<SaleTransaction>(_context);
 
+    private IRepository<ScheduledFarmTask>? _scheduledFarmTasks;
+    public IRepository<ScheduledFarmTask> ScheduledFarmTasks =>
+        _scheduledFarmTasks ??= new GenericRepository<ScheduledFarmTask>(_context);
+
     public Task<int> SaveChangesAsync(CancellationToken ct = default)
         => _context.SaveChangesAsync(ct);
 

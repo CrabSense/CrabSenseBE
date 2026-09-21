@@ -129,6 +129,14 @@ public record BoxStatusHistoryDto(
     DateTime ChangedAt,
     string? Reason);
 
+public record BoxStatusHistoryDayDto(
+    DateOnly Date,
+    int Normal,
+    int Watch,
+    int Molting,
+    int Alert,
+    int Empty);
+
 /// <summary>Sửa dòng audit trạng thái hộp (lỡ ghi sai).</summary>
 public record UpdateBoxStatusHistoryRequest(
     string? OldStatus,
