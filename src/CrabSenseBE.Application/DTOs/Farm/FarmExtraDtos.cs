@@ -137,6 +137,14 @@ public record BoxStatusHistoryDayDto(
     int Alert,
     int Empty);
 
+public record CrabStatusHistoryDayDto(
+    DateOnly Date,
+    int Normal,
+    int Watch,
+    int Molting,
+    int Alert,
+    int Empty);
+
 /// <summary>Sửa dòng audit trạng thái hộp (lỡ ghi sai).</summary>
 public record UpdateBoxStatusHistoryRequest(
     string? OldStatus,

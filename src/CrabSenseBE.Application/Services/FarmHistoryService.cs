@@ -101,6 +101,18 @@ public class FarmHistoryService : IFarmHistoryService
         _uow.Crabs.Update(crab);
 
         await ApplyBoxStatusAsync(box, BoxStatuses.Active, true, "Crab allocated", ct);
+        await _uow.CrabStatusHistories.AddAsync(new CrabStatusHistory
+        {
+            CrabId = crab.Id,
+            OldCondition = crab.Condition,
+            NewCondition = crab.Condition,
+            OldStatus = crab.Status,
+            NewStatus = crab.Status,
+            Source = previousBoxId == Guid.Empty ? "assignment" : "transfer",
+            Reason = previousBoxId == Guid.Empty
+                ? $"Gán cua vào hộp {box.Code}"
+                : $"Chuyển cua sang hộp {box.Code}"
+        }, ct);
 
         await _uow.OperationLogs.AddAsync(new OperationLog
         {
@@ -358,24 +370,122 @@ public class FarmHistoryService : IFarmHistoryService
     {
         var dayCount = Math.Clamp(days, 1, 31);
         var today = DateTime.UtcNow.Date;
+        var boxes = (await _uow.Boxes.GetAllAsync(ct)).ToList();
+        var crabs = await _uow.Crabs.GetAllAsync(ct);
+        var conditionsByBox = crabs
+            .Where(c => c.BoxId.HasValue)
+            .GroupBy(c => c.BoxId!.Value)
+            .ToDictionary(
+                group => group.Key,
+                group => group
+                    .Select(c => (CrabCondition?)c.Condition)
+                    .OrderByDescending(ConditionPriority)
+                    .FirstOrDefault());
         var events = (await _uow.BoxStatusHistories.GetAllAsync(ct))
             .Where(h => h.ChangedAt >= today.AddDays(-(dayCount - 1)))
             .OrderByDescending(h => h.ChangedAt)
             .ToList();
+        var states = boxes.ToDictionary(
+            b => b.Id,
+            b => (
+                status: b.Status,
+                occupied: b.IsOccupied,
+                condition: conditionsByBox.GetValueOrDefault(b.Id)));
         var result = new List<BoxStatusHistoryDayDto>(dayCount);
 
         for (var offset = 0; offset < dayCount; offset++)
         {
             var date = today.AddDays(-offset);
+            var dailyEvents = events.Where(h => h.ChangedAt.Date == date).ToList();
             var counts = new int[5];
-            foreach (var history in events.Where(h => h.ChangedAt.Date == date))
-                counts[StatusBucket(history.NewStatus, history.NewIsOccupied)]++;
+            if (dailyEvents.Count > 0)
+            {
+                foreach (var state in states.Values)
+                    counts[StatusBucket(state.status, state.occupied, state.condition)]++;
 
-            result.Add(new BoxStatusHistoryDayDto(DateOnly.FromDateTime(date),
-                counts[0], counts[1], counts[2], counts[3], counts[4]));
+                result.Add(new BoxStatusHistoryDayDto(DateOnly.FromDateTime(date),
+                    counts[0], counts[1], counts[2], counts[3], counts[4]));
+            }
+
+            foreach (var history in dailyEvents)
+            {
+                if (states.ContainsKey(history.BoxId))
+                    states[history.BoxId] = (
+                        history.OldStatus ?? states[history.BoxId].status,
+                        history.OldIsOccupied ?? states[history.BoxId].occupied,
+                        null);
+            }
         }
 
         return ApiResponse<IEnumerable<BoxStatusHistoryDayDto>>.Ok(
+            result.OrderBy(item => item.Date));
+    }
+
+    public async Task<ApiResponse<IEnumerable<CrabStatusHistoryDayDto>>> GetDailyCrabStatusHistoryAsync(
+        int days = 7, CancellationToken ct = default)
+    {
+        var dayCount = Math.Clamp(days, 1, 31);
+        var today = DateTime.UtcNow.Date;
+        var crabs = (await _uow.Crabs.GetAllAsync(ct)).ToList();
+        var events = (await _uow.CrabStatusHistories.GetAllAsync(ct))
+            .Where(h => h.ChangedAt >= today.AddDays(-(dayCount - 1)))
+            .OrderByDescending(h => h.ChangedAt)
+            .ToList();
+        var states = crabs.ToDictionary(
+            c => c.Id,
+            c => (status: c.Status, condition: c.Condition));
+        var result = new List<CrabStatusHistoryDayDto>(dayCount);
+
+        for (var offset = 0; offset < dayCount; offset++)
+        {
+            var date = today.AddDays(-offset);
+            var dailyEvents = events.Where(h => h.ChangedAt.Date == date).ToList();
+            if (dailyEvents.Count > 0)
+            {
+                var counts = new int[5];
+                foreach (var state in states.Values)
+                {
+                    var occupied = state.status is CrabStatus.Alive
+                        or CrabStatus.Molting
+                        or CrabStatus.Quarantined;
+                    counts[StatusBucket(
+                        state.status.ToString(), occupied, state.condition)]++;
+                }
+
+                result.Add(new CrabStatusHistoryDayDto(
+                    DateOnly.FromDateTime(date),
+                    counts[0], counts[1], counts[2], counts[3], counts[4]));
+            }
+
+            foreach (var history in dailyEvents)
+            {
+                if (states.ContainsKey(history.CrabId))
+                {
+                    states[history.CrabId] = (
+                        history.OldStatus ?? states[history.CrabId].status,
+                        history.OldCondition ?? states[history.CrabId].condition);
+                }
+            }
+        }
+
+        if (result.Count == 0 && crabs.Count > 0)
+        {
+            var counts = new int[5];
+            foreach (var state in states.Values)
+            {
+                var occupied = state.status is CrabStatus.Alive
+                    or CrabStatus.Molting
+                    or CrabStatus.Quarantined;
+                counts[StatusBucket(
+                    state.status.ToString(), occupied, state.condition)]++;
+            }
+
+            result.Add(new CrabStatusHistoryDayDto(
+                DateOnly.FromDateTime(today),
+                counts[0], counts[1], counts[2], counts[3], counts[4]));
+        }
+
+        return ApiResponse<IEnumerable<CrabStatusHistoryDayDto>>.Ok(
             result.OrderBy(item => item.Date));
     }
 

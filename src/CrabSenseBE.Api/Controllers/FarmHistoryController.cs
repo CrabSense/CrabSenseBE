@@ -110,6 +110,12 @@ public class FarmHistoryController : ControllerBase
         [FromQuery] int days = 7, CancellationToken ct = default)
         => Ok(await _service.GetDailyBoxStatusHistoryAsync(days, ct));
 
+    /// <summary>[READ] Daily crab status snapshots keyed by CrabId.</summary>
+    [HttpGet("api/crabs/status-history-daily")]
+    public async Task<IActionResult> DailyCrabStatusHistory(
+        [FromQuery] int days = 7, CancellationToken ct = default)
+        => Ok(await _service.GetDailyCrabStatusHistoryAsync(days, ct));
+
     /// <summary>[UPDATE] Fix a box status history row</summary>
     [HttpPut("api/box-status-histories/{id:guid}")]
     [Authorize(Roles = AppRoles.FarmWrite)]
