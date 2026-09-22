@@ -1,4 +1,7 @@
 using CrabSenseBE.Application.Common;
+using CrabSenseBE.Application.DTOs.Farm;
+using CrabSenseBE.Application.Interfaces;
+using CrabSenseBE.Domain.Entities;
 using CrabSenseBE.Domain.Enums;
 using CrabSenseBE.Infrastructure.Persistence;
 using Microsoft.AspNetCore.Authorization;
@@ -19,8 +22,13 @@ namespace CrabSenseBE.Api.Controllers;
 public class SyncQueueStubController : ControllerBase
 {
     private readonly AppDbContext _db;
+    private readonly IFarmHistoryService _farmHistory;
 
-    public SyncQueueStubController(AppDbContext db) => _db = db;
+    public SyncQueueStubController(AppDbContext db, IFarmHistoryService farmHistory)
+    {
+        _db = db;
+        _farmHistory = farmHistory;
+    }
 
     /// <summary>
     /// Accepts idempotent mobile mutations. Domain-specific handlers can
@@ -64,54 +72,7 @@ public class SyncQueueStubController : ControllerBase
             _db.SyncInboxItems.Add(inboxItem);
             accepted.Add(item.IdempotencyKey);
 
-            if (string.Equals(item.EntityType, "crab", StringComparison.OrdinalIgnoreCase) &&
-                string.Equals(item.OperationType, "update_crab", StringComparison.OrdinalIgnoreCase))
-            {
-                var payload = item.Payload ?? new Dictionary<string, object?>();
-                var statusValue = payload.TryGetValue("status", out var rawStatus)
-                    ? rawStatus
-                    : null;
-                if (statusValue == null ||
-                    !Enum.TryParse<CrabStatus>(
-                        statusValue.ToString(),
-                        ignoreCase: true,
-                        out var status) ||
-                    !Guid.TryParse(item.EntityId, out var crabId))
-                {
-                    inboxItem.Status = "failed";
-                    inboxItem.ErrorMessage =
-                        "update_crab chỉ nhận payload.status là trạng thái CrabStatus hợp lệ.";
-                    failed.Add(item.IdempotencyKey);
-                    continue;
-                }
-
-                var crab = await _db.Crabs.FindAsync(crabId);
-                if (crab == null)
-                {
-                    inboxItem.Status = "failed";
-                    inboxItem.ErrorMessage = "Không tìm thấy cua theo entityId.";
-                    failed.Add(item.IdempotencyKey);
-                    continue;
-                }
-
-                var clientTime = SyncBatchItem.ResolveClientUpdatedAt(item);
-                var serverTime = crab.UpdatedAt ?? crab.CreatedAt;
-                if (clientTime == null || serverTime.ToUniversalTime() > clientTime.Value.UtcDateTime)
-                {
-                    inboxItem.Status = "processed";
-                    inboxItem.ProcessedAt = DateTimeOffset.UtcNow;
-                    inboxItem.ErrorMessage =
-                        "Giữ bản server vì updatedAt mới hơn clientUpdatedAt.";
-                    processed.Add(item.IdempotencyKey);
-                    continue;
-                }
-
-                crab.Status = status;
-                crab.UpdatedAt = clientTime.Value.UtcDateTime;
-                inboxItem.Status = "processed";
-                inboxItem.ProcessedAt = DateTimeOffset.UtcNow;
-                processed.Add(item.IdempotencyKey);
-            }
+            await ApplyMobileOp(item, inboxItem, processed, failed);
         }
 
         await _db.SaveChangesAsync();
@@ -214,6 +175,196 @@ public class SyncQueueStubController : ControllerBase
             changes = new { box = boxes, crab = crabs }
         }, "Sync pull"));
     }
+
+    async Task ApplyMobileOp(
+        SyncBatchItem item,
+        SyncInboxItem inboxItem,
+        List<string> processed,
+        List<string> failed)
+    {
+        var op = item.OperationType ?? "";
+        try
+        {
+            if (op.Equals("update_crab", StringComparison.OrdinalIgnoreCase))
+                await ApplyUpdateCrab(item, inboxItem, processed, failed);
+            else if (op.Equals("create_crab", StringComparison.OrdinalIgnoreCase))
+                await ApplyCreateCrab(item, inboxItem, processed, failed);
+            else if (op.Equals("transfer_crab", StringComparison.OrdinalIgnoreCase))
+                await ApplyTransfer(item, inboxItem, processed, failed);
+            else if (op.Equals("update_box", StringComparison.OrdinalIgnoreCase))
+                await ApplyUpdateBox(item, inboxItem, processed, failed);
+        }
+        catch (AppException ex)
+        {
+            inboxItem.Status = "failed";
+            inboxItem.ErrorMessage = ex.Message;
+            failed.Add(item.IdempotencyKey!);
+        }
+    }
+
+    async Task ApplyUpdateCrab(
+        SyncBatchItem item, SyncInboxItem inbox, List<string> processed, List<string> failed)
+    {
+        var payload = SyncPayload.MergeNested(item.Payload, "crab");
+        var statusRaw = SyncPayload.Str(payload, "status");
+        if (statusRaw == null ||
+            !Enum.TryParse<CrabStatus>(statusRaw, ignoreCase: true, out var status) ||
+            !Guid.TryParse(item.EntityId, out var crabId))
+        {
+            Fail(inbox, failed, item, "update_crab cần entityId + payload.status (CrabStatus).");
+            return;
+        }
+
+        var crab = await _db.Crabs.FindAsync(crabId);
+        if (crab == null)
+        {
+            Fail(inbox, failed, item, "Không tìm thấy cua theo entityId.");
+            return;
+        }
+
+        if (ServerWins(item, crab.UpdatedAt ?? crab.CreatedAt))
+        {
+            KeepServer(inbox, processed, item);
+            return;
+        }
+
+        crab.Status = status;
+        crab.UpdatedAt = SyncBatchItem.ResolveClientUpdatedAt(item)!.Value.UtcDateTime;
+        Done(inbox, processed, item);
+    }
+
+    async Task ApplyCreateCrab(
+        SyncBatchItem item, SyncInboxItem inbox, List<string> processed, List<string> failed)
+    {
+        var payload = SyncPayload.MergeNested(item.Payload, "crab");
+        if (!Guid.TryParse(item.EntityId, out var crabId))
+        {
+            Fail(inbox, failed, item, "create_crab cần entityId Guid.");
+            return;
+        }
+
+        var crab = await _db.Crabs.FindAsync(crabId);
+        if (crab == null)
+        {
+            var lotId = await _db.CrabLots.AsNoTracking()
+                .OrderBy(lot => lot.CreatedAt)
+                .Select(lot => lot.Id)
+                .FirstOrDefaultAsync();
+            if (lotId == Guid.Empty)
+            {
+                Fail(inbox, failed, item, "Chưa có CrabLot trên server để gắn cua mới.");
+                return;
+            }
+
+            var code = SyncPayload.Str(payload, "code", "tag") ?? $"SYNC-{crabId.ToString("N")[..8]}";
+            crab = new Crab
+            {
+                Id = crabId,
+                CrabLotId = lotId,
+                Code = code,
+                QrCode = $"QR-{code}",
+                Tag = SyncPayload.Str(payload, "tag") ?? code,
+                WeightGram = SyncPayload.Dec(payload, "weight", "weightGram"),
+                StockedAt = DateTime.UtcNow,
+                MoltingStage = SyncPayload.Str(payload, "moltingStatus", "moltingStage") ?? "",
+            };
+            if (Enum.TryParse<CrabStatus>(SyncPayload.Str(payload, "status") ?? "", true, out var st))
+                crab.Status = st;
+            _db.Crabs.Add(crab);
+            await _db.SaveChangesAsync();
+        }
+
+        var boxRaw = SyncPayload.Str(payload, "boxId") ?? SyncPayload.Str(item.Payload ?? new(), "boxId");
+        if (Guid.TryParse(boxRaw, out var boxId) && boxId != Guid.Empty)
+        {
+            await _farmHistory.TransferCrabAsync(new MobileTransferCrabRequest(crabId, boxId));
+        }
+
+        Done(inbox, processed, item);
+    }
+
+    async Task ApplyTransfer(
+        SyncBatchItem item, SyncInboxItem inbox, List<string> processed, List<string> failed)
+    {
+        if (!Guid.TryParse(item.EntityId, out var crabId))
+        {
+            Fail(inbox, failed, item, "transfer_crab cần entityId Guid.");
+            return;
+        }
+
+        var payload = item.Payload ?? new Dictionary<string, object?>();
+        if (!Guid.TryParse(SyncPayload.Str(payload, "destinationBoxId"), out var dest) || dest == Guid.Empty)
+        {
+            Fail(inbox, failed, item, "transfer_crab cần destinationBoxId.");
+            return;
+        }
+
+        Guid? source = Guid.TryParse(SyncPayload.Str(payload, "sourceBoxId"), out var src) ? src : null;
+        await _farmHistory.TransferCrabAsync(new MobileTransferCrabRequest(crabId, dest, source));
+        Done(inbox, processed, item);
+    }
+
+    async Task ApplyUpdateBox(
+        SyncBatchItem item, SyncInboxItem inbox, List<string> processed, List<string> failed)
+    {
+        var payload = SyncPayload.MergeNested(item.Payload, "box");
+        if (!Guid.TryParse(item.EntityId, out var boxId))
+        {
+            Fail(inbox, failed, item, "update_box cần entityId Guid.");
+            return;
+        }
+
+        var box = await _db.Boxes.FindAsync(boxId);
+        if (box == null)
+        {
+            Fail(inbox, failed, item, "Không tìm thấy hộp.");
+            return;
+        }
+
+        if (ServerWins(item, box.UpdatedAt ?? box.CreatedAt))
+        {
+            KeepServer(inbox, processed, item);
+            return;
+        }
+
+        var code = SyncPayload.Str(payload, "code", "qrCode");
+        if (!string.IsNullOrWhiteSpace(code))
+            box.Code = code;
+        var status = SyncPayload.Str(payload, "status");
+        if (!string.IsNullOrWhiteSpace(status))
+            box.Status = status;
+        box.UpdatedAt = SyncBatchItem.ResolveClientUpdatedAt(item)!.Value.UtcDateTime;
+        Done(inbox, processed, item);
+    }
+
+    static bool ServerWins(SyncBatchItem item, DateTime serverTime)
+    {
+        var clientTime = SyncBatchItem.ResolveClientUpdatedAt(item);
+        return clientTime == null || serverTime.ToUniversalTime() > clientTime.Value.UtcDateTime;
+    }
+
+    static void KeepServer(SyncInboxItem inbox, List<string> processed, SyncBatchItem item)
+    {
+        inbox.Status = "processed";
+        inbox.ProcessedAt = DateTimeOffset.UtcNow;
+        inbox.ErrorMessage = "Giữ bản server vì updatedAt mới hơn clientUpdatedAt.";
+        processed.Add(item.IdempotencyKey!);
+    }
+
+    static void Done(SyncInboxItem inbox, List<string> processed, SyncBatchItem item)
+    {
+        inbox.Status = "processed";
+        inbox.ProcessedAt = DateTimeOffset.UtcNow;
+        processed.Add(item.IdempotencyKey!);
+    }
+
+    static void Fail(SyncInboxItem inbox, List<string> failed, SyncBatchItem item, string message)
+    {
+        inbox.Status = "failed";
+        inbox.ErrorMessage = message;
+        failed.Add(item.IdempotencyKey!);
+    }
+
     /// <summary>[READ] Hàng đợi sync (stub)</summary>
     [HttpGet("/api/sync/queue")]
     [ProducesResponseType(StatusCodes.Status200OK)]
@@ -300,6 +451,54 @@ public sealed class SyncBatchItem
         }
 
         return null;
+    }
+}
+
+internal static class SyncPayload
+{
+    public static Dictionary<string, object?> MergeNested(
+        Dictionary<string, object?>? payload, string nestedKey)
+    {
+        var root = payload ?? new Dictionary<string, object?>();
+        if (!root.TryGetValue(nestedKey, out var raw) || raw is null)
+            return root;
+        if (raw is JsonElement el && el.ValueKind == JsonValueKind.Object)
+        {
+            var nested = JsonSerializer.Deserialize<Dictionary<string, object?>>(el.GetRawText());
+            if (nested == null) return root;
+            foreach (var pair in root)
+            {
+                if (!nested.ContainsKey(pair.Key))
+                    nested[pair.Key] = pair.Value;
+            }
+            return nested;
+        }
+
+        return root;
+    }
+
+    public static string? Str(IDictionary<string, object?> payload, params string[] keys)
+    {
+        foreach (var key in keys)
+        {
+            if (!payload.TryGetValue(key, out var raw) || raw is null) continue;
+            if (raw is JsonElement el)
+            {
+                if (el.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined) continue;
+                return el.ValueKind == JsonValueKind.String ? el.GetString() : el.ToString();
+            }
+
+            var text = raw.ToString();
+            if (!string.IsNullOrWhiteSpace(text)) return text;
+        }
+
+        return null;
+    }
+
+    public static decimal? Dec(IDictionary<string, object?> payload, params string[] keys)
+    {
+        var text = Str(payload, keys);
+        return decimal.TryParse(text, out var value) ? value : null;
     }
 }
 
