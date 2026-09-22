@@ -121,7 +121,9 @@ public class FarmingService : IFarmingService
             AreaSquareMeters = req.AreaSquareMeters,
             EstablishedAt = NormalizeDate(req.EstablishedAt),
             Description = NormalizeOptional(req.Description),
-            AvatarUrl = NormalizeOptional(req.AvatarUrl)
+            AvatarUrl = NormalizeOptional(req.AvatarUrl),
+            Latitude = NormalizeCoord(req.Latitude, -90, 90, "Latitude"),
+            Longitude = NormalizeCoord(req.Longitude, -180, 180, "Longitude"),
         };
         ApplyStatus(area, status);
         await _uow.FarmingAreas.AddAsync(area, ct);
@@ -152,6 +154,10 @@ public class FarmingService : IFarmingService
             area.EstablishedAt = NormalizeDate(req.EstablishedAt);
         if (req.AvatarUrl is not null)
             area.AvatarUrl = NormalizeOptional(req.AvatarUrl);
+        if (req.Latitude is not null)
+            area.Latitude = NormalizeCoord(req.Latitude, -90, 90, "Latitude");
+        if (req.Longitude is not null)
+            area.Longitude = NormalizeCoord(req.Longitude, -180, 180, "Longitude");
 
         if (!string.IsNullOrWhiteSpace(req.Status))
             ApplyStatus(area, ParseFarmStatus(req.Status));
@@ -1524,7 +1530,7 @@ public class FarmingService : IFarmingService
             stats.BoxCount, stats.CrabCount, stats.HealthyBoxCount, stats.AlertBoxCount,
             a.MapImageUrl, a.MapX1, a.MapY1, a.MapX2, a.MapY2,
             stats.OccupiedBoxCount, stats.WatchBoxCount, stats.EmptyBoxCount,
-            a.UpdatedAt ?? a.CreatedAt);
+            a.UpdatedAt ?? a.CreatedAt, a.Latitude, a.Longitude);
     }
 
     /// <summary>Hộp "Theo dõi": status watch/maintenance nhưng chưa tới mức cảnh báo.</summary>
@@ -1792,6 +1798,14 @@ public class FarmingService : IFarmingService
 
     private static string? NormalizeOptional(string? value)
         => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+    private static double? NormalizeCoord(double? value, double min, double max, string name)
+    {
+        if (value is null) return null;
+        if (double.IsNaN(value.Value) || value < min || value > max)
+            throw AppException.BadRequest($"{name} must be between {min} and {max}.");
+        return value;
+    }
 
     private static DateTime? NormalizeDate(DateTime? value)
     {

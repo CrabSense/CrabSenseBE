@@ -211,7 +211,9 @@ public static class DevDbBootstrap
             ADD COLUMN IF NOT EXISTS "AreaSquareMeters" numeric(12,2) NULL,
             ADD COLUMN IF NOT EXISTS "EstablishedAt" timestamp with time zone NULL,
             ADD COLUMN IF NOT EXISTS "AvatarUrl" text NULL,
-            ADD COLUMN IF NOT EXISTS "Status" text NOT NULL DEFAULT 'Active';
+            ADD COLUMN IF NOT EXISTS "Status" text NOT NULL DEFAULT 'Active',
+            ADD COLUMN IF NOT EXISTS "Latitude" double precision NULL,
+            ADD COLUMN IF NOT EXISTS "Longitude" double precision NULL;
 
             CREATE UNIQUE INDEX IF NOT EXISTS "IX_FarmingAreas_Code"
             ON be."FarmingAreas" ("Code");

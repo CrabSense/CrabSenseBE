@@ -35,6 +35,11 @@ public class FarmingArea : BaseEntity
     public decimal? MapX2 { get; set; }
     public decimal? MapY2 { get; set; }
 
+    /// <summary>Vĩ độ GPS (WGS84). Null = chưa ghim bản đồ.</summary>
+    public double? Latitude { get; set; }
+    /// <summary>Kinh độ GPS (WGS84). Null = chưa ghim bản đồ.</summary>
+    public double? Longitude { get; set; }
+
     // Navigation
     public AppUser? Owner { get; set; }
     public ICollection<FarmingRow> Rows { get; set; } = new List<FarmingRow>();
