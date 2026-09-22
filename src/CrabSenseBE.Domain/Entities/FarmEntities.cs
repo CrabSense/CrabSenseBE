@@ -172,6 +172,8 @@ public class CrabLot : BaseEntity
     public string Status { get; set; } = "Pending";
     public int DeadOnArrival { get; set; }
     public string? Notes { get; set; }
+    /// <summary>JSON array URL ảnh lô nhập (Google Drive).</summary>
+    public string ImageUrlsJson { get; set; } = "[]";
 
     public ICollection<Crab> Crabs { get; set; } = new List<Crab>();
 }

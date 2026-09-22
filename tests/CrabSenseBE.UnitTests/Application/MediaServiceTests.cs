@@ -20,7 +20,7 @@ public class MediaServiceTests
     {
         _storage.SetupGet(s => s.ProviderName).Returns("GoogleDrive");
         _storage.Setup(s => s.UploadAsync(
-                It.IsAny<Stream>(), It.IsAny<string>(), It.IsAny<string>(), "image", It.IsAny<CancellationToken>()))
+                It.IsAny<Stream>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new MediaUploadResult("file123", "https://drive.google.com/view", null, null, 1024));
         _storage.Setup(s => s.EnsureShareLinkAsync("file123", It.IsAny<CancellationToken>()))
             .ReturnsAsync("https://drive.google.com/file/d/file123/view?usp=sharing");
@@ -31,10 +31,15 @@ public class MediaServiceTests
         _uow.Setup(u => u.MediaAssets).Returns(repo.Object);
         _uow.Setup(u => u.SaveChangesAsync(It.IsAny<CancellationToken>())).ReturnsAsync(1);
 
+        var boxId = Guid.NewGuid();
+        var boxes = new Mock<IRepository<Box>>();
+        boxes.Setup(r => r.GetByIdAsync(boxId, It.IsAny<CancellationToken>())).ReturnsAsync((Box?)null);
+        _uow.Setup(u => u.Boxes).Returns(boxes.Object);
+
         await using var stream = new MemoryStream(new byte[] { 1, 2, 3 });
         var result = await Create().UploadAsync(
             stream, "box.jpg", "image/jpeg",
-            new MediaUploadMeta("image", Guid.NewGuid(), null, null, "box", null, null, true),
+            new MediaUploadMeta("image", boxId, null, null, "box", null, null, true),
             Guid.NewGuid());
 
         result.Success.Should().BeTrue();

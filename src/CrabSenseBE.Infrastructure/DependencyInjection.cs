@@ -36,7 +36,7 @@ public static class DependencyInjection
         // Storage (MinIO) — HDF5 edge
         services.AddSingleton<IStorageService, MinioStorageService>();
 
-        // Media (ảnh / video / log) — S3 / Google Drive / Local
+        // Media (ảnh / video / log) — Google Drive / S3 / Local
         services.AddSingleton<S3MediaStorageService>();
         var mediaProvider = S3Settings.MediaProvider(config);
         if (mediaProvider.Equals("S3", StringComparison.OrdinalIgnoreCase)
@@ -47,10 +47,14 @@ public static class DependencyInjection
         else
             services.AddSingleton<IMediaStorageService, LocalMediaStorageService>();
 
-        // Crab photos: S3 when bucket is set (AwsS3:Bucket or S3_BUCKET)
+        // Ảnh công khai: cùng provider với MediaStorage (Drive khi Provider=GoogleDrive).
         services.AddSingleton<IPublicImageStorage>(sp =>
         {
-            if (!string.IsNullOrWhiteSpace(S3Settings.Bucket(config)))
+            if (mediaProvider.Equals("GoogleDrive", StringComparison.OrdinalIgnoreCase))
+                return new MediaStoragePublicImageAdapter(sp.GetRequiredService<IMediaStorageService>());
+            if (mediaProvider.Equals("S3", StringComparison.OrdinalIgnoreCase)
+                || mediaProvider.Equals("AwsS3", StringComparison.OrdinalIgnoreCase)
+                || !string.IsNullOrWhiteSpace(S3Settings.Bucket(config)))
                 return sp.GetRequiredService<S3MediaStorageService>();
             return new MediaStoragePublicImageAdapter(sp.GetRequiredService<IMediaStorageService>());
         });

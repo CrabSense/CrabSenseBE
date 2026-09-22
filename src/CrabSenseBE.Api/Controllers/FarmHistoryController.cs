@@ -3,6 +3,10 @@ using CrabSenseBE.Application.Interfaces;
 using CrabSenseBE.Domain.Enums;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using System.IdentityModel.Tokens.Jwt;
+using System.Security.Claims;
+
+namespace CrabSenseBE.Api.Controllers;
 
 namespace CrabSenseBE.Api.Controllers;
 
@@ -58,6 +62,27 @@ public class FarmHistoryController : ControllerBase
     public async Task<IActionResult> CreateMolting(
         Guid crabId, [FromBody] CreateMoltingRecordRequest req, CancellationToken ct)
         => Ok(await _service.CreateMoltingAsync(req with { CrabId = crabId }, ct));
+
+    /// <summary>[CREATE] Upload ảnh lột xác lên Drive — {khu}/{dãy}/{hộp}/{cua}/LotXac/{yyyyMMdd}/. URL ghi PhotoUrlsJson.</summary>
+    [HttpPost("api/moltings/{id:guid}/images")]
+    [Authorize(Roles = AppRoles.FarmWrite)]
+    [RequestSizeLimit(30_000_000)]
+    [Consumes("multipart/form-data")]
+    public async Task<IActionResult> UploadMoltingImages(
+        Guid id,
+        [FromForm] List<IFormFile>? files,
+        IFormFile? file,
+        CancellationToken ct = default)
+        => Ok(await _service.UploadMoltingImagesAsync(id, ToImageFiles(files, file), TryGetUserId(), ct));
+
+    /// <summary>[READ] Stream 1 ảnh lột xác (Drive). Desktop dùng kèm Bearer.</summary>
+    [HttpGet("api/moltings/{id:guid}/photos/{index:int}")]
+    public async Task<IActionResult> GetMoltingPhoto(Guid id, int index, CancellationToken ct)
+    {
+        var photo = await _service.GetMoltingPhotoAsync(id, index, ct);
+        if (photo is null) return NotFound();
+        return File(photo.Data, photo.ContentType);
+    }
 
     /// <summary>[UPDATE] Fix a molting record (mistake correction)</summary>
     [HttpPut("api/moltings/{id:guid}")]
@@ -128,4 +153,25 @@ public class FarmHistoryController : ControllerBase
     public async Task<IActionResult> BoxFarmingTimeline(
         Guid boxId, [FromQuery] DateTime? from = null, [FromQuery] DateTime? to = null, CancellationToken ct = default)
         => Ok(await _service.GetBoxFarmingTimelineAsync(boxId, from, to, ct));
+
+    private static IReadOnlyList<CrabImageFile> ToImageFiles(List<IFormFile>? files, IFormFile? file)
+    {
+        var list = new List<IFormFile>();
+        if (files is { Count: > 0 })
+            list.AddRange(files.Where(f => f is { Length: > 0 }));
+        if (file is { Length: > 0 } && list.All(f => f != file))
+            list.Add(file);
+        return list
+            .Select(f => new CrabImageFile(
+                f.OpenReadStream(), f.FileName, f.ContentType ?? "application/octet-stream"))
+            .ToList();
+    }
+
+    private Guid? TryGetUserId()
+    {
+        var raw = User.FindFirstValue(JwtRegisteredClaimNames.Sub)
+            ?? User.FindFirstValue(ClaimTypes.NameIdentifier)
+            ?? User.FindFirstValue("sub");
+        return raw is not null && Guid.TryParse(raw, out var id) && id != Guid.Empty ? id : null;
+    }
 }

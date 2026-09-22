@@ -26,6 +26,12 @@ public class ExceptionMiddleware
             _logger.LogWarning("AppException: {Message}", ex.Message);
             await WriteResponse(context, ex.StatusCode, ex.Message);
         }
+        catch (Google.GoogleApiException ex)
+        {
+            var mapped = CrabSenseBE.Infrastructure.Services.GoogleDriveMediaStorageService.TranslateDriveError(ex);
+            _logger.LogWarning(ex, "Google Drive API error");
+            await WriteResponse(context, mapped.StatusCode, mapped.Message);
+        }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Unhandled exception");

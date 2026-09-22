@@ -1,5 +1,6 @@
 using CrabSenseBE.Application.Common;
 using CrabSenseBE.Application.DTOs.Farm;
+using CrabSenseBE.Application.DTOs.Media;
 using CrabSenseBE.Application.Interfaces;
 using CrabSenseBE.Domain.Entities;
 using CrabSenseBE.Domain.Enums;
@@ -13,8 +14,13 @@ namespace CrabSenseBE.Application.Services;
 public class FarmHistoryService : IFarmHistoryService
 {
     private readonly IUnitOfWork _uow;
+    private readonly IPublicImageStorage _images;
 
-    public FarmHistoryService(IUnitOfWork uow) => _uow = uow;
+    public FarmHistoryService(IUnitOfWork uow, IPublicImageStorage images)
+    {
+        _uow = uow;
+        _images = images;
+    }
 
     // ─── Allocation ─────────────────────────────────────────────────────────
 
@@ -207,7 +213,8 @@ public class FarmHistoryService : IFarmHistoryService
             WeightAfterGram = req.WeightAfterGram,
             Result = result,
             Source = source,
-            Notes = req.Notes
+            Notes = req.Notes,
+            PhotoUrlsJson = "[]"
         };
         await _uow.MoltingRecords.AddAsync(record, ct);
 
@@ -656,8 +663,96 @@ public class FarmHistoryService : IFarmHistoryService
     private static CrabBoxAllocationDto MapAlloc(CrabBoxAllocation a) =>
         new(a.Id, a.CrabId, a.BoxId, a.StartTime, a.EndTime, a.Notes);
 
+    public async Task<ApiResponse<IReadOnlyList<CrabImageDto>>> UploadMoltingImagesAsync(
+        Guid moltingId,
+        IReadOnlyList<CrabImageFile> files,
+        Guid? uploadedBy,
+        CancellationToken ct = default)
+    {
+        ImageUploadRules.ValidateBatch(files);
+        var record = await _uow.MoltingRecords.GetByIdAsync(moltingId, ct)
+            ?? throw AppException.NotFound("MoltingRecord");
+
+        var existing = JsonStringList.Parse(record.PhotoUrlsJson);
+        if (existing.Count + files.Count > ImageUploadRules.MaxUrls)
+            throw AppException.BadRequest($"A molting record can have at most {ImageUploadRules.MaxUrls} images.");
+
+        var crabPath = await MediaFolderCodeResolver.ResolvePathAsync(_uow, "crab", record.CrabId, ct);
+        var folder = MediaFolderPath.Join(
+            crabPath, MediaFolderPath.MoltFolder, record.MoltTime.ToString("yyyyMMdd"));
+
+        var results = new List<CrabImageDto>(files.Count);
+        var urls = new List<string>(files.Count);
+
+        foreach (var file in files)
+        {
+            var uploaded = await _images.UploadAsync(
+                file.Data, file.FileName, file.ContentType, folder, ct);
+            var url = MediaPhotoResolver.PublicUrl(uploaded);
+
+            await _uow.MediaAssets.AddAsync(new MediaAsset
+            {
+                Category = "image",
+                FileName = file.FileName,
+                ContentType = string.IsNullOrWhiteSpace(file.ContentType) ? "image/jpeg" : file.ContentType,
+                SizeBytes = uploaded.SizeBytes,
+                Provider = _images.ProviderName,
+                StorageKey = uploaded.StorageKey,
+                WebViewLink = uploaded.WebViewLink,
+                WebContentLink = uploaded.WebContentLink,
+                ShareLink = url,
+                IsShared = true,
+                CrabId = record.CrabId,
+                RelatedEntityType = "MoltingRecord",
+                RelatedEntityId = record.Id,
+                Notes = "molting-image",
+                UploadedBy = uploadedBy
+            }, ct);
+
+            results.Add(new CrabImageDto(url, uploaded.StorageKey, file.FileName, _images.ProviderName, uploaded.SizeBytes));
+            urls.Add(url);
+        }
+
+        record.PhotoUrlsJson = JsonStringList.Serialize(
+            JsonStringList.Merge(record.PhotoUrlsJson, urls, ImageUploadRules.MaxUrls), ImageUploadRules.MaxUrls);
+        _uow.MoltingRecords.Update(record);
+        await _uow.SaveChangesAsync(ct);
+        return ApiResponse<IReadOnlyList<CrabImageDto>>.Ok(results, "Uploaded.");
+    }
+
+    public async Task<CrabImageContent?> GetMoltingPhotoAsync(Guid moltingId, int index, CancellationToken ct = default)
+    {
+        if (index < 0) return null;
+        var record = await _uow.MoltingRecords.GetByIdAsync(moltingId, ct);
+        if (record is null) return null;
+
+        var urls = JsonStringList.Parse(record.PhotoUrlsJson).ToList();
+        var assets = (await _uow.MediaAssets.FindAsync(
+                m => m.RelatedEntityId == moltingId && m.RelatedEntityType == "MoltingRecord",
+                ct))
+            .OrderBy(m => m.CreatedAt)
+            .ToList();
+
+        foreach (var asset in assets)
+        {
+            var link = asset.ShareLink ?? asset.WebContentLink ?? asset.WebViewLink;
+            if (!string.IsNullOrWhiteSpace(link) && !urls.Contains(link, StringComparer.OrdinalIgnoreCase))
+                urls.Add(link);
+        }
+
+        if (index >= urls.Count) return null;
+        var url = urls[index];
+        var assetMatch = assets.FirstOrDefault(a =>
+            string.Equals(a.ShareLink, url, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(a.WebContentLink, url, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(a.WebViewLink, url, StringComparison.OrdinalIgnoreCase));
+
+        return await MediaPhotoResolver.OpenAsync(_images, url, assetMatch, ct);
+    }
+
     private static MoltingRecordDto MapMolt(MoltingRecord m) =>
-        new(m.Id, m.CrabId, m.BoxId, m.MoltTime, m.WeightAfterGram, m.Result, m.Source, m.Notes);
+        new(m.Id, m.CrabId, m.BoxId, m.MoltTime, m.WeightAfterGram, m.Result, m.Source, m.Notes,
+            JsonStringList.Parse(m.PhotoUrlsJson));
 
     private static BoxStatusHistoryDto MapStatusHist(BoxStatusHistory h) =>
         new(h.Id, h.BoxId, h.OldStatus, h.NewStatus,

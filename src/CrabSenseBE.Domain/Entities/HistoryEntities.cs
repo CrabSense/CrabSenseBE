@@ -42,6 +42,9 @@ public class MoltingRecord : BaseEntity
 
     public string? Notes { get; set; }
 
+    /// <summary>JSON array URL ảnh lột xác trên Drive.</summary>
+    public string PhotoUrlsJson { get; set; } = "[]";
+
     public Crab? Crab { get; set; }
     public Box? Box { get; set; }
 }

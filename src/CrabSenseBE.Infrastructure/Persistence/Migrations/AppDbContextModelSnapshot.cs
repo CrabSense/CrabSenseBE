@@ -629,6 +629,10 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.Property<int>("DeadOnArrival")
                         .HasColumnType("integer");
 
+                    b.Property<string>("ImageUrlsJson")
+                        .IsRequired()
+                        .HasColumnType("text");
+
                     b.Property<DateTime>("ImportDate")
                         .HasColumnType("timestamp with time zone");
 
@@ -1593,6 +1597,10 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                         .HasColumnType("timestamp with time zone");
 
                     b.Property<string>("Notes")
+                        .HasColumnType("text");
+
+                    b.Property<string>("PhotoUrlsJson")
+                        .IsRequired()
                         .HasColumnType("text");
 
                     b.Property<string>("Result")

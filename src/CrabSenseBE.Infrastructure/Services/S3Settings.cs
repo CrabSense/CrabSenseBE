@@ -35,7 +35,7 @@ internal static class S3Settings
 
     public static string MediaProvider(IConfiguration config)
     {
-        var value = First(config, "UPLOAD_STORAGE", "MediaStorage:Provider") ?? "Local";
+        var value = First(config, "UPLOAD_STORAGE", "MEDIA_STORAGE_PROVIDER", "MediaStorage:Provider") ?? "Local";
         return value.Equals("s3", StringComparison.OrdinalIgnoreCase) ? "S3" : value;
     }
 }
