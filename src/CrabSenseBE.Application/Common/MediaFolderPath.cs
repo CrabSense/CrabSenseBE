@@ -18,6 +18,7 @@ public static class MediaFolderPath
     public const string WaterFolder = "Nuoc";
     public const string UsersRoot = "Users";
     public const string MoltFolder = "LotXac";
+    public const string FeedingFolder = "ChoAn";
 
     public static string Join(params string?[] segments)
     {
@@ -58,6 +59,7 @@ public static class MediaFolderPath
         return key switch
         {
             "crab" or "crabs" => "Crabs",
+            "crabfeeding" or "crabfeedings" or "feedingphoto" or "feedingphotos" => "CrabFeedings",
             "crablot" or "crablots" or "lot" or "lots" or "inbound" => InboundRoot,
             "farmingarea" or "farmingareas" or "farm" or "farms" or "area" or "areas" => "FarmingAreas",
             "farmingrow" or "farmingrows" or "row" or "rows" => "FarmingRows",
