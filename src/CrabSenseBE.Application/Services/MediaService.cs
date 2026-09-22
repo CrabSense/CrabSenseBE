@@ -39,9 +39,15 @@ public class MediaService : IMediaService
         if (string.IsNullOrWhiteSpace(fileName))
             throw AppException.BadRequest("fileName is required.");
 
-        // Upload lên Drive (hoặc local) — folder share dùng chung team
+        var entityType = meta.RelatedEntityType
+            ?? (meta.CrabId is Guid ? "crab"
+                : meta.BoxId is Guid ? "box"
+                : meta.DeviceId is Guid ? "device"
+                : meta.Category);
+        var entityId = meta.RelatedEntityId ?? meta.CrabId ?? meta.BoxId ?? meta.DeviceId;
+        var folder = await MediaFolderCodeResolver.ResolvePathAsync(_uow, entityType, entityId, ct);
         var uploaded = await _storage.UploadAsync(
-            fileStream, fileName, contentType, category, ct);
+            fileStream, fileName, contentType, folder, ct);
 
         string? shareLink = uploaded.ShareLink;
         var isShared = !string.IsNullOrWhiteSpace(shareLink);

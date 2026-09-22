@@ -1,5 +1,6 @@
 using CrabSenseBE.Application.Common;
 using CrabSenseBE.Application.DTOs.Farm;
+using CrabSenseBE.Application.Interfaces;
 using CrabSenseBE.Application.Services;
 using CrabSenseBE.Domain.Entities;
 using CrabSenseBE.Domain.Interfaces;
@@ -13,7 +14,8 @@ namespace CrabSenseBE.UnitTests.Application;
 public class FarmHistoryServiceTests
 {
     private readonly Mock<IUnitOfWork> _uow = new();
-    private FarmHistoryService Create() => new(_uow.Object);
+    private readonly Mock<IPublicImageStorage> _images = new();
+    private FarmHistoryService Create() => new(_uow.Object, _images.Object);
 
     [Fact]
     public async Task AllocateCrab_MovesCrabAndOpensAllocation()
@@ -205,6 +207,57 @@ public class FarmHistoryServiceTests
 
         result.Success.Should().BeTrue();
         crab.Condition.Should().Be(CrabCondition.Softshell);
+    }
+
+    [Fact]
+    public async Task UploadMoltingImages_StoresUrlsUnderLotXacFolder()
+    {
+        var moltId = Guid.NewGuid();
+        var crabId = Guid.NewGuid();
+        var molt = new MoltingRecord
+        {
+            Id = moltId,
+            CrabId = crabId,
+            MoltTime = new DateTime(2026, 9, 22, 0, 0, 0, DateTimeKind.Utc),
+            PhotoUrlsJson = "[]"
+        };
+        var crab = new Crab { Id = crabId, Code = "CRAB-0001" };
+
+        var moltRepo = new Mock<IRepository<MoltingRecord>>();
+        moltRepo.Setup(r => r.GetByIdAsync(moltId, It.IsAny<CancellationToken>())).ReturnsAsync(molt);
+        moltRepo.Setup(r => r.Update(It.IsAny<MoltingRecord>()));
+
+        var crabRepo = new Mock<IRepository<Crab>>();
+        crabRepo.Setup(r => r.GetByIdAsync(crabId, It.IsAny<CancellationToken>())).ReturnsAsync(crab);
+
+        var mediaRepo = new Mock<IRepository<MediaAsset>>();
+        mediaRepo.Setup(r => r.AddAsync(It.IsAny<MediaAsset>(), It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+
+        _uow.Setup(u => u.MoltingRecords).Returns(moltRepo.Object);
+        _uow.Setup(u => u.Crabs).Returns(crabRepo.Object);
+        _uow.Setup(u => u.MediaAssets).Returns(mediaRepo.Object);
+        _uow.Setup(u => u.SaveChangesAsync(It.IsAny<CancellationToken>())).ReturnsAsync(1);
+
+        _images.SetupGet(s => s.ProviderName).Returns("GoogleDrive");
+        string? folder = null;
+        _images.Setup(s => s.UploadAsync(
+                It.IsAny<Stream>(), "molt.jpg", "image/jpeg", It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .Callback<Stream, string, string, string, CancellationToken>((_, _, _, f, _) => folder = f)
+            .ReturnsAsync(new MediaUploadResult("k", "https://drive/view", "https://drive/content", "https://drive/share", 4));
+
+        await using var stream = new MemoryStream(new byte[] { 1, 2, 3 });
+        var result = await Create().UploadMoltingImagesAsync(
+            moltId,
+            new[] { new CrabImageFile(stream, "molt.jpg", "image/jpeg") },
+            Guid.NewGuid());
+
+        result.Success.Should().BeTrue();
+        result.Data.Should().HaveCount(1);
+        folder.Should().Be("NhapHang/_pending/CRAB-0001/LotXac/20260922");
+        JsonStringList.Parse(molt.PhotoUrlsJson).Should().Equal("https://drive/share");
+        mediaRepo.Verify(r => r.AddAsync(It.Is<MediaAsset>(a =>
+            a.RelatedEntityType == "MoltingRecord" && a.RelatedEntityId == moltId), It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]

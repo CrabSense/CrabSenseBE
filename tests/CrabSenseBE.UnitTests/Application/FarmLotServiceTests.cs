@@ -1,5 +1,6 @@
 using CrabSenseBE.Application.Common;
 using CrabSenseBE.Application.DTOs.Farm;
+using CrabSenseBE.Application.Interfaces;
 using CrabSenseBE.Application.Services;
 using CrabSenseBE.Domain.Entities;
 using CrabSenseBE.Domain.Interfaces;
@@ -11,7 +12,8 @@ namespace CrabSenseBE.UnitTests.Application;
 public class FarmLotServiceTests
 {
     private readonly Mock<IUnitOfWork> _uow = new();
-    private FarmLotService Create() => new(_uow.Object);
+    private readonly Mock<IPublicImageStorage> _images = new();
+    private FarmLotService Create() => new(_uow.Object, _images.Object);
 
     [Fact]
     public async Task CreateLot_StoresDeclaredQuantity_AndComputesAvgAndCost()
@@ -132,5 +134,44 @@ public class FarmLotServiceTests
                 Quantity: 10,
                 LotCode: "LOT-001")));
         ex.StatusCode.Should().Be(409);
+    }
+
+    [Fact]
+    public async Task UploadImages_StoresDriveUrlOnLot()
+    {
+        var lotId = Guid.NewGuid();
+        var lot = new CrabLot { Id = lotId, LotCode = "L1", Name = "Lô", ImageUrlsJson = "[]" };
+        var lots = new Mock<IRepository<CrabLot>>();
+        lots.Setup(r => r.GetByIdAsync(lotId, It.IsAny<CancellationToken>())).ReturnsAsync(lot);
+        lots.Setup(r => r.Update(It.IsAny<CrabLot>()));
+        var media = new Mock<IRepository<MediaAsset>>();
+        media.Setup(r => r.AddAsync(It.IsAny<MediaAsset>(), It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+        var crabs = new Mock<IRepository<Crab>>();
+        crabs.Setup(r => r.GetAllAsync(It.IsAny<CancellationToken>())).ReturnsAsync(Array.Empty<Crab>());
+        _uow.Setup(u => u.CrabLots).Returns(lots.Object);
+        _uow.Setup(u => u.MediaAssets).Returns(media.Object);
+        _uow.Setup(u => u.Crabs).Returns(crabs.Object);
+        _uow.Setup(u => u.SaveChangesAsync(It.IsAny<CancellationToken>())).ReturnsAsync(1);
+        _images.SetupGet(s => s.ProviderName).Returns("GoogleDrive");
+        _images.Setup(s => s.UploadAsync(
+                It.IsAny<Stream>(), "a.jpg", "image/jpeg", "NhapHang/L1", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new MediaUploadResult(
+                "drive-file",
+                "https://drive.google.com/file/d/drive-file/view",
+                "https://drive.google.com/uc?export=view&id=drive-file",
+                "https://drive.google.com/uc?export=view&id=drive-file",
+                12));
+
+        await using var stream = new MemoryStream(new byte[] { 1, 2, 3 });
+        var result = await Create().UploadImagesAsync(
+            lotId,
+            new[] { new CrabImageFile(stream, "a.jpg", "image/jpeg") },
+            Guid.NewGuid());
+
+        result.Success.Should().BeTrue();
+        result.Data.Should().HaveCount(1);
+        JsonStringList.Parse(lot.ImageUrlsJson).Should().ContainSingle()
+            .Which.Should().Contain("drive-file");
     }
 }

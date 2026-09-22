@@ -1,5 +1,6 @@
 using CrabSenseBE.Application.Common;
 using CrabSenseBE.Application.DTOs.Farm;
+using CrabSenseBE.Application.DTOs.Media;
 using CrabSenseBE.Application.Interfaces;
 using CrabSenseBE.Domain.Entities;
 using CrabSenseBE.Domain.Interfaces;
@@ -10,8 +11,13 @@ namespace CrabSenseBE.Application.Services;
 public class FarmLotService : IFarmLotService
 {
     private readonly IUnitOfWork _uow;
+    private readonly IPublicImageStorage _images;
 
-    public FarmLotService(IUnitOfWork uow) => _uow = uow;
+    public FarmLotService(IUnitOfWork uow, IPublicImageStorage images)
+    {
+        _uow = uow;
+        _images = images;
+    }
 
     public async Task<ApiResponse<IEnumerable<CrabLotDto>>> GetLotsAsync(CancellationToken ct = default)
     {
@@ -138,6 +144,89 @@ public class FarmLotService : IFarmLotService
         return ApiResponse.Ok($"Crab lot '{lot.LotCode}' deleted.");
     }
 
+    public async Task<ApiResponse<IReadOnlyList<CrabImageDto>>> UploadImagesAsync(
+        Guid lotId,
+        IReadOnlyList<CrabImageFile> files,
+        Guid? uploadedBy,
+        CancellationToken ct = default)
+    {
+        ImageUploadRules.ValidateBatch(files);
+        var lot = await _uow.CrabLots.GetByIdAsync(lotId, ct)
+            ?? throw AppException.NotFound("CrabLot");
+
+        var existing = JsonStringList.Parse(lot.ImageUrlsJson);
+        if (existing.Count + files.Count > ImageUploadRules.MaxUrls)
+            throw AppException.BadRequest($"A crab lot can have at most {ImageUploadRules.MaxUrls} images.");
+
+        var folder = MediaFolderPath.Join(MediaFolderPath.InboundRoot, lot.LotCode);
+        var results = new List<CrabImageDto>(files.Count);
+        var urls = new List<string>(files.Count);
+
+        foreach (var file in files)
+        {
+            var uploaded = await _images.UploadAsync(
+                file.Data, file.FileName, file.ContentType, folder, ct);
+            var url = MediaPhotoResolver.PublicUrl(uploaded);
+
+            await _uow.MediaAssets.AddAsync(new MediaAsset
+            {
+                Category = "image",
+                FileName = file.FileName,
+                ContentType = string.IsNullOrWhiteSpace(file.ContentType) ? "image/jpeg" : file.ContentType,
+                SizeBytes = uploaded.SizeBytes,
+                Provider = _images.ProviderName,
+                StorageKey = uploaded.StorageKey,
+                WebViewLink = uploaded.WebViewLink,
+                WebContentLink = uploaded.WebContentLink,
+                ShareLink = url,
+                IsShared = true,
+                RelatedEntityType = "CrabLot",
+                RelatedEntityId = lot.Id,
+                Notes = "crab-lot-image",
+                UploadedBy = uploadedBy
+            }, ct);
+
+            results.Add(new CrabImageDto(url, uploaded.StorageKey, file.FileName, _images.ProviderName, uploaded.SizeBytes));
+            urls.Add(url);
+        }
+
+        lot.ImageUrlsJson = JsonStringList.Serialize(
+            JsonStringList.Merge(lot.ImageUrlsJson, urls, ImageUploadRules.MaxUrls), ImageUploadRules.MaxUrls);
+        _uow.CrabLots.Update(lot);
+        await _uow.SaveChangesAsync(ct);
+        return ApiResponse<IReadOnlyList<CrabImageDto>>.Ok(results, "Uploaded.");
+    }
+
+    public async Task<CrabImageContent?> GetPhotoAsync(Guid lotId, int index, CancellationToken ct = default)
+    {
+        if (index < 0) return null;
+        var lot = await _uow.CrabLots.GetByIdAsync(lotId, ct);
+        if (lot is null) return null;
+
+        var urls = JsonStringList.Parse(lot.ImageUrlsJson).ToList();
+        var assets = (await _uow.MediaAssets.FindAsync(
+                m => m.RelatedEntityId == lotId && m.RelatedEntityType == "CrabLot",
+                ct))
+            .OrderBy(m => m.CreatedAt)
+            .ToList();
+
+        foreach (var asset in assets)
+        {
+            var link = asset.ShareLink ?? asset.WebContentLink ?? asset.WebViewLink;
+            if (!string.IsNullOrWhiteSpace(link) && !urls.Contains(link, StringComparer.OrdinalIgnoreCase))
+                urls.Add(link);
+        }
+
+        if (index >= urls.Count) return null;
+        var url = urls[index];
+        var assetMatch = assets.FirstOrDefault(a =>
+            string.Equals(a.ShareLink, url, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(a.WebContentLink, url, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(a.WebViewLink, url, StringComparison.OrdinalIgnoreCase));
+
+        return await MediaPhotoResolver.OpenAsync(_images, url, assetMatch, ct);
+    }
+
     private async Task<Dictionary<Guid, int>> LoadPlacedCountsAsync(CancellationToken ct)
     {
         var crabs = await _uow.Crabs.GetAllAsync(ct);
@@ -167,7 +256,8 @@ public class FarmLotService : IFarmLotService
             string.IsNullOrWhiteSpace(l.Condition) ? "Good" : l.Condition,
             l.DeadOnArrival,
             l.Notes,
-            ResolveWorkflowStatus(l.Status, count, l.Quantity));
+            ResolveWorkflowStatus(l.Status, count, l.Quantity),
+            JsonStringList.Parse(l.ImageUrlsJson));
     }
 
     private static void RecalcDerived(CrabLot lot)

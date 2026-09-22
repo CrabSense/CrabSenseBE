@@ -31,7 +31,7 @@ public class CrabImageServiceTests
     public async Task Upload_WithoutCrab_ReturnsS3Urls()
     {
         _storage.Setup(s => s.UploadAsync(
-                It.IsAny<Stream>(), "a.jpg", "image/jpeg", "crabs", It.IsAny<CancellationToken>()))
+                It.IsAny<Stream>(), "a.jpg", "image/jpeg", "NhapHang/_pending", It.IsAny<CancellationToken>()))
             .ReturnsAsync(new MediaUploadResult("media/crabs/a.jpg",
                 "https://bucket.s3.amazonaws.com/a.jpg",
                 "https://bucket.s3.amazonaws.com/a.jpg",
@@ -55,8 +55,11 @@ public class CrabImageServiceTests
         var crabId = Guid.NewGuid();
         var crab = new Crab { Id = crabId, ImageUrlsJson = """["https://old.jpg"]""" };
         _crabs.Setup(r => r.GetByIdAsync(crabId, It.IsAny<CancellationToken>())).ReturnsAsync(crab);
+        var lots = new Mock<IRepository<CrabLot>>();
+        _uow.Setup(u => u.CrabLots).Returns(lots.Object);
+        var folder = $"NhapHang/_pending/{crabId:D}";
         _storage.Setup(s => s.UploadAsync(
-                It.IsAny<Stream>(), "b.png", "image/png", "crabs", It.IsAny<CancellationToken>()))
+                It.IsAny<Stream>(), "b.png", "image/png", folder, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new MediaUploadResult("k", "https://new.png", "https://new.png", "https://new.png", 4));
 
         await using var stream = new MemoryStream(new byte[] { 1 });

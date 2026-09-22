@@ -21,7 +21,8 @@ public record CrabLotDto(
     string Condition,
     int DeadOnArrival,
     string? Notes,
-    string Status);
+    string Status,
+    IReadOnlyList<string> ImageUrls);
 
 public record NextCrabLotCodeDto(string Code);
 
@@ -103,7 +104,8 @@ public record UpdateAllocationRequest(
 // --- Molting history ---
 public record MoltingRecordDto(
     Guid Id, Guid CrabId, Guid? BoxId, DateTime MoltTime,
-    decimal? WeightAfterGram, string Result, string Source, string? Notes);
+    decimal? WeightAfterGram, string Result, string Source, string? Notes,
+    IReadOnlyList<string> PhotoUrls);
 
 public record CreateMoltingRecordRequest(
     Guid CrabId, Guid? BoxId, DateTime? MoltTime,

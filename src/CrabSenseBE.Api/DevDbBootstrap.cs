@@ -409,6 +409,9 @@ public static class DevDbBootstrap
             CREATE INDEX IF NOT EXISTS "IX_CrabAiAnalyses_CrabId" ON be."CrabAiAnalyses" ("CrabId");
             CREATE INDEX IF NOT EXISTS "IX_CrabHarvestHistories_CrabId" ON be."CrabHarvestHistories" ("CrabId");
             CREATE INDEX IF NOT EXISTS "IX_QrCodes_CrabId" ON be."QrCodes" ("CrabId");
+
+            ALTER TABLE be."MoltingRecords"
+            ADD COLUMN IF NOT EXISTS "PhotoUrlsJson" text NOT NULL DEFAULT '[]';
             """).ConfigureAwait(false);
 
         try
@@ -489,7 +492,8 @@ public static class DevDbBootstrap
             ADD COLUMN IF NOT EXISTS "TotalCostVnd" numeric(14,2) NULL,
             ADD COLUMN IF NOT EXISTS "Condition" character varying(16) NOT NULL DEFAULT 'Good',
             ADD COLUMN IF NOT EXISTS "DeadOnArrival" integer NOT NULL DEFAULT 0,
-            ADD COLUMN IF NOT EXISTS "Status" character varying(16) NOT NULL DEFAULT 'Pending';
+            ADD COLUMN IF NOT EXISTS "Status" character varying(16) NOT NULL DEFAULT 'Pending',
+            ADD COLUMN IF NOT EXISTS "ImageUrlsJson" text NOT NULL DEFAULT '[]';
             """).ConfigureAwait(false);
 
         await db.Database.ExecuteSqlRawAsync(

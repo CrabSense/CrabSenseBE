@@ -233,7 +233,10 @@ public class FarmingService : IFarmingService
         if (areaId is Guid id && id != Guid.Empty)
             area = await RequireAreaAsync(id, requireActive: false, ct);
 
-        var uploaded = await _images.UploadAsync(data, fileName, contentType, "farms", ct);
+        var folder = area is null
+            ? MediaFolderPath.Join(MediaFolderPath.PendingSegment, MediaFolderPath.AreasLeaf)
+            : MediaFolderPath.Join(area.Code, MediaFolderPath.AreasLeaf);
+        var uploaded = await _images.UploadAsync(data, fileName, contentType, folder, ct);
         var url = uploaded.ShareLink ?? uploaded.WebContentLink ?? uploaded.WebViewLink
             ?? throw AppException.BadRequest("Upload succeeded but no public URL was returned.");
 

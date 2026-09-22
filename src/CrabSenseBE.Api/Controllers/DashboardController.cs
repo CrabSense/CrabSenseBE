@@ -133,6 +133,8 @@ public class OperationsController : ControllerBase
         IFormFile file,
         [FromForm] Guid? boxId = null,
         [FromForm] Guid? operationId = null,
+        [FromForm] string? relatedEntityType = null,
+        [FromForm] Guid? relatedEntityId = null,
         [FromServices] IMediaService media = null!,
         CancellationToken ct = default)
     {
@@ -144,13 +146,15 @@ public class OperationsController : ControllerBase
         _ = Guid.TryParse(userIdClaim, out var userId);
 
         await using var stream = file.OpenReadStream();
+        var entityType = string.IsNullOrWhiteSpace(relatedEntityType) ? "FarmOperation" : relatedEntityType;
+        var entityId = relatedEntityId ?? operationId;
         var meta = new CrabSenseBE.Application.DTOs.Media.MediaUploadMeta(
             Category: "image",
             BoxId: boxId,
             CrabId: null,
             DeviceId: null,
-            RelatedEntityType: "FarmOperation",
-            RelatedEntityId: operationId,
+            RelatedEntityType: entityType,
+            RelatedEntityId: entityId,
             Notes: "operation-photo",
             SharePublic: true);
 
