@@ -8,8 +8,6 @@ using System.Security.Claims;
 
 namespace CrabSenseBE.Api.Controllers;
 
-namespace CrabSenseBE.Api.Controllers;
-
 [ApiController]
 [Authorize]
 [Tags("04b. History — Allocation & Molting")]
