@@ -42,7 +42,9 @@ public record FarmingAreaDto(
     /// <summary>Hộp trống (không có cua).</summary>
     int EmptyBoxCount = 0,
     /// <summary>Cập nhật cuối của bản ghi khu (UpdatedAt ?? CreatedAt).</summary>
-    DateTime? UpdatedAt = null);
+    DateTime? UpdatedAt = null,
+    double? Latitude = null,
+    double? Longitude = null);
 
 /// <summary>
 /// Cập nhật vị trí khu trên ảnh bản đồ trại. Tất cả tỉ lệ 0–1 theo chiều rộng/cao ảnh.
@@ -71,7 +73,9 @@ public record CreateFarmingAreaRequest(
     string? Address = null,
     string? Region = null,
     DateTime? EstablishedAt = null,
-    string? AvatarUrl = null);
+    string? AvatarUrl = null,
+    double? Latitude = null,
+    double? Longitude = null);
 
 /// <summary>Sửa khu. Code không đổi.</summary>
 public record UpdateFarmingAreaRequest(
@@ -84,7 +88,9 @@ public record UpdateFarmingAreaRequest(
     string? Address = null,
     string? Region = null,
     DateTime? EstablishedAt = null,
-    string? AvatarUrl = null);
+    string? AvatarUrl = null,
+    double? Latitude = null,
+    double? Longitude = null);
 
 public record NextFarmCodeDto(string Code);
 
