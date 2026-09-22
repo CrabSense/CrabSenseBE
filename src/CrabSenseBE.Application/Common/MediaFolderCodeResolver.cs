@@ -18,6 +18,9 @@ public static class MediaFolderCodeResolver
         return table switch
         {
             "Crabs" => await CrabPathAsync(uow, id, ct),
+            "CrabFeedings" => MediaFolderPath.Join(
+                await CrabPathAsync(uow, id, ct),
+                MediaFolderPath.FeedingFolder),
             var t when t == MediaFolderPath.InboundRoot => await LotPathAsync(uow, id, ct),
             "FarmingAreas" => await AreaPathAsync(uow, id, ct),
             "FarmingRows" => await RowPathAsync(uow, id, ct),
