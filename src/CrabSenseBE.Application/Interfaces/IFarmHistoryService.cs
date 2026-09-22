@@ -36,6 +36,8 @@ public interface IFarmHistoryService
         Guid boxId, DateTime? from = null, DateTime? to = null, CancellationToken ct = default);
     Task<ApiResponse<IEnumerable<BoxStatusHistoryDayDto>>> GetDailyBoxStatusHistoryAsync(
         int days = 7, CancellationToken ct = default);
+    Task<ApiResponse<IEnumerable<CrabStatusHistoryDayDto>>> GetDailyCrabStatusHistoryAsync(
+        int days = 7, CancellationToken ct = default);
     Task<ApiResponse<BoxStatusHistoryDto>> UpdateBoxStatusHistoryAsync(
         Guid id, UpdateBoxStatusHistoryRequest req, CancellationToken ct = default);
     Task<ApiResponse> DeleteBoxStatusHistoryAsync(Guid id, CancellationToken ct = default);

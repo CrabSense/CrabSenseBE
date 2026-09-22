@@ -3,6 +3,7 @@ using System;
 using CrabSenseBE.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace CrabSenseBE.Infrastructure.Persistence.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    partial class AppDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260922060701_OfflineSyncInbox")]
+    partial class OfflineSyncInbox
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -311,14 +314,6 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
 
                     b.Property<bool>("IsOccupied")
                         .HasColumnType("boolean");
-
-                    b.Property<decimal?>("MapX")
-                        .HasPrecision(7, 4)
-                        .HasColumnType("numeric(7,4)");
-
-                    b.Property<decimal?>("MapY")
-                        .HasPrecision(7, 4)
-                        .HasColumnType("numeric(7,4)");
 
                     b.Property<string>("Status")
                         .HasColumnType("text");
@@ -629,10 +624,6 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.Property<int>("DeadOnArrival")
                         .HasColumnType("integer");
 
-                    b.Property<string>("ImageUrlsJson")
-                        .IsRequired()
-                        .HasColumnType("text");
-
                     b.Property<DateTime>("ImportDate")
                         .HasColumnType("timestamp with time zone");
 
@@ -932,9 +923,6 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.Property<Guid?>("FarmingAreaId")
                         .HasColumnType("uuid");
 
-                    b.Property<Guid?>("FarmingRowId")
-                        .HasColumnType("uuid");
-
                     b.Property<string>("FirmwareVersion")
                         .HasColumnType("text");
 
@@ -952,21 +940,11 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.Property<string>("Name")
                         .HasColumnType("text");
 
-                    b.Property<string>("Resolution")
-                        .HasMaxLength(32)
-                        .HasColumnType("character varying(32)");
-
                     b.Property<decimal?>("RssiDbm")
                         .HasColumnType("numeric");
 
-                    b.Property<string>("SnapshotUrl")
-                        .HasColumnType("text");
-
                     b.Property<string>("Status")
                         .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<string>("StreamUrl")
                         .HasColumnType("text");
 
                     b.Property<DateTime?>("UpdatedAt")
@@ -975,8 +953,6 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.HasKey("Id");
 
                     b.HasIndex("FarmingAreaId");
-
-                    b.HasIndex("FarmingRowId");
 
                     b.ToTable("Devices", "be");
                 });
@@ -1120,25 +1096,6 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                         .HasMaxLength(256)
                         .HasColumnType("character varying(256)");
 
-                    b.Property<string>("MapImageUrl")
-                        .HasColumnType("text");
-
-                    b.Property<decimal?>("MapX1")
-                        .HasPrecision(7, 4)
-                        .HasColumnType("numeric(7,4)");
-
-                    b.Property<decimal?>("MapX2")
-                        .HasPrecision(7, 4)
-                        .HasColumnType("numeric(7,4)");
-
-                    b.Property<decimal?>("MapY1")
-                        .HasPrecision(7, 4)
-                        .HasColumnType("numeric(7,4)");
-
-                    b.Property<decimal?>("MapY2")
-                        .HasPrecision(7, 4)
-                        .HasColumnType("numeric(7,4)");
-
                     b.Property<string>("Name")
                         .IsRequired()
                         .HasColumnType("text");
@@ -1195,14 +1152,6 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.Property<string>("Location")
                         .HasMaxLength(256)
                         .HasColumnType("character varying(256)");
-
-                    b.Property<decimal?>("MapX")
-                        .HasPrecision(7, 4)
-                        .HasColumnType("numeric(7,4)");
-
-                    b.Property<decimal?>("MapY")
-                        .HasPrecision(7, 4)
-                        .HasColumnType("numeric(7,4)");
 
                     b.Property<string>("Name")
                         .IsRequired()
@@ -1655,10 +1604,6 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                         .HasColumnType("timestamp with time zone");
 
                     b.Property<string>("Notes")
-                        .HasColumnType("text");
-
-                    b.Property<string>("PhotoUrlsJson")
-                        .IsRequired()
                         .HasColumnType("text");
 
                     b.Property<string>("Result")
@@ -2307,9 +2252,6 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.Property<Guid?>("DeviceId")
                         .HasColumnType("uuid");
 
-                    b.Property<Guid?>("FarmingRowId")
-                        .HasColumnType("uuid");
-
                     b.Property<bool>("IsActive")
                         .HasColumnType("boolean");
 
@@ -2345,8 +2287,6 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.HasKey("Id");
 
                     b.HasIndex("DeviceId");
-
-                    b.HasIndex("FarmingRowId");
 
                     b.HasIndex("RasComponentId");
 
