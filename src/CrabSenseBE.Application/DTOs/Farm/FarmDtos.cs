@@ -137,7 +137,8 @@ public record FarmingRowDto(
     int WatchBoxCount = 0,
     /// <summary>Số hộp không có cua.</summary>
     int EmptyBoxCount = 0,
-    DateTime? UpdatedAt = null);
+    DateTime? UpdatedAt = null,
+    DateTime? CreatedAt = null);
 
 /// <summary>
 /// Tạo dãy. Code hệ thống tự sinh DAY-A01… — không gửi trong body.
@@ -213,6 +214,9 @@ public record BoxDto(
 /// Code optional → auto BOX-0001…
 /// </summary>
 public record CreateBoxRequest(Guid FarmingRowId, Guid? FarmingAreaId = null, string? Code = null);
+
+/// <summary>Tạo nhiều hộp trong dãy. Backend tự sinh mã BOX-0001… Quantity >= 1, không vượt sức chứa.</summary>
+public record CreateBoxesBulkRequest(int Quantity = 1);
 
 public record UpdateBoxRequest(string Code, string? Status, bool IsOccupied);
 public record UpdateBoxStatusRequest(string Status, bool IsOccupied);
@@ -360,7 +364,80 @@ public record CrabWeightHistoryDto(
     decimal WeightGram,
     DateTime MeasuredAt,
     string Source,
-    string? Notes);
+    string? Notes,
+    decimal? CarapaceWidthMm = null,
+    decimal? CarapaceLengthMm = null,
+    string? RecordedByName = null,
+    IReadOnlyList<string>? PhotoUrls = null);
+
+public record RecordCrabWeightRequest(
+    DateTime? MeasuredAt,
+    decimal WeightGram,
+    decimal? CarapaceWidthMm = null,
+    decimal? CarapaceLengthMm = null,
+    string? Notes = null,
+    string? RecordedByName = null,
+    IReadOnlyList<string>? PhotoUrls = null,
+    string? Source = null);
+
+public record UpdateCrabWeightRequest(string? Notes);
+
+public record CrabGrowthMoltDto(
+    IReadOnlyList<CrabWeightHistoryDto> Measurements,
+    IReadOnlyList<MoltingRecordDto> Molts,
+    decimal? CurrentWeightGram,
+    decimal? CurrentWidthMm,
+    decimal? CurrentLengthMm);
+
+/// <summary>Nhật ký vòng đời một cá thể cua (audit + timeline).</summary>
+public record CrabLifecycleEventsDto(
+    IReadOnlyList<CrabLifecycleEventDto> Items,
+    int Total,
+    bool HasMore,
+    CrabLifecycleSummaryDto Summary);
+
+public record CrabLifecycleSummaryDto(
+    int Total,
+    int Feeding,
+    int Growth,
+    int Molt,
+    int Health,
+    int Transfer,
+    int Ai,
+    int Alert,
+    int Harvest,
+    int System,
+    int Note);
+
+public record CrabLifecycleEventDto(
+    string Id,
+    Guid CrabId,
+    string CrabCode,
+    string EventType,
+    DateTime OccurredAt,
+    string Title,
+    string Summary,
+    CrabLifecycleLocationDto? Location,
+    CrabLifecycleActorDto Actor,
+    string Source,
+    string? CameraId,
+    IReadOnlyDictionary<string, CrabLifecycleChangeDto>? Changes,
+    IReadOnlyDictionary<string, object?>? Metadata,
+    IReadOnlyList<string> MediaUrls,
+    string? Note,
+    string? Severity);
+
+public record CrabLifecycleLocationDto(
+    Guid? FarmAreaId,
+    string? FarmAreaCode,
+    Guid? RowId,
+    string? RowCode,
+    Guid? BoxId,
+    string? BoxCode);
+
+public record CrabLifecycleActorDto(string Type, Guid? Id, string Name);
+
+public record CrabLifecycleChangeDto(object? Before, object? After);
 
 public record CrabAiAnalysisDto(
     Guid Id,
@@ -408,11 +485,35 @@ public record CreateCrabRequest(
     string? Condition = null,
     decimal? CarapaceLengthMm = null);
 
+public record CreateCrabBulkItem(
+    string? Gender = null,
+    decimal WeightGram = 0,
+    decimal CarapaceWidthMm = 0,
+    decimal CarapaceLengthMm = 0,
+    bool AutoAssign = true,
+    Guid? TargetBoxId = null,
+    string? Note = null,
+    IReadOnlyList<string>? ImageUrls = null);
+
+public record CreateCrabsBulkRequest(
+    Guid CrabLotId,
+    Guid? FarmingAreaId = null,
+    Guid? FarmingRowId = null,
+    string? CrabType = null,
+    string? Condition = null,
+    string? InitialCondition = null,
+    DateTime? StockedAt = null,
+    IReadOnlyList<CreateCrabBulkItem>? Items = null);
+
+public record CreateCrabsBulkDto(
+    IReadOnlyList<CrabDto> Crabs,
+    int CreatedCount);
+
 public record UpdateCrabRequest(
     string? MoltingStage,
     decimal? WeightGram,
-    bool IsAlive,
-    DateTime? MoltedAt,
+    bool? IsAlive = null,
+    DateTime? MoltedAt = null,
     IReadOnlyList<string>? ImageUrls = null,
     string? Condition = null,
     string? Notes = null,
