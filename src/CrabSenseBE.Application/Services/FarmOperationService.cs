@@ -115,6 +115,7 @@ public class FarmOperationService : IFarmOperationService
 
         var crabIds = NormalizeIds(req.CrabIds);
         var condition = NormalizeConditionKey(req.Condition);
+        ValidateFeedingAmounts(req.Quantity, req.EatenQuantity);
 
         var op = new FarmOperation
         {
@@ -126,6 +127,11 @@ public class FarmOperationService : IFarmOperationService
             Condition = condition,
             Quantity = req.Quantity,
             Unit = req.Unit,
+            EatenQuantity = req.EatenQuantity,
+            ActivityBefore = ClampScore(req.ActivityBefore),
+            ActivityAfter = ClampScore(req.ActivityAfter),
+            FeedingDurationMinutes = req.FeedingDurationMinutes,
+            CameraId = string.IsNullOrWhiteSpace(req.CameraId) ? null : req.CameraId.Trim(),
             Notes = req.Notes ?? "",
             PhotoUrlsJson = JsonSerializer.Serialize(req.PhotoUrls ?? Array.Empty<string>(), JsonOpts),
             Timestamp = req.Timestamp ?? DateTime.UtcNow,
@@ -161,6 +167,12 @@ public class FarmOperationService : IFarmOperationService
         if (req.Notes is not null) op.Notes = req.Notes;
         if (req.Quantity.HasValue) op.Quantity = req.Quantity;
         if (req.Unit is not null) op.Unit = req.Unit;
+        if (req.EatenQuantity.HasValue) op.EatenQuantity = req.EatenQuantity;
+        if (req.ActivityBefore.HasValue) op.ActivityBefore = ClampScore(req.ActivityBefore);
+        if (req.ActivityAfter.HasValue) op.ActivityAfter = ClampScore(req.ActivityAfter);
+        if (req.FeedingDurationMinutes.HasValue) op.FeedingDurationMinutes = req.FeedingDurationMinutes;
+        if (req.CameraId is not null) op.CameraId = string.IsNullOrWhiteSpace(req.CameraId) ? null : req.CameraId.Trim();
+        ValidateFeedingAmounts(op.Quantity, op.EatenQuantity);
         if (req.PhotoUrls is not null)
             op.PhotoUrlsJson = JsonSerializer.Serialize(req.PhotoUrls, JsonOpts);
         op.UpdatedAt = DateTime.UtcNow;
@@ -202,7 +214,158 @@ public class FarmOperationService : IFarmOperationService
         return new FarmOperationDto(
             o.Id, o.Type, boxIds, o.Quantity, o.Unit, o.Notes, photos,
             o.Timestamp, o.OperatorId, o.OperatorName, o.Source, o.LocationLabel,
-            crabIds, o.Appetite, o.FoodType, o.Condition);
+            crabIds, o.Appetite, o.FoodType, o.Condition,
+            o.EatenQuantity, FeedingPercentOf(o),
+            o.ActivityBefore, o.ActivityAfter, o.FeedingDurationMinutes, o.CameraId);
+    }
+
+    // ------------------------------------------------------------------
+    // Tab "Ăn & Vận động" — per-crab feeding + activity analytics
+    // ------------------------------------------------------------------
+
+    public async Task<ApiResponse<CrabFeedingActivityDto>> GetCrabFeedingActivityAsync(
+        Guid crabId, DateTime? from, DateTime? to, int page = 1, int limit = 10, CancellationToken ct = default)
+    {
+        var end = (to ?? DateTime.UtcNow).ToUniversalTime();
+        var start = (from ?? end.AddDays(-7)).ToUniversalTime();
+        if (start >= end) throw AppException.BadRequest("'from' must be earlier than 'to'.");
+
+        var span = end - start;
+        var hourly = span.TotalHours <= 36;
+        var granularity = hourly ? "hour" : "day";
+
+        var crabKey = crabId.ToString();
+        var all = (await _uow.FarmOperations.GetAllAsync(ct))
+            .Where(o => IsFeedingOp(o) &&
+                        o.CrabIdsJson.Contains(crabKey, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        var current = all.Where(o => o.Timestamp >= start && o.Timestamp < end)
+            .OrderByDescending(o => o.Timestamp)
+            .ToList();
+        var previous = all.Where(o => o.Timestamp >= start - span && o.Timestamp < start).ToList();
+
+        // ---- summary ----
+        var pcts = current.Select(FeedingPercentOf).Where(p => p.HasValue).Select(p => p!.Value).ToList();
+        var prevPcts = previous.Select(FeedingPercentOf).Where(p => p.HasValue).Select(p => p!.Value).ToList();
+        var acts = current.SelectMany(ActivityScoresOf).ToList();
+
+        int? finishRate = pcts.Count == 0 ? null : (int)Math.Round(100.0 * pcts.Count(p => p >= FinishThreshold) / pcts.Count);
+        int? prevFinishRate = prevPcts.Count == 0 ? null : (int)Math.Round(100.0 * prevPcts.Count(p => p >= FinishThreshold) / prevPcts.Count);
+        int? avgPct = pcts.Count == 0 ? null : (int)Math.Round(pcts.Average());
+        int? avgAct = acts.Count == 0 ? null : (int)Math.Round(acts.Average());
+
+        var summary = new CrabFeedingActivitySummaryDto(
+            FeedingCount: current.Count,
+            FinishRate: finishRate,
+            AvgFeedingPercent: avgPct,
+            AvgActivityScore: avgAct,
+            FeedingCountDelta: current.Count - previous.Count,
+            FinishRateDelta: finishRate.HasValue && prevFinishRate.HasValue ? finishRate - prevFinishRate : null);
+
+        // ---- trends (only buckets that have data; FE does not zero-fill) ----
+        DateTime BucketOf(DateTime t) => hourly
+            ? new DateTime(t.Year, t.Month, t.Day, t.Hour, 0, 0, DateTimeKind.Utc)
+            : new DateTime(t.Year, t.Month, t.Day, 0, 0, 0, DateTimeKind.Utc);
+
+        var feedingTrend = current
+            .GroupBy(o => BucketOf(o.Timestamp))
+            .OrderBy(g => g.Key)
+            .Select(g =>
+            {
+                var gp = g.Select(FeedingPercentOf).Where(p => p.HasValue).Select(p => p!.Value).ToList();
+                var served = g.Where(o => o.Quantity.HasValue).Sum(o => o.Quantity);
+                var eaten = g.Where(o => o.EatenQuantity.HasValue).Sum(o => o.EatenQuantity);
+                return new FeedingTrendPointDto(
+                    g.Key,
+                    gp.Count == 0 ? null : (int)Math.Round(gp.Average()),
+                    g.Any(o => o.Quantity.HasValue) ? served : null,
+                    g.Any(o => o.EatenQuantity.HasValue) ? eaten : null,
+                    g.Count());
+            })
+            .ToList();
+
+        var activityTrend = current
+            .SelectMany(o => ActivityScoresOf(o).Select(s => (Bucket: BucketOf(o.Timestamp), Score: s)))
+            .GroupBy(x => x.Bucket)
+            .OrderBy(g => g.Key)
+            .Select(g => new ActivityTrendPointDto(g.Key, (int)Math.Round(g.Average(x => x.Score)), g.Count()))
+            .ToList();
+
+        // ---- events page ----
+        var pageSize = limit <= 0 ? 10 : Math.Min(limit, 200);
+        var pageNum = page <= 0 ? 1 : page;
+        var events = current.Skip((pageNum - 1) * pageSize).Take(pageSize).Select(Map).ToList();
+
+        // ---- insight: only "anomaly detected" / "trend to watch" — never diagnoses ----
+        var (insight, level) = BuildInsight(feedingTrend, avgAct, hourly);
+
+        return ApiResponse<CrabFeedingActivityDto>.Ok(new CrabFeedingActivityDto(
+            start, end, granularity, summary, feedingTrend, activityTrend, events, current.Count, insight, level));
+    }
+
+    private const int FinishThreshold = 80;
+
+    private static bool IsFeedingOp(FarmOperation o) =>
+        string.Equals(o.Type, "feeding", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>feedingPercent = eaten / served × 100 (clamp 0–100); fallback appetite many/little/none → 100/40/0.</summary>
+    private static int? FeedingPercentOf(FarmOperation o)
+    {
+        if (o.Quantity is > 0 && o.EatenQuantity.HasValue)
+        {
+            var pct = (double)(o.EatenQuantity.Value / o.Quantity.Value) * 100.0;
+            return (int)Math.Round(Math.Clamp(pct, 0, 100));
+        }
+        return (o.Appetite ?? "").ToLowerInvariant() switch
+        {
+            "many" => 100,
+            "little" => 40,
+            "none" => 0,
+            _ => null
+        };
+    }
+
+    private static IEnumerable<int> ActivityScoresOf(FarmOperation o)
+    {
+        if (o.ActivityBefore.HasValue) yield return o.ActivityBefore.Value;
+        if (o.ActivityAfter.HasValue) yield return o.ActivityAfter.Value;
+    }
+
+    private static int? ClampScore(int? v) => v.HasValue ? Math.Clamp(v.Value, 0, 100) : null;
+
+    private static void ValidateFeedingAmounts(decimal? served, decimal? eaten)
+    {
+        if (eaten is < 0) throw AppException.BadRequest("Lượng đã ăn không được âm.");
+        if (served.HasValue && eaten.HasValue && eaten > served)
+            throw AppException.BadRequest("Lượng đã ăn không được lớn hơn khẩu phần.");
+    }
+
+    private static (string? Text, string Level) BuildInsight(
+        IReadOnlyList<FeedingTrendPointDto> trend, int? avgActivity, bool hourly)
+    {
+        var pts = trend.Where(p => p.FeedingPercent.HasValue).ToList();
+        if (pts.Count < 3) return (null, "none");
+
+        var half = pts.Count / 2;
+        var firstAvg = pts.Take(half).Average(p => p.FeedingPercent!.Value);
+        var lastAvg = pts.Skip(pts.Count - half).Average(p => p.FeedingPercent!.Value);
+        var lowStreak = 0;
+        var maxLowStreak = 0;
+        foreach (var p in pts)
+        {
+            lowStreak = p.FeedingPercent!.Value < 50 ? lowStreak + 1 : 0;
+            maxLowStreak = Math.Max(maxLowStreak, lowStreak);
+        }
+
+        var unit = hourly ? "giờ" : "ngày";
+        if (maxLowStreak >= 2 && lastAvg + 15 < firstAvg)
+            return ($"AI phát hiện xu hướng giảm ăn trong {maxLowStreak} {unit} gần nhất. Khuyến nghị theo dõi thêm.", "warning");
+        if (lastAvg + 15 < firstAvg)
+            return ("AI phát hiện xu hướng mức ăn giảm so với đầu kỳ. Nên tiếp tục theo dõi.", "watch");
+        if (avgActivity is < 30)
+            return ("AI phát hiện mức vận động trung bình thấp trong kỳ. Nên tiếp tục theo dõi.", "watch");
+        return ("AI nhận định: Mức ăn và vận động ổn định trong kỳ.", "ok");
     }
 
     private static IReadOnlyList<string> NormalizeIds(IReadOnlyList<string>? raw)

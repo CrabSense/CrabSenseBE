@@ -34,6 +34,22 @@ public class FarmOperation : BaseEntity
 
     public decimal? Quantity { get; set; }
     public string? Unit { get; set; }
+
+    /// <summary>Lượng thức ăn cua đã ăn (cùng đơn vị với <see cref="Quantity"/>). Null = chưa đo.</summary>
+    public decimal? EatenQuantity { get; set; }
+
+    /// <summary>Điểm vận động chuẩn hoá 0–100 trước khi cho ăn (AI camera / thủ công).</summary>
+    public int? ActivityBefore { get; set; }
+
+    /// <summary>Điểm vận động chuẩn hoá 0–100 sau khi cho ăn.</summary>
+    public int? ActivityAfter { get; set; }
+
+    /// <summary>Thời gian cua ăn (phút), nếu quan sát được.</summary>
+    public int? FeedingDurationMinutes { get; set; }
+
+    /// <summary>Camera liên quan (mã hoặc Guid) đã ghi nhận lần cho ăn.</summary>
+    public string? CameraId { get; set; }
+
     public string Notes { get; set; } = string.Empty;
 
     /// <summary>JSON array of photo URLs.</summary>

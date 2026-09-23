@@ -38,11 +38,19 @@ public class FarmHistoryService : IFarmHistoryService
         var crab = await _uow.Crabs.GetByIdAsync(req.CrabId, ct)
             ?? throw AppException.NotFound("Crab");
         if (!IsCrabAlive(crab))
-            throw AppException.BadRequest("Cannot allocate a dead/harvested crab.");
+            throw AppException.BadRequest(
+                crab.Status == CrabStatus.Harvested || crab.Status == CrabStatus.Sold
+                    ? "Cua này đã được thu hoạch."
+                    : "Không thể chuyển hộp cho cua đã chết.");
 
         var previousBoxId = GetCrabBoxId(crab);
+        if (previousBoxId != Guid.Empty && previousBoxId == boxId)
+            throw AppException.BadRequest("Không thể chuyển cua vào chính hộp hiện tại.");
+
         var box = await _uow.Boxes.GetByIdAsync(boxId, ct)
             ?? throw AppException.NotFound("Box");
+        if (IsBoxUnusable(box.Status))
+            throw AppException.BadRequest($"Hộp '{box.Code}' không thể sử dụng.");
         var row = await _uow.FarmingRows.GetByIdAsync(box.FarmingRowId, ct)
             ?? throw AppException.NotFound("FarmingRow");
         if (!row.IsActive)
@@ -71,7 +79,7 @@ public class FarmHistoryService : IFarmHistoryService
         var allocsWithCrab = await _uow.CrabBoxAllocations.FindAsync(
             a => a.BoxId == boxId && a.EndTime == null && a.CrabId != req.CrabId, ct);
         if (allocsWithCrab.Any())
-            throw AppException.Conflict($"Box '{box.Code}' already has a live crab.");
+            throw AppException.Conflict($"Hộp '{box.Code}' vừa được sử dụng. Vui lòng chọn hộp khác.");
 
         var open = await _uow.CrabBoxAllocations.FindAsync(
             a => a.CrabId == req.CrabId && a.EndTime == null, ct);
@@ -117,7 +125,9 @@ public class FarmHistoryService : IFarmHistoryService
             Source = previousBoxId == Guid.Empty ? "assignment" : "transfer",
             Reason = previousBoxId == Guid.Empty
                 ? $"Gán cua vào hộp {box.Code}"
-                : $"Chuyển cua sang hộp {box.Code}"
+                : string.IsNullOrWhiteSpace(req.Notes)
+                    ? $"Chuyển cua sang hộp {box.Code}"
+                    : $"Chuyển cua sang hộp {box.Code}|{req.Notes}"
         }, ct);
 
         await _uow.OperationLogs.AddAsync(new OperationLog
@@ -128,7 +138,9 @@ public class FarmHistoryService : IFarmHistoryService
             EntityId = crab.Id,
             Details = previousBoxId == Guid.Empty
                 ? $"Gán cua {crab.Code} vào hộp {box.Code}"
-                : $"Chuyển cua {crab.Code} sang hộp {box.Code}"
+                : string.IsNullOrWhiteSpace(req.Notes)
+                    ? $"Chuyển cua {crab.Code} sang hộp {box.Code}"
+                    : $"Chuyển cua {crab.Code} sang hộp {box.Code} — {req.Notes}"
         }, ct);
 
         await _uow.SaveChangesAsync(ct);
@@ -137,12 +149,22 @@ public class FarmHistoryService : IFarmHistoryService
 
     public async Task<ApiResponse<CrabBoxAllocationDto>> TransferCrabAsync(
         MobileTransferCrabRequest req, CancellationToken ct = default)
-        => await AllocateCrabAsync(new AllocateCrabRequest(
+    {
+        var dest = req.TargetBoxId is Guid t && t != Guid.Empty ? t : req.DestinationBoxId;
+        if (string.Equals((req.ReasonCode ?? "").Trim(), "OTHER", StringComparison.OrdinalIgnoreCase)
+            && string.IsNullOrWhiteSpace(req.ReasonText) && string.IsNullOrWhiteSpace(req.Notes) && string.IsNullOrWhiteSpace(req.Note))
+            throw AppException.BadRequest("Nhập lý do chuyển hộp.");
+
+        var notes = ComposeTransferNotes(req);
+        return await AllocateCrabAsync(new AllocateCrabRequest(
             req.CrabId,
-            req.DestinationBoxId,
-            Notes: req.Notes,
+            dest,
+            FarmingAreaId: req.TargetFarmAreaId,
+            FarmingRowId: req.TargetRowId,
+            Notes: notes,
             SourceBoxId: req.SourceBoxId,
-            DestinationBoxId: req.DestinationBoxId), ct);
+            DestinationBoxId: dest), ct);
+    }
 
     public async Task<ApiResponse<IEnumerable<CrabBoxAllocationDto>>> GetAllocationsByCrabAsync(
         Guid crabId, DateTime? from = null, DateTime? to = null, CancellationToken ct = default)
@@ -217,12 +239,23 @@ public class FarmHistoryService : IFarmHistoryService
                 ?? throw AppException.NotFound("Box");
         }
 
+        if (req.CompletedAt.HasValue && req.StartedAt.HasValue && req.CompletedAt < req.StartedAt)
+            throw AppException.BadRequest("CompletedAt must be greater than or equal to StartedAt.");
+
         var record = new MoltingRecord
         {
             CrabId = req.CrabId,
             BoxId = boxId,
             MoltTime = moltTime,
+            StartedAt = req.StartedAt,
+            CompletedAt = req.CompletedAt,
+            WeightBeforeGram = req.WeightBeforeGram,
             WeightAfterGram = req.WeightAfterGram,
+            ShellWidthBeforeMm = req.ShellWidthBeforeMm,
+            ShellLengthBeforeMm = req.ShellLengthBeforeMm,
+            ShellWidthAfterMm = req.ShellWidthAfterMm,
+            ShellLengthAfterMm = req.ShellLengthAfterMm,
+            CameraId = string.IsNullOrWhiteSpace(req.CameraId) ? null : req.CameraId.Trim(),
             Result = result,
             Source = source,
             Notes = req.Notes,
@@ -253,13 +286,17 @@ public class FarmHistoryService : IFarmHistoryService
         if (req.WeightAfterGram.HasValue)
         {
             crab.WeightGram = req.WeightAfterGram;
+            if (req.ShellWidthAfterMm.HasValue) crab.CarapaceWidthMm = req.ShellWidthAfterMm;
+            if (req.ShellLengthAfterMm.HasValue) crab.CarapaceLengthMm = req.ShellLengthAfterMm;
             await _uow.CrabWeightHistories.AddAsync(new CrabWeightHistory
             {
                 CrabId = crab.Id,
                 WeightGram = req.WeightAfterGram.Value,
-                MeasuredAt = moltTime,
+                CarapaceWidthMm = req.ShellWidthAfterMm,
+                CarapaceLengthMm = req.ShellLengthAfterMm,
+                MeasuredAt = req.CompletedAt ?? moltTime,
                 Source = source,
-                Notes = "After molt"
+                Notes = req.Notes ?? "After molt"
             }, ct);
         }
         _uow.Crabs.Update(crab);
@@ -309,6 +346,17 @@ public class FarmHistoryService : IFarmHistoryService
             record.Source = string.IsNullOrWhiteSpace(req.Source) ? "manual" : req.Source.Trim().ToLowerInvariant();
         if (req.Notes is not null)
             record.Notes = req.Notes;
+        if (req.StartedAt.HasValue) record.StartedAt = req.StartedAt;
+        if (req.CompletedAt.HasValue) record.CompletedAt = req.CompletedAt;
+        if (req.WeightBeforeGram.HasValue) record.WeightBeforeGram = req.WeightBeforeGram;
+        if (req.ShellWidthBeforeMm.HasValue) record.ShellWidthBeforeMm = req.ShellWidthBeforeMm;
+        if (req.ShellLengthBeforeMm.HasValue) record.ShellLengthBeforeMm = req.ShellLengthBeforeMm;
+        if (req.ShellWidthAfterMm.HasValue) record.ShellWidthAfterMm = req.ShellWidthAfterMm;
+        if (req.ShellLengthAfterMm.HasValue) record.ShellLengthAfterMm = req.ShellLengthAfterMm;
+        if (req.CameraId is not null)
+            record.CameraId = string.IsNullOrWhiteSpace(req.CameraId) ? null : req.CameraId.Trim();
+        if (record.CompletedAt.HasValue && record.StartedAt.HasValue && record.CompletedAt < record.StartedAt)
+            throw AppException.BadRequest("CompletedAt must be greater than or equal to StartedAt.");
 
         _uow.MoltingRecords.Update(record);
         await ResyncCrabFromMoltingsAsync(record.CrabId, excludeId: null, ct);
@@ -715,6 +763,45 @@ public class FarmHistoryService : IFarmHistoryService
         _uow.Crabs.Update(crab);
     }
 
+    private static bool IsBoxUnusable(string? status)
+    {
+        var s = (status ?? "").Trim().ToLowerInvariant();
+        return s is "maintenance" or "quarantine" or "harvested" or "suspended" or "closed";
+    }
+
+    private static string? ComposeTransferNotes(MobileTransferCrabRequest req)
+    {
+        var reason = ResolveTransferReason(req.ReasonCode, req.ReasonText);
+        var note = string.IsNullOrWhiteSpace(req.Note) ? null : req.Note.Trim();
+        if (!string.IsNullOrWhiteSpace(reason))
+            return string.IsNullOrWhiteSpace(note) ? reason : $"{reason} — {note}";
+        return FirstNonEmpty(req.Note, req.Notes);
+    }
+
+    private static string? ResolveTransferReason(string? code, string? text)
+    {
+        var key = (code ?? "").Trim().ToUpperInvariant();
+        return key switch
+        {
+            "RELOCATION" => "Điều chỉnh vị trí nuôi",
+            "BOX_FAULT" => "Hộp gặp sự cố",
+            "MONITORING" => "Cua cần theo dõi",
+            "PRE_MOLT" => "Chuẩn bị lột xác",
+            "POST_MOLT" => "Sau lột xác",
+            "AREA_ADJUST" => "Điều chỉnh khu vực nuôi",
+            "OPS_REQUEST" => "Theo yêu cầu vận hành",
+            "OTHER" => string.IsNullOrWhiteSpace(text) ? null : text.Trim(),
+            _ => string.IsNullOrWhiteSpace(text) ? null : text.Trim()
+        };
+    }
+
+    private static string? FirstNonEmpty(string? a, string? b)
+    {
+        if (!string.IsNullOrWhiteSpace(a)) return a.Trim();
+        if (!string.IsNullOrWhiteSpace(b)) return b.Trim();
+        return null;
+    }
+
     private static bool IsCrabAlive(Crab? c) =>
         c is not null && (c.Status == CrabStatus.Alive || c.Status == CrabStatus.Molting || c.Status == CrabStatus.Quarantined);
 
@@ -747,10 +834,11 @@ public class FarmHistoryService : IFarmHistoryService
         {
             "" or "success" or "normal" or "good" or "ok" or "passed"
                 or "binhthuong" => "success",
+            "monitoring" or "monitor" or "theodoi" or "incomplete" or "weak"
+                or "needs_watch" or "needswatch" or "watch" or "poor" or "yeu" => "monitoring",
+            "abnormal" or "batthuong" or "anomaly" => "abnormal",
             "failed" or "fail" or "dead" or "died" or "death" or "thatbai" => "failed",
-            "incomplete" or "weak" or "needs_watch" or "needswatch" or "watch"
-                or "poor" or "yeu" => "incomplete",
-            _ => throw AppException.BadRequest("Result must be success | failed | incomplete.")
+            _ => throw AppException.BadRequest("Result must be success | monitoring | abnormal | failed.")
         };
     }
 
@@ -860,9 +948,12 @@ public class FarmHistoryService : IFarmHistoryService
         return await MediaPhotoResolver.OpenAsync(_images, url, assetMatch, ct);
     }
 
-    private static MoltingRecordDto MapMolt(MoltingRecord m) =>
+    internal static MoltingRecordDto MapMolt(MoltingRecord m) =>
         new(m.Id, m.CrabId, m.BoxId, m.MoltTime, m.WeightAfterGram, m.Result, m.Source, m.Notes,
-            JsonStringList.Parse(m.PhotoUrlsJson));
+            JsonStringList.Parse(m.PhotoUrlsJson),
+            m.StartedAt, m.CompletedAt, m.WeightBeforeGram,
+            m.ShellWidthBeforeMm, m.ShellLengthBeforeMm,
+            m.ShellWidthAfterMm, m.ShellLengthAfterMm, m.CameraId);
 
     private static BoxStatusHistoryDto MapStatusHist(BoxStatusHistory h) =>
         new(h.Id, h.BoxId, h.OldStatus, h.NewStatus,

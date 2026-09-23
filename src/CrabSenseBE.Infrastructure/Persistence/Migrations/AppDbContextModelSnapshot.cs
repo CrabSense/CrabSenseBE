@@ -795,6 +795,14 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uuid");
 
+                    b.Property<decimal?>("CarapaceLengthMm")
+                        .HasPrecision(8, 2)
+                        .HasColumnType("numeric(8,2)");
+
+                    b.Property<decimal?>("CarapaceWidthMm")
+                        .HasPrecision(8, 2)
+                        .HasColumnType("numeric(8,2)");
+
                     b.Property<Guid>("CrabId")
                         .HasColumnType("uuid");
 
@@ -805,6 +813,13 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                         .HasColumnType("timestamp with time zone");
 
                     b.Property<string>("Notes")
+                        .HasColumnType("text");
+
+                    b.Property<string>("PhotoUrlsJson")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("RecordedByName")
                         .HasColumnType("text");
 
                     b.Property<string>("Source")
@@ -987,11 +1002,20 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uuid");
 
+                    b.Property<int?>("ActivityAfter")
+                        .HasColumnType("integer");
+
+                    b.Property<int?>("ActivityBefore")
+                        .HasColumnType("integer");
+
                     b.Property<string>("Appetite")
                         .HasColumnType("text");
 
                     b.Property<string>("BoxIdsJson")
                         .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("CameraId")
                         .HasColumnType("text");
 
                     b.Property<string>("Condition")
@@ -1003,6 +1027,12 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
 
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("timestamp with time zone");
+
+                    b.Property<decimal?>("EatenQuantity")
+                        .HasColumnType("numeric");
+
+                    b.Property<int?>("FeedingDurationMinutes")
+                        .HasColumnType("integer");
 
                     b.Property<string>("FoodType")
                         .HasColumnType("text");
@@ -1645,6 +1675,12 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.Property<Guid?>("BoxId")
                         .HasColumnType("uuid");
 
+                    b.Property<string>("CameraId")
+                        .HasColumnType("text");
+
+                    b.Property<DateTime?>("CompletedAt")
+                        .HasColumnType("timestamp with time zone");
+
                     b.Property<Guid>("CrabId")
                         .HasColumnType("uuid");
 
@@ -1665,14 +1701,36 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                         .IsRequired()
                         .HasColumnType("text");
 
+                    b.Property<decimal?>("ShellLengthAfterMm")
+                        .HasPrecision(8, 2)
+                        .HasColumnType("numeric(8,2)");
+
+                    b.Property<decimal?>("ShellLengthBeforeMm")
+                        .HasPrecision(8, 2)
+                        .HasColumnType("numeric(8,2)");
+
+                    b.Property<decimal?>("ShellWidthAfterMm")
+                        .HasPrecision(8, 2)
+                        .HasColumnType("numeric(8,2)");
+
+                    b.Property<decimal?>("ShellWidthBeforeMm")
+                        .HasPrecision(8, 2)
+                        .HasColumnType("numeric(8,2)");
+
                     b.Property<string>("Source")
                         .IsRequired()
                         .HasColumnType("text");
+
+                    b.Property<DateTime?>("StartedAt")
+                        .HasColumnType("timestamp with time zone");
 
                     b.Property<DateTime?>("UpdatedAt")
                         .HasColumnType("timestamp with time zone");
 
                     b.Property<decimal?>("WeightAfterGram")
+                        .HasColumnType("numeric");
+
+                    b.Property<decimal?>("WeightBeforeGram")
                         .HasColumnType("numeric");
 
                     b.HasKey("Id");
