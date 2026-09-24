@@ -44,6 +44,7 @@ public static class DevDbBootstrap
                 await EnsureCameraAndSensorRowSchemaAsync(db, logger);
                 await EnsureWaterAnalysisSchemaAsync(db, logger);
                 await EnsureFarmOperationLogColumnsAsync(db, logger);
+                await EnsureGrowthMoltColumnsAsync(db, logger);
                 await EnsureScheduledFarmTasksSchemaAsync(db, logger);
                 await EnsureHarvestSalesWorkflowSchemaAsync(db, logger);
                 await EnsureOrphanAlertCleanupAsync(db, logger);
@@ -211,7 +212,9 @@ public static class DevDbBootstrap
             ADD COLUMN IF NOT EXISTS "AreaSquareMeters" numeric(12,2) NULL,
             ADD COLUMN IF NOT EXISTS "EstablishedAt" timestamp with time zone NULL,
             ADD COLUMN IF NOT EXISTS "AvatarUrl" text NULL,
-            ADD COLUMN IF NOT EXISTS "Status" text NOT NULL DEFAULT 'Active';
+            ADD COLUMN IF NOT EXISTS "Status" text NOT NULL DEFAULT 'Active',
+            ADD COLUMN IF NOT EXISTS "Latitude" double precision NULL,
+            ADD COLUMN IF NOT EXISTS "Longitude" double precision NULL;
 
             CREATE UNIQUE INDEX IF NOT EXISTS "IX_FarmingAreas_Code"
             ON be."FarmingAreas" ("Code");
@@ -409,6 +412,9 @@ public static class DevDbBootstrap
             CREATE INDEX IF NOT EXISTS "IX_CrabAiAnalyses_CrabId" ON be."CrabAiAnalyses" ("CrabId");
             CREATE INDEX IF NOT EXISTS "IX_CrabHarvestHistories_CrabId" ON be."CrabHarvestHistories" ("CrabId");
             CREATE INDEX IF NOT EXISTS "IX_QrCodes_CrabId" ON be."QrCodes" ("CrabId");
+
+            ALTER TABLE be."MoltingRecords"
+            ADD COLUMN IF NOT EXISTS "PhotoUrlsJson" text NOT NULL DEFAULT '[]';
             """).ConfigureAwait(false);
 
         try
@@ -489,7 +495,8 @@ public static class DevDbBootstrap
             ADD COLUMN IF NOT EXISTS "TotalCostVnd" numeric(14,2) NULL,
             ADD COLUMN IF NOT EXISTS "Condition" character varying(16) NOT NULL DEFAULT 'Good',
             ADD COLUMN IF NOT EXISTS "DeadOnArrival" integer NOT NULL DEFAULT 0,
-            ADD COLUMN IF NOT EXISTS "Status" character varying(16) NOT NULL DEFAULT 'Pending';
+            ADD COLUMN IF NOT EXISTS "Status" character varying(16) NOT NULL DEFAULT 'Pending',
+            ADD COLUMN IF NOT EXISTS "ImageUrlsJson" text NOT NULL DEFAULT '[]';
             """).ConfigureAwait(false);
 
         await db.Database.ExecuteSqlRawAsync(
@@ -751,9 +758,37 @@ public static class DevDbBootstrap
             ADD COLUMN IF NOT EXISTS "CrabIdsJson" text NOT NULL DEFAULT '[]',
             ADD COLUMN IF NOT EXISTS "Appetite" text NULL,
             ADD COLUMN IF NOT EXISTS "FoodType" text NULL,
-            ADD COLUMN IF NOT EXISTS "Condition" text NULL;
+            ADD COLUMN IF NOT EXISTS "Condition" text NULL,
+            ADD COLUMN IF NOT EXISTS "EatenQuantity" numeric NULL,
+            ADD COLUMN IF NOT EXISTS "ActivityBefore" integer NULL,
+            ADD COLUMN IF NOT EXISTS "ActivityAfter" integer NULL,
+            ADD COLUMN IF NOT EXISTS "FeedingDurationMinutes" integer NULL,
+            ADD COLUMN IF NOT EXISTS "CameraId" text NULL;
             """).ConfigureAwait(false);
-        logger.LogInformation("Ensured FarmOperations.Source / LocationLabel / CrabIdsJson / Appetite / FoodType / Condition.");
+        logger.LogInformation("Ensured FarmOperations.Source / LocationLabel / CrabIdsJson / Appetite / FoodType / Condition / feeding-activity fields.");
+    }
+
+    private static async Task EnsureGrowthMoltColumnsAsync(AppDbContext db, ILogger logger)
+    {
+        await db.Database.ExecuteSqlRawAsync(
+            """
+            ALTER TABLE be."CrabWeightHistories"
+            ADD COLUMN IF NOT EXISTS "CarapaceWidthMm" numeric(8,2) NULL,
+            ADD COLUMN IF NOT EXISTS "CarapaceLengthMm" numeric(8,2) NULL,
+            ADD COLUMN IF NOT EXISTS "RecordedByName" text NULL,
+            ADD COLUMN IF NOT EXISTS "PhotoUrlsJson" text NOT NULL DEFAULT '[]';
+
+            ALTER TABLE be."MoltingRecords"
+            ADD COLUMN IF NOT EXISTS "StartedAt" timestamp with time zone NULL,
+            ADD COLUMN IF NOT EXISTS "CompletedAt" timestamp with time zone NULL,
+            ADD COLUMN IF NOT EXISTS "WeightBeforeGram" numeric NULL,
+            ADD COLUMN IF NOT EXISTS "ShellWidthBeforeMm" numeric(8,2) NULL,
+            ADD COLUMN IF NOT EXISTS "ShellLengthBeforeMm" numeric(8,2) NULL,
+            ADD COLUMN IF NOT EXISTS "ShellWidthAfterMm" numeric(8,2) NULL,
+            ADD COLUMN IF NOT EXISTS "ShellLengthAfterMm" numeric(8,2) NULL,
+            ADD COLUMN IF NOT EXISTS "CameraId" text NULL;
+            """).ConfigureAwait(false);
+        logger.LogInformation("Ensured CrabWeightHistories / MoltingRecords growth-molt columns.");
     }
 
     private static async Task EnsureScheduledFarmTasksSchemaAsync(

@@ -11,6 +11,7 @@ namespace CrabSenseBE.Infrastructure.Services;
 public class LocalMediaStorageService : IMediaStorageService
 {
     private readonly string _root;
+    private readonly string _project;
     private readonly ILogger<LocalMediaStorageService> _logger;
 
     public string ProviderName => "Local";
@@ -21,17 +22,28 @@ public class LocalMediaStorageService : IMediaStorageService
         _root = config["MediaStorage:LocalRoot"]
             ?? Path.Combine(Directory.GetCurrentDirectory(), "media-storage");
         Directory.CreateDirectory(_root);
+        _project = config["MediaStorage:ProjectFolder"] ?? "CrabSense";
     }
 
     public async Task<MediaUploadResult> UploadAsync(
         Stream data, string fileName, string contentType, string category, CancellationToken ct = default)
     {
+        var folder = string.IsNullOrWhiteSpace(category)
+            ? "Media/image"
+            : category.Trim().Trim('/');
+        if (!folder.Contains('/', StringComparison.Ordinal))
+            folder = folder.Trim().ToLowerInvariant() switch
+            {
+                "image" or "images" or "photo" or "photos" => "Media/image",
+                "video" or "videos" => "Media/video",
+                "log" or "logs" => "Media/log",
+                _ => folder
+            };
+
         var now = DateTime.UtcNow;
         var relative = Path.Combine(
-            MapCategoryFolder(category),
-            now.ToString("yyyy"),
-            now.ToString("MM"),
-            now.ToString("dd"),
+            _project,
+            folder.Replace('/', Path.DirectorySeparatorChar),
             $"{now:yyyyMMddHHmmss}_{Sanitize(fileName)}");
         var full = Path.Combine(_root, relative);
         Directory.CreateDirectory(Path.GetDirectoryName(full)!);
@@ -45,15 +57,6 @@ public class LocalMediaStorageService : IMediaStorageService
         _logger.LogInformation("Local media saved {Key}", key);
         return new MediaUploadResult(key, link, link, link, size);
     }
-
-    private static string MapCategoryFolder(string category) =>
-        category.Trim().ToLowerInvariant() switch
-        {
-            "image" or "images" or "photo" or "photos" => "images",
-            "video" or "videos" => "videos",
-            "log" or "logs" => "logs",
-            _ => "other"
-        };
 
     public Task<Stream> DownloadAsync(string storageKey, CancellationToken ct = default)
     {

@@ -33,6 +33,10 @@ public interface IFarmOperationService
         DateTime? startDate = null, DateTime? endDate = null, CancellationToken ct = default);
     Task<ApiResponse<FarmOperationDto>> CreateAsync(CreateFarmOperationRequest req, CancellationToken ct = default);
     Task<ApiResponse<FarmOperationDto>> UpdateAsync(Guid id, UpdateFarmOperationRequest req, CancellationToken ct = default);
+
+    /// <summary>Tab "Ăn &amp; Vận động": KPI + trend + lịch sử cho ăn của một con cua trong khoảng thời gian.</summary>
+    Task<ApiResponse<CrabFeedingActivityDto>> GetCrabFeedingActivityAsync(
+        Guid crabId, DateTime? from, DateTime? to, int page = 1, int limit = 10, CancellationToken ct = default);
 }
 
 public interface IManualInspectionService

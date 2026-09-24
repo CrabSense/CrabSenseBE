@@ -23,6 +23,7 @@ appsettings.Production.json
 appsettings.Local.json
 secrets/
 **/google-drive-sa.json
+**/crabsense-*.json
 
 # Local media fallback
 media-storage/

@@ -24,8 +24,11 @@ public partial class FarmingRowKhuFields : Migration
         // DAY-xxx backfill lives in DevDbBootstrap (CHR needs ::int).
         migrationBuilder.Sql(
             """
+            -- Existing rows may have the default empty code. Keep those rows
+            -- valid while enforcing uniqueness for actual row codes.
             CREATE UNIQUE INDEX IF NOT EXISTS "IX_FarmingRows_Code"
-            ON be."FarmingRows" ("Code");
+            ON be."FarmingRows" ("Code")
+            WHERE "Code" <> '';
             """);
     }
 

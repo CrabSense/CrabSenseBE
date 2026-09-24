@@ -124,7 +124,7 @@ builder.Services.AddCors(options =>
             {
                 if (string.IsNullOrWhiteSpace(origin)) return false;
                 if (!Uri.TryCreate(origin, UriKind.Absolute, out var uri)) return false;
-                if (uri.Host is "localhost" or "127.0.0.1") return true;
+                if (uri.Host is "localhost" or "127.0.0.1" or "103.69.96.143") return true;
                 var configured = builder.Configuration.GetSection("AllowedOrigins").Get<string[]>()
                     ?? new[] { "http://localhost:3000", "http://localhost:5173" };
                 return configured.Contains(origin, StringComparer.OrdinalIgnoreCase);

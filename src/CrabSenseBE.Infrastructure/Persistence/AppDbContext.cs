@@ -71,6 +71,7 @@ public class AppDbContext : DbContext
     public DbSet<FarmOperation> FarmOperations => Set<FarmOperation>();
     public DbSet<SaleTransaction> SaleTransactions => Set<SaleTransaction>();
     public DbSet<ScheduledFarmTask> ScheduledFarmTasks => Set<ScheduledFarmTask>();
+    public DbSet<SyncInboxItem> SyncInboxItems => Set<SyncInboxItem>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -81,6 +82,14 @@ public class AppDbContext : DbContext
 
         // Apply all IEntityTypeConfiguration from this assembly
         modelBuilder.ApplyConfigurationsFromAssembly(typeof(AppDbContext).Assembly);
+        modelBuilder.Entity<SyncInboxItem>()
+            .HasIndex(item => item.IdempotencyKey)
+            .IsUnique();
+        modelBuilder.Entity<SyncInboxItem>()
+            .HasIndex(item => new { item.Status, item.ReceivedAt });
+        modelBuilder.Entity<SyncInboxItem>()
+            .Property(item => item.PayloadJson)
+            .HasColumnType("jsonb");
         // Enum conversions stored as string
         modelBuilder.Entity<AppUser>()
             .Property(u => u.Role)

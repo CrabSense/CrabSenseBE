@@ -33,6 +33,7 @@ public interface IFarmingService
     Task<ApiResponse<BoxDto>> GetBoxByIdAsync(Guid id, CancellationToken ct = default);
     Task<ApiResponse<FarmAvailabilityDto>> GetAvailabilityAsync(Guid? farmingAreaId, Guid? farmingRowId, CancellationToken ct = default);
     Task<ApiResponse<BoxDto>> CreateBoxAsync(CreateBoxRequest request, CancellationToken ct = default);
+    Task<ApiResponse<IReadOnlyList<BoxDto>>> CreateBoxesBulkAsync(Guid rowId, int quantity, CancellationToken ct = default);
     Task<ApiResponse<BoxDto>> UpdateBoxAsync(Guid id, UpdateBoxRequest request, CancellationToken ct = default);
     Task<ApiResponse<BoxDto>> UpdateBoxStatusAsync(Guid boxId, UpdateBoxStatusRequest request, CancellationToken ct = default);
     /// <summary>Đặt tâm hộp trên ảnh bản đồ trại (tỉ lệ 0–1).</summary>
@@ -45,11 +46,25 @@ public interface IFarmingService
     Task<ApiResponse<CrabProfileDto>> GetCrabProfileAsync(Guid id, CancellationToken ct = default);
     Task<ApiResponse<NextCrabCodeDto>> GetNextCrabCodeAsync(CancellationToken ct = default);
     Task<ApiResponse<CrabDto>> CreateCrabAsync(CreateCrabRequest request, CancellationToken ct = default);
+    Task<ApiResponse<CreateCrabsBulkDto>> CreateCrabsBulkAsync(CreateCrabsBulkRequest request, CancellationToken ct = default);
     Task<ApiResponse<CrabDto>> UpdateCrabAsync(Guid id, UpdateCrabRequest request, CancellationToken ct = default);
     /// <summary>Soft-delete: IsAlive=false, free box, keep history.</summary>
     Task<ApiResponse> DeleteCrabAsync(Guid id, CancellationToken ct = default);
     Task<ApiResponse<IReadOnlyList<CrabStatusHistoryDto>>> GetCrabStatusHistoryAsync(Guid crabId, CancellationToken ct = default);
     Task<ApiResponse<IReadOnlyList<CrabWeightHistoryDto>>> GetCrabWeightHistoryAsync(Guid crabId, CancellationToken ct = default);
+    Task<ApiResponse<CrabWeightHistoryDto>> RecordCrabWeightAsync(Guid crabId, RecordCrabWeightRequest req, CancellationToken ct = default);
+    Task<ApiResponse<CrabWeightHistoryDto>> UpdateCrabWeightAsync(Guid crabId, Guid weightId, UpdateCrabWeightRequest req, CancellationToken ct = default);
+    Task<ApiResponse<CrabGrowthMoltDto>> GetCrabGrowthMoltAsync(Guid crabId, DateTime? from = null, DateTime? to = null, CancellationToken ct = default);
+    Task<ApiResponse<CrabLifecycleEventsDto>> GetCrabLifecycleEventsAsync(
+        Guid crabId,
+        DateTime? from = null,
+        DateTime? to = null,
+        string? eventType = null,
+        string? search = null,
+        string? sort = null,
+        int skip = 0,
+        int take = 20,
+        CancellationToken ct = default);
     Task<ApiResponse<IReadOnlyList<CrabAiAnalysisDto>>> GetCrabAiAnalysesAsync(Guid crabId, CancellationToken ct = default);
     Task<ApiResponse<IReadOnlyList<CrabHarvestHistoryDto>>> GetCrabHarvestHistoryAsync(Guid crabId, CancellationToken ct = default);
 }

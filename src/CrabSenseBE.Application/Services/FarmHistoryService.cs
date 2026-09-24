@@ -1,5 +1,6 @@
 using CrabSenseBE.Application.Common;
 using CrabSenseBE.Application.DTOs.Farm;
+using CrabSenseBE.Application.DTOs.Media;
 using CrabSenseBE.Application.Interfaces;
 using CrabSenseBE.Domain.Entities;
 using CrabSenseBE.Domain.Enums;
@@ -13,8 +14,13 @@ namespace CrabSenseBE.Application.Services;
 public class FarmHistoryService : IFarmHistoryService
 {
     private readonly IUnitOfWork _uow;
+    private readonly IPublicImageStorage _images;
 
-    public FarmHistoryService(IUnitOfWork uow) => _uow = uow;
+    public FarmHistoryService(IUnitOfWork uow, IPublicImageStorage images)
+    {
+        _uow = uow;
+        _images = images;
+    }
 
     // ─── Allocation ─────────────────────────────────────────────────────────
 
@@ -32,11 +38,19 @@ public class FarmHistoryService : IFarmHistoryService
         var crab = await _uow.Crabs.GetByIdAsync(req.CrabId, ct)
             ?? throw AppException.NotFound("Crab");
         if (!IsCrabAlive(crab))
-            throw AppException.BadRequest("Cannot allocate a dead/harvested crab.");
+            throw AppException.BadRequest(
+                crab.Status == CrabStatus.Harvested || crab.Status == CrabStatus.Sold
+                    ? "Cua này đã được thu hoạch."
+                    : "Không thể chuyển hộp cho cua đã chết.");
 
         var previousBoxId = GetCrabBoxId(crab);
+        if (previousBoxId != Guid.Empty && previousBoxId == boxId)
+            throw AppException.BadRequest("Không thể chuyển cua vào chính hộp hiện tại.");
+
         var box = await _uow.Boxes.GetByIdAsync(boxId, ct)
             ?? throw AppException.NotFound("Box");
+        if (IsBoxUnusable(box.Status))
+            throw AppException.BadRequest($"Hộp '{box.Code}' không thể sử dụng.");
         var row = await _uow.FarmingRows.GetByIdAsync(box.FarmingRowId, ct)
             ?? throw AppException.NotFound("FarmingRow");
         if (!row.IsActive)
@@ -65,7 +79,7 @@ public class FarmHistoryService : IFarmHistoryService
         var allocsWithCrab = await _uow.CrabBoxAllocations.FindAsync(
             a => a.BoxId == boxId && a.EndTime == null && a.CrabId != req.CrabId, ct);
         if (allocsWithCrab.Any())
-            throw AppException.Conflict($"Box '{box.Code}' already has a live crab.");
+            throw AppException.Conflict($"Hộp '{box.Code}' vừa được sử dụng. Vui lòng chọn hộp khác.");
 
         var open = await _uow.CrabBoxAllocations.FindAsync(
             a => a.CrabId == req.CrabId && a.EndTime == null, ct);
@@ -101,6 +115,20 @@ public class FarmHistoryService : IFarmHistoryService
         _uow.Crabs.Update(crab);
 
         await ApplyBoxStatusAsync(box, BoxStatuses.Active, true, "Crab allocated", ct);
+        await _uow.CrabStatusHistories.AddAsync(new CrabStatusHistory
+        {
+            CrabId = crab.Id,
+            OldCondition = crab.Condition,
+            NewCondition = crab.Condition,
+            OldStatus = crab.Status,
+            NewStatus = crab.Status,
+            Source = previousBoxId == Guid.Empty ? "assignment" : "transfer",
+            Reason = previousBoxId == Guid.Empty
+                ? $"Gán cua vào hộp {box.Code}"
+                : string.IsNullOrWhiteSpace(req.Notes)
+                    ? $"Chuyển cua sang hộp {box.Code}"
+                    : $"Chuyển cua sang hộp {box.Code}|{req.Notes}"
+        }, ct);
 
         await _uow.OperationLogs.AddAsync(new OperationLog
         {
@@ -110,7 +138,9 @@ public class FarmHistoryService : IFarmHistoryService
             EntityId = crab.Id,
             Details = previousBoxId == Guid.Empty
                 ? $"Gán cua {crab.Code} vào hộp {box.Code}"
-                : $"Chuyển cua {crab.Code} sang hộp {box.Code}"
+                : string.IsNullOrWhiteSpace(req.Notes)
+                    ? $"Chuyển cua {crab.Code} sang hộp {box.Code}"
+                    : $"Chuyển cua {crab.Code} sang hộp {box.Code} — {req.Notes}"
         }, ct);
 
         await _uow.SaveChangesAsync(ct);
@@ -119,12 +149,22 @@ public class FarmHistoryService : IFarmHistoryService
 
     public async Task<ApiResponse<CrabBoxAllocationDto>> TransferCrabAsync(
         MobileTransferCrabRequest req, CancellationToken ct = default)
-        => await AllocateCrabAsync(new AllocateCrabRequest(
+    {
+        var dest = req.TargetBoxId is Guid t && t != Guid.Empty ? t : req.DestinationBoxId;
+        if (string.Equals((req.ReasonCode ?? "").Trim(), "OTHER", StringComparison.OrdinalIgnoreCase)
+            && string.IsNullOrWhiteSpace(req.ReasonText) && string.IsNullOrWhiteSpace(req.Notes) && string.IsNullOrWhiteSpace(req.Note))
+            throw AppException.BadRequest("Nhập lý do chuyển hộp.");
+
+        var notes = ComposeTransferNotes(req);
+        return await AllocateCrabAsync(new AllocateCrabRequest(
             req.CrabId,
-            req.DestinationBoxId,
-            Notes: req.Notes,
+            dest,
+            FarmingAreaId: req.TargetFarmAreaId,
+            FarmingRowId: req.TargetRowId,
+            Notes: notes,
             SourceBoxId: req.SourceBoxId,
-            DestinationBoxId: req.DestinationBoxId), ct);
+            DestinationBoxId: dest), ct);
+    }
 
     public async Task<ApiResponse<IEnumerable<CrabBoxAllocationDto>>> GetAllocationsByCrabAsync(
         Guid crabId, DateTime? from = null, DateTime? to = null, CancellationToken ct = default)
@@ -199,15 +239,27 @@ public class FarmHistoryService : IFarmHistoryService
                 ?? throw AppException.NotFound("Box");
         }
 
+        if (req.CompletedAt.HasValue && req.StartedAt.HasValue && req.CompletedAt < req.StartedAt)
+            throw AppException.BadRequest("CompletedAt must be greater than or equal to StartedAt.");
+
         var record = new MoltingRecord
         {
             CrabId = req.CrabId,
             BoxId = boxId,
             MoltTime = moltTime,
+            StartedAt = req.StartedAt,
+            CompletedAt = req.CompletedAt,
+            WeightBeforeGram = req.WeightBeforeGram,
             WeightAfterGram = req.WeightAfterGram,
+            ShellWidthBeforeMm = req.ShellWidthBeforeMm,
+            ShellLengthBeforeMm = req.ShellLengthBeforeMm,
+            ShellWidthAfterMm = req.ShellWidthAfterMm,
+            ShellLengthAfterMm = req.ShellLengthAfterMm,
+            CameraId = string.IsNullOrWhiteSpace(req.CameraId) ? null : req.CameraId.Trim(),
             Result = result,
             Source = source,
-            Notes = req.Notes
+            Notes = req.Notes,
+            PhotoUrlsJson = "[]"
         };
         await _uow.MoltingRecords.AddAsync(record, ct);
 
@@ -234,13 +286,17 @@ public class FarmHistoryService : IFarmHistoryService
         if (req.WeightAfterGram.HasValue)
         {
             crab.WeightGram = req.WeightAfterGram;
+            if (req.ShellWidthAfterMm.HasValue) crab.CarapaceWidthMm = req.ShellWidthAfterMm;
+            if (req.ShellLengthAfterMm.HasValue) crab.CarapaceLengthMm = req.ShellLengthAfterMm;
             await _uow.CrabWeightHistories.AddAsync(new CrabWeightHistory
             {
                 CrabId = crab.Id,
                 WeightGram = req.WeightAfterGram.Value,
-                MeasuredAt = moltTime,
+                CarapaceWidthMm = req.ShellWidthAfterMm,
+                CarapaceLengthMm = req.ShellLengthAfterMm,
+                MeasuredAt = req.CompletedAt ?? moltTime,
                 Source = source,
-                Notes = "After molt"
+                Notes = req.Notes ?? "After molt"
             }, ct);
         }
         _uow.Crabs.Update(crab);
@@ -290,6 +346,17 @@ public class FarmHistoryService : IFarmHistoryService
             record.Source = string.IsNullOrWhiteSpace(req.Source) ? "manual" : req.Source.Trim().ToLowerInvariant();
         if (req.Notes is not null)
             record.Notes = req.Notes;
+        if (req.StartedAt.HasValue) record.StartedAt = req.StartedAt;
+        if (req.CompletedAt.HasValue) record.CompletedAt = req.CompletedAt;
+        if (req.WeightBeforeGram.HasValue) record.WeightBeforeGram = req.WeightBeforeGram;
+        if (req.ShellWidthBeforeMm.HasValue) record.ShellWidthBeforeMm = req.ShellWidthBeforeMm;
+        if (req.ShellLengthBeforeMm.HasValue) record.ShellLengthBeforeMm = req.ShellLengthBeforeMm;
+        if (req.ShellWidthAfterMm.HasValue) record.ShellWidthAfterMm = req.ShellWidthAfterMm;
+        if (req.ShellLengthAfterMm.HasValue) record.ShellLengthAfterMm = req.ShellLengthAfterMm;
+        if (req.CameraId is not null)
+            record.CameraId = string.IsNullOrWhiteSpace(req.CameraId) ? null : req.CameraId.Trim();
+        if (record.CompletedAt.HasValue && record.StartedAt.HasValue && record.CompletedAt < record.StartedAt)
+            throw AppException.BadRequest("CompletedAt must be greater than or equal to StartedAt.");
 
         _uow.MoltingRecords.Update(record);
         await ResyncCrabFromMoltingsAsync(record.CrabId, excludeId: null, ct);
@@ -358,24 +425,122 @@ public class FarmHistoryService : IFarmHistoryService
     {
         var dayCount = Math.Clamp(days, 1, 31);
         var today = DateTime.UtcNow.Date;
+        var boxes = (await _uow.Boxes.GetAllAsync(ct)).ToList();
+        var crabs = await _uow.Crabs.GetAllAsync(ct);
+        var conditionsByBox = crabs
+            .Where(c => c.BoxId.HasValue)
+            .GroupBy(c => c.BoxId!.Value)
+            .ToDictionary(
+                group => group.Key,
+                group => group
+                    .Select(c => (CrabCondition?)c.Condition)
+                    .OrderByDescending(ConditionPriority)
+                    .FirstOrDefault());
         var events = (await _uow.BoxStatusHistories.GetAllAsync(ct))
             .Where(h => h.ChangedAt >= today.AddDays(-(dayCount - 1)))
             .OrderByDescending(h => h.ChangedAt)
             .ToList();
+        var states = boxes.ToDictionary(
+            b => b.Id,
+            b => (
+                status: b.Status,
+                occupied: b.IsOccupied,
+                condition: conditionsByBox.GetValueOrDefault(b.Id)));
         var result = new List<BoxStatusHistoryDayDto>(dayCount);
 
         for (var offset = 0; offset < dayCount; offset++)
         {
             var date = today.AddDays(-offset);
+            var dailyEvents = events.Where(h => h.ChangedAt.Date == date).ToList();
             var counts = new int[5];
-            foreach (var history in events.Where(h => h.ChangedAt.Date == date))
-                counts[StatusBucket(history.NewStatus, history.NewIsOccupied)]++;
+            if (dailyEvents.Count > 0)
+            {
+                foreach (var state in states.Values)
+                    counts[StatusBucket(state.status, state.occupied, state.condition)]++;
 
-            result.Add(new BoxStatusHistoryDayDto(DateOnly.FromDateTime(date),
-                counts[0], counts[1], counts[2], counts[3], counts[4]));
+                result.Add(new BoxStatusHistoryDayDto(DateOnly.FromDateTime(date),
+                    counts[0], counts[1], counts[2], counts[3], counts[4]));
+            }
+
+            foreach (var history in dailyEvents)
+            {
+                if (states.ContainsKey(history.BoxId))
+                    states[history.BoxId] = (
+                        history.OldStatus ?? states[history.BoxId].status,
+                        history.OldIsOccupied ?? states[history.BoxId].occupied,
+                        null);
+            }
         }
 
         return ApiResponse<IEnumerable<BoxStatusHistoryDayDto>>.Ok(
+            result.OrderBy(item => item.Date));
+    }
+
+    public async Task<ApiResponse<IEnumerable<CrabStatusHistoryDayDto>>> GetDailyCrabStatusHistoryAsync(
+        int days = 7, CancellationToken ct = default)
+    {
+        var dayCount = Math.Clamp(days, 1, 31);
+        var today = DateTime.UtcNow.Date;
+        var crabs = (await _uow.Crabs.GetAllAsync(ct)).ToList();
+        var events = (await _uow.CrabStatusHistories.GetAllAsync(ct))
+            .Where(h => h.ChangedAt >= today.AddDays(-(dayCount - 1)))
+            .OrderByDescending(h => h.ChangedAt)
+            .ToList();
+        var states = crabs.ToDictionary(
+            c => c.Id,
+            c => (status: c.Status, condition: c.Condition));
+        var result = new List<CrabStatusHistoryDayDto>(dayCount);
+
+        for (var offset = 0; offset < dayCount; offset++)
+        {
+            var date = today.AddDays(-offset);
+            var dailyEvents = events.Where(h => h.ChangedAt.Date == date).ToList();
+            if (dailyEvents.Count > 0)
+            {
+                var counts = new int[5];
+                foreach (var state in states.Values)
+                {
+                    var occupied = state.status is CrabStatus.Alive
+                        or CrabStatus.Molting
+                        or CrabStatus.Quarantined;
+                    counts[StatusBucket(
+                        state.status.ToString(), occupied, state.condition)]++;
+                }
+
+                result.Add(new CrabStatusHistoryDayDto(
+                    DateOnly.FromDateTime(date),
+                    counts[0], counts[1], counts[2], counts[3], counts[4]));
+            }
+
+            foreach (var history in dailyEvents)
+            {
+                if (states.ContainsKey(history.CrabId))
+                {
+                    states[history.CrabId] = (
+                        history.OldStatus ?? states[history.CrabId].status,
+                        history.OldCondition ?? states[history.CrabId].condition);
+                }
+            }
+        }
+
+        if (result.Count == 0 && crabs.Count > 0)
+        {
+            var counts = new int[5];
+            foreach (var state in states.Values)
+            {
+                var occupied = state.status is CrabStatus.Alive
+                    or CrabStatus.Molting
+                    or CrabStatus.Quarantined;
+                counts[StatusBucket(
+                    state.status.ToString(), occupied, state.condition)]++;
+            }
+
+            result.Add(new CrabStatusHistoryDayDto(
+                DateOnly.FromDateTime(today),
+                counts[0], counts[1], counts[2], counts[3], counts[4]));
+        }
+
+        return ApiResponse<IEnumerable<CrabStatusHistoryDayDto>>.Ok(
             result.OrderBy(item => item.Date));
     }
 
@@ -598,6 +763,45 @@ public class FarmHistoryService : IFarmHistoryService
         _uow.Crabs.Update(crab);
     }
 
+    private static bool IsBoxUnusable(string? status)
+    {
+        var s = (status ?? "").Trim().ToLowerInvariant();
+        return s is "maintenance" or "quarantine" or "harvested" or "suspended" or "closed";
+    }
+
+    private static string? ComposeTransferNotes(MobileTransferCrabRequest req)
+    {
+        var reason = ResolveTransferReason(req.ReasonCode, req.ReasonText);
+        var note = string.IsNullOrWhiteSpace(req.Note) ? null : req.Note.Trim();
+        if (!string.IsNullOrWhiteSpace(reason))
+            return string.IsNullOrWhiteSpace(note) ? reason : $"{reason} — {note}";
+        return FirstNonEmpty(req.Note, req.Notes);
+    }
+
+    private static string? ResolveTransferReason(string? code, string? text)
+    {
+        var key = (code ?? "").Trim().ToUpperInvariant();
+        return key switch
+        {
+            "RELOCATION" => "Điều chỉnh vị trí nuôi",
+            "BOX_FAULT" => "Hộp gặp sự cố",
+            "MONITORING" => "Cua cần theo dõi",
+            "PRE_MOLT" => "Chuẩn bị lột xác",
+            "POST_MOLT" => "Sau lột xác",
+            "AREA_ADJUST" => "Điều chỉnh khu vực nuôi",
+            "OPS_REQUEST" => "Theo yêu cầu vận hành",
+            "OTHER" => string.IsNullOrWhiteSpace(text) ? null : text.Trim(),
+            _ => string.IsNullOrWhiteSpace(text) ? null : text.Trim()
+        };
+    }
+
+    private static string? FirstNonEmpty(string? a, string? b)
+    {
+        if (!string.IsNullOrWhiteSpace(a)) return a.Trim();
+        if (!string.IsNullOrWhiteSpace(b)) return b.Trim();
+        return null;
+    }
+
     private static bool IsCrabAlive(Crab? c) =>
         c is not null && (c.Status == CrabStatus.Alive || c.Status == CrabStatus.Molting || c.Status == CrabStatus.Quarantined);
 
@@ -630,10 +834,11 @@ public class FarmHistoryService : IFarmHistoryService
         {
             "" or "success" or "normal" or "good" or "ok" or "passed"
                 or "binhthuong" => "success",
+            "monitoring" or "monitor" or "theodoi" or "incomplete" or "weak"
+                or "needs_watch" or "needswatch" or "watch" or "poor" or "yeu" => "monitoring",
+            "abnormal" or "batthuong" or "anomaly" => "abnormal",
             "failed" or "fail" or "dead" or "died" or "death" or "thatbai" => "failed",
-            "incomplete" or "weak" or "needs_watch" or "needswatch" or "watch"
-                or "poor" or "yeu" => "incomplete",
-            _ => throw AppException.BadRequest("Result must be success | failed | incomplete.")
+            _ => throw AppException.BadRequest("Result must be success | monitoring | abnormal | failed.")
         };
     }
 
@@ -656,8 +861,99 @@ public class FarmHistoryService : IFarmHistoryService
     private static CrabBoxAllocationDto MapAlloc(CrabBoxAllocation a) =>
         new(a.Id, a.CrabId, a.BoxId, a.StartTime, a.EndTime, a.Notes);
 
-    private static MoltingRecordDto MapMolt(MoltingRecord m) =>
-        new(m.Id, m.CrabId, m.BoxId, m.MoltTime, m.WeightAfterGram, m.Result, m.Source, m.Notes);
+    public async Task<ApiResponse<IReadOnlyList<CrabImageDto>>> UploadMoltingImagesAsync(
+        Guid moltingId,
+        IReadOnlyList<CrabImageFile> files,
+        Guid? uploadedBy,
+        CancellationToken ct = default)
+    {
+        ImageUploadRules.ValidateBatch(files);
+        var record = await _uow.MoltingRecords.GetByIdAsync(moltingId, ct)
+            ?? throw AppException.NotFound("MoltingRecord");
+
+        var existing = JsonStringList.Parse(record.PhotoUrlsJson);
+        if (existing.Count + files.Count > ImageUploadRules.MaxUrls)
+            throw AppException.BadRequest($"A molting record can have at most {ImageUploadRules.MaxUrls} images.");
+
+        var crabPath = await MediaFolderCodeResolver.ResolvePathAsync(_uow, "crab", record.CrabId, ct);
+        var folder = MediaFolderPath.Join(
+            crabPath, MediaFolderPath.MoltFolder, record.MoltTime.ToString("yyyyMMdd"));
+
+        var results = new List<CrabImageDto>(files.Count);
+        var urls = new List<string>(files.Count);
+
+        foreach (var file in files)
+        {
+            var uploaded = await _images.UploadAsync(
+                file.Data, file.FileName, file.ContentType, folder, ct);
+            var url = MediaPhotoResolver.PublicUrl(uploaded);
+
+            await _uow.MediaAssets.AddAsync(new MediaAsset
+            {
+                Category = "image",
+                FileName = file.FileName,
+                ContentType = string.IsNullOrWhiteSpace(file.ContentType) ? "image/jpeg" : file.ContentType,
+                SizeBytes = uploaded.SizeBytes,
+                Provider = _images.ProviderName,
+                StorageKey = uploaded.StorageKey,
+                WebViewLink = uploaded.WebViewLink,
+                WebContentLink = uploaded.WebContentLink,
+                ShareLink = url,
+                IsShared = true,
+                CrabId = record.CrabId,
+                RelatedEntityType = "MoltingRecord",
+                RelatedEntityId = record.Id,
+                Notes = "molting-image",
+                UploadedBy = uploadedBy
+            }, ct);
+
+            results.Add(new CrabImageDto(url, uploaded.StorageKey, file.FileName, _images.ProviderName, uploaded.SizeBytes));
+            urls.Add(url);
+        }
+
+        record.PhotoUrlsJson = JsonStringList.Serialize(
+            JsonStringList.Merge(record.PhotoUrlsJson, urls, ImageUploadRules.MaxUrls), ImageUploadRules.MaxUrls);
+        _uow.MoltingRecords.Update(record);
+        await _uow.SaveChangesAsync(ct);
+        return ApiResponse<IReadOnlyList<CrabImageDto>>.Ok(results, "Uploaded.");
+    }
+
+    public async Task<CrabImageContent?> GetMoltingPhotoAsync(Guid moltingId, int index, CancellationToken ct = default)
+    {
+        if (index < 0) return null;
+        var record = await _uow.MoltingRecords.GetByIdAsync(moltingId, ct);
+        if (record is null) return null;
+
+        var urls = JsonStringList.Parse(record.PhotoUrlsJson).ToList();
+        var assets = (await _uow.MediaAssets.FindAsync(
+                m => m.RelatedEntityId == moltingId && m.RelatedEntityType == "MoltingRecord",
+                ct))
+            .OrderBy(m => m.CreatedAt)
+            .ToList();
+
+        foreach (var asset in assets)
+        {
+            var link = asset.ShareLink ?? asset.WebContentLink ?? asset.WebViewLink;
+            if (!string.IsNullOrWhiteSpace(link) && !urls.Contains(link, StringComparer.OrdinalIgnoreCase))
+                urls.Add(link);
+        }
+
+        if (index >= urls.Count) return null;
+        var url = urls[index];
+        var assetMatch = assets.FirstOrDefault(a =>
+            string.Equals(a.ShareLink, url, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(a.WebContentLink, url, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(a.WebViewLink, url, StringComparison.OrdinalIgnoreCase));
+
+        return await MediaPhotoResolver.OpenAsync(_images, url, assetMatch, ct);
+    }
+
+    internal static MoltingRecordDto MapMolt(MoltingRecord m) =>
+        new(m.Id, m.CrabId, m.BoxId, m.MoltTime, m.WeightAfterGram, m.Result, m.Source, m.Notes,
+            JsonStringList.Parse(m.PhotoUrlsJson),
+            m.StartedAt, m.CompletedAt, m.WeightBeforeGram,
+            m.ShellWidthBeforeMm, m.ShellLengthBeforeMm,
+            m.ShellWidthAfterMm, m.ShellLengthAfterMm, m.CameraId);
 
     private static BoxStatusHistoryDto MapStatusHist(BoxStatusHistory h) =>
         new(h.Id, h.BoxId, h.OldStatus, h.NewStatus,

@@ -20,7 +20,13 @@ public record FarmOperationDto(
     IReadOnlyList<string>? CrabIds = null,
     string? Appetite = null,
     string? FoodType = null,
-    string? Condition = null);
+    string? Condition = null,
+    decimal? EatenQuantity = null,
+    int? FeedingPercent = null,
+    int? ActivityBefore = null,
+    int? ActivityAfter = null,
+    int? FeedingDurationMinutes = null,
+    string? CameraId = null);
 
 public record FeedingHistoryDayDto(
     DateOnly Date,
@@ -43,7 +49,12 @@ public record CreateFarmOperationRequest(
     IReadOnlyList<string>? CrabIds = null,
     string? Appetite = null,
     string? FoodType = null,
-    string? Condition = null);
+    string? Condition = null,
+    decimal? EatenQuantity = null,
+    int? ActivityBefore = null,
+    int? ActivityAfter = null,
+    int? FeedingDurationMinutes = null,
+    string? CameraId = null);
 
 public record UpdateFarmOperationRequest(
     string? Type = null,
@@ -55,7 +66,46 @@ public record UpdateFarmOperationRequest(
     IReadOnlyList<string>? CrabIds = null,
     string? Appetite = null,
     string? FoodType = null,
-    string? Condition = null);
+    string? Condition = null,
+    decimal? EatenQuantity = null,
+    int? ActivityBefore = null,
+    int? ActivityAfter = null,
+    int? FeedingDurationMinutes = null,
+    string? CameraId = null);
+
+// --- Crab feeding & activity (tab "Ăn & Vận động") ---
+
+public record CrabFeedingActivitySummaryDto(
+    int FeedingCount,
+    int? FinishRate,
+    int? AvgFeedingPercent,
+    int? AvgActivityScore,
+    int? FeedingCountDelta,
+    int? FinishRateDelta);
+
+public record FeedingTrendPointDto(
+    DateTime Bucket,
+    int? FeedingPercent,
+    decimal? ServedGram,
+    decimal? EatenGram,
+    int FeedingCount);
+
+public record ActivityTrendPointDto(
+    DateTime Bucket,
+    int? ActivityScore,
+    int SampleCount);
+
+public record CrabFeedingActivityDto(
+    DateTime From,
+    DateTime To,
+    string Granularity,
+    CrabFeedingActivitySummaryDto Summary,
+    IReadOnlyList<FeedingTrendPointDto> FeedingTrend,
+    IReadOnlyList<ActivityTrendPointDto> ActivityTrend,
+    IReadOnlyList<FarmOperationDto> Events,
+    int TotalEvents,
+    string? Insight,
+    string InsightLevel);
 
 public record ManualInspectionDto(
     Guid Id,

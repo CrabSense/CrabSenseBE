@@ -1,5 +1,6 @@
 using CrabSenseBE.Application.Common;
 using CrabSenseBE.Application.DTOs.Farm;
+using CrabSenseBE.Application.DTOs.Media;
 
 namespace CrabSenseBE.Application.Interfaces;
 
@@ -24,6 +25,9 @@ public interface IFarmHistoryService
     Task<ApiResponse<MoltingRecordDto>> UpdateMoltingAsync(
         Guid id, UpdateMoltingRecordRequest req, CancellationToken ct = default);
     Task<ApiResponse> DeleteMoltingAsync(Guid id, CancellationToken ct = default);
+    Task<ApiResponse<IReadOnlyList<CrabImageDto>>> UploadMoltingImagesAsync(
+        Guid moltingId, IReadOnlyList<CrabImageFile> files, Guid? uploadedBy, CancellationToken ct = default);
+    Task<CrabImageContent?> GetMoltingPhotoAsync(Guid moltingId, int index, CancellationToken ct = default);
 
     Task<ApiResponse<BoxFarmingStatusDto>> GetBoxFarmingStatusAsync(Guid boxId, CancellationToken ct = default);
     Task<ApiResponse<IEnumerable<BoxFarmingStatusDto>>> ListBoxesFarmingStatusAsync(
@@ -31,6 +35,8 @@ public interface IFarmHistoryService
     Task<ApiResponse<IEnumerable<BoxStatusHistoryDto>>> GetBoxStatusHistoryAsync(
         Guid boxId, DateTime? from = null, DateTime? to = null, CancellationToken ct = default);
     Task<ApiResponse<IEnumerable<BoxStatusHistoryDayDto>>> GetDailyBoxStatusHistoryAsync(
+        int days = 7, CancellationToken ct = default);
+    Task<ApiResponse<IEnumerable<CrabStatusHistoryDayDto>>> GetDailyCrabStatusHistoryAsync(
         int days = 7, CancellationToken ct = default);
     Task<ApiResponse<BoxStatusHistoryDto>> UpdateBoxStatusHistoryAsync(
         Guid id, UpdateBoxStatusHistoryRequest req, CancellationToken ct = default);
