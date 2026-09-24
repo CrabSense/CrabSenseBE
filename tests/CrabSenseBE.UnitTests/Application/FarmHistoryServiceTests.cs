@@ -1,5 +1,6 @@
 using CrabSenseBE.Application.Common;
 using CrabSenseBE.Application.DTOs.Farm;
+using CrabSenseBE.Application.Interfaces;
 using CrabSenseBE.Application.Services;
 using CrabSenseBE.Domain.Entities;
 using CrabSenseBE.Domain.Interfaces;
@@ -13,7 +14,7 @@ namespace CrabSenseBE.UnitTests.Application;
 public class FarmHistoryServiceTests
 {
     private readonly Mock<IUnitOfWork> _uow = new();
-    private FarmHistoryService Create() => new(_uow.Object);
+    private FarmHistoryService Create() => new(_uow.Object, Mock.Of<IPublicImageStorage>());
 
     [Fact]
     public async Task AllocateCrab_MovesCrabAndOpensAllocation()
