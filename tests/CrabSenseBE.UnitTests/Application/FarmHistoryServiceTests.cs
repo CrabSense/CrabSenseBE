@@ -64,6 +64,10 @@ public class FarmHistoryServiceTests
         statusHistRepo.Setup(r => r.AddAsync(It.IsAny<BoxStatusHistory>(), It.IsAny<CancellationToken>()))
             .Returns(Task.CompletedTask);
 
+        var crabStatusHistRepo = new Mock<IRepository<CrabStatusHistory>>();
+        crabStatusHistRepo.Setup(r => r.AddAsync(It.IsAny<CrabStatusHistory>(), It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+
         var logRepo = new Mock<IRepository<OperationLog>>();
         logRepo.Setup(r => r.AddAsync(It.IsAny<OperationLog>(), It.IsAny<CancellationToken>()))
             .Returns(Task.CompletedTask);
@@ -74,6 +78,7 @@ public class FarmHistoryServiceTests
         _uow.Setup(u => u.FarmingAreas).Returns(areaRepo.Object);
         _uow.Setup(u => u.CrabBoxAllocations).Returns(allocRepo.Object);
         _uow.Setup(u => u.BoxStatusHistories).Returns(statusHistRepo.Object);
+        _uow.Setup(u => u.CrabStatusHistories).Returns(crabStatusHistRepo.Object);
         _uow.Setup(u => u.OperationLogs).Returns(logRepo.Object);
         _uow.Setup(u => u.SaveChangesAsync(It.IsAny<CancellationToken>())).ReturnsAsync(1);
 
