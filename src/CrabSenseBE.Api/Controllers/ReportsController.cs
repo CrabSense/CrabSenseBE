@@ -89,6 +89,19 @@ public class ReportsController : ControllerBase
     }
 
     /// <summary>
+    /// Báo cáo tồn kho với filter thời gian + cảnh báo hết hạn.
+    /// </summary>
+    [HttpGet("inventory/filtered")]
+    public async Task<IActionResult> InventoryFiltered(
+        [FromQuery] InventoryReportFilterDto filter,
+        CancellationToken cancellationToken)
+    {
+        var result = await _inventoryReportService
+            .GetInventoryReportAsync(filter, cancellationToken);
+        return Ok(new { success = true, data = result });
+    }
+
+    /// <summary>
     /// Báo cáo tỷ lệ sống tổng quan.
     /// Có thể lọc theo:
     /// - Thời điểm thả cua
@@ -125,6 +138,19 @@ public class ReportsController : ControllerBase
             success = true,
             data = result
         });
+    }
+
+    /// <summary>
+    /// Báo cáo molting với filter thời gian + trend.
+    /// </summary>
+    [HttpGet("molting/filtered")]
+    public async Task<IActionResult> GetMoltingReportFiltered(
+        [FromQuery] MoltingReportFilterDto filter,
+        CancellationToken cancellationToken)
+    {
+        var result = await _moltingReportService
+            .GetMoltingReportAsync(filter, cancellationToken);
+        return Ok(new { success = true, data = result });
     }
 
     /// <summary>

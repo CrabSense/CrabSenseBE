@@ -112,7 +112,7 @@ public class HarvestReportService : IHarvestReportService
         HarvestReportFilterDto filter,
         CancellationToken cancellationToken = default)
     {
-        ValidateFilter(filter);
+        await ValidateFilter(filter, cancellationToken);
 
         // Lấy các phiếu thu hoạch đã hoàn thành.
         var completedVouchers =
@@ -157,13 +157,9 @@ public class HarvestReportService : IHarvestReportService
             .Select(voucher => voucher.Id)
             .ToHashSet();
 
-        var allLines =
-            await _unitOfWork.HarvestLines.GetAllAsync(
-                cancellationToken);
-
-        var lines = allLines
-            .Where(line => voucherIds.Contains(line.HarvestVoucherId))
-            .ToList();
+        var lines = (await _unitOfWork.HarvestLines.FindAsync(
+    line => voucherIds.Contains(line.HarvestVoucherId),
+    cancellationToken)).ToList();
 
         // Gom phiếu theo ngày, tuần hoặc tháng.
         var byPeriod = voucherList
@@ -242,8 +238,9 @@ public class HarvestReportService : IHarvestReportService
     /// <summary>
     /// Kiểm tra tính hợp lệ của bộ lọc.
     /// </summary>
-    private static void ValidateFilter(
-        HarvestReportFilterDto filter)
+    private async Task ValidateFilter(
+        HarvestReportFilterDto filter,
+        CancellationToken cancellationToken)
     {
         if (filter.FromDate.HasValue &&
             filter.ToDate.HasValue &&
@@ -258,6 +255,31 @@ public class HarvestReportService : IHarvestReportService
         {
             throw new ArgumentException(
                 "Period must be Day, Week or Month.");
+        }
+
+        if (filter.FarmingAreaId.HasValue)
+        {
+            var areaExists = await _unitOfWork.FarmingAreas.AnyAsync(
+                a => a.Id == filter.FarmingAreaId.Value,
+                cancellationToken);
+
+            if (!areaExists)
+            {
+                throw new ArgumentException(
+                    "FarmingAreaId does not exist.");
+            }
+        }
+
+        if (filter.FromDate.HasValue && filter.ToDate.HasValue)
+        {
+            var rangeDays = (filter.ToDate.Value.Date
+                - filter.FromDate.Value.Date).Days;
+
+            if (rangeDays > 365)
+            {
+                throw new ArgumentException(
+                    "Date range cannot exceed 365 days.");
+            }
         }
     }
 

@@ -2,7 +2,6 @@ namespace CrabSenseBE.Application.DTOs.Reports;
 
 /// <summary>
 /// Bộ lọc cho báo cáo hiệu quả vận hành.
-/// Lọc theo thời điểm thả cua (StockedAt).
 /// </summary>
 public record OperationalEfficiencyFilterDto
 (
@@ -15,14 +14,19 @@ public record OperationalEfficiencyFilterDto
 /// </summary>
 public record OperationalEfficiencyDto
 (
-    int TotalCrabs,          // Tổng số cua đã thả trong khoảng thời gian
-    int MoltedCrabs,         // Số cua đã lột xác (có MoltingRecord)
-    int HarvestedCrabs,      // Số cua đã thu hoạch (CrabStatus.Harvested)
-    int AliveCrabs,          // Số cua đang nuôi (Alive + Molting + Quarantined)
-    int DeadCrabs,           // Số cua đã chết (CrabStatus.Dead)
+    int TotalCrabs,
+    int AliveCrabs,          // Cua đang nuôi, chưa lột
+    int MoltingCrabs,        // Cua đang trong giai đoạn lột
+    int MoltedCrabs,         // Cua đã lột xong
+    int HarvestedCrabs,
+    int DeadCrabs,
+    int UnclassifiedCrabs,
 
-    decimal MoltingRate,     // MoltedCrabs / TotalCrabs × 100
-    decimal HarvestRate,     // HarvestedCrabs / TotalCrabs × 100
-    decimal MortalityRate,   // DeadCrabs / TotalCrabs × 100
-    decimal AliveRate        // AliveCrabs / TotalCrabs × 100
+    decimal SurvivalRate,    // (Alive + Molting) / Total × 100
+    decimal MoltingRate,     // Molting / Total × 100
+    decimal HarvestRate,     // Harvested / Total × 100
+    decimal MortalityRate,   // Dead / Total × 100
+    decimal AliveRate,       // Alive / Total × 100 (chỉ cua chưa lột)
+
+    decimal HealthScore      // Điểm tổng hợp 0-100
 );
