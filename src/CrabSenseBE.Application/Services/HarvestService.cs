@@ -115,10 +115,21 @@ public class HarvestService : IHarvestService
     {
         var boxIdsInArea = await BoxIdsInAreaAsync(farmingAreaId, ct);
         var crabs = (await _uow.Crabs.GetAllAsync(ct)).ToList();
-        var harvestable = crabs.Count(c =>
-            (c.Status is CrabStatus.Alive or CrabStatus.Molting or CrabStatus.Quarantined)
-            && (boxIdsInArea is null
-                || (c.BoxId is Guid bid && boxIdsInArea.Contains(bid))));
+        bool InArea(Crab c) =>
+            boxIdsInArea is null
+            || (c.BoxId is Guid bid && boxIdsInArea.Contains(bid));
+
+        var harvestableCrabs = crabs
+            .Where(c =>
+                (c.Status is CrabStatus.Alive or CrabStatus.Molting or CrabStatus.Quarantined)
+                && InArea(c))
+            .ToList();
+        var harvestable = harvestableCrabs.Count;
+        var softshellWaiting = harvestableCrabs.Count(c =>
+            c.Condition is CrabCondition.Softshell or CrabCondition.Molting
+            || c.Status == CrabStatus.Molting
+            || c.MoltingStage.Contains("soft", StringComparison.OrdinalIgnoreCase)
+            || c.MoltingStage.Contains("lột", StringComparison.OrdinalIgnoreCase));
 
         var today = DateTime.UtcNow.Date;
         var tomorrow = today.AddDays(1);
@@ -128,12 +139,16 @@ public class HarvestService : IHarvestService
                 || farmingAreaId == Guid.Empty
                 || v.FarmingAreaId == farmingAreaId)
             .ToList();
-        var harvestedToday = areaVouchers
+        var todayCompleted = areaVouchers
             .Where(v =>
                 v.Status == HarvestStatus.Completed
                 && v.HarvestDate >= today
                 && v.HarvestDate < tomorrow)
-            .Sum(v => v.TotalQuantity);
+            .ToList();
+        var harvestedToday = todayCompleted.Sum(v => v.TotalQuantity);
+        var todayWeightKg = decimal.Round(
+            todayCompleted.Sum(v => v.TotalWeightKg),
+            3);
 
         var completedIds = areaVouchers
             .Where(v => v.Status == HarvestStatus.Completed)
@@ -155,7 +170,8 @@ public class HarvestService : IHarvestService
             harvestable,
             harvestedToday,
             waitingCrabs.Count,
-            decimal.Round(waitingCrabs.Sum(c => c.WeightGram ?? 0) / 1000m, 3)));
+            todayWeightKg,
+            softshellWaiting));
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -166,15 +182,7 @@ public class HarvestService : IHarvestService
         CreateHarvestVoucherRequest request,
         CancellationToken ct = default)
     {
-        var requestLines = request.Lines?.ToList()
-            ?? throw AppException.BadRequest(
-                "Harvest lines are required.");
-
-        if (requestLines.Count == 0)
-        {
-            throw AppException.BadRequest(
-                "At least one harvest line is required.");
-        }
+        var requestLines = request.Lines?.ToList() ?? [];
 
         if (request.HarvestDate == default)
         {
@@ -188,27 +196,56 @@ public class HarvestService : IHarvestService
                 "HarvestDate cannot be in the future.");
         }
 
-        // if (request.CropBatchId.HasValue)
-        // {
-        //     var cropBatchExists = await _uow.CropBatches.AnyAsync(
-        //         batch => batch.Id == request.CropBatchId.Value,
-        //         ct);
-
-        //     if (!cropBatchExists)
-        //     {
-        //         throw AppException.BadRequest(
-        //             $"CropBatch '{request.CropBatchId}' does not exist.");
-        //     }
-        // }
-
-        ValidateHarvestLines(requestLines);
-
         var suppliedCrabIds = requestLines
             .Where(line => line.CrabId.HasValue)
             .Select(line => line.CrabId!.Value)
             .ToList();
 
-        await ValidateCrabsAsync(suppliedCrabIds, ct);
+        var statusSpecified = !string.IsNullOrWhiteSpace(request.Status);
+        HarvestStatus status;
+        if (statusSpecified)
+        {
+            if (!Enum.TryParse<HarvestStatus>(
+                    request.Status!.Trim(),
+                    ignoreCase: true,
+                    out status))
+            {
+                var allowed = string.Join(", ", Enum.GetNames<HarvestStatus>());
+                throw AppException.BadRequest(
+                    $"Invalid harvest status. Allowed values: {allowed}.");
+            }
+        }
+        else
+        {
+            // Clients cũ: tạo phiếu kèm cua = hoàn tất ngay.
+            status = suppliedCrabIds.Count > 0
+                ? HarvestStatus.Completed
+                : HarvestStatus.Planned;
+        }
+
+        var completeNow = status == HarvestStatus.Completed;
+        var requireWeights = status is HarvestStatus.InProgress
+            or HarvestStatus.Completed;
+
+        if (requireWeights && requestLines.Count == 0)
+        {
+            throw AppException.BadRequest(
+                "At least one harvest line is required.");
+        }
+
+        if (status == HarvestStatus.Planned
+            && request.FarmingAreaId is null
+            && suppliedCrabIds.Count == 0)
+        {
+            throw AppException.BadRequest(
+                "FarmingAreaId is required when saving a draft without crabs.");
+        }
+
+        if (requestLines.Count > 0)
+        {
+            ValidateHarvestLines(requestLines, requirePositiveWeight: requireWeights);
+            await ValidateCrabsAsync(suppliedCrabIds, ct);
+        }
 
         var areaId = request.FarmingAreaId;
         if (areaId is null && suppliedCrabIds.Count > 0)
@@ -217,14 +254,12 @@ public class HarvestService : IHarvestService
         var performer = NormalizeNullable(request.PerformedByName)
             ?? await ResolveUserNameAsync(ct);
 
-        var completeNow = suppliedCrabIds.Count > 0;
-
         var voucher = new HarvestVoucher
         {
             VoucherCode = await GenerateVoucherCodeAsync(ct),
             // CropBatchId = request.CropBatchId,
             HarvestDate = NormalizeUtc(request.HarvestDate),
-            Status = completeNow ? HarvestStatus.Completed : HarvestStatus.Planned,
+            Status = status,
             Notes = NormalizeNullable(request.Notes),
             CreatedBy = _currentUser.UserId,
             FarmingAreaId = areaId,
@@ -550,7 +585,8 @@ public class HarvestService : IHarvestService
     // ─────────────────────────────────────────────────────────────────────────
 
     private static void ValidateHarvestLines(
-        IReadOnlyCollection<HarvestLineRequest> lines)
+        IReadOnlyCollection<HarvestLineRequest> lines,
+        bool requirePositiveWeight = true)
     {
         var duplicateCrabId = lines
             .Where(line => line.CrabId.HasValue)
@@ -570,10 +606,16 @@ public class HarvestService : IHarvestService
         {
             lineNumber++;
 
-            if (line.WeightGram <= 0)
+            if (requirePositiveWeight && line.WeightGram <= 0)
             {
                 throw AppException.BadRequest(
                     $"WeightGram at line {lineNumber} must be greater than zero.");
+            }
+
+            if (!requirePositiveWeight && line.WeightGram < 0)
+            {
+                throw AppException.BadRequest(
+                    $"WeightGram at line {lineNumber} cannot be negative.");
             }
 
             if (line.WeightGram > 10000)

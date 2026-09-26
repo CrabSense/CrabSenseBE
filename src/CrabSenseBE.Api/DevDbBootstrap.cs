@@ -47,6 +47,7 @@ public static class DevDbBootstrap
                 await EnsureGrowthMoltColumnsAsync(db, logger);
                 await EnsureScheduledFarmTasksSchemaAsync(db, logger);
                 await EnsureHarvestSalesWorkflowSchemaAsync(db, logger);
+                await EnsureAlertWorkflowColumnsAsync(db, logger);
                 await EnsureOrphanAlertCleanupAsync(db, logger);
                 logger.LogInformation("Schema ready (attempt {A}).", attempt);
 
@@ -676,7 +677,9 @@ public static class DevDbBootstrap
             ADD COLUMN IF NOT EXISTS "Name" text NULL,
             ADD COLUMN IF NOT EXISTS "MacAddress" character varying(64) NULL,
             ADD COLUMN IF NOT EXISTS "IpAddress" character varying(64) NULL,
-            ADD COLUMN IF NOT EXISTS "FarmingAreaId" uuid NULL;
+            ADD COLUMN IF NOT EXISTS "FarmingAreaId" uuid NULL,
+            ADD COLUMN IF NOT EXISTS "InstallationLocation" character varying(200) NULL,
+            ADD COLUMN IF NOT EXISTS "Notes" character varying(500) NULL;
 
             CREATE INDEX IF NOT EXISTS "IX_Devices_FarmingAreaId"
                 ON be."Devices" ("FarmingAreaId");
@@ -698,7 +701,7 @@ public static class DevDbBootstrap
             logger.LogWarning(ex, "Devices.FarmingAreaId FK skipped.");
         }
 
-        logger.LogInformation("Ensured Device/Controller columns (Name, MAC, IP, khu).");
+        logger.LogInformation("Ensured Device/Controller columns (Name, MAC, IP, khu, vị trí, ghi chú).");
     }
 
     private static async Task EnsureWaterAnalysisSchemaAsync(AppDbContext db, ILogger logger)
@@ -744,6 +747,21 @@ public static class DevDbBootstrap
         {
             logger.LogWarning(ex, "WaterAnalysisRuns.FarmingAreaId FK skipped.");
         }
+
+        await db.Database.ExecuteSqlRawAsync(
+            """
+            ALTER TABLE be."WaterAnalysisRuns" ADD COLUMN IF NOT EXISTS "Analyte" character varying(16) NULL;
+            ALTER TABLE be."WaterAnalysisRuns" ADD COLUMN IF NOT EXISTS "SampleSource" character varying(32) NULL;
+            ALTER TABLE be."WaterAnalysisRuns" ADD COLUMN IF NOT EXISTS "SampleLocation" character varying(128) NULL;
+            ALTER TABLE be."WaterAnalysisRuns" ADD COLUMN IF NOT EXISTS "Notes" character varying(500) NULL;
+            ALTER TABLE be."WaterAnalysisRuns" ADD COLUMN IF NOT EXISTS "TestCode" character varying(32) NULL;
+            ALTER TABLE be."WaterAnalysisRuns" ADD COLUMN IF NOT EXISTS "Confidence" numeric(5,4) NULL;
+            ALTER TABLE be."WaterAnalysisRuns" ADD COLUMN IF NOT EXISTS "PerformedBy" character varying(128) NULL;
+            ALTER TABLE be."WaterAnalysisRuns" ADD COLUMN IF NOT EXISTS "StepLogJson" text NULL;
+            ALTER TABLE be."WaterAnalysisRuns" ADD COLUMN IF NOT EXISTS "ControllerId" character varying(64) NULL;
+            ALTER TABLE be."WaterAnalysisRuns" ADD COLUMN IF NOT EXISTS "CameraId" character varying(64) NULL;
+            ALTER TABLE be."WaterAnalysisRuns" ADD COLUMN IF NOT EXISTS "HardwareJson" text NULL;
+            """).ConfigureAwait(false);
 
         logger.LogInformation("Ensured WaterAnalysisRuns (colorimetric).");
     }
@@ -873,6 +891,24 @@ public static class DevDbBootstrap
     /// <summary>
     /// Alert còn SensorId nhưng sensor đã bị xóa (seed dở) — gỡ trước khi SaveChanges.
     /// </summary>
+    private static async Task EnsureAlertWorkflowColumnsAsync(AppDbContext db, ILogger logger)
+    {
+        await db.Database.ExecuteSqlRawAsync(
+            """
+            ALTER TABLE be."Alerts" ADD COLUMN IF NOT EXISTS "ProcessingStartedAt" timestamp with time zone NULL;
+            ALTER TABLE be."Alerts" ADD COLUMN IF NOT EXISTS "ProcessingBy" uuid NULL;
+            ALTER TABLE be."Alerts" ADD COLUMN IF NOT EXISTS "ResolvedAt" timestamp with time zone NULL;
+            ALTER TABLE be."Alerts" ADD COLUMN IF NOT EXISTS "ResolvedBy" uuid NULL;
+            ALTER TABLE be."Alerts" ADD COLUMN IF NOT EXISTS "ResolutionReason" character varying(128) NULL;
+            ALTER TABLE be."Alerts" ADD COLUMN IF NOT EXISTS "ResolutionAction" character varying(1000) NULL;
+            ALTER TABLE be."Alerts" ADD COLUMN IF NOT EXISTS "ResolutionNote" character varying(1000) NULL;
+            ALTER TABLE be."Alerts" ADD COLUMN IF NOT EXISTS "OccurrenceCount" integer NOT NULL DEFAULT 1;
+            ALTER TABLE be."Alerts" ADD COLUMN IF NOT EXISTS "LastOccurredAt" timestamp with time zone NULL;
+            ALTER TABLE be."Alerts" ADD COLUMN IF NOT EXISTS "IncidentId" character varying(64) NULL;
+            """).ConfigureAwait(false);
+        logger.LogInformation("Ensured Alert workflow columns.");
+    }
+
     private static async Task EnsureOrphanAlertCleanupAsync(AppDbContext db, ILogger logger)
     {
         try

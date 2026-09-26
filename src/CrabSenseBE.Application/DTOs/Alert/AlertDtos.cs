@@ -35,9 +35,31 @@ public record AlertDto(
     string SlaLabel,
     string? AiRecommendation,
     int? AiConfidence,
-    Guid? AcknowledgedBy);
+    Guid? AcknowledgedBy,
+    string? Description = null,
+    string? SourceLabel = null,
+    string? Kind = null,
+    string? DeviceCode = null,
+    string? AreaCode = null,
+    DateTime? ProcessingStartedAt = null,
+    DateTime? ResolvedAt = null,
+    string? ResolutionReason = null,
+    string? ResolutionAction = null,
+    string? ResolutionNote = null,
+    int OccurrenceCount = 1,
+    DateTime? LastOccurredAt = null,
+    string? IncidentId = null);
 
 public record AcknowledgeAlertRequest(Guid? UserId);
+
+public record ResolveAlertRequest(
+    string? Reason = null,
+    string? Action = null,
+    string? Note = null,
+    bool? DeviceRecovered = null,
+    Guid? UserId = null);
+
+public record StartProcessingRequest(Guid? UserId = null);
 
 public record AlertUnreadCountDto(int Count, int UnreadCount);
 

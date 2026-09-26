@@ -388,11 +388,21 @@ public class IotService : IIotService
         }
         var row = await _uow.FarmingRows.GetByIdAsync(farmingRowId.Value, ct)
             ?? throw AppException.NotFound("FarmingRow");
+        if (device.FarmingAreaId is Guid aid && row.FarmingAreaId != aid)
+            throw AppException.BadRequest("Dãy không thuộc khu vực của Controller.");
         device.FarmingRowId = row.Id;
         device.FarmingAreaId ??= row.FarmingAreaId;
     }
 
     private static string? Clean(string? v) => string.IsNullOrWhiteSpace(v) ? null : v.Trim();
+
+    private static string? Limit(string? v, int max)
+    {
+        if (v is null) return null;
+        if (v.Length > max)
+            throw AppException.BadRequest($"Trường vượt quá {max} ký tự.");
+        return v;
+    }
 
     public async Task<ApiResponse<DeviceDetailDto>> GetDeviceAsync(Guid id, CancellationToken ct = default)
     {
@@ -453,6 +463,8 @@ public class IotService : IIotService
             StreamUrl = Clean(req.StreamUrl),
             SnapshotUrl = Clean(req.SnapshotUrl),
             Resolution = Clean(req.Resolution),
+            InstallationLocation = Limit(Clean(req.InstallationLocation), 200),
+            Notes = Limit(Clean(req.Note ?? req.Notes), 500),
             Status = DeviceStatus.Offline
         };
         await ApplyRowAsync(device, req.FarmingRowId, ct);
@@ -487,6 +499,15 @@ public class IotService : IIotService
             {
                 _ = await _uow.FarmingAreas.GetByIdAsync(req.FarmingAreaId.Value, ct)
                     ?? throw AppException.NotFound("FarmingArea");
+                if (device.FarmingAreaId != req.FarmingAreaId)
+                {
+                    if (req.FarmingRowId is null && device.FarmingRowId is Guid currentRowId)
+                    {
+                        var currentRow = await _uow.FarmingRows.GetByIdAsync(currentRowId, ct);
+                        if (currentRow is not null && currentRow.FarmingAreaId != req.FarmingAreaId)
+                            device.FarmingRowId = null;
+                    }
+                }
                 device.FarmingAreaId = req.FarmingAreaId;
             }
         }
@@ -494,6 +515,10 @@ public class IotService : IIotService
         if (req.StreamUrl is not null) device.StreamUrl = Clean(req.StreamUrl);
         if (req.SnapshotUrl is not null) device.SnapshotUrl = Clean(req.SnapshotUrl);
         if (req.Resolution is not null) device.Resolution = Clean(req.Resolution);
+        if (req.InstallationLocation is not null)
+            device.InstallationLocation = Limit(Clean(req.InstallationLocation), 200);
+        if (req.Note is not null || req.Notes is not null)
+            device.Notes = Limit(Clean(req.Note ?? req.Notes), 500);
         if (!string.IsNullOrWhiteSpace(req.Status)
             && Enum.TryParse<DeviceStatus>(req.Status, true, out var st))
             device.Status = st;
@@ -678,7 +703,8 @@ public class IotService : IIotService
             d.MacAddress, d.IpAddress, d.FarmingAreaId,
             area?.Name, area?.Code, actuatorCount,
             d.FarmingRowId, row?.Name, row?.Code,
-            stream, snapshot, d.Resolution);
+            stream, snapshot, d.Resolution,
+            d.InstallationLocation, d.Notes);
     }
 
     private static DeviceDetailDto MapDeviceDetail(
@@ -698,7 +724,8 @@ public class IotService : IIotService
             area?.Name, area?.Code, d.BatteryLevel, d.RssiDbm,
             sensors, actuators,
             d.FarmingRowId, row?.Name, row?.Code,
-            stream, snapshot, d.Resolution);
+            stream, snapshot, d.Resolution,
+            d.InstallationLocation, d.Notes);
     }
 
     private static WaterSystemDto MapWs(WaterSystem w) =>

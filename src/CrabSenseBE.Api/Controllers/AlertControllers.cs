@@ -56,17 +56,26 @@ public class AlertsController : ControllerBase
     public async Task<IActionResult> AcknowledgePost(Guid id, [FromBody] AcknowledgeAlertRequest? req, CancellationToken ct = default)
         => Ok(await _service.AcknowledgeAsync(id, req ?? new AcknowledgeAlertRequest(null), ct));
 
+    /// <summary>[UPDATE] Bắt đầu xử lý cảnh báo.</summary>
+    [HttpPost("{id:guid}/process")]
+    [Authorize(Roles = AppRoles.FarmWrite)]
+    public async Task<IActionResult> StartProcessing(
+        Guid id, [FromBody] StartProcessingRequest? req, CancellationToken ct)
+        => Ok(await _service.StartProcessingAsync(id, req, ct));
+
     /// <summary>[UPDATE] Resolve alert</summary>
     [HttpPatch("{id:guid}/resolve")]
     [Authorize(Roles = AppRoles.FarmWrite)]
-    public async Task<IActionResult> Resolve(Guid id, CancellationToken ct)
-        => Ok(await _service.ResolveAsync(id, ct));
+    public async Task<IActionResult> Resolve(
+        Guid id, [FromBody] ResolveAlertRequest? req, CancellationToken ct)
+        => Ok(await _service.ResolveAsync(id, req, ct));
 
     /// <summary>[UPDATE] Resolve / dismiss alias (POST)</summary>
     [HttpPost("{id:guid}/resolve")]
     [Authorize(Roles = AppRoles.FarmWrite)]
-    public async Task<IActionResult> ResolvePost(Guid id, CancellationToken ct)
-        => Ok(await _service.ResolveAsync(id, ct));
+    public async Task<IActionResult> ResolvePost(
+        Guid id, [FromBody] ResolveAlertRequest? req, CancellationToken ct)
+        => Ok(await _service.ResolveAsync(id, req, ct));
 
     /// <summary>[ACTION] Scan disconnected devices/sensors</summary>
     [HttpPost("check-disconnects")]

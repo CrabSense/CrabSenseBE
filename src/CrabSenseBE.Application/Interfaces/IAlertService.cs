@@ -24,7 +24,8 @@ public interface IAlertService
     Task<ApiResponse<AlertDto>> GetByIdAsync(Guid id, CancellationToken ct = default);
     Task<ApiResponse<AlertUnreadCountDto>> GetUnreadCountAsync(CancellationToken ct = default);
     Task<ApiResponse<AlertDto>> AcknowledgeAsync(Guid id, AcknowledgeAlertRequest req, CancellationToken ct = default);
-    Task<ApiResponse<AlertDto>> ResolveAsync(Guid id, CancellationToken ct = default);
+    Task<ApiResponse<AlertDto>> StartProcessingAsync(Guid id, StartProcessingRequest? req, CancellationToken ct = default);
+    Task<ApiResponse<AlertDto>> ResolveAsync(Guid id, ResolveAlertRequest? req, CancellationToken ct = default);
 
     /// <summary>So giá trị đo với ngưỡng → tạo Alert nếu vượt.</summary>
     Task EvaluateMeasurementAsync(Sensor sensor, decimal value, CancellationToken ct = default);

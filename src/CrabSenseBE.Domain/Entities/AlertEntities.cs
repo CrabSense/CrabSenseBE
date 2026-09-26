@@ -24,6 +24,16 @@ public class Alert : BaseEntity
     public decimal? TriggerValue { get; set; }
     public DateTime? AcknowledgedAt { get; set; }
     public Guid? AcknowledgedBy { get; set; }
+    public DateTime? ProcessingStartedAt { get; set; }
+    public Guid? ProcessingBy { get; set; }
+    public DateTime? ResolvedAt { get; set; }
+    public Guid? ResolvedBy { get; set; }
+    public string? ResolutionReason { get; set; }
+    public string? ResolutionAction { get; set; }
+    public string? ResolutionNote { get; set; }
+    public int OccurrenceCount { get; set; } = 1;
+    public DateTime? LastOccurredAt { get; set; }
+    public string? IncidentId { get; set; }
 
     // Navigation
     public Sensor? Sensor { get; set; }

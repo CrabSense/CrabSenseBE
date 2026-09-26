@@ -122,6 +122,12 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<Device>()
             .Property(d => d.Resolution)
             .HasMaxLength(32);
+        modelBuilder.Entity<Device>()
+            .Property(d => d.InstallationLocation)
+            .HasMaxLength(200);
+        modelBuilder.Entity<Device>()
+            .Property(d => d.Notes)
+            .HasMaxLength(500);
         // Gắn theo dãy: không tạo FK để xoá dãy không kéo theo thiết bị/cảm biến.
         modelBuilder.Entity<Device>()
             .HasIndex(d => d.FarmingRowId);
@@ -140,6 +146,30 @@ public class AppDbContext : DbContext
             .HasMaxLength(32);
         modelBuilder.Entity<WaterAnalysisRun>()
             .Property(r => r.Source)
+            .HasMaxLength(64);
+        modelBuilder.Entity<WaterAnalysisRun>()
+            .Property(r => r.Analyte)
+            .HasMaxLength(16);
+        modelBuilder.Entity<WaterAnalysisRun>()
+            .Property(r => r.SampleSource)
+            .HasMaxLength(32);
+        modelBuilder.Entity<WaterAnalysisRun>()
+            .Property(r => r.SampleLocation)
+            .HasMaxLength(128);
+        modelBuilder.Entity<WaterAnalysisRun>()
+            .Property(r => r.Notes)
+            .HasMaxLength(500);
+        modelBuilder.Entity<WaterAnalysisRun>()
+            .Property(r => r.TestCode)
+            .HasMaxLength(32);
+        modelBuilder.Entity<WaterAnalysisRun>()
+            .Property(r => r.PerformedBy)
+            .HasMaxLength(128);
+        modelBuilder.Entity<WaterAnalysisRun>()
+            .Property(r => r.ControllerId)
+            .HasMaxLength(64);
+        modelBuilder.Entity<WaterAnalysisRun>()
+            .Property(r => r.CameraId)
             .HasMaxLength(64);
 
         modelBuilder.Entity<SalesOrder>()

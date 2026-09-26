@@ -75,7 +75,8 @@ public record CreateHarvestVoucherRequest(
     IEnumerable<HarvestLineRequest> Lines,
     Guid? FarmingAreaId = null,
     string? PerformedByName = null,
-    IEnumerable<string>? PhotoUrls = null
+    IEnumerable<string>? PhotoUrls = null,
+    string? Status = null
 );
 
 public record HarvestLineRequest(
@@ -93,7 +94,8 @@ public record HarvestOverviewDto(
     int HarvestableCount,
     int HarvestedToday,
     int WaitingSale,
-    decimal TotalHarvestWeightKg
+    decimal TotalHarvestWeightKg,
+    int SoftshellWaiting = 0
 );
 
 public record UpdateHarvestStatusRequest(
