@@ -71,6 +71,9 @@ public class AppDbContext : DbContext
     public DbSet<FarmOperation> FarmOperations => Set<FarmOperation>();
     public DbSet<SaleTransaction> SaleTransactions => Set<SaleTransaction>();
     public DbSet<ScheduledFarmTask> ScheduledFarmTasks => Set<ScheduledFarmTask>();
+    public DbSet<FeedingEvent> FeedingEvents => Set<FeedingEvent>();
+    public DbSet<ObservationEvent> ObservationEvents => Set<ObservationEvent>();
+    public DbSet<TrainingLabel> TrainingLabels => Set<TrainingLabel>();
     public DbSet<SyncInboxItem> SyncInboxItems => Set<SyncInboxItem>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
