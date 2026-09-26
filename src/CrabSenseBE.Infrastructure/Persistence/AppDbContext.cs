@@ -75,6 +75,7 @@ public class AppDbContext : DbContext
     public DbSet<ObservationEvent> ObservationEvents => Set<ObservationEvent>();
     public DbSet<TrainingLabel> TrainingLabels => Set<TrainingLabel>();
     public DbSet<SyncInboxItem> SyncInboxItems => Set<SyncInboxItem>();
+    public DbSet<EdgeCommand> EdgeCommands => Set<EdgeCommand>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -93,6 +94,8 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<SyncInboxItem>()
             .Property(item => item.PayloadJson)
             .HasColumnType("jsonb");
+        modelBuilder.Entity<EdgeCommand>()
+            .HasIndex(command => new { command.DeviceCode, command.Status, command.CreatedAt });
         // Enum conversions stored as string
         modelBuilder.Entity<AppUser>()
             .Property(u => u.Role)

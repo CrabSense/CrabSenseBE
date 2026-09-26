@@ -11,8 +11,13 @@ namespace CrabSenseBE.Application.Services;
 public class RasFlowService : IRasFlowService
 {
     private readonly IUnitOfWork _uow;
+    private readonly IEdgeCommandService _edgeCommands;
 
-    public RasFlowService(IUnitOfWork uow) => _uow = uow;
+    public RasFlowService(IUnitOfWork uow, IEdgeCommandService edgeCommands)
+    {
+        _uow = uow;
+        _edgeCommands = edgeCommands;
+    }
 
     public async Task<ApiResponse<RasFlowDiagramDto>> GetDiagramByAreaAsync(Guid areaId, CancellationToken ct = default)
     {
@@ -201,6 +206,21 @@ public class RasFlowService : IRasFlowService
             }, ct);
         }
         await _uow.SaveChangesAsync(ct);
+        if (node.RelayDeviceId is Guid deviceId
+            && cmd is ("on" or "off" or "start" or "stop" or "open" or "close" or "toggle"))
+        {
+            var device = await _uow.Devices.GetByIdAsync(deviceId, ct);
+            if (device is not null)
+            {
+                await _edgeCommands.EnqueueAsync(
+                    new EnqueueEdgeCommandRequest(
+                        device.DeviceCode,
+                        node.IsOn ? "on" : "off",
+                        node.RelayChannel),
+                    actorId,
+                    ct);
+            }
+        }
         return ApiResponse<RasFlowDiagramDto>.Ok(await BuildDiagramAsync(area, ws, ct), "Command applied.");
     }
 

@@ -203,6 +203,10 @@ public class UnitOfWork : IUnitOfWork
     public IRepository<TrainingLabel> TrainingLabels =>
         _trainingLabels ??= new GenericRepository<TrainingLabel>(_context);
 
+    private IRepository<EdgeCommand>? _edgeCommands;
+    public IRepository<EdgeCommand> EdgeCommands =>
+        _edgeCommands ??= new GenericRepository<EdgeCommand>(_context);
+
     public Task<int> SaveChangesAsync(CancellationToken ct = default)
         => _context.SaveChangesAsync(ct);
 

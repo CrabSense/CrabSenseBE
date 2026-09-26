@@ -59,6 +59,7 @@ public interface IUnitOfWork : IDisposable
     IRepository<FeedingEvent> FeedingEvents { get; }
     IRepository<ObservationEvent> ObservationEvents { get; }
     IRepository<TrainingLabel> TrainingLabels { get; }
+    IRepository<EdgeCommand> EdgeCommands { get; }
 
     Task<int> SaveChangesAsync(CancellationToken ct = default);
 
