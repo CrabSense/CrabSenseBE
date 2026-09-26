@@ -191,6 +191,18 @@ public class UnitOfWork : IUnitOfWork
     public IRepository<ScheduledFarmTask> ScheduledFarmTasks =>
         _scheduledFarmTasks ??= new GenericRepository<ScheduledFarmTask>(_context);
 
+    private IRepository<FeedingEvent>? _feedingEvents;
+    public IRepository<FeedingEvent> FeedingEvents =>
+        _feedingEvents ??= new GenericRepository<FeedingEvent>(_context);
+
+    private IRepository<ObservationEvent>? _observationEvents;
+    public IRepository<ObservationEvent> ObservationEvents =>
+        _observationEvents ??= new GenericRepository<ObservationEvent>(_context);
+
+    private IRepository<TrainingLabel>? _trainingLabels;
+    public IRepository<TrainingLabel> TrainingLabels =>
+        _trainingLabels ??= new GenericRepository<TrainingLabel>(_context);
+
     public Task<int> SaveChangesAsync(CancellationToken ct = default)
         => _context.SaveChangesAsync(ct);
 
