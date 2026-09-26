@@ -33,6 +33,10 @@ public interface IFarmOperationService
         DateTime? startDate = null, DateTime? endDate = null, CancellationToken ct = default);
     Task<ApiResponse<FarmOperationDto>> CreateAsync(CreateFarmOperationRequest req, CancellationToken ct = default);
     Task<ApiResponse<FarmOperationDto>> UpdateAsync(Guid id, UpdateFarmOperationRequest req, CancellationToken ct = default);
+
+    /// <summary>Tab "Ăn &amp; Vận động": KPI + trend + lịch sử cho ăn của một con cua trong khoảng thời gian.</summary>
+    Task<ApiResponse<CrabFeedingActivityDto>> GetCrabFeedingActivityAsync(
+        Guid crabId, DateTime? from, DateTime? to, int page = 1, int limit = 10, CancellationToken ct = default);
 }
 
 public interface IManualInspectionService
@@ -47,5 +51,8 @@ public interface IAiOpsService
     Task<ApiResponse<AiDetectionDto>> AnalyzeAsync(AiAnalyzeRequest req, CancellationToken ct = default);
     Task<ApiResponse<IEnumerable<AiDetectionDto>>> ListDetectionsAsync(
         Guid? boxId = null, Guid? mediaId = null, CancellationToken ct = default);
+    /// <summary>Lọc theo khu (qua hộp→dãy→khu hoặc camera) và giới hạn số bản ghi mới nhất.</summary>
+    Task<ApiResponse<IEnumerable<AiDetectionDto>>> ListDetectionsAsync(
+        Guid? boxId, Guid? mediaId, Guid? farmingAreaId, int? take, CancellationToken ct = default);
     Task<ApiResponse<object>> SubmitFeedbackAsync(AiFeedbackRequest req, Guid userId, CancellationToken ct = default);
 }

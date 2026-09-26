@@ -121,7 +121,9 @@ public class FarmingService : IFarmingService
             AreaSquareMeters = req.AreaSquareMeters,
             EstablishedAt = NormalizeDate(req.EstablishedAt),
             Description = NormalizeOptional(req.Description),
-            AvatarUrl = NormalizeOptional(req.AvatarUrl)
+            AvatarUrl = NormalizeOptional(req.AvatarUrl),
+            Latitude = NormalizeCoord(req.Latitude, -90, 90, "Latitude"),
+            Longitude = NormalizeCoord(req.Longitude, -180, 180, "Longitude"),
         };
         ApplyStatus(area, status);
         await _uow.FarmingAreas.AddAsync(area, ct);
@@ -152,6 +154,10 @@ public class FarmingService : IFarmingService
             area.EstablishedAt = NormalizeDate(req.EstablishedAt);
         if (req.AvatarUrl is not null)
             area.AvatarUrl = NormalizeOptional(req.AvatarUrl);
+        if (req.Latitude is not null)
+            area.Latitude = NormalizeCoord(req.Latitude, -90, 90, "Latitude");
+        if (req.Longitude is not null)
+            area.Longitude = NormalizeCoord(req.Longitude, -180, 180, "Longitude");
 
         if (!string.IsNullOrWhiteSpace(req.Status))
             ApplyStatus(area, ParseFarmStatus(req.Status));
@@ -163,6 +169,54 @@ public class FarmingService : IFarmingService
         var owner = await _uow.Users.GetByIdAsync(area.OwnerId, ct);
         var stats = await BuildAreaStatsAsync(new[] { area.Id }, ct);
         return ApiResponse<FarmingAreaDto>.Ok(MapArea(area, owner?.FullName, stats.GetValueOrDefault(area.Id)));
+    }
+
+    public async Task<ApiResponse<FarmingAreaDto>> UpdateAreaMapAsync(
+        Guid id, UpdateAreaMapRequest req, CancellationToken ct = default)
+    {
+        var area = await RequireAreaAsync(id, requireActive: false, ct);
+
+        var coords = new[] { req.MapX1, req.MapY1, req.MapX2, req.MapY2 };
+        var provided = coords.Count(c => c is not null);
+        if (provided is not (0 or 4))
+            throw AppException.BadRequest("MapX1, MapY1, MapX2, MapY2 must be sent together (all or none).");
+        if (provided == 4)
+        {
+            foreach (var c in coords)
+                ValidateMapRatio(c, "Map bounds");
+            if (req.MapX2 <= req.MapX1 || req.MapY2 <= req.MapY1)
+                throw AppException.BadRequest("Map bounds require MapX2 > MapX1 and MapY2 > MapY1.");
+        }
+
+        if (req.MapImageUrl is not null)
+            area.MapImageUrl = NormalizeOptional(req.MapImageUrl);
+
+        area.MapX1 = req.MapX1;
+        area.MapY1 = req.MapY1;
+        area.MapX2 = req.MapX2;
+        area.MapY2 = req.MapY2;
+
+        _uow.FarmingAreas.Update(area);
+        await _uow.SaveChangesAsync(ct);
+        var owner = await _uow.Users.GetByIdAsync(area.OwnerId, ct);
+        var stats = await BuildAreaStatsAsync(new[] { area.Id }, ct);
+        return ApiResponse<FarmingAreaDto>.Ok(
+            MapArea(area, owner?.FullName, stats.GetValueOrDefault(area.Id)), "Map layout updated.");
+    }
+
+    /// <summary>Toạ độ bản đồ là tỉ lệ 0–1 theo kích thước ảnh.</summary>
+    private static void ValidateMapRatio(decimal? value, string field)
+    {
+        if (value is < 0 or > 1)
+            throw AppException.BadRequest($"{field} must be within 0..1 (ratio of the map image).");
+    }
+
+    private static void ValidateMapPoint(UpdateMapPointRequest req)
+    {
+        if ((req.MapX is null) != (req.MapY is null))
+            throw AppException.BadRequest("MapX and MapY must be sent together (both or none).");
+        ValidateMapRatio(req.MapX, "MapX");
+        ValidateMapRatio(req.MapY, "MapY");
     }
 
     public async Task<ApiResponse<FarmAvatarDto>> UploadAvatarAsync(
@@ -185,7 +239,10 @@ public class FarmingService : IFarmingService
         if (areaId is Guid id && id != Guid.Empty)
             area = await RequireAreaAsync(id, requireActive: false, ct);
 
-        var uploaded = await _images.UploadAsync(data, fileName, contentType, "farms", ct);
+        var folder = area is null
+            ? MediaFolderPath.Join(MediaFolderPath.PendingSegment, MediaFolderPath.AreasLeaf)
+            : MediaFolderPath.Join(area.Code, MediaFolderPath.AreasLeaf);
+        var uploaded = await _images.UploadAsync(data, fileName, contentType, folder, ct);
         var url = uploaded.ShareLink ?? uploaded.WebContentLink ?? uploaded.WebViewLink
             ?? throw AppException.BadRequest("Upload succeeded but no public URL was returned.");
 
@@ -338,16 +395,20 @@ public class FarmingService : IFarmingService
 
         var area = await RequireAreaAsync(req.FarmingAreaId, requireActive: true, ct);
         var status = ParseFarmStatus(req.Status, FarmStatus.Active);
+        var name = req.Name.Trim();
+        var sameArea = await _uow.FarmingRows.FindAsync(r => r.FarmingAreaId == area.Id, ct);
+        if (sameArea.Any(r => string.Equals(r.Name, name, StringComparison.OrdinalIgnoreCase)))
+            throw AppException.BadRequest("Tên dãy đã tồn tại trong khu vực này.");
 
         var row = new FarmingRow
         {
             FarmingAreaId = area.Id,
             Code = await AllocateRowCodeAsync(ct),
-            Name = req.Name.Trim(),
+            Name = name,
             Location = NormalizeOptional(req.Location),
             Description = NormalizeOptional(req.Description),
             Capacity = req.Capacity,
-            SortOrder = req.SortOrder ?? 0
+            SortOrder = req.SortOrder ?? 1
         };
         ApplyStatus(row, status);
         await _uow.FarmingRows.AddAsync(row, ct);
@@ -372,7 +433,12 @@ public class FarmingService : IFarmingService
                 throw AppException.BadRequest($"Capacity ({cap}) cannot be less than current box count ({boxCount}).");
         }
 
-        row.Name = req.Name.Trim();
+        var newName = req.Name.Trim();
+        var sameArea = await _uow.FarmingRows.FindAsync(r => r.FarmingAreaId == row.FarmingAreaId, ct);
+        if (sameArea.Any(r => r.Id != id && string.Equals(r.Name, newName, StringComparison.OrdinalIgnoreCase)))
+            throw AppException.BadRequest("Tên dãy đã tồn tại trong khu vực này.");
+
+        row.Name = newName;
         if (req.Location is not null)
             row.Location = NormalizeOptional(req.Location);
         if (req.Description is not null)
@@ -393,6 +459,23 @@ public class FarmingService : IFarmingService
         var area = await _uow.FarmingAreas.GetByIdAsync(row.FarmingAreaId, ct);
         var stats = await BuildRowStatsAsync(new[] { row.Id }, ct);
         return ApiResponse<FarmingRowDto>.Ok(MapRow(row, area, stats.GetValueOrDefault(row.Id)));
+    }
+
+    public async Task<ApiResponse<FarmingRowDto>> UpdateRowMapAsync(
+        Guid id, UpdateMapPointRequest req, CancellationToken ct = default)
+    {
+        var row = await RequireRowAsync(id, requireActive: false, ct);
+        ValidateMapPoint(req);
+
+        row.MapX = req.MapX;
+        row.MapY = req.MapY;
+        _uow.FarmingRows.Update(row);
+        await _uow.SaveChangesAsync(ct);
+
+        var area = await _uow.FarmingAreas.GetByIdAsync(row.FarmingAreaId, ct);
+        var stats = await BuildRowStatsAsync(new[] { row.Id }, ct);
+        return ApiResponse<FarmingRowDto>.Ok(
+            MapRow(row, area, stats.GetValueOrDefault(row.Id)), "Map position updated.");
     }
 
     public async Task<ApiResponse> DeleteRowAsync(Guid id, CancellationToken ct = default)
@@ -497,6 +580,47 @@ public class FarmingService : IFarmingService
         return ApiResponse<BoxDto>.Ok(MapBox(box, ctx), $"Created under {area.Name} / {row.Name}.");
     }
 
+    public async Task<ApiResponse<IReadOnlyList<BoxDto>>> CreateBoxesBulkAsync(
+        Guid rowId, int quantity, CancellationToken ct = default)
+    {
+        if (quantity < 1)
+            throw AppException.BadRequest("Quantity must be >= 1.");
+        if (quantity > 100)
+            throw AppException.BadRequest("Quantity cannot exceed 100 boxes.");
+
+        var row = await RequireRowAsync(rowId, requireActive: true, ct);
+        await RequireAreaAsync(row.FarmingAreaId, requireActive: true, ct);
+
+        var boxCount = (await _uow.Boxes.FindAsync(b => b.FarmingRowId == row.Id, ct)).Count();
+        if (row.Capacity > 0)
+        {
+            var remaining = row.Capacity - boxCount;
+            if (remaining <= 0)
+                throw AppException.Conflict(
+                    $"Row '{row.Name}' is full (capacity {row.Capacity}). Cannot add more boxes.");
+            if (quantity > remaining)
+                throw AppException.Conflict(
+                    $"Row '{row.Name}' only has remaining capacity for {remaining} box(es) ({boxCount}/{row.Capacity}).");
+        }
+
+        var codes = await AllocateBoxCodesAsync(quantity, ct);
+        var created = new List<Box>();
+        foreach (var code in codes)
+        {
+            var box = new Box { FarmingRowId = row.Id, Code = code, Status = "empty" };
+            await _uow.Boxes.AddAsync(box, ct);
+            created.Add(box);
+        }
+        await _uow.SaveChangesAsync(ct);
+        foreach (var box in created)
+            await _boxQr.EnsureBoxQrAsync(box.Id, ct);
+
+        var ctx = await LoadBoxContextAsync(ct);
+        return ApiResponse<IReadOnlyList<BoxDto>>.Ok(
+            created.Select(b => MapBox(b, ctx)).ToList(),
+            $"Created {created.Count} box(es) under {row.Name}.");
+    }
+
     /// <summary>Next farm-wide box code: BOX-0001, BOX-0002, …</summary>
     private async Task<string> NextGlobalBoxCodeAsync(CancellationToken ct)
     {
@@ -544,6 +668,33 @@ public class FarmingService : IFarmingService
         }
 
         return max + 1;
+    }
+
+    /// <summary>Allocate N unused BOX-#### codes (skips gaps / deleted numbers).</summary>
+    private async Task<List<string>> AllocateBoxCodesAsync(int count, CancellationToken ct)
+    {
+        const string prefix = "BOX-";
+        var boxes = await _uow.Boxes.GetAllAsync(ct);
+        var used = new HashSet<int>();
+        var max = 0;
+        foreach (var b in boxes)
+        {
+            if (string.IsNullOrWhiteSpace(b.Code)) continue;
+            if (!b.Code.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) continue;
+            var suffix = b.Code[prefix.Length..];
+            if (!int.TryParse(suffix, out var n)) continue;
+            used.Add(n);
+            if (n > max) max = n;
+        }
+
+        var codes = new List<string>(count);
+        for (var i = 1; codes.Count < count; i++)
+        {
+            if (used.Contains(i)) continue;
+            used.Add(i);
+            codes.Add($"{prefix}{i:D4}");
+        }
+        return codes;
     }
 
     public async Task<ApiResponse<BoxDto>> UpdateBoxAsync(Guid id, UpdateBoxRequest req, CancellationToken ct = default)
@@ -602,6 +753,21 @@ public class FarmingService : IFarmingService
 
         var ctx = await LoadBoxContextAsync(ct);
         return ApiResponse<BoxDto>.Ok(MapBox(box, ctx));
+    }
+
+    public async Task<ApiResponse<BoxDto>> UpdateBoxMapAsync(
+        Guid boxId, UpdateMapPointRequest req, CancellationToken ct = default)
+    {
+        var box = await RequireBoxAsync(boxId, ct);
+        ValidateMapPoint(req);
+
+        box.MapX = req.MapX;
+        box.MapY = req.MapY;
+        _uow.Boxes.Update(box);
+        await _uow.SaveChangesAsync(ct);
+
+        var ctx = await LoadBoxContextAsync(ct);
+        return ApiResponse<BoxDto>.Ok(MapBox(box, ctx), "Map position updated.");
     }
 
     public async Task<ApiResponse> DeleteBoxAsync(Guid id, CancellationToken ct = default)
@@ -766,11 +932,12 @@ public class FarmingService : IFarmingService
 
             _ = await RequireAreaAsync(areaId.Value, requireActive: true, ct);
 
-            box = await PickEmptyBoxAsync(areaId.Value, rowId, ct)
+            var empty = await ListEmptyBoxesAsync(areaId.Value, rowId, ct);
+            box = empty.FirstOrDefault(b => !IsBoxUnusable(b.Status))
                 ?? throw AppException.Conflict(
                     rowId.HasValue
-                        ? "No empty box left in this row."
-                        : "No empty box left in this area.");
+                        ? "Không còn hộp trống phù hợp trong dãy này."
+                        : "Không còn hộp trống phù hợp trong khu vực này.");
         }
         else
         {
@@ -780,6 +947,8 @@ public class FarmingService : IFarmingService
                     "Provide boxId, or set autoAssignEmptyBox=true to pick next empty box.");
 
             box = await RequireBoxAsync(req.BoxId.Value, ct);
+            if (IsBoxUnusable(box.Status))
+                throw AppException.BadRequest($"Hộp '{box.Code}' không thể sử dụng.");
             var row = await RequireRowAsync(box.FarmingRowId, requireActive: true, ct);
             _ = await RequireAreaAsync(row.FarmingAreaId, requireActive: true, ct);
 
@@ -796,13 +965,14 @@ public class FarmingService : IFarmingService
                                || c.Status == CrabStatus.Molting
                                || c.Status == CrabStatus.Quarantined), ct);
         if (liveInBox)
-            throw AppException.Conflict($"Box '{box.Code}' already has a live crab.");
+            throw AppException.Conflict($"Hộp '{box.Code}' vừa được sử dụng.");
 
         if (req.CrabLotId == Guid.Empty)
             throw AppException.BadRequest("CrabLotId is required — crab must belong to a lot.");
 
         _ = await _uow.CrabLots.GetByIdAsync(req.CrabLotId, ct)
             ?? throw AppException.NotFound("CrabLot");
+        await EnsureLotCapacityAsync(req.CrabLotId, 1, ct);
 
         if (req.WeightGram is null or <= 0)
             throw AppException.BadRequest("WeightGram is required and must be > 0.");
@@ -849,8 +1019,8 @@ public class FarmingService : IFarmingService
             NewCondition = condition,
             NewStatus = status,
             ChangedAt = DateTime.UtcNow,
-            Source = "system",
-            Reason = "Thả nuôi"
+            Source = req.AutoAssignEmptyBox ? "AUTO_ASSIGN" : "MANUAL_ASSIGN",
+            Reason = "CRAB_CREATED"
         }, ct);
         if (initialWeight is decimal w)
         {
@@ -858,9 +1028,11 @@ public class FarmingService : IFarmingService
             {
                 CrabId = crab.Id,
                 WeightGram = w,
+                CarapaceWidthMm = req.CarapaceWidthMm,
+                CarapaceLengthMm = req.CarapaceLengthMm,
                 MeasuredAt = crab.StockedAt,
-                Source = "stocking",
-                Notes = "Trọng lượng ban đầu"
+                Source = "INITIAL",
+                Notes = "Đo lường ban đầu"
             }, ct);
         }
 
@@ -895,15 +1067,121 @@ public class FarmingService : IFarmingService
             req.AutoAssignEmptyBox ? $"Created (auto box {box.Code})." : $"Created in box {box.Code}.");
     }
 
+    public async Task<ApiResponse<CreateCrabsBulkDto>> CreateCrabsBulkAsync(
+        CreateCrabsBulkRequest req, CancellationToken ct = default)
+    {
+        var items = req.Items ?? Array.Empty<CreateCrabBulkItem>();
+        if (items.Count == 0)
+            throw AppException.BadRequest("Danh sách cua trống.");
+        if (items.Count > 80)
+            throw AppException.BadRequest("Mỗi lần tối đa 80 cá thể.");
+
+        await EnsureLotCapacityAsync(req.CrabLotId, items.Count, ct);
+
+        Guid? areaId = req.FarmingAreaId is Guid a && a != Guid.Empty ? a : null;
+        Guid? rowId = req.FarmingRowId is Guid r && r != Guid.Empty ? r : null;
+        if (rowId.HasValue)
+        {
+            var scopedRow = await RequireRowAsync(rowId.Value, requireActive: true, ct);
+            if (areaId.HasValue && areaId.Value != scopedRow.FarmingAreaId)
+                throw AppException.BadRequest("FarmingAreaId does not match FarmingRowId.");
+            areaId = scopedRow.FarmingAreaId;
+        }
+        if (areaId.HasValue)
+            _ = await RequireAreaAsync(areaId.Value, requireActive: true, ct);
+
+        var reserved = new HashSet<Guid>();
+        var assigned = new List<(CreateCrabBulkItem item, Box box)>(items.Count);
+        foreach (var item in items)
+        {
+            if (item.WeightGram <= 0)
+                throw AppException.BadRequest("Cân nặng phải > 0.");
+            if (item.CarapaceWidthMm <= 0 || item.CarapaceLengthMm <= 0)
+                throw AppException.BadRequest("Rộng mai và dài mai phải > 0.");
+
+            Box box;
+            if (!item.AutoAssign && item.TargetBoxId is Guid tid && tid != Guid.Empty)
+            {
+                box = await RequireBoxAsync(tid, ct);
+                var boxRow = await RequireRowAsync(box.FarmingRowId, requireActive: true, ct);
+                _ = await RequireAreaAsync(boxRow.FarmingAreaId, requireActive: true, ct);
+                if (rowId.HasValue && box.FarmingRowId != rowId.Value)
+                    throw AppException.BadRequest($"Hộp '{box.Code}' không thuộc dãy đã chọn.");
+                if (areaId.HasValue && boxRow.FarmingAreaId != areaId.Value)
+                    throw AppException.BadRequest($"Hộp '{box.Code}' không thuộc khu đã chọn.");
+                if (IsBoxUnusable(box.Status))
+                    throw AppException.BadRequest($"Hộp '{box.Code}' không thể sử dụng.");
+                if (!reserved.Add(box.Id))
+                    throw AppException.BadRequest($"Hộp '{box.Code}' bị chọn trùng.");
+            }
+            else
+            {
+                if (!areaId.HasValue)
+                    throw AppException.BadRequest("Cần khu vực để tự gán hộp trống.");
+                var empty = await ListEmptyBoxesAsync(areaId.Value, rowId, ct);
+                box = empty.FirstOrDefault(b => !reserved.Contains(b.Id) && !IsBoxUnusable(b.Status))
+                    ?? throw AppException.Conflict("Không còn hộp trống phù hợp.");
+                reserved.Add(box.Id);
+            }
+
+            var liveInBox = await _uow.Crabs.Query()
+                .Include(c => c.BoxAllocations)
+                .AnyAsync(c => c.BoxAllocations.Any(al => al.BoxId == box.Id && al.EndTime == null)
+                               && (c.Status == CrabStatus.Alive
+                                   || c.Status == CrabStatus.Molting
+                                   || c.Status == CrabStatus.Quarantined), ct);
+            if (liveInBox)
+                throw AppException.Conflict($"Hộp '{box.Code}' vừa được sử dụng. Vui lòng làm mới và chọn lại hộp.");
+
+            assigned.Add((item, box));
+        }
+
+        var created = new List<Crab>(assigned.Count);
+        var nextNo = await CrabCodeAllocator.NextNumberAsync(_uow.Crabs, ct);
+        foreach (var (item, box) in assigned)
+        {
+            var single = new CreateCrabRequest(
+                req.CrabLotId,
+                BoxId: box.Id,
+                FarmingRowId: req.FarmingRowId,
+                FarmingAreaId: req.FarmingAreaId,
+                WeightGram: item.WeightGram,
+                ImageUrls: item.ImageUrls,
+                StockedAt: req.StockedAt,
+                CrabType: req.CrabType,
+                Gender: item.Gender,
+                InitialWeightGram: item.WeightGram,
+                CarapaceWidthMm: item.CarapaceWidthMm,
+                InitialCondition: req.InitialCondition,
+                Notes: item.Note,
+                Condition: req.Condition,
+                CarapaceLengthMm: item.CarapaceLengthMm);
+            var crab = await PersistNewCrabAsync(
+                single, box, item.AutoAssign, ct, forcedCode: $"CRAB-{nextNo:D4}");
+            nextNo++;
+            created.Add(crab);
+        }
+
+        await _uow.SaveChangesAsync(ct);
+        var ctx = await LoadBoxContextAsync(ct);
+        return ApiResponse<CreateCrabsBulkDto>.Ok(
+            new CreateCrabsBulkDto(created.Select(c => MapCrab(c, ctx)).ToList(), created.Count),
+            $"Đã tạo {created.Count} cá thể cua.");
+    }
+
     public async Task<ApiResponse<CrabDto>> UpdateCrabAsync(Guid id, UpdateCrabRequest req, CancellationToken ct = default)
     {
         var crab = await _uow.Crabs.GetByIdAsync(id, ct) ?? throw AppException.NotFound("Crab");
         var oldCondition = crab.Condition;
         var oldStatus = crab.Status;
         var oldWeight = crab.WeightGram;
+        var oldType = crab.CrabType;
+        var oldGender = crab.Gender;
+        var oldNotes = crab.Notes;
+        var oldStage = crab.MoltingStage;
 
-        crab.WeightGram = req.WeightGram;
-        crab.MoltedAt = req.MoltedAt;
+        if (req.WeightGram is decimal w) crab.WeightGram = w;
+        if (req.MoltedAt is not null) crab.MoltedAt = req.MoltedAt;
         if (req.MoltingStage is not null) crab.MoltingStage = req.MoltingStage;
         if (req.Notes is not null) crab.Notes = req.Notes.Trim();
         if (req.CrabType is not null) crab.CrabType = req.CrabType.Trim();
@@ -918,17 +1196,23 @@ public class FarmingService : IFarmingService
         else if (req.MoltingStage is not null)
             crab.Condition = CrabConditions.FromMoltingAndStatus(req.MoltingStage, crab.Status);
 
-        if (!req.IsAlive
+        if (req.IsAlive == false
             && crab.Condition is not CrabCondition.Harvested
             && crab.Condition is not CrabCondition.Sold)
             crab.Condition = CrabCondition.Dead;
-        if (req.IsAlive && crab.Condition == CrabCondition.Dead)
+        if (req.IsAlive == true && crab.Condition == CrabCondition.Dead)
             crab.Condition = CrabConditions.FromMoltingAndStatus(crab.MoltingStage, CrabStatus.Alive);
 
         crab.Status = CrabConditions.ToLifecycle(crab.Condition);
         _uow.Crabs.Update(crab);
 
-        if (oldCondition != crab.Condition || oldStatus != crab.Status)
+        var profileChanged = oldCondition != crab.Condition
+            || oldStatus != crab.Status
+            || !string.Equals(oldType, crab.CrabType, StringComparison.Ordinal)
+            || oldGender != crab.Gender
+            || !string.Equals(oldNotes, crab.Notes, StringComparison.Ordinal)
+            || !string.Equals(oldStage, crab.MoltingStage, StringComparison.Ordinal);
+        if (profileChanged)
         {
             await _uow.CrabStatusHistories.AddAsync(new CrabStatusHistory
             {
@@ -938,7 +1222,12 @@ public class FarmingService : IFarmingService
                 OldStatus = oldStatus,
                 NewStatus = crab.Status,
                 ChangedAt = DateTime.UtcNow,
-                Source = "manual"
+                Source = "manual",
+                Reason = "CRAB_PROFILE_UPDATED"
+                    + $"|health={ConditionVi(oldCondition, oldStatus)}→{ConditionVi(crab.Condition, crab.Status)}"
+                    + $"|stage={oldStage}→{crab.MoltingStage}"
+                    + $"|type={oldType}→{crab.CrabType}"
+                    + $"|gender={oldGender}→{crab.Gender}"
             }, ct);
         }
 
@@ -948,6 +1237,8 @@ public class FarmingService : IFarmingService
             {
                 CrabId = crab.Id,
                 WeightGram = nextWeight,
+                CarapaceWidthMm = crab.CarapaceWidthMm,
+                CarapaceLengthMm = crab.CarapaceLengthMm,
                 Source = "manual"
             }, ct);
         }
@@ -1030,10 +1321,730 @@ public class FarmingService : IFarmingService
         _ = await _uow.Crabs.GetByIdAsync(crabId, ct) ?? throw AppException.NotFound("Crab");
         var rows = (await _uow.CrabWeightHistories.FindAsync(h => h.CrabId == crabId, ct))
             .OrderByDescending(h => h.MeasuredAt)
-            .Select(h => new CrabWeightHistoryDto(h.Id, h.CrabId, h.WeightGram, h.MeasuredAt, h.Source, h.Notes))
+            .Select(MapWeight)
             .ToList();
         return ApiResponse<IReadOnlyList<CrabWeightHistoryDto>>.Ok(rows);
     }
+
+    public async Task<ApiResponse<CrabWeightHistoryDto>> RecordCrabWeightAsync(
+        Guid crabId, RecordCrabWeightRequest req, CancellationToken ct = default)
+    {
+        var crab = await _uow.Crabs.GetByIdAsync(crabId, ct) ?? throw AppException.NotFound("Crab");
+        if (req.WeightGram <= 0)
+            throw AppException.BadRequest("WeightGram must be greater than 0.");
+        if (req.CarapaceWidthMm is <= 0)
+            throw AppException.BadRequest("CarapaceWidthMm must be greater than 0.");
+        if (req.CarapaceLengthMm is <= 0)
+            throw AppException.BadRequest("CarapaceLengthMm must be greater than 0.");
+
+        var at = req.MeasuredAt ?? DateTime.UtcNow;
+        var source = string.IsNullOrWhiteSpace(req.Source) ? "manual" : req.Source!.Trim().ToLowerInvariant();
+        var row = new CrabWeightHistory
+        {
+            CrabId = crab.Id,
+            WeightGram = req.WeightGram,
+            CarapaceWidthMm = req.CarapaceWidthMm,
+            CarapaceLengthMm = req.CarapaceLengthMm,
+            MeasuredAt = at,
+            Source = source,
+            Notes = req.Notes,
+            RecordedByName = string.IsNullOrWhiteSpace(req.RecordedByName) ? null : req.RecordedByName.Trim(),
+            PhotoUrlsJson = JsonStringList.Serialize(req.PhotoUrls)
+        };
+        await _uow.CrabWeightHistories.AddAsync(row, ct);
+
+        crab.WeightGram = req.WeightGram;
+        if (req.CarapaceWidthMm.HasValue) crab.CarapaceWidthMm = req.CarapaceWidthMm;
+        if (req.CarapaceLengthMm.HasValue) crab.CarapaceLengthMm = req.CarapaceLengthMm;
+        _uow.Crabs.Update(crab);
+        await _uow.SaveChangesAsync(ct);
+        return ApiResponse<CrabWeightHistoryDto>.Ok(MapWeight(row), "Growth recorded.");
+    }
+
+    public async Task<ApiResponse<CrabWeightHistoryDto>> UpdateCrabWeightAsync(
+        Guid crabId, Guid weightId, UpdateCrabWeightRequest req, CancellationToken ct = default)
+    {
+        var row = await _uow.CrabWeightHistories.GetByIdAsync(weightId, ct)
+            ?? throw AppException.NotFound("CrabWeightHistory");
+        if (row.CrabId != crabId) throw AppException.NotFound("CrabWeightHistory");
+        if (req.Notes is not null) row.Notes = req.Notes;
+        _uow.CrabWeightHistories.Update(row);
+        await _uow.SaveChangesAsync(ct);
+        return ApiResponse<CrabWeightHistoryDto>.Ok(MapWeight(row), "Note updated.");
+    }
+
+    public async Task<ApiResponse<CrabGrowthMoltDto>> GetCrabGrowthMoltAsync(
+        Guid crabId, DateTime? from = null, DateTime? to = null, CancellationToken ct = default)
+    {
+        var crab = await _uow.Crabs.GetByIdAsync(crabId, ct) ?? throw AppException.NotFound("Crab");
+        var weights = (await _uow.CrabWeightHistories.FindAsync(h => h.CrabId == crabId, ct))
+            .Where(h => (!from.HasValue || h.MeasuredAt >= from.Value) && (!to.HasValue || h.MeasuredAt <= to.Value))
+            .OrderBy(h => h.MeasuredAt)
+            .Select(MapWeight)
+            .ToList();
+        var molts = (await _uow.MoltingRecords.FindAsync(m => m.CrabId == crabId, ct))
+            .Where(m => (!from.HasValue || m.MoltTime >= from.Value) && (!to.HasValue || m.MoltTime <= to.Value))
+            .OrderBy(m => m.MoltTime)
+            .Select(FarmHistoryService.MapMolt)
+            .ToList();
+        return ApiResponse<CrabGrowthMoltDto>.Ok(new CrabGrowthMoltDto(
+            weights, molts, crab.WeightGram, crab.CarapaceWidthMm, crab.CarapaceLengthMm));
+    }
+
+    public async Task<ApiResponse<CrabLifecycleEventsDto>> GetCrabLifecycleEventsAsync(
+        Guid crabId,
+        DateTime? from = null,
+        DateTime? to = null,
+        string? eventType = null,
+        string? search = null,
+        string? sort = null,
+        int skip = 0,
+        int take = 20,
+        CancellationToken ct = default)
+    {
+        var crab = await _uow.Crabs.GetByIdAsync(crabId, ct) ?? throw AppException.NotFound("Crab");
+        var ctx = await LoadBoxContextAsync(ct);
+        var lot = crab.CrabLotId != Guid.Empty
+            ? await _uow.CrabLots.GetByIdAsync(crab.CrabLotId, ct)
+            : null;
+
+        var users = (await _uow.Users.GetAllAsync(ct)).ToDictionary(u => u.Id);
+        var allocsAll = (await _uow.CrabBoxAllocations.FindAsync(a => a.CrabId == crabId, ct))
+            .OrderBy(a => a.StartTime)
+            .ToList();
+        string ActorName(Guid? id)
+        {
+            if (id is Guid uid && users.TryGetValue(uid, out var u))
+                return string.IsNullOrWhiteSpace(u.FullName) ? u.Username : u.FullName;
+            return "";
+        }
+
+        var events = new List<CrabLifecycleEventDto>();
+        var crabCode = crab.Code ?? "";
+        var crabKey = crab.Id.ToString();
+        var currentBoxId = ResolveCurrentBoxId(crab);
+        var currentBox = ctx.Boxes.FirstOrDefault(b => b.Id == currentBoxId);
+
+        CrabLifecycleLocationDto? Loc(Guid? boxId)
+        {
+            var id = boxId is Guid g && g != Guid.Empty ? g : currentBoxId;
+            if (id == Guid.Empty) return null;
+            var box = ctx.Boxes.FirstOrDefault(b => b.Id == id);
+            if (box is null) return null;
+            ctx.Rows.TryGetValue(box.FarmingRowId, out var row);
+            FarmingArea? area = null;
+            if (row is not null) ctx.Areas.TryGetValue(row.FarmingAreaId, out area);
+            return new CrabLifecycleLocationDto(
+                area?.Id, area?.Code, row?.Id, row?.Code ?? row?.Name, box.Id, box.Code);
+        }
+
+        CrabLifecycleLocationDto? LocAt(DateTime at)
+        {
+            var hit = allocsAll
+                .Where(a => a.StartTime <= at && (a.EndTime == null || a.EndTime > at))
+                .OrderByDescending(a => a.StartTime)
+                .FirstOrDefault();
+            return Loc(hit?.BoxId ?? currentBoxId);
+        }
+
+        static CrabLifecycleActorDto Actor(string type, Guid? id, string name) =>
+            new(type, id, string.IsNullOrWhiteSpace(name) ? type : name);
+
+        static string MapSource(string? raw, bool hasCamera = false)
+        {
+            var s = (raw ?? "").Trim().ToLowerInvariant();
+            if (s is "ai" or "auto" or "ai_camera") return "AI_CAMERA";
+            if (s is "controller") return "CONTROLLER";
+            if (s is "import") return "IMPORT";
+            if (s is "system" or "assignment") return "SYSTEM";
+            if (hasCamera && (s is "manual" or "manual_ai" or "")) return "MANUAL_AI";
+            if (s is "transfer") return "MANUAL";
+            return string.IsNullOrEmpty(s) ? "SYSTEM" : "MANUAL";
+        }
+
+        static Dictionary<string, CrabLifecycleChangeDto>? Changes(params (string Key, object? Before, object? After)[] items)
+        {
+            var map = items
+                .Where(i => i.Before != null || i.After != null)
+                .ToDictionary(i => i.Key, i => new CrabLifecycleChangeDto(i.Before, i.After));
+            return map.Count == 0 ? null : map;
+        }
+
+        static Dictionary<string, object?> Meta(params (string Key, object? Value)[] items) =>
+            items.Where(i => i.Value != null).ToDictionary(i => i.Key, i => i.Value);
+
+        var importAt = lot?.ImportDate ?? crab.StockedAt;
+        events.Add(new CrabLifecycleEventDto(
+            $"SYS-{crab.Id:N}",
+            crab.Id, crabCode, "SYSTEM", importAt,
+            "Nhập hệ thống",
+            string.IsNullOrWhiteSpace(lot?.LotCode) ? "Cua được đưa vào hệ thống" : $"Lô {lot!.LotCode}",
+            Loc(currentBoxId),
+            Actor("SYSTEM", null, "System"),
+            "SYSTEM",
+            null,
+            null,
+            Meta(("lotCode", lot?.LotCode)),
+            Array.Empty<string>(),
+            crab.Notes,
+            null));
+
+        var operations = (await _uow.FarmOperations.FindAsync(
+                o => o.CrabIdsJson.Contains(crabKey), ct)).ToList();
+        foreach (var op in operations)
+        {
+            var type = (op.Type ?? "").Trim().ToLowerInvariant();
+            var photos = JsonStringList.Parse(op.PhotoUrlsJson);
+            var loc = Loc(ParseFirstGuid(op.BoxIdsJson)) ?? LocAt(op.Timestamp);
+            var actor = Actor(
+                "USER",
+                op.OperatorId == Guid.Empty ? null : op.OperatorId,
+                string.IsNullOrWhiteSpace(op.OperatorName) ? "Người dùng" : op.OperatorName);
+            var source = MapSource(op.Source, !string.IsNullOrWhiteSpace(op.CameraId));
+
+            if (type == "feeding" || op.Quantity is not null || !string.IsNullOrWhiteSpace(op.Appetite))
+            {
+                var served = op.Quantity;
+                var eaten = op.EatenQuantity;
+                int? pct = served is > 0 && eaten is not null
+                    ? (int)Math.Round((double)(eaten.Value / served.Value * 100m), MidpointRounding.AwayFromZero)
+                    : null;
+                var summaryParts = new List<string>();
+                if (served is not null) summaryParts.Add($"Khẩu phần {FmtNum(served)} g");
+                if (eaten is not null) summaryParts.Add($"Đã ăn {FmtNum(eaten)} g");
+                if (pct is not null) summaryParts.Add($"{pct}%");
+                var actSummary = ActivityChangeSummary(op.ActivityBefore, op.ActivityAfter);
+                if (actSummary != null) summaryParts.Add(actSummary);
+                events.Add(new CrabLifecycleEventDto(
+                    $"FEED-{op.Id:N}",
+                    crab.Id, crabCode, "FEEDING", op.Timestamp,
+                    "Cho ăn",
+                    summaryParts.Count == 0 ? "Phiếu cho ăn" : string.Join(" • ", summaryParts),
+                    loc, actor, source, op.CameraId,
+                    Changes(("activityScore", op.ActivityBefore, op.ActivityAfter)),
+                    Meta(
+                        ("servedGram", served),
+                        ("eatenGram", eaten),
+                        ("feedingPercent", pct),
+                        ("foodType", op.FoodType),
+                        ("appetite", op.Appetite),
+                        ("appetiteLabel", AppetiteVi(op.Appetite)),
+                        ("activityBefore", op.ActivityBefore),
+                        ("activityAfter", op.ActivityAfter),
+                        ("activityBeforeLabel", ActivityLabel(op.ActivityBefore)),
+                        ("activityAfterLabel", ActivityLabel(op.ActivityAfter)),
+                        ("feedingDurationMinutes", op.FeedingDurationMinutes),
+                        ("feedingGrade", FeedingGrade(pct))),
+                    photos, op.Notes, null));
+            }
+            else if (type == "note")
+            {
+                events.Add(new CrabLifecycleEventDto(
+                    $"NOTE-{op.Id:N}",
+                    crab.Id, crabCode, "NOTE_UPDATED", op.Timestamp,
+                    "Ghi chú",
+                    Truncate(op.Notes, 80) ?? "Cập nhật ghi chú",
+                    loc, actor, source, op.CameraId, null,
+                    Meta(("note", op.Notes)),
+                    photos, op.Notes, null));
+            }
+        }
+
+        var weights = (await _uow.CrabWeightHistories.FindAsync(h => h.CrabId == crabId, ct))
+            .OrderBy(h => h.MeasuredAt)
+            .ToList();
+        CrabWeightHistory? prevW = null;
+        foreach (var w in weights)
+        {
+            var dw = prevW is null ? (decimal?)null : w.WeightGram - prevW.WeightGram;
+            var line = prevW is null
+                ? $"Cân nặng {FmtNum(w.WeightGram)} g"
+                : $"Cân nặng {FmtNum(prevW.WeightGram)} g → {FmtNum(w.WeightGram)} g";
+            if (dw is not null) line += $" • {FmtSigned(dw)} g";
+            var sizeAfter = SizePair(w.CarapaceWidthMm, w.CarapaceLengthMm);
+            var sizeBefore = prevW is null ? null : SizePair(prevW.CarapaceWidthMm, prevW.CarapaceLengthMm);
+            if (sizeAfter != null)
+                line += sizeBefore == null ? $" • {sizeAfter}" : $" • {sizeBefore} → {sizeAfter}";
+            events.Add(new CrabLifecycleEventDto(
+                $"GRW-{w.Id:N}",
+                crab.Id, crabCode, "GROWTH_UPDATE", w.MeasuredAt,
+                "Cập nhật sinh trưởng",
+                line,
+                LocAt(w.MeasuredAt),
+                Actor(
+                    string.IsNullOrWhiteSpace(w.RecordedByName) ? "SYSTEM" : "USER",
+                    null,
+                    string.IsNullOrWhiteSpace(w.RecordedByName) ? "System" : w.RecordedByName),
+                MapSource(w.Source),
+                null,
+                Changes(
+                    ("weightGram", prevW?.WeightGram, w.WeightGram),
+                    ("carapaceWidthMm", prevW?.CarapaceWidthMm, w.CarapaceWidthMm),
+                    ("carapaceLengthMm", prevW?.CarapaceLengthMm, w.CarapaceLengthMm)),
+                Meta(
+                    ("weightBefore", prevW?.WeightGram),
+                    ("weightAfter", w.WeightGram),
+                    ("deltaGram", dw),
+                    ("widthBefore", prevW?.CarapaceWidthMm),
+                    ("widthAfter", w.CarapaceWidthMm),
+                    ("lengthBefore", prevW?.CarapaceLengthMm),
+                    ("lengthAfter", w.CarapaceLengthMm)),
+                JsonStringList.Parse(w.PhotoUrlsJson),
+                w.Notes,
+                null));
+            prevW = w;
+        }
+
+        var molts = (await _uow.MoltingRecords.FindAsync(m => m.CrabId == crabId, ct))
+            .OrderBy(m => m.MoltTime)
+            .ToList();
+        var moltNo = 0;
+        foreach (var m in molts)
+        {
+            moltNo++;
+            var resultLabel = MoltResultVi(m.Result);
+            var completedAt = m.CompletedAt ?? m.MoltTime;
+            var startedAt = m.StartedAt;
+            var duration = startedAt is DateTime st ? completedAt - st : (TimeSpan?)null;
+            if (startedAt is DateTime start && start < completedAt.AddMinutes(-1))
+            {
+                events.Add(new CrabLifecycleEventDto(
+                    $"MLS-{m.Id:N}",
+                    crab.Id, crabCode, "MOLT_START", start,
+                    "Bắt đầu lột xác",
+                    $"Lần {moltNo}",
+                    Loc(m.BoxId) ?? LocAt(start),
+                    Actor(m.Source == "ai" ? "AI" : "USER", null, m.Source == "ai" ? "AI System" : "Người dùng"),
+                    MapSource(m.Source, !string.IsNullOrWhiteSpace(m.CameraId)),
+                    m.CameraId, null,
+                    Meta(("moltNumber", moltNo), ("result", m.Result), ("resultLabel", resultLabel)),
+                    JsonStringList.Parse(m.PhotoUrlsJson), m.Notes, null));
+            }
+            var parts = new List<string> { $"Lần {moltNo}", resultLabel };
+            if (duration is TimeSpan d && d.TotalMinutes > 0) parts.Add(FmtDuration(d));
+            if (m.WeightBeforeGram is not null && m.WeightAfterGram is not null)
+                parts.Add($"{FmtNum(m.WeightBeforeGram)} g → {FmtNum(m.WeightAfterGram)} g");
+            events.Add(new CrabLifecycleEventDto(
+                $"MLC-{m.Id:N}",
+                crab.Id, crabCode, "MOLT_COMPLETE", completedAt,
+                "Hoàn tất lột xác",
+                string.Join(" • ", parts),
+                Loc(m.BoxId) ?? LocAt(completedAt),
+                Actor(m.Source == "ai" ? "AI" : "USER", null, m.Source == "ai" ? "AI System" : "Người dùng"),
+                MapSource(m.Source, !string.IsNullOrWhiteSpace(m.CameraId)),
+                m.CameraId,
+                Changes(
+                    ("weightGram", m.WeightBeforeGram, m.WeightAfterGram),
+                    ("carapaceWidthMm", m.ShellWidthBeforeMm, m.ShellWidthAfterMm),
+                    ("carapaceLengthMm", m.ShellLengthBeforeMm, m.ShellLengthAfterMm)),
+                Meta(
+                    ("moltNumber", moltNo),
+                    ("result", m.Result),
+                    ("resultLabel", resultLabel),
+                    ("durationMinutes", duration is TimeSpan td ? (int)td.TotalMinutes : null),
+                    ("weightBefore", m.WeightBeforeGram),
+                    ("weightAfter", m.WeightAfterGram),
+                    ("widthBefore", m.ShellWidthBeforeMm),
+                    ("widthAfter", m.ShellWidthAfterMm),
+                    ("lengthBefore", m.ShellLengthBeforeMm),
+                    ("lengthAfter", m.ShellLengthAfterMm)),
+                JsonStringList.Parse(m.PhotoUrlsJson),
+                m.Notes,
+                string.Equals(m.Result, "failed", StringComparison.OrdinalIgnoreCase) ? "critical"
+                    : string.Equals(m.Result, "abnormal", StringComparison.OrdinalIgnoreCase) ? "warning"
+                    : null));
+        }
+
+        var statuses = (await _uow.CrabStatusHistories.FindAsync(h => h.CrabId == crabId, ct)).ToList();
+        foreach (var h in statuses)
+        {
+            var src = (h.Source ?? "").Trim().ToLowerInvariant();
+            if (src is "transfer" or "assignment") continue;
+
+            var actorName = ActorName(h.ChangedByUserId);
+            var actor = string.IsNullOrWhiteSpace(actorName)
+                ? Actor(src is "ai" or "auto" ? "AI" : "SYSTEM", h.ChangedByUserId, src is "ai" or "auto" ? "AI System" : "System")
+                : Actor("USER", h.ChangedByUserId, actorName);
+            var beforeLabel = ConditionVi(h.OldCondition, h.OldStatus);
+            var afterLabel = ConditionVi(h.NewCondition, h.NewStatus);
+            var eventTypeName = h.NewStatus switch
+            {
+                CrabStatus.Harvested => "HARVESTED",
+                CrabStatus.Sold => "HARVESTED",
+                CrabStatus.Dead => "DEAD",
+                _ when (h.Reason ?? "").StartsWith("CRAB_CREATED", StringComparison.OrdinalIgnoreCase)
+                    => "CRAB_CREATED",
+                _ when (h.Reason ?? "").StartsWith("CRAB_PROFILE_UPDATED", StringComparison.OrdinalIgnoreCase)
+                    => "CRAB_PROFILE_UPDATED",
+                _ when (h.Reason ?? "").Contains("sắp thu hoạch", StringComparison.OrdinalIgnoreCase)
+                    || (h.Reason ?? "").Contains("ready", StringComparison.OrdinalIgnoreCase)
+                    => "HARVEST_READY",
+                _ => "HEALTH_CHECK"
+            };
+            var title = eventTypeName switch
+            {
+                "HARVESTED" => h.NewStatus == CrabStatus.Sold ? "Đã bán" : "Thu hoạch",
+                "DEAD" => "Ghi nhận chết",
+                "HARVEST_READY" => "Sẵn sàng thu hoạch",
+                "CRAB_CREATED" => "Tạo cá thể",
+                "CRAB_PROFILE_UPDATED" => "Cập nhật thông tin cua",
+                _ => "Kiểm tra sức khỏe"
+            };
+            var line = eventTypeName == "CRAB_CREATED"
+                ? string.Join(" · ", new[]
+                {
+                    string.IsNullOrWhiteSpace(lot?.LotCode) ? null : $"Lô {lot!.LotCode}",
+                    crab.WeightGram is decimal wg ? $"{FmtNum(wg)} g" : null,
+                    SizePair(crab.CarapaceWidthMm, crab.CarapaceLengthMm)
+                }.Where(s => !string.IsNullOrWhiteSpace(s)))
+                : beforeLabel != null && afterLabel != null && beforeLabel != afterLabel
+                    ? $"{beforeLabel} → {afterLabel}"
+                    : afterLabel ?? h.Reason ?? title;
+            events.Add(new CrabLifecycleEventDto(
+                $"HLT-{h.Id:N}",
+                crab.Id, crabCode, eventTypeName, h.ChangedAt,
+                title, line,
+                LocAt(h.ChangedAt), actor, MapSource(h.Source), null,
+                Changes(("condition", beforeLabel, afterLabel), ("status", h.OldStatus?.ToString(), h.NewStatus.ToString())),
+                Meta(
+                    ("conditionBefore", beforeLabel),
+                    ("conditionAfter", afterLabel),
+                    ("statusBefore", h.OldStatus?.ToString()),
+                    ("statusAfter", h.NewStatus.ToString())),
+                Array.Empty<string>(),
+                h.Reason,
+                h.NewCondition is CrabCondition.Problem or CrabCondition.Dead ? "warning" : null));
+        }
+
+        CrabBoxAllocation? prevAlloc = null;
+        foreach (var a in allocsAll)
+        {
+            if (prevAlloc is null)
+            {
+                prevAlloc = a;
+                continue;
+            }
+            var fromBox = ctx.Boxes.FirstOrDefault(b => b.Id == prevAlloc.BoxId);
+            var toBox = ctx.Boxes.FirstOrDefault(b => b.Id == a.BoxId);
+            events.Add(new CrabLifecycleEventDto(
+                $"TRF-{a.Id:N}",
+                crab.Id, crabCode, "BOX_TRANSFER", a.StartTime,
+                "Chuyển hộp",
+                $"{fromBox?.Code ?? "—"} → {toBox?.Code ?? "—"}",
+                Loc(a.BoxId),
+                Actor("USER", null, "Người dùng"),
+                "MANUAL",
+                null,
+                Changes(("boxId", fromBox?.Code ?? prevAlloc.BoxId.ToString(), toBox?.Code ?? a.BoxId.ToString())),
+                Meta(
+                    ("fromBoxId", prevAlloc.BoxId.ToString()),
+                    ("fromBoxCode", fromBox?.Code),
+                    ("toBoxId", a.BoxId.ToString()),
+                    ("toBoxCode", toBox?.Code),
+                    ("reason", a.Notes)),
+                Array.Empty<string>(),
+                a.Notes,
+                null));
+            prevAlloc = a;
+        }
+
+        var analyses = (await _uow.CrabAiAnalyses.FindAsync(a => a.CrabId == crabId, ct)).ToList();
+        foreach (var a in analyses)
+        {
+            var anomaly = !string.IsNullOrWhiteSpace(a.AnomalyNote);
+            var low = (a.ActivityLevel ?? "").Contains("low", StringComparison.OrdinalIgnoreCase)
+                || (a.ActivityLevel ?? "").Contains("thấp", StringComparison.OrdinalIgnoreCase);
+            var title = anomaly || low ? "AI phát hiện" : "AI kiểm tra";
+            var line = anomaly
+                ? a.AnomalyNote!
+                : low
+                    ? a.ActivityLevel ?? "Giảm vận động bất thường"
+                    : string.IsNullOrWhiteSpace(a.Prediction)
+                        ? "Không phát hiện bất thường"
+                        : a.Prediction;
+            var media = string.IsNullOrWhiteSpace(a.MediaUrl)
+                ? Array.Empty<string>()
+                : new[] { a.MediaUrl! };
+            events.Add(new CrabLifecycleEventDto(
+                $"AI-{a.Id:N}",
+                crab.Id, crabCode, "AI_DETECTION", a.AnalyzedAt,
+                title, line,
+                Loc(a.BoxId) ?? LocAt(a.AnalyzedAt),
+                Actor("AI", null, "AI System"),
+                "AI_CAMERA",
+                currentBox is null ? null : null,
+                Changes(("activityLevel", null, a.ActivityLevel), ("prediction", null, a.Prediction)),
+                Meta(
+                    ("prediction", a.Prediction),
+                    ("confidence", a.Confidence),
+                    ("activityLevel", a.ActivityLevel),
+                    ("anomalyNote", a.AnomalyNote),
+                    ("modelVersion", a.ModelVersion)),
+                media,
+                a.AnomalyNote,
+                anomaly || low ? "warning" : null));
+        }
+
+        var harvests = (await _uow.CrabHarvestHistories.FindAsync(h => h.CrabId == crabId, ct)).ToList();
+        foreach (var h in harvests)
+        {
+            events.Add(new CrabLifecycleEventDto(
+                $"HRV-{h.Id:N}",
+                crab.Id, crabCode, "HARVESTED", h.HarvestedAt,
+                "Thu hoạch",
+                string.Join(" • ", new[] { h.Grade, h.WeightGram is null ? null : $"{FmtNum(h.WeightGram)} g" }.Where(x => !string.IsNullOrWhiteSpace(x))),
+                LocAt(h.HarvestedAt),
+                Actor("USER", null, "Người dùng"),
+                "MANUAL",
+                null,
+                Changes(("status", "Alive", "Harvested")),
+                Meta(("grade", h.Grade), ("weightGram", h.WeightGram)),
+                Array.Empty<string>(),
+                h.Notes,
+                null));
+        }
+
+        var deaths = (await _uow.CrabMortalityRecords.FindAsync(h => h.CrabId == crabId, ct)).ToList();
+        foreach (var d in deaths)
+        {
+            var name = ActorName(d.RecordedBy);
+            events.Add(new CrabLifecycleEventDto(
+                $"DED-{d.Id:N}",
+                crab.Id, crabCode, "DEAD", d.MortalityDate,
+                "Ghi nhận chết",
+                d.Notes ?? d.Cause.ToString(),
+                LocAt(d.MortalityDate),
+                string.IsNullOrWhiteSpace(name) ? Actor("SYSTEM", d.RecordedBy, "System") : Actor("USER", d.RecordedBy, name),
+                "MANUAL",
+                null,
+                Changes(("status", "Alive", "Dead")),
+                Meta(("cause", d.Cause.ToString())),
+                Array.Empty<string>(),
+                d.Notes,
+                "critical"));
+        }
+
+        var code = crab.Code ?? "";
+        var boxCode = currentBox?.Code ?? "";
+        var alerts = (await _uow.Alerts.GetAllAsync(ct))
+            .Where(a =>
+                (!string.IsNullOrWhiteSpace(code) && a.Message.Contains(code, StringComparison.OrdinalIgnoreCase))
+                || (!string.IsNullOrWhiteSpace(boxCode) && a.Message.Contains(boxCode, StringComparison.OrdinalIgnoreCase)))
+            .ToList();
+        foreach (var a in alerts)
+        {
+            var sev = a.Severity.ToString().ToLowerInvariant();
+            events.Add(new CrabLifecycleEventDto(
+                $"ALR-{a.Id:N}",
+                crab.Id, crabCode, "ALERT_CREATED", a.CreatedAt,
+                "Cảnh báo",
+                a.Message,
+                Loc(currentBoxId),
+                Actor("SYSTEM", null, "System"),
+                "SYSTEM",
+                null, null,
+                Meta(("severity", sev), ("severityLabel", AlertSevVi(a.Severity)), ("status", a.Status.ToString())),
+                Array.Empty<string>(),
+                a.Message,
+                sev));
+            if (a.Status == AlertStatus.Resolved || a.AcknowledgedAt is not null)
+            {
+                events.Add(new CrabLifecycleEventDto(
+                    $"ALX-{a.Id:N}",
+                    crab.Id, crabCode, "ALERT_RESOLVED", a.AcknowledgedAt ?? a.UpdatedAt ?? a.CreatedAt,
+                    "Xác nhận cảnh báo",
+                    a.Message,
+                    Loc(currentBoxId),
+                    Actor("USER", a.AcknowledgedBy, string.IsNullOrWhiteSpace(ActorName(a.AcknowledgedBy)) ? "Người dùng" : ActorName(a.AcknowledgedBy)),
+                    "MANUAL",
+                    null, null,
+                    Meta(("severity", sev), ("status", a.Status.ToString())),
+                    Array.Empty<string>(),
+                    a.Message,
+                    null));
+            }
+        }
+
+        IEnumerable<CrabLifecycleEventDto> filtered = events;
+        if (from.HasValue)
+            filtered = filtered.Where(e => e.OccurredAt >= from.Value);
+        if (to.HasValue)
+            filtered = filtered.Where(e => e.OccurredAt <= to.Value);
+
+        var q = (search ?? "").Trim();
+        if (q.Length > 0)
+        {
+            filtered = filtered.Where(e => EventMatchesSearch(e, q));
+        }
+
+        var dated = filtered.ToList();
+        var summary = new CrabLifecycleSummaryDto(
+            dated.Count,
+            dated.Count(e => e.EventType == "FEEDING"),
+            dated.Count(e => e.EventType == "GROWTH_UPDATE"),
+            dated.Count(e => e.EventType is "MOLT_START" or "MOLT_COMPLETE"),
+            dated.Count(e => e.EventType == "HEALTH_CHECK"),
+            dated.Count(e => e.EventType == "BOX_TRANSFER"),
+            dated.Count(e => e.EventType == "AI_DETECTION"),
+            dated.Count(e => e.EventType is "ALERT_CREATED" or "ALERT_RESOLVED"),
+            dated.Count(e => e.EventType is "HARVESTED" or "HARVEST_READY"),
+            dated.Count(e => e.EventType == "SYSTEM"),
+            dated.Count(e => e.EventType == "NOTE_UPDATED"));
+
+        var typeKey = (eventType ?? "").Trim().ToUpperInvariant();
+        if (typeKey is not ("" or "ALL" or "TẤT CẢ"))
+        {
+            dated = dated.Where(e => EventTypeMatches(e.EventType, typeKey)).ToList();
+        }
+
+        var desc = !string.Equals(sort, "asc", StringComparison.OrdinalIgnoreCase);
+        dated = desc
+            ? dated.OrderByDescending(e => e.OccurredAt).ToList()
+            : dated.OrderBy(e => e.OccurredAt).ToList();
+
+        if (skip < 0) skip = 0;
+        if (take <= 0) take = 20;
+        if (take > 500) take = 500;
+        var page = dated.Skip(skip).Take(take).ToList();
+        return ApiResponse<CrabLifecycleEventsDto>.Ok(new CrabLifecycleEventsDto(
+            page, dated.Count, skip + page.Count < dated.Count, summary));
+    }
+
+    private static bool EventTypeMatches(string eventType, string filter) => filter switch
+    {
+        "FEEDING" or "CHOAN" or "CHO_AN" => eventType == "FEEDING",
+        "GROWTH" or "GROWTH_UPDATE" or "SINHTRUONG" => eventType == "GROWTH_UPDATE",
+        "MOLT" or "MOLT_START" or "MOLT_COMPLETE" or "LOTXAC" => eventType is "MOLT_START" or "MOLT_COMPLETE",
+        "HEALTH" or "HEALTH_CHECK" or "SUCKHOE" => eventType == "HEALTH_CHECK",
+        "TRANSFER" or "BOX_TRANSFER" or "CHUYENHOP" => eventType == "BOX_TRANSFER",
+        "AI" or "AI_DETECTION" => eventType == "AI_DETECTION",
+        "ALERT" or "ALERT_CREATED" or "ALERT_RESOLVED" or "CANHBAO" => eventType is "ALERT_CREATED" or "ALERT_RESOLVED",
+        "HARVEST" or "HARVESTED" or "HARVEST_READY" or "THUHOACH" => eventType is "HARVESTED" or "HARVEST_READY",
+        "SYSTEM" or "HETHONG" => eventType == "SYSTEM",
+        "NOTE" or "NOTE_UPDATED" or "GHICHU" => eventType == "NOTE_UPDATED",
+        "PROFILE" or "CRAB_PROFILE_UPDATED" => eventType == "CRAB_PROFILE_UPDATED",
+        "CREATED" or "CRAB_CREATED" or "TAOCATHE" => eventType == "CRAB_CREATED",
+        "DEAD" => eventType == "DEAD",
+        _ => eventType.Equals(filter, StringComparison.OrdinalIgnoreCase)
+    };
+
+    private static bool EventMatchesSearch(CrabLifecycleEventDto e, string q)
+    {
+        var hay = string.Join(' ', new[]
+        {
+            e.Title, e.Summary, e.Note, e.EventType, e.Source, e.CameraId,
+            e.Actor.Name, e.Location?.BoxCode, e.Location?.RowCode, e.Location?.FarmAreaCode,
+            e.CrabCode
+        }.Where(s => !string.IsNullOrWhiteSpace(s)));
+        return hay.Contains(q, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static Guid? ParseFirstGuid(string? json)
+    {
+        foreach (var s in JsonStringList.Parse(json))
+            if (Guid.TryParse(s, out var g) && g != Guid.Empty) return g;
+        return null;
+    }
+
+    private static string FmtNum(decimal? v)
+    {
+        if (v is null) return "—";
+        return v.Value == decimal.Truncate(v.Value) ? v.Value.ToString("0") : v.Value.ToString("0.#");
+    }
+
+    private static string FmtSigned(decimal? v)
+    {
+        if (v is null) return "—";
+        var n = FmtNum(v);
+        return v >= 0 ? $"+{n}" : n;
+    }
+
+    private static string? SizePair(decimal? w, decimal? l)
+    {
+        if (w is null && l is null) return null;
+        return $"{FmtNum(w)} × {FmtNum(l)} mm";
+    }
+
+    private static string FmtDuration(TimeSpan d)
+    {
+        if (d.TotalHours >= 1)
+            return d.Minutes == 0 ? $"{(int)d.TotalHours} giờ" : $"{(int)d.TotalHours} giờ {d.Minutes} phút";
+        return $"{(int)d.TotalMinutes} phút";
+    }
+
+    private static string? Truncate(string? s, int max)
+    {
+        if (string.IsNullOrWhiteSpace(s)) return null;
+        var t = s.Trim();
+        return t.Length <= max ? t : t[..max] + "…";
+    }
+
+    private static string? ActivityLabel(int? score)
+    {
+        if (score is null) return null;
+        if (score <= 30) return "Thấp";
+        if (score <= 70) return "Bình thường";
+        return "Cao";
+    }
+
+    private static string? ActivityChangeSummary(int? before, int? after)
+    {
+        var a = ActivityLabel(before);
+        var b = ActivityLabel(after);
+        if (a == null && b == null) return null;
+        if (a != null && b != null && a != b) return $"Vận động {a} → {b}";
+        return $"Vận động {b ?? a}";
+    }
+
+    private static string? FeedingGrade(int? pct) => pct switch
+    {
+        null => null,
+        >= 80 => "Tốt",
+        >= 50 => "Theo dõi",
+        _ => "Cảnh báo"
+    };
+
+    private static string MoltResultVi(string? result) => (result ?? "").Trim().ToLowerInvariant() switch
+    {
+        "success" or "normal" => "Bình thường",
+        "monitoring" => "Theo dõi",
+        "abnormal" => "Bất thường",
+        "failed" => "Lột thất bại",
+        _ => string.IsNullOrWhiteSpace(result) ? "Bình thường" : result
+    };
+
+    private static string? ConditionVi(CrabCondition? condition, CrabStatus? status)
+    {
+        if (status == CrabStatus.Harvested) return "Thu hoạch";
+        if (status == CrabStatus.Sold) return "Đã bán";
+        if (status == CrabStatus.Dead) return "Đã chết";
+        return condition switch
+        {
+            null => null,
+            CrabCondition.Normal => "Khỏe mạnh",
+            CrabCondition.Premolt => "Sắp lột",
+            CrabCondition.Molting => "Đang lột",
+            CrabCondition.Softshell => "Cua mềm",
+            CrabCondition.Problem => "Có vấn đề",
+            CrabCondition.Weak => "Theo dõi",
+            CrabCondition.Dead => "Đã chết",
+            CrabCondition.Harvested => "Thu hoạch",
+            CrabCondition.Sold => "Đã bán",
+            _ => condition.ToString()
+        };
+    }
+
+    private static string AlertSevVi(AlertSeverity s) => s switch
+    {
+        AlertSeverity.Critical => "Nghiêm trọng",
+        AlertSeverity.Warning => "Theo dõi",
+        _ => "Thông tin"
+    };
+
+    private static CrabWeightHistoryDto MapWeight(CrabWeightHistory h) =>
+        new(h.Id, h.CrabId, h.WeightGram, h.MeasuredAt, h.Source, h.Notes,
+            h.CarapaceWidthMm, h.CarapaceLengthMm, h.RecordedByName,
+            JsonStringList.Parse(h.PhotoUrlsJson));
 
     public async Task<ApiResponse<IReadOnlyList<CrabAiAnalysisDto>>> GetCrabAiAnalysesAsync(
         Guid crabId, CancellationToken ct = default)
@@ -1418,7 +2429,15 @@ public class FarmingService : IFarmingService
         };
     }
 
-    private sealed record AreaStats(int RowCount, int BoxCount, int CrabCount, int HealthyBoxCount, int AlertBoxCount)
+    private sealed record AreaStats(
+        int RowCount,
+        int BoxCount,
+        int CrabCount,
+        int HealthyBoxCount,
+        int AlertBoxCount,
+        int OccupiedBoxCount = 0,
+        int WatchBoxCount = 0,
+        int EmptyBoxCount = 0)
     {
         public static AreaStats Empty { get; } = new(0, 0, 0, 0, 0);
     }
@@ -1430,7 +2449,18 @@ public class FarmingService : IFarmingService
             a.Id, a.OwnerId, ownerName, a.Code, a.Name, a.Location, a.Address, a.Region,
             a.AreaSquareMeters, a.EstablishedAt, a.CreatedAt, a.Description, a.AvatarUrl,
             a.Status.ToString(), a.IsActive, stats.RowCount,
-            stats.BoxCount, stats.CrabCount, stats.HealthyBoxCount, stats.AlertBoxCount);
+            stats.BoxCount, stats.CrabCount, stats.HealthyBoxCount, stats.AlertBoxCount,
+            a.MapImageUrl, a.MapX1, a.MapY1, a.MapX2, a.MapY2,
+            stats.OccupiedBoxCount, stats.WatchBoxCount, stats.EmptyBoxCount,
+            a.UpdatedAt ?? a.CreatedAt, a.Latitude, a.Longitude);
+    }
+
+    /// <summary>Hộp "Theo dõi": status watch/maintenance nhưng chưa tới mức cảnh báo.</summary>
+    private static bool IsWatchBox(Box box)
+    {
+        var status = box.Status ?? "";
+        return status.Equals(BoxStatuses.Watch, StringComparison.OrdinalIgnoreCase)
+            || status.Equals(BoxStatuses.Maintenance, StringComparison.OrdinalIgnoreCase);
     }
 
     private async Task<Dictionary<Guid, AreaStats>> BuildAreaStatsAsync(
@@ -1492,10 +2522,21 @@ public class FarmingService : IFarmingService
             var crabCount = areaBoxIds.Sum(id =>
                 crabsByBox.TryGetValue(id, out var list) ? list.Count : 0);
             var farmWarning = areaHasWarning.Contains(areaId);
-            var alertBoxes = areaBoxes.Count(box => IsAlertBox(box, farmWarning, activeAlerts));
-            var healthy = Math.Max(0, areaBoxes.Count - alertBoxes);
+            // Bình thường / Theo dõi / Cảnh báo chỉ tính trên hộp ĐANG CÓ CUA;
+            // hộp không có cua = Hộp trống → 4 nhóm cộng lại đúng bằng tổng hộp.
+            var occupiedList = areaBoxes
+                .Where(box => crabsByBox.TryGetValue(box.Id, out var list) && list.Count > 0)
+                .ToList();
+            var occupiedBoxes = occupiedList.Count;
+            var alertBoxes = occupiedList.Count(box => IsAlertBox(box, farmWarning, activeAlerts));
+            var watchBoxes = occupiedList.Count(box =>
+                !IsAlertBox(box, farmWarning, activeAlerts) && IsWatchBox(box));
+            var emptyBoxes = Math.Max(0, areaBoxes.Count - occupiedBoxes);
+            var healthy = Math.Max(0, occupiedBoxes - alertBoxes - watchBoxes);
             var rowCount = rows.Count(r => r.FarmingAreaId == areaId);
-            result[areaId] = new AreaStats(rowCount, areaBoxes.Count, crabCount, healthy, alertBoxes);
+            result[areaId] = new AreaStats(
+                rowCount, areaBoxes.Count, crabCount, healthy, alertBoxes,
+                occupiedBoxes, watchBoxes, emptyBoxes);
         }
 
         return result;
@@ -1504,8 +2545,7 @@ public class FarmingService : IFarmingService
     private static bool IsAlertBox(Box box, bool farmHasWarning, IEnumerable<Alert> alerts)
     {
         var status = box.Status ?? "";
-        if (status.Equals(BoxStatuses.Quarantine, StringComparison.OrdinalIgnoreCase)
-            || status.Equals(BoxStatuses.Maintenance, StringComparison.OrdinalIgnoreCase))
+        if (status.Equals(BoxStatuses.Quarantine, StringComparison.OrdinalIgnoreCase))
             return true;
         if (!string.IsNullOrWhiteSpace(box.Code)
             && alerts.Any(a => a.Message.Contains(box.Code, StringComparison.OrdinalIgnoreCase)))
@@ -1681,6 +2721,14 @@ public class FarmingService : IFarmingService
     private static string? NormalizeOptional(string? value)
         => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
+    private static double? NormalizeCoord(double? value, double min, double max, string name)
+    {
+        if (value is null) return null;
+        if (double.IsNaN(value.Value) || value < min || value > max)
+            throw AppException.BadRequest($"{name} must be between {min} and {max}.");
+        return value;
+    }
+
     private static DateTime? NormalizeDate(DateTime? value)
     {
         if (value is null) return null;
@@ -1697,7 +2745,11 @@ public class FarmingService : IFarmingService
             r.Id, r.FarmingAreaId, area?.Name, area?.Location,
             r.Code, r.Name, r.Location, r.Description,
             r.Capacity, r.SortOrder, r.Status.ToString(), r.IsActive,
-            stats.BoxCount, stats.CrabCount, stats.HealthyBoxCount, stats.AlertBoxCount);
+            stats.BoxCount, stats.CrabCount, stats.HealthyBoxCount, stats.AlertBoxCount,
+            r.MapX, r.MapY,
+            stats.OccupiedBoxCount, stats.WatchBoxCount, stats.EmptyBoxCount,
+            r.UpdatedAt ?? r.CreatedAt,
+            r.CreatedAt);
     }
 
     private async Task<Dictionary<Guid, AreaStats>> BuildRowStatsAsync(
@@ -1725,9 +2777,16 @@ public class FarmingService : IFarmingService
             var rowBoxIds = rowBoxes.Select(b => b.Id).ToHashSet();
             var crabCount = rowBoxIds.Sum(id =>
                 crabsByBox.TryGetValue(id, out var list) ? list.Count : 0);
-            var alertBoxes = rowBoxes.Count(box => IsAlertBox(box, false, activeAlerts));
-            var healthy = Math.Max(0, rowBoxes.Count - alertBoxes);
-            result[rowId] = new AreaStats(0, rowBoxes.Count, crabCount, healthy, alertBoxes);
+            var occupiedList = rowBoxes
+                .Where(box => crabsByBox.TryGetValue(box.Id, out var list) && list.Count > 0)
+                .ToList();
+            var alertBoxes = occupiedList.Count(box => IsAlertBox(box, false, activeAlerts));
+            var watchBoxes = occupiedList.Count(box =>
+                !IsAlertBox(box, false, activeAlerts) && IsWatchBox(box));
+            var healthy = Math.Max(0, occupiedList.Count - alertBoxes - watchBoxes);
+            result[rowId] = new AreaStats(
+                0, rowBoxes.Count, crabCount, healthy, alertBoxes,
+                occupiedList.Count, watchBoxes, Math.Max(0, rowBoxes.Count - occupiedList.Count));
         }
 
         return result;
@@ -1789,7 +2848,9 @@ public class FarmingService : IFarmingService
             crabCount,
             crabInBoxSince,
             aiUpdatedAt,
-            emptySince);
+            emptySince,
+            b.MapX,
+            b.MapY);
     }
 
     private static bool BoxMatchesSearch(Box box, BoxContext ctx, string query)
@@ -1821,7 +2882,8 @@ public class FarmingService : IFarmingService
     }
 
     private static bool KeepBoxStatusWhenEmpty(string? status)
-        => string.Equals(status, BoxStatuses.Maintenance, StringComparison.OrdinalIgnoreCase);
+        => string.Equals(status, BoxStatuses.Maintenance, StringComparison.OrdinalIgnoreCase)
+           || string.Equals(status, BoxStatuses.Watch, StringComparison.OrdinalIgnoreCase);
 
     private async Task ReleaseCrabFromBoxAsync(Crab crab, string reason, CancellationToken ct)
     {
@@ -2183,6 +3245,111 @@ public class FarmingService : IFarmingService
             if (!string.IsNullOrWhiteSpace(v)) return v.Trim();
         }
         return null;
+    }
+
+    private async Task EnsureLotCapacityAsync(Guid lotId, int adding, CancellationToken ct)
+    {
+        var lot = await _uow.CrabLots.GetByIdAsync(lotId, ct)
+            ?? throw AppException.NotFound("CrabLot");
+        if (string.Equals(lot.Status, "Cancelled", StringComparison.OrdinalIgnoreCase))
+            throw AppException.BadRequest("Lô nhập đã hủy.");
+        var placed = await _uow.Crabs.Query().CountAsync(c => c.CrabLotId == lotId, ct);
+        var remaining = lot.Quantity - placed - lot.DeadOnArrival;
+        if (remaining < adding)
+            throw AppException.BadRequest(
+                $"Lô này chỉ còn {Math.Max(0, remaining)} cá thể chưa được tạo.");
+    }
+
+    private static bool IsBoxUnusable(string? status)
+    {
+        var s = (status ?? "").Trim().ToLowerInvariant();
+        return s is "maintenance" or "quarantine" or "harvested" or "suspended" or "closed";
+    }
+
+    private async Task<Crab> PersistNewCrabAsync(
+        CreateCrabRequest req, Box box, bool autoAssign, CancellationToken ct, string? forcedCode = null)
+    {
+        var code = string.IsNullOrWhiteSpace(forcedCode)
+            ? await AllocateCrabCodeAsync(ct)
+            : forcedCode.Trim();
+        var condition = string.IsNullOrWhiteSpace(req.Condition)
+            ? CrabConditions.FromMoltingAndStatus(req.MoltingStage, CrabStatus.Alive)
+            : CrabConditions.Parse(req.Condition);
+        var status = CrabConditions.ToLifecycle(condition);
+        var initialWeight = req.InitialWeightGram ?? req.WeightGram;
+
+        var crab = new Crab
+        {
+            BoxId = box.Id,
+            CrabLotId = req.CrabLotId,
+            Code = code,
+            QrCode = $"QR-{code}",
+            Tag = string.IsNullOrWhiteSpace(req.Tag) ? code : req.Tag.Trim(),
+            CrabType = string.IsNullOrWhiteSpace(req.CrabType) ? null : req.CrabType.Trim(),
+            Gender = CrabConditions.ParseGender(req.Gender),
+            WeightGram = req.WeightGram,
+            InitialWeightGram = initialWeight,
+            CarapaceWidthMm = req.CarapaceWidthMm,
+            CarapaceLengthMm = req.CarapaceLengthMm,
+            InitialCondition = string.IsNullOrWhiteSpace(req.InitialCondition)
+                ? "Khỏe mạnh"
+                : req.InitialCondition.Trim(),
+            Notes = string.IsNullOrWhiteSpace(req.Notes) ? null : req.Notes.Trim(),
+            MoltingStage = req.MoltingStage ?? "hard-shell",
+            StockedAt = req.StockedAt ?? DateTime.UtcNow,
+            Status = status,
+            Condition = condition,
+            ImageUrlsJson = JsonStringList.Serialize(req.ImageUrls)
+        };
+        await _uow.Crabs.AddAsync(crab, ct);
+
+        await _uow.CrabStatusHistories.AddAsync(new CrabStatusHistory
+        {
+            CrabId = crab.Id,
+            NewCondition = condition,
+            NewStatus = status,
+            ChangedAt = DateTime.UtcNow,
+            Source = autoAssign ? "AUTO_ASSIGN" : "MANUAL_ASSIGN",
+            Reason = "CRAB_CREATED"
+        }, ct);
+        if (initialWeight is decimal w)
+        {
+            await _uow.CrabWeightHistories.AddAsync(new CrabWeightHistory
+            {
+                CrabId = crab.Id,
+                WeightGram = w,
+                CarapaceWidthMm = req.CarapaceWidthMm,
+                CarapaceLengthMm = req.CarapaceLengthMm,
+                MeasuredAt = crab.StockedAt,
+                Source = "INITIAL",
+                Notes = "Đo lường ban đầu"
+            }, ct);
+        }
+
+        await _uow.QrCodes.AddAsync(new QrCode
+        {
+            Code = crab.QrCode!,
+            EntityType = "crab",
+            CrabId = crab.Id,
+            BoxId = box.Id,
+            IsActive = true,
+            Payload =
+                $"{{\"type\":\"crab\",\"crabId\":\"{crab.Id}\",\"crabCode\":\"{code}\",\"crabsense\":\"CRABSENSE:CRAB:{code}\"}}"
+        }, ct);
+
+        await _uow.CrabBoxAllocations.AddAsync(new CrabBoxAllocation
+        {
+            CrabId = crab.Id,
+            BoxId = box.Id,
+            StartTime = DateTime.UtcNow,
+            Notes = autoAssign ? "Auto-assigned empty box" : "Initial placement"
+        }, ct);
+
+        box.IsOccupied = true;
+        if (string.IsNullOrWhiteSpace(box.Status) || box.Status == "empty")
+            box.Status = "active";
+        _uow.Boxes.Update(box);
+        return crab;
     }
 
     private async Task<string> AllocateCrabCodeAsync(CancellationToken ct)

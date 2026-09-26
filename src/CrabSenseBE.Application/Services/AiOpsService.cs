@@ -31,11 +31,25 @@ public class AiOpsService : IAiOpsService
         var (detectionType, confidence, note, health) =
             await BuildHeuristicAsync(box, boxId, ct);
 
+        // Camera ghi nhận: theo media; nếu không có → camera gắn dãy / camera tổng quan khu của hộp.
+        FarmingRow? row = box is not null ? await _uow.FarmingRows.GetByIdAsync(box.FarmingRowId, ct) : null;
+        var deviceId = media?.DeviceId;
+        if (deviceId is null && row is not null)
+            deviceId = PickCamera(await _uow.Devices.GetAllAsync(ct), row)?.Id;
+        // Cua đang ở trong hộp tại thời điểm phân tích.
+        Guid? crabId = null;
+        if (boxId is Guid bx)
+            crabId = (await _uow.Crabs.FindAsync(c => c.BoxId == bx, ct))
+                .Where(c => c.Status is CrabStatus.Alive or CrabStatus.Molting or CrabStatus.Quarantined)
+                .OrderByDescending(c => c.StockedAt)
+                .FirstOrDefault()?.Id;
+
         var detection = new AiDetection
         {
+            CrabId = crabId,
             BoxId = boxId,
             MediaId = media?.Id,
-            DeviceId = media?.DeviceId,
+            DeviceId = deviceId,
             ModelVersion = "crabsense-ai-v1-rules",
             DetectionType = detectionType,
             Confidence = confidence,
@@ -55,7 +69,10 @@ public class AiOpsService : IAiOpsService
 
         await _uow.AiDetections.AddAsync(detection, ct);
         await _uow.SaveChangesAsync(ct);
-        return ApiResponse<AiDetectionDto>.Ok(Map(detection), "Analyzed.");
+
+        Device? dev = deviceId is Guid did ? await _uow.Devices.GetByIdAsync(did, ct) : null;
+        Crab? crab = crabId is Guid cid ? await _uow.Crabs.GetByIdAsync(cid, ct) : null;
+        return ApiResponse<AiDetectionDto>.Ok(Map(detection, dev, box, row, crab), "Analyzed.");
     }
 
     private async Task<(string type, decimal confidence, string note, string health)> BuildHeuristicAsync(
@@ -147,14 +164,70 @@ public class AiOpsService : IAiOpsService
 
     public async Task<ApiResponse<IEnumerable<AiDetectionDto>>> ListDetectionsAsync(
         Guid? boxId = null, Guid? mediaId = null, CancellationToken ct = default)
+        => await ListDetectionsAsync(boxId, mediaId, null, null, ct);
+
+    public async Task<ApiResponse<IEnumerable<AiDetectionDto>>> ListDetectionsAsync(
+        Guid? boxId, Guid? mediaId, Guid? farmingAreaId, int? take, CancellationToken ct = default)
     {
         var q = (await _uow.AiDetections.GetAllAsync(ct)).AsEnumerable();
         if (boxId.HasValue)
             q = q.Where(d => d.BoxId == boxId.Value);
         if (mediaId.HasValue)
             q = q.Where(d => d.MediaId == mediaId.Value);
-        var list = q.OrderByDescending(d => d.DetectedAt).Select(Map).ToList();
+
+        var boxes = (await _uow.Boxes.GetAllAsync(ct)).ToDictionary(b => b.Id);
+        var rows = (await _uow.FarmingRows.GetAllAsync(ct)).ToDictionary(r => r.Id);
+        var devices = (await _uow.Devices.GetAllAsync(ct)).ToDictionary(d => d.Id);
+        // Cua đang ở trong hộp: để ghép mã cua cho phát hiện theo hộp (nếu detection không có CrabId).
+        var crabInBox = (await _uow.Crabs.GetAllAsync(ct))
+            .Where(c => c.BoxId != null && c.Status is CrabStatus.Alive or CrabStatus.Molting or CrabStatus.Quarantined)
+            .GroupBy(c => c.BoxId!.Value)
+            .ToDictionary(g => g.Key, g => g.OrderByDescending(c => c.StockedAt).First());
+        var crabs = (await _uow.Crabs.GetAllAsync(ct)).ToDictionary(c => c.Id);
+
+        Guid? AreaOf(AiDetection d)
+        {
+            if (d.BoxId is Guid bid && boxes.TryGetValue(bid, out var b)
+                && rows.TryGetValue(b.FarmingRowId, out var r))
+                return r.FarmingAreaId;
+            if (d.DeviceId is Guid did && devices.TryGetValue(did, out var dev))
+                return dev.FarmingAreaId;
+            return null;
+        }
+
+        if (farmingAreaId is Guid areaId && areaId != Guid.Empty)
+            q = q.Where(d => AreaOf(d) == areaId);
+
+        IEnumerable<AiDetection> ordered = q.OrderByDescending(d => d.DetectedAt);
+        if (take is > 0) ordered = ordered.Take(take.Value);
+
+        var list = ordered.Select(d =>
+        {
+            boxes.TryGetValue(d.BoxId ?? Guid.Empty, out var box);
+            FarmingRow? row = null;
+            if (box is not null) rows.TryGetValue(box.FarmingRowId, out row);
+            devices.TryGetValue(d.DeviceId ?? Guid.Empty, out var dev);
+            // Camera phụ trách: DeviceId của detection → camera gắn dãy → camera tổng quan khu.
+            dev ??= PickCamera(devices.Values, row);
+            Crab? crab = null;
+            if (d.CrabId is Guid cid) crabs.TryGetValue(cid, out crab);
+            if (crab is null && box is not null) crabInBox.TryGetValue(box.Id, out crab);
+            return Map(d, dev, box, row, crab);
+        }).ToList();
         return ApiResponse<IEnumerable<AiDetectionDto>>.Ok(list);
+    }
+
+    private static Device? PickCamera(IEnumerable<Device> devices, FarmingRow? row)
+    {
+        var cams = devices
+            .Where(d => (d.DeviceType ?? "").Contains("cam", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        if (row is null) return null;
+        return cams.FirstOrDefault(c => c.FarmingRowId == row.Id)
+            ?? cams.Where(c => c.FarmingAreaId == row.FarmingAreaId && c.FarmingRowId == null)
+                .OrderByDescending(c => c.LastSeenAt)
+                .FirstOrDefault()
+            ?? cams.FirstOrDefault(c => c.FarmingAreaId == row.FarmingAreaId);
     }
 
     public async Task<ApiResponse<object>> SubmitFeedbackAsync(
@@ -180,7 +253,12 @@ public class AiOpsService : IAiOpsService
         return ApiResponse<object>.Ok(new { id = feedback.Id }, "Feedback saved.");
     }
 
-    private static AiDetectionDto Map(AiDetection d) => new(
+    private static AiDetectionDto Map(
+        AiDetection d, Device? dev = null, Box? box = null, FarmingRow? row = null, Crab? crab = null) => new(
         d.Id, d.BoxId, d.MediaId, d.DetectionType, d.Confidence,
-        d.Status, d.ResultJson, d.DetectedAt, d.ModelVersion);
+        d.Status, d.ResultJson, d.DetectedAt, d.ModelVersion,
+        dev?.Id ?? d.DeviceId, dev?.DeviceCode, d.ImagePath,
+        box?.Code,
+        crab?.Id ?? d.CrabId, crab is null ? null : (string.IsNullOrWhiteSpace(crab.Tag) ? crab.Code : crab.Tag),
+        row?.Id, row?.Name, row?.FarmingAreaId);
 }

@@ -12,7 +12,10 @@ public record SensorDto(
     decimal? MaxThreshold,
     bool IsActive,
     DateTime? LastSeenAt,
-    Guid? RasComponentId = null);
+    Guid? RasComponentId = null,
+    Guid? FarmingRowId = null,
+    decimal? LatestValue = null,
+    DateTime? LatestMeasuredAt = null);
 
 public record CreateSensorRequest(
     Guid? WaterSystemId,
@@ -22,8 +25,10 @@ public record CreateSensorRequest(
     string? Unit,
     decimal? MinThreshold,
     decimal? MaxThreshold,
-    Guid? RasComponentId = null);
+    Guid? RasComponentId = null,
+    Guid? FarmingRowId = null);
 
+/// <remarks>FarmingRowId = Guid.Empty → gỡ khỏi dãy (về cảm biến chung của khu).</remarks>
 public record UpdateSensorRequest(
     Guid? WaterSystemId,
     Guid? DeviceId,
@@ -32,7 +37,8 @@ public record UpdateSensorRequest(
     decimal? MinThreshold,
     decimal? MaxThreshold,
     bool? IsActive,
-    Guid? RasComponentId = null);
+    Guid? RasComponentId = null,
+    Guid? FarmingRowId = null);
 
 // --- Device = Controller (một ESP32). Sensor + relay/actuator thuộc Device. ---
 public record DeviceDto(
@@ -51,7 +57,13 @@ public record DeviceDto(
     Guid? FarmingAreaId = null,
     string? AreaName = null,
     string? AreaCode = null,
-    int ActuatorCount = 0);
+    int ActuatorCount = 0,
+    Guid? FarmingRowId = null,
+    string? RowName = null,
+    string? RowCode = null,
+    string? StreamUrl = null,
+    string? SnapshotUrl = null,
+    string? Resolution = null);
 
 public record DeviceActuatorDto(
     Guid Id,
@@ -80,7 +92,13 @@ public record DeviceDetailDto(
     decimal? BatteryLevel,
     decimal? RssiDbm,
     IReadOnlyList<SensorDto> Sensors,
-    IReadOnlyList<DeviceActuatorDto> Actuators);
+    IReadOnlyList<DeviceActuatorDto> Actuators,
+    Guid? FarmingRowId = null,
+    string? RowName = null,
+    string? RowCode = null,
+    string? StreamUrl = null,
+    string? SnapshotUrl = null,
+    string? Resolution = null);
 
 public record CreateDeviceRequest(
     string DeviceCode,
@@ -90,8 +108,15 @@ public record CreateDeviceRequest(
     string? Name = null,
     string? MacAddress = null,
     string? IpAddress = null,
-    Guid? FarmingAreaId = null);
+    Guid? FarmingAreaId = null,
+    Guid? FarmingRowId = null,
+    string? StreamUrl = null,
+    string? SnapshotUrl = null,
+    string? Resolution = null);
 
+/// <remarks>
+/// FarmingRowId = Guid.Empty → gỡ khỏi dãy. StreamUrl/SnapshotUrl/Resolution = "" → xoá giá trị.
+/// </remarks>
 public record UpdateDeviceRequest(
     string? DeviceType,
     string? FirmwareVersion,
@@ -102,7 +127,11 @@ public record UpdateDeviceRequest(
     string? Name = null,
     string? MacAddress = null,
     string? IpAddress = null,
-    Guid? FarmingAreaId = null);
+    Guid? FarmingAreaId = null,
+    Guid? FarmingRowId = null,
+    string? StreamUrl = null,
+    string? SnapshotUrl = null,
+    string? Resolution = null);
 
 public record UpdateDeviceStatusRequest(
     string Status,
@@ -128,7 +157,10 @@ public record SensorLiveDto(
     DateTime? SensorLastSeenAt,
     string? Alarm,
     string? LocationName = null,
-    string? LocationType = null);
+    string? LocationType = null,
+    Guid? FarmingRowId = null,
+    string? RowName = null,
+    string? RowCode = null);
 
 // --- Sensor Data Ingest (ESP32 → BE) ---
 public record SensorDataRequest(
@@ -136,7 +168,8 @@ public record SensorDataRequest(
     string SensorCode,
     decimal Value,
     string? Unit,
-    DateTime MeasuredAt
+    DateTime MeasuredAt,
+    string? IpAddress = null
 );
 public record SensorDataBatchRequest(IEnumerable<SensorDataRequest> Measurements);
 public record SensorDataDto(Guid Id, Guid SensorId, decimal Value, string? Unit, DateTime MeasuredAt, string? Source);

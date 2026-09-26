@@ -80,6 +80,15 @@ public class FarmingAreasController : ControllerBase
         => Ok(await _service.UpdateAreaAsync(id, req, ct));
 
     /// <summary>
+    /// [UPDATE] Bản đồ trại: ảnh nền (mapImageUrl) + khung khu trên ảnh (mapX1..mapY2, tỉ lệ 0–1).
+    /// Gửi 4 toạ độ cùng lúc; bỏ trống cả 4 để xoá khung.
+    /// </summary>
+    [HttpPatch("{id:guid}/map")]
+    [Authorize(Roles = AppRoles.FarmWrite)]
+    public async Task<IActionResult> UpdateMap(Guid id, [FromBody] UpdateAreaMapRequest req, CancellationToken ct)
+        => Ok(await _service.UpdateAreaMapAsync(id, req, ct));
+
+    /// <summary>
     /// [DELETE] Delete area. Mặc định chỉ xoá được khi khu đã hết hàng.
     /// cascade=true: xoá cả cây con (cua → hộp → hàng) trong 1 transaction.
     /// </summary>
@@ -179,6 +188,12 @@ public class FarmingRowsController : ControllerBase
     public async Task<IActionResult> Update(Guid id, [FromBody] UpdateFarmingRowRequest req, CancellationToken ct)
         => Ok(await _service.UpdateRowAsync(id, req, ct));
 
+    /// <summary>[UPDATE] Bản đồ trại: tâm dãy trên ảnh (mapX, mapY tỉ lệ 0–1). Cả 2 null = xoá vị trí.</summary>
+    [HttpPatch("{id:guid}/map")]
+    [Authorize(Roles = AppRoles.FarmWrite)]
+    public async Task<IActionResult> UpdateMap(Guid id, [FromBody] UpdateMapPointRequest req, CancellationToken ct)
+        => Ok(await _service.UpdateRowMapAsync(id, req, ct));
+
     /// <summary>[DELETE] Delete row (only if no boxes remain)</summary>
     [HttpDelete("{id:guid}")]
     [Authorize(Roles = AppRoles.FarmManage)]
@@ -203,6 +218,13 @@ public class FarmingRowsController : ControllerBase
     public async Task<IActionResult> CreateBox(Guid rowId, [FromBody] CreateBoxRequest? req, CancellationToken ct)
         => Ok(await _service.CreateBoxAsync(
             (req ?? new CreateBoxRequest(rowId)) with { FarmingRowId = rowId }, ct));
+
+    /// <summary>[CREATE] Create N empty boxes in row. Codes auto BOX-####. Body: { quantity }.</summary>
+    [HttpPost("{rowId:guid}/boxes/bulk")]
+    [Authorize(Roles = AppRoles.FarmWrite)]
+    public async Task<IActionResult> CreateBoxesBulk(
+        Guid rowId, [FromBody] CreateBoxesBulkRequest? req, CancellationToken ct)
+        => Ok(await _service.CreateBoxesBulkAsync(rowId, req?.Quantity ?? 0, ct));
 }
 
 /// <summary>CRUD Crab Farm Boxes</summary>
@@ -321,6 +343,12 @@ public class BoxesController : ControllerBase
     public async Task<IActionResult> UpdateStatus(Guid boxId, [FromBody] UpdateBoxStatusRequest req, CancellationToken ct)
         => Ok(await _service.UpdateBoxStatusAsync(boxId, req, ct));
 
+    /// <summary>[UPDATE] Bản đồ trại: tâm hộp trên ảnh (mapX, mapY tỉ lệ 0–1). Cả 2 null = xoá vị trí.</summary>
+    [HttpPatch("{boxId:guid}/map")]
+    [Authorize(Roles = AppRoles.FarmWrite)]
+    public async Task<IActionResult> UpdateMap(Guid boxId, [FromBody] UpdateMapPointRequest req, CancellationToken ct)
+        => Ok(await _service.UpdateBoxMapAsync(boxId, req, ct));
+
     /// <summary>[DELETE] Delete box (no live crabs)</summary>
     [HttpDelete("{id:guid}")]
     [Authorize(Roles = AppRoles.FarmManage)]
@@ -398,6 +426,12 @@ public class CrabsController : ControllerBase
     public async Task<IActionResult> Create([FromBody] CreateCrabRequest req, CancellationToken ct)
         => Ok(await _service.CreateCrabAsync(req, ct));
 
+    /// <summary>[CREATE] Tạo nhiều cua + gán hộp trong một transaction.</summary>
+    [HttpPost("bulk")]
+    [Authorize(Roles = AppRoles.FarmWrite)]
+    public async Task<IActionResult> CreateBulk([FromBody] CreateCrabsBulkRequest req, CancellationToken ct)
+        => Ok(await _service.CreateCrabsBulkAsync(req, ct));
+
     /// <summary>[UPDATE] Update crab details. Send imageUrls to replace the full photo list.</summary>
     [HttpPut("{id:guid}")]
     [Authorize(Roles = AppRoles.FarmWrite)]
@@ -431,6 +465,37 @@ public class CrabsController : ControllerBase
     [HttpGet("{id:guid}/weights")]
     public async Task<IActionResult> WeightHistory(Guid id, CancellationToken ct)
         => Ok(await _service.GetCrabWeightHistoryAsync(id, ct));
+
+    /// <summary>[CREATE] Ghi nhận lần đo sinh trưởng</summary>
+    [HttpPost("{id:guid}/weights")]
+    [Authorize(Roles = AppRoles.FarmWrite)]
+    public async Task<IActionResult> RecordWeight(Guid id, [FromBody] RecordCrabWeightRequest req, CancellationToken ct)
+        => Ok(await _service.RecordCrabWeightAsync(id, req, ct));
+
+    /// <summary>[UPDATE] Sửa ghi chú lần đo</summary>
+    [HttpPut("{id:guid}/weights/{weightId:guid}")]
+    [Authorize(Roles = AppRoles.FarmWrite)]
+    public async Task<IActionResult> UpdateWeight(Guid id, Guid weightId, [FromBody] UpdateCrabWeightRequest req, CancellationToken ct)
+        => Ok(await _service.UpdateCrabWeightAsync(id, weightId, req, ct));
+
+    /// <summary>[READ] Sinh trưởng + lột xác (tab Chi tiết cua)</summary>
+    [HttpGet("{id:guid}/growth-molt")]
+    public async Task<IActionResult> GrowthMolt(Guid id, [FromQuery] DateTime? from, [FromQuery] DateTime? to, CancellationToken ct)
+        => Ok(await _service.GetCrabGrowthMoltAsync(id, from, to, ct));
+
+    /// <summary>[READ] Nhật ký vòng đời / audit log một cá thể cua</summary>
+    [HttpGet("{id:guid}/lifecycle-events")]
+    public async Task<IActionResult> LifecycleEvents(
+        Guid id,
+        [FromQuery] DateTime? from,
+        [FromQuery] DateTime? to,
+        [FromQuery] string? eventType,
+        [FromQuery] string? search,
+        [FromQuery] string? sort,
+        [FromQuery] int skip = 0,
+        [FromQuery] int take = 20,
+        CancellationToken ct = default)
+        => Ok(await _service.GetCrabLifecycleEventsAsync(id, from, to, eventType, search, sort, skip, take, ct));
 
     /// <summary>[READ] Lịch sử AI (không nhập tay)</summary>
     [HttpGet("{id:guid}/ai-analyses")]

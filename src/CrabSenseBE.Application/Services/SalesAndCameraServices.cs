@@ -127,13 +127,16 @@ public class BoxCameraService : IBoxCameraService
     public async Task<ApiResponse<BoxCameraDto>> GetCameraForBoxAsync(Guid boxId, CancellationToken ct = default)
     {
         var box = await _uow.Boxes.GetByIdAsync(boxId, ct) ?? throw AppException.NotFound("Box");
-        _ = await _uow.FarmingRows.GetByIdAsync(box.FarmingRowId, ct);
+        var row = await _uow.FarmingRows.GetByIdAsync(box.FarmingRowId, ct);
 
-        var devices = (await _uow.Devices.GetAllAsync(ct)).ToList();
-        var camera = devices
-            .Where(d => d.DeviceType.Contains("camera", StringComparison.OrdinalIgnoreCase))
+        // Ưu tiên camera gắn đúng dãy của hộp → camera tổng quan khu → camera bất kỳ mới hoạt động nhất.
+        var cameras = (await _uow.Devices.GetAllAsync(ct))
+            .Where(d => d.DeviceType.Contains("cam", StringComparison.OrdinalIgnoreCase))
             .OrderByDescending(d => d.LastSeenAt ?? d.CreatedAt)
-            .FirstOrDefault();
+            .ToList();
+        var camera = cameras.FirstOrDefault(d => d.FarmingRowId == box.FarmingRowId)
+            ?? (row is null ? null : cameras.FirstOrDefault(d => d.FarmingAreaId == row.FarmingAreaId))
+            ?? cameras.FirstOrDefault();
 
         // Latest box media as real preview (Drive/web link) when camera stream is unavailable.
         var latestMedia = (await _uow.MediaAssets.FindAsync(
@@ -160,9 +163,13 @@ public class BoxCameraService : IBoxCameraService
         var online = camera.Status == DeviceStatus.Online
             || (camera.LastSeenAt.HasValue && camera.LastSeenAt > DateTime.UtcNow.AddMinutes(-15));
 
-        // Prefer configured stream from firmware notes when present: "rtsp://..." or "http...m3u8"
+        // Ưu tiên Device.StreamUrl; kế đến cách cũ: FirmwareVersion chứa "rtsp://..." hoặc "http...m3u8"
         string? stream = null;
-        if (!string.IsNullOrWhiteSpace(camera.FirmwareVersion) &&
+        if (!string.IsNullOrWhiteSpace(camera.StreamUrl))
+        {
+            stream = camera.StreamUrl.Trim();
+        }
+        else if (!string.IsNullOrWhiteSpace(camera.FirmwareVersion) &&
             (camera.FirmwareVersion.StartsWith("rtsp://", StringComparison.OrdinalIgnoreCase) ||
              camera.FirmwareVersion.Contains(".m3u8", StringComparison.OrdinalIgnoreCase) ||
              camera.FirmwareVersion.StartsWith("http", StringComparison.OrdinalIgnoreCase)))
@@ -175,8 +182,8 @@ public class BoxCameraService : IBoxCameraService
             stream = $"https://stream.crabsense.local/live/{Uri.EscapeDataString(camera.DeviceCode)}.m3u8?boxId={boxId}";
         }
 
-        // Always expose a real snapshot/preview when we have media.
-        var snapshot = preview;
+        // Snapshot: ảnh chụp tĩnh của camera nếu khai báo, không thì media gần nhất của hộp.
+        var snapshot = string.IsNullOrWhiteSpace(camera.SnapshotUrl) ? preview : camera.SnapshotUrl.Trim();
 
         return ApiResponse<BoxCameraDto>.Ok(new BoxCameraDto(
             boxId,
@@ -188,7 +195,7 @@ public class BoxCameraService : IBoxCameraService
             camera.LastSeenAt ?? latestMedia?.CreatedAt,
             online
                 ? (stream != null && stream.Contains("stream.crabsense.local", StringComparison.OrdinalIgnoreCase)
-                    ? "Camera online — đặt FirmwareVersion = RTSP/HLS URL thật để phát live."
+                    ? "Camera online — đặt StreamUrl = RTSP/HLS URL thật để phát live."
                     : "Camera online — stream sẵn sàng.")
                 : (preview != null
                     ? "Camera offline — đang hiện media gần nhất của hộp."

@@ -24,7 +24,9 @@ public class BoxDetailService : IBoxDetailService
     {
         var box = await _uow.Boxes.GetByIdAsync(boxId, ct)
             ?? throw AppException.NotFound("Box");
-        var row = await _uow.FarmingRows.GetByIdAsync(box.FarmingRowId, ct);
+        var row = _uow.FarmingRows is null
+            ? null
+            : await _uow.FarmingRows.GetByIdAsync(box.FarmingRowId, ct);
         FarmingArea? area = null;
         if (row is not null)
             area = await _uow.FarmingAreas.GetByIdAsync(row.FarmingAreaId, ct);

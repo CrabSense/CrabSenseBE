@@ -74,6 +74,7 @@ public class AppDbContext : DbContext
     public DbSet<FeedingEvent> FeedingEvents => Set<FeedingEvent>();
     public DbSet<ObservationEvent> ObservationEvents => Set<ObservationEvent>();
     public DbSet<TrainingLabel> TrainingLabels => Set<TrainingLabel>();
+    public DbSet<SyncInboxItem> SyncInboxItems => Set<SyncInboxItem>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -84,6 +85,14 @@ public class AppDbContext : DbContext
 
         // Apply all IEntityTypeConfiguration from this assembly
         modelBuilder.ApplyConfigurationsFromAssembly(typeof(AppDbContext).Assembly);
+        modelBuilder.Entity<SyncInboxItem>()
+            .HasIndex(item => item.IdempotencyKey)
+            .IsUnique();
+        modelBuilder.Entity<SyncInboxItem>()
+            .HasIndex(item => new { item.Status, item.ReceivedAt });
+        modelBuilder.Entity<SyncInboxItem>()
+            .Property(item => item.PayloadJson)
+            .HasColumnType("jsonb");
         // Enum conversions stored as string
         modelBuilder.Entity<AppUser>()
             .Property(u => u.Role)
@@ -113,6 +122,14 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<Device>()
             .Property(d => d.IpAddress)
             .HasMaxLength(64);
+        modelBuilder.Entity<Device>()
+            .Property(d => d.Resolution)
+            .HasMaxLength(32);
+        // Gắn theo dãy: không tạo FK để xoá dãy không kéo theo thiết bị/cảm biến.
+        modelBuilder.Entity<Device>()
+            .HasIndex(d => d.FarmingRowId);
+        modelBuilder.Entity<Sensor>()
+            .HasIndex(s => s.FarmingRowId);
 
         modelBuilder.Entity<WaterAnalysisRun>()
             .HasIndex(r => new { r.FarmingAreaId, r.StartedAt });
@@ -175,6 +192,25 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<FarmingArea>()
             .Property(a => a.AreaSquareMeters)
             .HasPrecision(12, 2);
+
+        // Farm map layout: ratios 0–1 on the map image.
+        modelBuilder.Entity<FarmingArea>(b =>
+        {
+            b.Property(a => a.MapX1).HasPrecision(7, 4);
+            b.Property(a => a.MapY1).HasPrecision(7, 4);
+            b.Property(a => a.MapX2).HasPrecision(7, 4);
+            b.Property(a => a.MapY2).HasPrecision(7, 4);
+        });
+        modelBuilder.Entity<FarmingRow>(b =>
+        {
+            b.Property(r => r.MapX).HasPrecision(7, 4);
+            b.Property(r => r.MapY).HasPrecision(7, 4);
+        });
+        modelBuilder.Entity<Box>(b =>
+        {
+            b.Property(x => x.MapX).HasPrecision(7, 4);
+            b.Property(x => x.MapY).HasPrecision(7, 4);
+        });
 
         modelBuilder.Entity<FarmingRow>()
             .Property(r => r.Status)

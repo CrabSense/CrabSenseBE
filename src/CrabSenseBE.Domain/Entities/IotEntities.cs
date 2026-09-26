@@ -38,6 +38,12 @@ public class Sensor : BaseEntity
     public decimal? MaxThreshold { get; set; }
     public bool IsActive { get; set; } = true;
 
+    /// <summary>
+    /// Dãy mà cảm biến đo trực tiếp; null = cảm biến chung cho cả khu (các dãy kế thừa).
+    /// Dùng cho "So sánh theo dãy" / "Thông số theo dãy" trên Chi tiết khu.
+    /// </summary>
+    public Guid? FarmingRowId { get; set; }
+
     /// <summary>Lần cuối nhận dữ liệu — dùng phát hiện mất kết nối cảm biến.</summary>
     public DateTime? LastSeenAt { get; set; }
 
@@ -116,6 +122,18 @@ public class Device : BaseEntity
     public string? MacAddress { get; set; }
     public string? IpAddress { get; set; }
     public Guid? FarmingAreaId { get; set; }
+
+    /// <summary>Dãy camera/thiết bị quan sát; null = tổng quan cả khu.</summary>
+    public Guid? FarmingRowId { get; set; }
+
+    /// <summary>Camera: URL stream (rtsp:// | http MJPEG | .m3u8).</summary>
+    public string? StreamUrl { get; set; }
+
+    /// <summary>Camera: URL ảnh chụp tĩnh (ESP32 /capture) dùng khi stream lỗi.</summary>
+    public string? SnapshotUrl { get; set; }
+
+    /// <summary>Camera: độ phân giải khai báo, ví dụ "1080p", "720p".</summary>
+    public string? Resolution { get; set; }
 
     public string? FirmwareVersion { get; set; }
     public decimal? BatteryLevel { get; set; }

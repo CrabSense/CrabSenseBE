@@ -15,7 +15,11 @@ public interface IIotService
         CancellationToken ct = default);
 
 
-    Task<ApiResponse<IEnumerable<SensorDto>>> GetSensorsAsync(Guid? deviceId = null, CancellationToken ct = default);
+    Task<ApiResponse<IEnumerable<SensorDto>>> GetSensorsAsync(
+        Guid? deviceId = null,
+        Guid? farmingAreaId = null,
+        Guid? farmingRowId = null,
+        CancellationToken ct = default);
     Task<ApiResponse<SensorDto>> GetSensorAsync(Guid id, CancellationToken ct = default);
     Task<ApiResponse<SensorDto>> CreateSensorAsync(CreateSensorRequest request, CancellationToken ct = default);
     Task<ApiResponse<SensorDto>> UpdateSensorAsync(Guid id, UpdateSensorRequest request, CancellationToken ct = default);
@@ -23,6 +27,7 @@ public interface IIotService
 
     Task<ApiResponse<IEnumerable<DeviceDto>>> GetDevicesAsync(
         Guid? farmingAreaId = null,
+        Guid? farmingRowId = null,
         CancellationToken ct = default);
     Task<ApiResponse<DeviceDetailDto>> GetDeviceAsync(Guid id, CancellationToken ct = default);
     Task<ApiResponse<DeviceDto>> CreateDeviceAsync(CreateDeviceRequest request, CancellationToken ct = default);

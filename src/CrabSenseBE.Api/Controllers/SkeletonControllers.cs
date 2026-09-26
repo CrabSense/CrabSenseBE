@@ -79,8 +79,10 @@ public class AiController : ControllerBase
         [FromQuery] Guid? boxId = null,
         [FromQuery] Guid? mediaId = null,
         [FromQuery] Guid? videoId = null,
+        [FromQuery] Guid? farmingAreaId = null,
+        [FromQuery] int? take = null,
         CancellationToken ct = default)
-        => Ok(await _ai.ListDetectionsAsync(boxId, mediaId ?? videoId, ct));
+        => Ok(await _ai.ListDetectionsAsync(boxId, mediaId ?? videoId, farmingAreaId, take, ct));
 
     /// <summary>[CREATE] Trigger AI analysis on media/video</summary>
     [HttpPost("analyze")]

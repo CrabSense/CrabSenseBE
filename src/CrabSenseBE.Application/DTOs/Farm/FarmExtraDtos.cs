@@ -21,7 +21,8 @@ public record CrabLotDto(
     string Condition,
     int DeadOnArrival,
     string? Notes,
-    string Status);
+    string Status,
+    IReadOnlyList<string> ImageUrls);
 
 public record NextCrabLotCodeDto(string Code);
 
@@ -92,7 +93,13 @@ public record MobileTransferCrabRequest(
     Guid CrabId,
     Guid DestinationBoxId,
     Guid? SourceBoxId = null,
-    string? Notes = null);
+    string? Notes = null,
+    Guid? TargetFarmAreaId = null,
+    Guid? TargetRowId = null,
+    Guid? TargetBoxId = null,
+    string? ReasonCode = null,
+    string? ReasonText = null,
+    string? Note = null);
 
 /// <summary>Sửa bản ghi allocation (ghi chú / thời gian) — không đổi crab/box.</summary>
 public record UpdateAllocationRequest(
@@ -103,11 +110,28 @@ public record UpdateAllocationRequest(
 // --- Molting history ---
 public record MoltingRecordDto(
     Guid Id, Guid CrabId, Guid? BoxId, DateTime MoltTime,
-    decimal? WeightAfterGram, string Result, string Source, string? Notes);
+    decimal? WeightAfterGram, string Result, string Source, string? Notes,
+    IReadOnlyList<string> PhotoUrls,
+    DateTime? StartedAt = null,
+    DateTime? CompletedAt = null,
+    decimal? WeightBeforeGram = null,
+    decimal? ShellWidthBeforeMm = null,
+    decimal? ShellLengthBeforeMm = null,
+    decimal? ShellWidthAfterMm = null,
+    decimal? ShellLengthAfterMm = null,
+    string? CameraId = null);
 
 public record CreateMoltingRecordRequest(
     Guid CrabId, Guid? BoxId, DateTime? MoltTime,
-    decimal? WeightAfterGram, string? Result, string? Source, string? Notes);
+    decimal? WeightAfterGram, string? Result, string? Source, string? Notes,
+    DateTime? StartedAt = null,
+    DateTime? CompletedAt = null,
+    decimal? WeightBeforeGram = null,
+    decimal? ShellWidthBeforeMm = null,
+    decimal? ShellLengthBeforeMm = null,
+    decimal? ShellWidthAfterMm = null,
+    decimal? ShellLengthAfterMm = null,
+    string? CameraId = null);
 
 /// <summary>Sửa lần ghi lột xác (lỡ nhập sai).</summary>
 public record UpdateMoltingRecordRequest(
@@ -116,7 +140,15 @@ public record UpdateMoltingRecordRequest(
     decimal? WeightAfterGram,
     string? Result,
     string? Source,
-    string? Notes);
+    string? Notes,
+    DateTime? StartedAt = null,
+    DateTime? CompletedAt = null,
+    decimal? WeightBeforeGram = null,
+    decimal? ShellWidthBeforeMm = null,
+    decimal? ShellLengthBeforeMm = null,
+    decimal? ShellWidthAfterMm = null,
+    decimal? ShellLengthAfterMm = null,
+    string? CameraId = null);
 
 /// <summary>One box status change event.</summary>
 public record BoxStatusHistoryDto(
@@ -130,6 +162,14 @@ public record BoxStatusHistoryDto(
     string? Reason);
 
 public record BoxStatusHistoryDayDto(
+    DateOnly Date,
+    int Normal,
+    int Watch,
+    int Molting,
+    int Alert,
+    int Empty);
+
+public record CrabStatusHistoryDayDto(
     DateOnly Date,
     int Normal,
     int Watch,

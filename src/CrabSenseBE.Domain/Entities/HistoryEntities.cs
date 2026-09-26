@@ -32,15 +32,26 @@ public class MoltingRecord : BaseEntity
     public Guid? BoxId { get; set; }
 
     public DateTime MoltTime { get; set; } = DateTime.UtcNow;
+    public DateTime? StartedAt { get; set; }
+    public DateTime? CompletedAt { get; set; }
+    public decimal? WeightBeforeGram { get; set; }
     public decimal? WeightAfterGram { get; set; }
+    public decimal? ShellWidthBeforeMm { get; set; }
+    public decimal? ShellLengthBeforeMm { get; set; }
+    public decimal? ShellWidthAfterMm { get; set; }
+    public decimal? ShellLengthAfterMm { get; set; }
+    public string? CameraId { get; set; }
 
-    /// <summary>Kết quả: success | failed | incomplete.</summary>
+    /// <summary>Kết quả: success | monitoring | abnormal | failed.</summary>
     public string Result { get; set; } = "success";
 
     /// <summary>Nguồn ghi nhận: manual | ai.</summary>
     public string Source { get; set; } = "manual";
 
     public string? Notes { get; set; }
+
+    /// <summary>JSON array URL ảnh lột xác trên Drive.</summary>
+    public string PhotoUrlsJson { get; set; } = "[]";
 
     public Crab? Crab { get; set; }
     public Box? Box { get; set; }
@@ -86,9 +97,13 @@ public class CrabWeightHistory : BaseEntity
 {
     public Guid CrabId { get; set; }
     public decimal WeightGram { get; set; }
+    public decimal? CarapaceWidthMm { get; set; }
+    public decimal? CarapaceLengthMm { get; set; }
     public DateTime MeasuredAt { get; set; } = DateTime.UtcNow;
     public string Source { get; set; } = "manual";
     public string? Notes { get; set; }
+    public string? RecordedByName { get; set; }
+    public string PhotoUrlsJson { get; set; } = "[]";
 
     public Crab? Crab { get; set; }
 }

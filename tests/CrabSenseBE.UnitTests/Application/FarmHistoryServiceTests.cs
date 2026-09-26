@@ -1,5 +1,6 @@
 using CrabSenseBE.Application.Common;
 using CrabSenseBE.Application.DTOs.Farm;
+using CrabSenseBE.Application.Interfaces;
 using CrabSenseBE.Application.Services;
 using CrabSenseBE.Domain.Entities;
 using CrabSenseBE.Domain.Interfaces;
@@ -13,7 +14,7 @@ namespace CrabSenseBE.UnitTests.Application;
 public class FarmHistoryServiceTests
 {
     private readonly Mock<IUnitOfWork> _uow = new();
-    private FarmHistoryService Create() => new(_uow.Object);
+    private FarmHistoryService Create() => new(_uow.Object, Mock.Of<IPublicImageStorage>());
 
     [Fact]
     public async Task AllocateCrab_MovesCrabAndOpensAllocation()
@@ -63,12 +64,22 @@ public class FarmHistoryServiceTests
         statusHistRepo.Setup(r => r.AddAsync(It.IsAny<BoxStatusHistory>(), It.IsAny<CancellationToken>()))
             .Returns(Task.CompletedTask);
 
+        var crabStatusHistRepo = new Mock<IRepository<CrabStatusHistory>>();
+        crabStatusHistRepo.Setup(r => r.AddAsync(It.IsAny<CrabStatusHistory>(), It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+
+        var logRepo = new Mock<IRepository<OperationLog>>();
+        logRepo.Setup(r => r.AddAsync(It.IsAny<OperationLog>(), It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+
         _uow.Setup(u => u.Crabs).Returns(crabRepo.Object);
         _uow.Setup(u => u.Boxes).Returns(boxRepo.Object);
         _uow.Setup(u => u.FarmingRows).Returns(rowRepo.Object);
         _uow.Setup(u => u.FarmingAreas).Returns(areaRepo.Object);
         _uow.Setup(u => u.CrabBoxAllocations).Returns(allocRepo.Object);
         _uow.Setup(u => u.BoxStatusHistories).Returns(statusHistRepo.Object);
+        _uow.Setup(u => u.CrabStatusHistories).Returns(crabStatusHistRepo.Object);
+        _uow.Setup(u => u.OperationLogs).Returns(logRepo.Object);
         _uow.Setup(u => u.SaveChangesAsync(It.IsAny<CancellationToken>())).ReturnsAsync(1);
 
         var result = await Create().AllocateCrabAsync(new AllocateCrabRequest(crabId, newBox, areaId, rowId, "stock"));

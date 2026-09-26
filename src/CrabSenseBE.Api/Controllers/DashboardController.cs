@@ -104,6 +104,20 @@ public class OperationsController : ControllerBase
         CancellationToken ct = default)
         => Ok(await _farmOps.ListByCrabAsync(crabId, page, limit, type, startDate, endDate, ct));
 
+    /// <summary>
+    /// [READ] Tab "Ăn &amp; Vận động" của một con cua: KPI, trend mức ăn / vận động,
+    /// lịch sử cho ăn phân trang. Mặc định 7 ngày gần nhất.
+    /// </summary>
+    [HttpGet("crab/{crabId:guid}/feeding-activity")]
+    public async Task<IActionResult> CrabFeedingActivity(
+        Guid crabId,
+        [FromQuery] DateTime? from = null,
+        [FromQuery] DateTime? to = null,
+        [FromQuery] int page = 1,
+        [FromQuery] int limit = 10,
+        CancellationToken ct = default)
+        => Ok(await _farmOps.GetCrabFeedingActivityAsync(crabId, from, to, page, limit, ct));
+
     /// <summary>[CREATE] Create farm operation / note / task</summary>
     [HttpPost]
     [Authorize(Roles = AppRoles.FarmWrite)]

@@ -27,6 +27,19 @@ public class FarmingArea : BaseEntity
     /// <summary>Đồng bộ từ Status == Active.</summary>
     public bool IsActive { get; set; } = true;
 
+    /// <summary>Ảnh bản đồ (Maps nhìn từ trên) của trại — dùng làm nền "Bản đồ trại". Null = FE dùng ảnh mặc định.</summary>
+    public string? MapImageUrl { get; set; }
+    /// <summary>Khung khu trên ảnh bản đồ, tỉ lệ 0–1 theo chiều rộng/cao ảnh. Null = FE tự neo.</summary>
+    public decimal? MapX1 { get; set; }
+    public decimal? MapY1 { get; set; }
+    public decimal? MapX2 { get; set; }
+    public decimal? MapY2 { get; set; }
+
+    /// <summary>Vĩ độ GPS (WGS84). Null = chưa ghim bản đồ.</summary>
+    public double? Latitude { get; set; }
+    /// <summary>Kinh độ GPS (WGS84). Null = chưa ghim bản đồ.</summary>
+    public double? Longitude { get; set; }
+
     // Navigation
     public AppUser? Owner { get; set; }
     public ICollection<FarmingRow> Rows { get; set; } = new List<FarmingRow>();
@@ -50,6 +63,10 @@ public class FarmingRow : BaseEntity
     public FarmStatus Status { get; set; } = FarmStatus.Active;
     public bool IsActive { get; set; } = true;
 
+    /// <summary>Tâm dãy trên ảnh bản đồ trại, tỉ lệ 0–1. Null = chưa đặt vị trí.</summary>
+    public decimal? MapX { get; set; }
+    public decimal? MapY { get; set; }
+
     // Navigation
     public FarmingArea? FarmingArea { get; set; }
     public ICollection<Box> Boxes { get; set; } = new List<Box>();
@@ -62,6 +79,10 @@ public class Box : BaseEntity
     public string Code { get; set; } = string.Empty;
     public string? Status { get; set; }
     public bool IsOccupied { get; set; } = false;
+
+    /// <summary>Tâm hộp trên ảnh bản đồ trại, tỉ lệ 0–1. Null = chưa đặt vị trí.</summary>
+    public decimal? MapX { get; set; }
+    public decimal? MapY { get; set; }
 
     // Navigation
     public FarmingRow? FarmingRow { get; set; }
@@ -156,6 +177,8 @@ public class CrabLot : BaseEntity
     public string Status { get; set; } = "Pending";
     public int DeadOnArrival { get; set; }
     public string? Notes { get; set; }
+    /// <summary>JSON array URL ảnh lô nhập (Google Drive).</summary>
+    public string ImageUrlsJson { get; set; } = "[]";
 
     public ICollection<Crab> Crabs { get; set; } = new List<Crab>();
 }

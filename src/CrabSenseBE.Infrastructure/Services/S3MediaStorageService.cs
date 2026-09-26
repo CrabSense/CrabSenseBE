@@ -28,7 +28,12 @@ public class S3MediaStorageService : IMediaStorageService, IPublicImageStorage
 
     public Task<MediaUploadResult> UploadAsync(
         Stream data, string fileName, string contentType, string category, CancellationToken ct = default)
-        => UploadInternalAsync(data, fileName, contentType, MapCategoryFolder(category), ct);
+        => UploadInternalAsync(
+            data,
+            fileName,
+            contentType,
+            category.Contains('/', StringComparison.Ordinal) ? category : MapCategoryFolder(category),
+            ct);
 
     Task<MediaUploadResult> IPublicImageStorage.UploadAsync(
         Stream data, string fileName, string contentType, string folder, CancellationToken ct)
@@ -114,17 +119,19 @@ public class S3MediaStorageService : IMediaStorageService, IPublicImageStorage
     private string BuildObjectKey(string folder, string fileName)
     {
         var prefix = (_config["AwsS3:Prefix"] ?? "media").Trim().Trim('/');
-        var now = DateTime.UtcNow;
-        var safeFolder = string.IsNullOrWhiteSpace(folder) ? "other" : SanitizeSegment(folder);
-        return $"{prefix}/{safeFolder}/{now:yyyy}/{now:MM}/{now:dd}/{Guid.NewGuid():N}_{Sanitize(fileName)}";
+        var project = (_config["MediaStorage:ProjectFolder"] ?? "CrabSense").Trim().Trim('/');
+        var safeFolder = string.IsNullOrWhiteSpace(folder) ? "Media/image" : folder.Trim().Trim('/');
+        if (!safeFolder.Contains('/', StringComparison.Ordinal))
+            safeFolder = MapCategoryFolder(safeFolder);
+        return $"{prefix}/{project}/{safeFolder}/{Guid.NewGuid():N}_{Sanitize(fileName)}";
     }
 
     private static string MapCategoryFolder(string category) =>
         category.Trim().ToLowerInvariant() switch
         {
-            "image" or "images" or "photo" or "photos" or "crabs" => "crabs",
-            "video" or "videos" => "videos",
-            "log" or "logs" => "logs",
+            "image" or "images" or "photo" or "photos" or "crabs" => "Crabs/_pending",
+            "video" or "videos" => "Media/video",
+            "log" or "logs" => "Media/log",
             _ => SanitizeSegment(category)
         };
 

@@ -7,7 +7,7 @@ namespace CrabSenseBE.Api.Controllers;
 
 [ApiController]
 [Route("api/reports")]
-[Authorize(Roles = "SystemAdmin")]
+[Authorize(Roles = "SystemAdmin,FarmOwner")]
 public class ReportsController : ControllerBase
 {
     private readonly IHarvestReportService _harvestReportService;
@@ -45,6 +45,33 @@ public class ReportsController : ControllerBase
     }
 
     /// <summary>
+    /// Báo cáo sản lượng theo ngày, tuần hoặc tháng.
+    ///
+    /// Ví dụ:
+    /// GET /api/reports/harvest/period?period=Day
+    /// GET /api/reports/harvest/period?period=Week
+    /// GET /api/reports/harvest/period?period=Month
+    /// </summary>
+    [HttpGet("harvest/period")]
+    public async Task<IActionResult> GetHarvestReportByPeriod(
+        [FromQuery] HarvestReportFilterDto filter,
+        CancellationToken cancellationToken)
+    {
+        var result =
+            await _harvestReportService
+                .GetHarvestReportByPeriodAsync(
+                    filter,
+                    cancellationToken);
+
+        return Ok(new
+        {
+            success = true,
+            message = (string?)null,
+            data = result
+        });
+    }
+
+    /// <summary>
     /// Báo cáo tồn kho cua đông lạnh.
     /// </summary>
     [HttpGet("inventory")]
@@ -59,6 +86,19 @@ public class ReportsController : ControllerBase
             success = true,
             data = result
         });
+    }
+
+    /// <summary>
+    /// Báo cáo tồn kho với filter thời gian + cảnh báo hết hạn.
+    /// </summary>
+    [HttpGet("inventory/filtered")]
+    public async Task<IActionResult> InventoryFiltered(
+        [FromQuery] InventoryReportFilterDto filter,
+        CancellationToken cancellationToken)
+    {
+        var result = await _inventoryReportService
+            .GetInventoryReportAsync(filter, cancellationToken);
+        return Ok(new { success = true, data = result });
     }
 
     /// <summary>
@@ -101,6 +141,19 @@ public class ReportsController : ControllerBase
     }
 
     /// <summary>
+    /// Báo cáo molting với filter thời gian + trend.
+    /// </summary>
+    [HttpGet("molting/filtered")]
+    public async Task<IActionResult> GetMoltingReportFiltered(
+        [FromQuery] MoltingReportFilterDto filter,
+        CancellationToken cancellationToken)
+    {
+        var result = await _moltingReportService
+            .GetMoltingReportAsync(filter, cancellationToken);
+        return Ok(new { success = true, data = result });
+    }
+
+    /// <summary>
     /// Thống kê hiệu quả vận hành.
     /// </summary>
     [HttpGet("operational-efficiency")]
@@ -117,4 +170,5 @@ public class ReportsController : ControllerBase
             data = result
         });
     }
+
 }

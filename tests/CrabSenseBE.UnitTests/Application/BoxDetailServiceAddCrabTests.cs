@@ -72,11 +72,13 @@ public class BoxDetailServiceAddCrabTests
             .Callback<QrCode, CancellationToken>((q, _) => _savedQr = q)
             .Returns(Task.CompletedTask);
 
+        var rows = new Mock<IRepository<FarmingRow>>();
         _uow.Setup(u => u.Boxes).Returns(boxes.Object);
         _uow.Setup(u => u.Crabs).Returns(crabs.Object);
         _uow.Setup(u => u.CrabLots).Returns(lots.Object);
         _uow.Setup(u => u.CrabBoxAllocations).Returns(allocations.Object);
         _uow.Setup(u => u.QrCodes).Returns(qrCodes.Object);
+        _uow.Setup(u => u.FarmingRows).Returns(rows.Object);
         _uow.Setup(u => u.SaveChangesAsync(It.IsAny<CancellationToken>())).ReturnsAsync(1);
 
         return new BoxDetailService(_uow.Object, _boxQr.Object);

@@ -63,6 +63,19 @@ public class SurvivalRateReportService
             SurvivalRateFilterDto filter,
             CancellationToken cancellationToken = default)
     {
+        if (filter is null)
+        {
+            throw AppException.BadRequest(
+                "Survival rate filter is required.");
+        }
+
+        if (filter.FromDate.HasValue &&
+            filter.ToDate.HasValue &&
+            filter.FromDate.Value.Date > filter.ToDate.Value.Date)
+        {
+            throw AppException.BadRequest(
+                "FromDate cannot be greater than ToDate.");
+        }
         // ============================================================
         // 1. KIỂM TRA KHU VỰC NẾU CÓ FILTER
         // ============================================================
@@ -104,7 +117,6 @@ public class SurvivalRateReportService
 
         var query = _uow.Crabs
             .Query()
-
             .Include(c => c.BoxAllocations)
                 .ThenInclude(a => a.Box)
                     .ThenInclude(b => b!.FarmingRow)
@@ -251,7 +263,12 @@ public class SurvivalRateReportService
 
         var harvested =
             crabs.Count(c =>
-                c.Status == CrabStatus.Harvested);
+                c.Status == CrabStatus.Harvested
+                || c.Status == CrabStatus.Sold);
+
+        var missing =
+            crabs.Count(c =>
+                c.Status == CrabStatus.Missing);
 
         // ============================================================
         // 7. THỐNG KÊ THEO KHU VỰC
@@ -321,7 +338,12 @@ public class SurvivalRateReportService
 
                 var areaHarvested =
                     areaCrabs.Count(c =>
-                        c.Status == CrabStatus.Harvested);
+                        c.Status == CrabStatus.Harvested
+                        || c.Status == CrabStatus.Sold);
+
+                var areaMissing =
+                    areaCrabs.Count(c =>
+                        c.Status == CrabStatus.Missing);
 
                 return new SurvivalByAreaDto(
                     AreaId:
@@ -365,40 +387,52 @@ public class SurvivalRateReportService
             .ToList();
 
         // ============================================================
-        // 8. TRẢ KẾT QUẢ
+        // 8. TREND THEO NGÀY (dựa trên StockedAt)
         // ============================================================
+        //
+        // Nếu filter có ngày: gom theo ngày trong khoảng.
+        // Nếu không: gom theo ngày của toàn bộ dữ liệu.
+        // ============================================================
+        var trend = crabs
+            .GroupBy(c => c.StockedAt.Date)
+            .Select(g =>
+            {
+                var groupCrabs = g.ToList();
+                var gTotal = groupCrabs.Count;
+                var gAlive = groupCrabs.Count(c =>
+                    c.Status == CrabStatus.Alive
+                    || c.Status == CrabStatus.Molting
+                    || c.Status == CrabStatus.Quarantined);
+                var gDead = groupCrabs.Count(c =>
+                    c.Status == CrabStatus.Dead);
+                var gHarvested = groupCrabs.Count(c =>
+    c.Status == CrabStatus.Harvested
+    || c.Status == CrabStatus.Sold);
 
+                var gMissing = groupCrabs.Count(c =>
+                    c.Status == CrabStatus.Missing);
+
+                return new SurvivalTrendDto(
+                    g.Key,
+                    gTotal, gAlive, gDead, gHarvested,
+                    CalculateRate(gAlive, gTotal));
+            })
+            .OrderBy(x => x.Date)
+            .ToList();
+
+        // ============================================================
+        // 9. TRẢ KẾT QUẢ
+        // ============================================================
         return new SurvivalRateReportDto(
-            TotalCrabs:
-                total,
-
-            AliveCrabs:
-                alive,
-
-            DeadCrabs:
-                dead,
-
-            HarvestedCrabs:
-                harvested,
-
-            SurvivalRate:
-                CalculateRate(
-                    alive,
-                    total),
-
-            MortalityRate:
-                CalculateRate(
-                    dead,
-                    total),
-
-            HarvestRate:
-                CalculateRate(
-                    harvested,
-                    total),
-
-            ByAreas:
-                byAreas
-        );
+            TotalCrabs: total,
+            AliveCrabs: alive,
+            DeadCrabs: dead,
+            HarvestedCrabs: harvested,
+            SurvivalRate: CalculateRate(alive, total),
+            MortalityRate: CalculateRate(dead, total),
+            HarvestRate: CalculateRate(harvested, total),
+            ByAreas: byAreas,
+            Trend: trend);
     }
 
     // ================================================================
@@ -421,10 +455,6 @@ public class SurvivalRateReportService
     {
         return total > 0
             ? decimal.Round(
-                (decimal)count
-                / total
-                * 100,
-                2)
-            : 0;
+                (decimal)count / total * 100, 2) : 0;
     }
 }
