@@ -119,6 +119,8 @@ public class RasFlowService : IRasFlowService
             node.IsOn = false;
             node.ControlMode = "manual";
         }
+        if (!string.IsNullOrWhiteSpace(req.ParamDefaultsJson))
+            node.ParamDefaultsJson = req.ParamDefaultsJson.Trim();
 
         _uow.RasComponents.Update(node);
         await _uow.SaveChangesAsync(ct);
