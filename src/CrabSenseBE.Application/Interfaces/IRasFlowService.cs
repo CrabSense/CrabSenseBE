@@ -14,4 +14,5 @@ public interface IRasFlowService
 
     Task<ApiResponse<IReadOnlyList<RasComponentDto>>> ListComponentsAsync(Guid waterSystemId, CancellationToken ct = default);
     Task<ApiResponse<IReadOnlyList<WaterFlowDto>>> ListFlowsAsync(Guid waterSystemId, CancellationToken ct = default);
+    Task ApplyAutoRelaysAsync(Guid deviceId, CancellationToken ct = default);
 }

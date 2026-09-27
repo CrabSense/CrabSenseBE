@@ -209,17 +209,7 @@ public class RasFlowService : IRasFlowService
         if (node.RelayDeviceId is Guid deviceId
             && cmd is ("on" or "off" or "start" or "stop" or "open" or "close" or "toggle"))
         {
-            var device = await _uow.Devices.GetByIdAsync(deviceId, ct);
-            if (device is not null)
-            {
-                await _edgeCommands.EnqueueAsync(
-                    new EnqueueEdgeCommandRequest(
-                        device.DeviceCode,
-                        node.IsOn ? "on" : "off",
-                        node.RelayChannel),
-                    actorId,
-                    ct);
-            }
+            await EnqueueRelayAsync(node, actorId, ct);
         }
         return ApiResponse<RasFlowDiagramDto>.Ok(await BuildDiagramAsync(area, ws, ct), "Command applied.");
     }
@@ -455,6 +445,115 @@ public class RasFlowService : IRasFlowService
         if (obj is null) return null;
         if (obj is string s) return s;
         return JsonSerializer.Serialize(obj);
+    }
+
+    public async Task ApplyAutoRelaysAsync(Guid deviceId, CancellationToken ct = default)
+    {
+        var pumps = (await _uow.RasComponents.FindAsync(
+            c => c.RelayDeviceId == deviceId
+                 && c.HasRelay
+                 && string.Equals(c.ControlMode, "auto", StringComparison.OrdinalIgnoreCase),
+            ct)).ToList();
+        if (pumps.Count == 0)
+            return;
+
+        var sensors = (await _uow.Sensors.FindAsync(s => s.DeviceId == deviceId, ct)).ToList();
+        if (sensors.Count == 0)
+            return;
+
+        var latest = new Dictionary<string, decimal>(StringComparer.OrdinalIgnoreCase);
+        foreach (var sensor in sensors)
+        {
+            var reading = (await _uow.WaterMeasurements.FindAsync(m => m.SensorId == sensor.Id, ct))
+                .OrderByDescending(m => m.MeasuredAt)
+                .FirstOrDefault();
+            if (reading is not null)
+                latest[sensor.SensorCode] = reading.Value;
+        }
+
+        foreach (var pump in pumps)
+        {
+            var rule = ReadAutoRule(pump.ParamDefaultsJson);
+            if (rule is null)
+                continue;
+
+            var wantOn = pump.IsOn;
+            if (rule.OffSensor is not null
+                && latest.TryGetValue(rule.OffSensor, out var offVal)
+                && offVal == rule.OffValue)
+                wantOn = false;
+            else if (rule.OnSensor is not null
+                     && latest.TryGetValue(rule.OnSensor, out var onVal)
+                     && onVal == rule.OnValue)
+                wantOn = true;
+
+            if (wantOn == pump.IsOn)
+                continue;
+
+            pump.IsOn = wantOn;
+            pump.RunStartedAt = wantOn ? DateTime.UtcNow : null;
+            pump.LastCommandAt = DateTime.UtcNow;
+            _uow.RasComponents.Update(pump);
+            await _uow.SaveChangesAsync(ct);
+            await EnqueueRelayAsync(pump, null, ct);
+        }
+    }
+
+    private async Task EnqueueRelayAsync(RasComponent node, Guid? actorId, CancellationToken ct)
+    {
+        if (node.RelayDeviceId is not Guid deviceId)
+            return;
+        var device = await _uow.Devices.GetByIdAsync(deviceId, ct);
+        if (device is null)
+            return;
+        await _edgeCommands.EnqueueAsync(
+            new EnqueueEdgeCommandRequest(
+                device.DeviceCode,
+                node.IsOn ? "on" : "off",
+                node.RelayChannel),
+            actorId,
+            ct);
+    }
+
+    private sealed record AutoRule(string? OnSensor, decimal OnValue, string? OffSensor, decimal OffValue);
+
+    private static AutoRule? ReadAutoRule(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json))
+            return null;
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            var root = doc.RootElement;
+            if (root.TryGetProperty("auto", out var nested) && nested.ValueKind == JsonValueKind.Object)
+                root = nested;
+            return new AutoRule(
+                ReadString(root, "onSensor"),
+                ReadDecimal(root, "onValue", 1),
+                ReadString(root, "offSensor"),
+                ReadDecimal(root, "offValue", 1));
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    private static string? ReadString(JsonElement root, string name)
+        => root.TryGetProperty(name, out var el) && el.ValueKind == JsonValueKind.String
+            ? el.GetString()
+            : null;
+
+    private static decimal ReadDecimal(JsonElement root, string name, decimal fallback)
+    {
+        if (!root.TryGetProperty(name, out var el))
+            return fallback;
+        return el.ValueKind switch
+        {
+            JsonValueKind.Number => el.GetDecimal(),
+            JsonValueKind.String when decimal.TryParse(el.GetString(), out var n) => n,
+            _ => fallback
+        };
     }
 
     private static RasComponentDto MapComponent(RasComponent c) =>

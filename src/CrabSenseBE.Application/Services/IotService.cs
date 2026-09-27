@@ -15,12 +15,18 @@ public class IotService : IIotService
     private readonly IUnitOfWork _uow;
     private readonly IStorageService _storage;
     private readonly IAlertService _alerts;
+    private readonly IRasFlowService _rasFlow;
 
-    public IotService(IUnitOfWork uow, IStorageService storage, IAlertService alerts)
+    public IotService(
+        IUnitOfWork uow,
+        IStorageService storage,
+        IAlertService alerts,
+        IRasFlowService rasFlow)
     {
         _uow = uow;
         _storage = storage;
         _alerts = alerts;
+        _rasFlow = rasFlow;
     }
 
     // ─── Ingest (ESP32 HTTP) ────────────────────────────────────────────────
@@ -80,6 +86,8 @@ public class IotService : IIotService
         await _uow.SaveChangesAsync(ct);
 
         await _alerts.EvaluateMeasurementAsync(sensor, req.Value, ct);
+        if (sensor.DeviceId is Guid deviceId)
+            await _rasFlow.ApplyAutoRelaysAsync(deviceId, ct);
         return ApiResponse.Ok("Sensor data ingested.");
     }
 
