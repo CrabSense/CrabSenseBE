@@ -35,6 +35,12 @@ public class AreaRasFlowController : ControllerBase
     public async Task<IActionResult> AddNode(Guid areaId, [FromBody] CreateRasFlowNodeRequest req, CancellationToken ct)
         => Ok(await _service.AddNodeAsync(areaId, req, ct));
 
+    [HttpPut("{areaId:guid}/ras-flow/nodes/{nodeId:guid}/relay")]
+    [Authorize(Roles = AppRoles.FarmWrite)]
+    public async Task<IActionResult> UpdateRelay(
+        Guid areaId, Guid nodeId, [FromBody] UpdateRasFlowNodeRelayRequest req, CancellationToken ct)
+        => Ok(await _service.UpdateNodeRelayAsync(areaId, nodeId, req, ct));
+
     /// <summary>[DELETE] Xóa node + các WaterFlow liên quan.</summary>
     [HttpDelete("{areaId:guid}/ras-flow/nodes/{nodeId:guid}")]
     [Authorize(Roles = AppRoles.FarmWrite)]

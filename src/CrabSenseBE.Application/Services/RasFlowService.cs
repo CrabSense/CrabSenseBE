@@ -81,6 +81,51 @@ public class RasFlowService : IRasFlowService
         return ApiResponse<RasFlowDiagramDto>.Ok(await BuildDiagramAsync(area, ws, ct), "Node added.");
     }
 
+    public async Task<ApiResponse<RasFlowDiagramDto>> UpdateNodeRelayAsync(
+        Guid areaId, Guid nodeId, UpdateRasFlowNodeRelayRequest req, CancellationToken ct = default)
+    {
+        var area = await RequireAreaAsync(areaId, ct);
+        var ws = await EnsureSystemAsync(area, ct);
+        var node = await _uow.RasComponents.GetByIdAsync(nodeId, ct)
+            ?? throw AppException.NotFound("RasComponent");
+        if (node.WaterSystemId != ws.Id)
+            throw AppException.BadRequest("Node does not belong to this area RAS.");
+
+        var relayDeviceId = req.RelayDeviceId;
+        if (relayDeviceId is null && !string.IsNullOrWhiteSpace(req.RelayDeviceCode))
+        {
+            var device = await _uow.Devices.FirstOrDefaultAsync(
+                d => d.DeviceCode == req.RelayDeviceCode.Trim(), ct);
+            relayDeviceId = device?.Id;
+        }
+
+        if (relayDeviceId is null || string.IsNullOrWhiteSpace(req.RelayChannel))
+        {
+            node.RelayDeviceId = null;
+            node.RelayChannel = null;
+            node.HasRelay = false;
+            node.IsOn = false;
+            node.ControlMode = null;
+        }
+        else
+        {
+            var device = await _uow.Devices.GetByIdAsync(relayDeviceId.Value, ct)
+                ?? throw AppException.NotFound("Controller");
+            if (req.RelayChannel is not ("1" or "2"))
+                throw AppException.BadRequest("SSR channel must be 1 or 2.");
+            node.RelayDeviceId = device.Id;
+            node.RelayChannel = req.RelayChannel.Trim();
+            node.HasRelay = true;
+            node.IsOn = false;
+            node.ControlMode = "manual";
+        }
+
+        _uow.RasComponents.Update(node);
+        await _uow.SaveChangesAsync(ct);
+        return ApiResponse<RasFlowDiagramDto>.Ok(
+            await BuildDiagramAsync(area, ws, ct), "Relay assignment updated.");
+    }
+
     public async Task<ApiResponse<RasFlowDiagramDto>> ReorderAsync(
         Guid areaId, ReorderRasFlowRequest req, CancellationToken ct = default)
     {
