@@ -82,6 +82,11 @@ public class BoxDetailService : IBoxDetailService
     {
         _ = await _uow.Boxes.GetByIdAsync(boxId, ct) ?? throw AppException.NotFound("Box");
         var crabs = (await _uow.Crabs.FindAsync(c => c.BoxId == boxId, ct)).ToList();
+        var lotIds = crabs.Select(c => c.CrabLotId).Where(id => id != Guid.Empty).Distinct().ToList();
+        var lots = lotIds.Count == 0
+            ? new Dictionary<Guid, string>()
+            : (await _uow.CrabLots.FindAsync(l => lotIds.Contains(l.Id), ct))
+                .ToDictionary(l => l.Id, l => string.IsNullOrWhiteSpace(l.LotCode) ? l.Name : l.LotCode);
         var list = crabs.Select(c =>
         {
             var health = c.Status switch
@@ -92,6 +97,7 @@ public class BoxDetailService : IBoxDetailService
                 _ => "normal"
             };
             var molt = string.IsNullOrWhiteSpace(c.MoltingStage) ? "hardShell" : c.MoltingStage;
+            lots.TryGetValue(c.CrabLotId, out var lotCode);
             return new BoxCrabItemDto(
                 c.Id,
                 boxId,
@@ -105,6 +111,7 @@ public class BoxDetailService : IBoxDetailService
                 WeightGram: c.WeightGram,
                 MoltingStage: c.MoltingStage,
                 Tag: c.Tag,
+                LotCode: lotCode,
                 ImageUrls: JsonStringList.Parse(c.ImageUrlsJson));
         });
         return ApiResponse<IEnumerable<BoxCrabItemDto>>.Ok(list);
@@ -363,16 +370,17 @@ public class BoxDetailService : IBoxDetailService
             throw AppException.Conflict($"Box '{box.Code}' already has a live crab.");
 
         Guid crabLotId;
+        CrabLot? lot;
         if (req.CrabLotId is Guid lotId && lotId != Guid.Empty)
         {
-            _ = await _uow.CrabLots.GetByIdAsync(lotId, ct) ?? throw AppException.NotFound("CrabLot");
+            lot = await _uow.CrabLots.GetByIdAsync(lotId, ct) ?? throw AppException.NotFound("CrabLot");
             crabLotId = lotId;
         }
         else
         {
-            var anyLot = (await _uow.CrabLots.GetAllAsync(ct)).OrderBy(l => l.CreatedAt).FirstOrDefault()
+            lot = (await _uow.CrabLots.GetAllAsync(ct)).OrderBy(l => l.CreatedAt).FirstOrDefault()
                 ?? throw AppException.BadRequest("No CrabLot available — create a crab lot first, or pass crabLotId.");
-            crabLotId = anyLot.Id;
+            crabLotId = lot.Id;
         }
 
         var weight = req.WeightGram ?? req.Weight;
@@ -465,6 +473,7 @@ public class BoxDetailService : IBoxDetailService
             WeightGram: weight,
             MoltingStage: molt,
             Tag: crab.Tag,
+            LotCode: lot?.LotCode ?? lot?.Name,
             ImageUrls: JsonStringList.Parse(crab.ImageUrlsJson)));
     }
 }

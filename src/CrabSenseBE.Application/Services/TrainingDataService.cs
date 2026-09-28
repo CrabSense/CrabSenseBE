@@ -64,7 +64,7 @@ public class TrainingDataService : ITrainingDataService
             FeedingEventId = request.FeedingEventId,
             ObservationEventId = request.ObservationEventId,
             Ate = request.Ate, ConsumptionLevel = request.ConsumptionLevel,
-            MovementLevel = request.MovementLevel, FoodResponse = request.FoodResponse,
+            MovementLevel = request.MovementLevel,
             ActualWeightGram = request.ActualWeightGram, Notes = request.Notes,
             LabeledBy = userId
         };
@@ -89,7 +89,7 @@ public class TrainingDataService : ITrainingDataService
                 .OrderByDescending(x => x.LabeledAt).FirstOrDefault();
             return new TrainingDataDto(feed.Id, observation?.Id, feed.CrabId, feed.BoxId,
                 feed.InitialFoodGram, label?.ConsumptionLevel, label?.Ate,
-                label?.MovementLevel, label?.FoodResponse, observation?.VideoMediaId,
+                label?.MovementLevel, observation?.VideoMediaId,
                 feed.FedAt, observation?.ObservedAt);
         }).ToList();
         return ApiResponse<IReadOnlyList<TrainingDataDto>>.Ok(result);

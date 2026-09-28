@@ -38,7 +38,6 @@ public class TrainingLabel : BaseEntity
     public bool? Ate { get; set; }
     public string? ConsumptionLevel { get; set; }
     public string? MovementLevel { get; set; }
-    public string? FoodResponse { get; set; }
     public decimal? ActualWeightGram { get; set; }
     public string LabelSource { get; set; } = "operator";
     public Guid? LabeledBy { get; set; }

@@ -338,7 +338,6 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     Ate = table.Column<bool>(type: "boolean", nullable: true),
                     ConsumptionLevel = table.Column<string>(type: "text", nullable: true),
                     MovementLevel = table.Column<string>(type: "text", nullable: true),
-                    FoodResponse = table.Column<string>(type: "text", nullable: true),
                     ActualWeightGram = table.Column<decimal>(type: "numeric", nullable: true),
                     LabelSource = table.Column<string>(type: "text", nullable: false),
                     LabeledBy = table.Column<Guid>(type: "uuid", nullable: true),

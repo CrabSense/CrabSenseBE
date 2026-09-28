@@ -7,10 +7,10 @@ public record CreateObservationEventRequest(Guid CrabId, Guid? BoxId, Guid? Feed
     DateTime? ObservedAt, int? DurationSeconds, string? ObservationType, string? Notes);
 
 public record SubmitTrainingLabelRequest(Guid? FeedingEventId, Guid? ObservationEventId,
-    bool? Ate, string? ConsumptionLevel, string? MovementLevel, string? FoodResponse,
+    bool? Ate, string? ConsumptionLevel, string? MovementLevel,
     decimal? ActualWeightGram, string? Notes);
 
 public record TrainingDataDto(Guid FeedingEventId, Guid? ObservationEventId, Guid CrabId,
     Guid? BoxId, decimal? InitialFoodGram, string? ConsumptionLevel, bool? Ate,
-    string? MovementLevel, string? FoodResponse, Guid? VideoMediaId, DateTime FedAt,
+    string? MovementLevel, Guid? VideoMediaId, DateTime FedAt,
     DateTime? ObservedAt);
