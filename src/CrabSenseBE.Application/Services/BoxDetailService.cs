@@ -71,7 +71,7 @@ public class BoxDetailService : IBoxDetailService
             Location: new BoxLocationDto(0, 0, area?.Name ?? row?.Name ?? box.Code),
             CurrentCrabCount: alive.Count,
             Capacity: row?.Capacity > 0 ? row.Capacity : Math.Max(alive.Count, 1),
-            Species: "mudCrab",
+            Species: "",
             AverageWeight: Math.Round(avgWeight, 1),
             CreatedAt: box.CreatedAt,
             LastVideoAt: lastVideo?.CreatedAt));
@@ -84,9 +84,9 @@ public class BoxDetailService : IBoxDetailService
         var crabs = (await _uow.Crabs.FindAsync(c => c.BoxId == boxId, ct)).ToList();
         var lotIds = crabs.Select(c => c.CrabLotId).Where(id => id != Guid.Empty).Distinct().ToList();
         var lots = lotIds.Count == 0
-            ? new Dictionary<Guid, string>()
+            ? new Dictionary<Guid, CrabLot>()
             : (await _uow.CrabLots.FindAsync(l => lotIds.Contains(l.Id), ct))
-                .ToDictionary(l => l.Id, l => string.IsNullOrWhiteSpace(l.LotCode) ? l.Name : l.LotCode);
+                .ToDictionary(l => l.Id);
         var list = crabs.Select(c =>
         {
             var health = c.Status switch
@@ -97,11 +97,11 @@ public class BoxDetailService : IBoxDetailService
                 _ => "normal"
             };
             var molt = string.IsNullOrWhiteSpace(c.MoltingStage) ? "hardShell" : c.MoltingStage;
-            lots.TryGetValue(c.CrabLotId, out var lotCode);
+            lots.TryGetValue(c.CrabLotId, out var lot);
             return new BoxCrabItemDto(
                 c.Id,
                 boxId,
-                Species: "mudCrab",
+                Species: string.IsNullOrWhiteSpace(c.CrabType) ? "" : c.CrabType,
                 Weight: c.WeightGram ?? 0,
                 MoltingStatus: molt,
                 HealthStatus: health,
@@ -111,7 +111,10 @@ public class BoxDetailService : IBoxDetailService
                 WeightGram: c.WeightGram,
                 MoltingStage: c.MoltingStage,
                 Tag: c.Tag,
-                LotCode: lotCode,
+                LotCode: lot?.LotCode,
+                LotName: string.IsNullOrWhiteSpace(lot?.Name) ? lot?.LotCode : lot!.Name,
+                CarapaceLengthMm: c.CarapaceLengthMm,
+                CarapaceWidthMm: c.CarapaceWidthMm,
                 ImageUrls: JsonStringList.Parse(c.ImageUrlsJson));
         });
         return ApiResponse<IEnumerable<BoxCrabItemDto>>.Ok(list);
@@ -463,7 +466,7 @@ public class BoxDetailService : IBoxDetailService
         return ApiResponse<BoxCrabItemDto>.Ok(new BoxCrabItemDto(
             crab.Id,
             boxId,
-            Species: string.IsNullOrWhiteSpace(req.Species) ? "mudCrab" : req.Species!,
+            Species: string.IsNullOrWhiteSpace(req.Species) ? (crab.CrabType ?? "") : req.Species!,
             Weight: weight ?? 0,
             MoltingStatus: molt,
             HealthStatus: "normal",
@@ -473,7 +476,10 @@ public class BoxDetailService : IBoxDetailService
             WeightGram: weight,
             MoltingStage: molt,
             Tag: crab.Tag,
-            LotCode: lot?.LotCode ?? lot?.Name,
+            LotCode: lot?.LotCode,
+            LotName: string.IsNullOrWhiteSpace(lot?.Name) ? lot?.LotCode : lot!.Name,
+            CarapaceLengthMm: crab.CarapaceLengthMm,
+            CarapaceWidthMm: crab.CarapaceWidthMm,
             ImageUrls: JsonStringList.Parse(crab.ImageUrlsJson)));
     }
 }
