@@ -89,12 +89,19 @@ public class BoxDetailService : IBoxDetailService
                 .ToDictionary(l => l.Id);
         var list = crabs.Select(c =>
         {
-            var health = c.Status switch
+            var health = c.Condition switch
             {
-                CrabStatus.Quarantined => "disease",
-                CrabStatus.Dead => "unknown",
-                CrabStatus.Molting => "stress",
-                _ => "normal"
+                CrabCondition.Problem => "disease",
+                CrabCondition.Weak => "weak",
+                CrabCondition.Dead => "unknown",
+                CrabCondition.Molting or CrabCondition.Premolt or CrabCondition.Softshell => "stress",
+                _ => c.Status switch
+                {
+                    CrabStatus.Quarantined => "disease",
+                    CrabStatus.Dead => "unknown",
+                    CrabStatus.Molting => "stress",
+                    _ => "normal"
+                }
             };
             var molt = string.IsNullOrWhiteSpace(c.MoltingStage) ? "hardShell" : c.MoltingStage;
             lots.TryGetValue(c.CrabLotId, out var lot);

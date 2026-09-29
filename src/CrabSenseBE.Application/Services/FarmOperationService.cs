@@ -25,6 +25,9 @@ public class FarmOperationService : IFarmOperationService
             .Select(offset => start.Date.AddDays(offset))
             .ToDictionary(date => date, _ => new int[3]);
 
+        // Một hộp / ngày: phiếu mới nhất. Cộng mọi phiếu thì BOX-0005 test làm phình "ăn nhiều".
+        var latest = new Dictionary<(DateTime Day, string BoxId), (DateTime At, int Bucket)>();
+
         foreach (var operation in operations)
         {
             var isFeedingRecord =
@@ -46,10 +49,24 @@ public class FarmOperationService : IFarmOperationService
             };
             if (bucket < 0) continue;
 
-            var crabIds = ParseStringList(operation.CrabIdsJson);
-            if (crabIds.Count == 0) continue;
-            totals[operation.Timestamp.Date][bucket] += crabIds.Count;
+            var boxIds = ParseStringList(operation.BoxIdsJson);
+            if (boxIds.Count == 0)
+                boxIds = ParseStringList(operation.CrabIdsJson);
+            if (boxIds.Count == 0) continue;
+
+            var day = operation.Timestamp.Date;
+            if (!totals.ContainsKey(day)) continue;
+
+            foreach (var boxId in boxIds)
+            {
+                var key = (day, boxId);
+                if (!latest.TryGetValue(key, out var prev) || operation.Timestamp >= prev.At)
+                    latest[key] = (operation.Timestamp, bucket);
+            }
         }
+
+        foreach (var item in latest)
+            totals[item.Key.Day][item.Value.Bucket] += 1;
 
         var result = totals
             .OrderBy(item => item.Key)

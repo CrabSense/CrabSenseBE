@@ -2976,9 +2976,7 @@ public class FarmingService : IFarmingService
     {
         if (crab is null)
             return occupied ? "normal" : "empty";
-        var derived = CrabConditions.FromMoltingAndStatus(crab.MoltingStage, crab.Status);
-        if (crab.Condition == CrabCondition.Normal && derived != CrabCondition.Normal)
-            return CrabConditions.ToApi(derived);
+        // Tình trạng phiếu (Condition), không đè lột mềm từ MoltingStage.
         return CrabConditions.ToApi(crab.Condition);
     }
 
