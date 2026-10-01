@@ -31,9 +31,8 @@ public class BoxDetailService : IBoxDetailService
         if (row is not null)
             area = await _uow.FarmingAreas.GetByIdAsync(row.FarmingAreaId, ct);
 
-        var crabs = (await _uow.Crabs.FindAsync(c => c.BoxId == boxId, ct)).ToList();
-        var alive = crabs.Where(c =>
-            c.Status is CrabStatus.Alive or CrabStatus.Molting or CrabStatus.Quarantined).ToList();
+        var alive = await LiveCrabsInBoxAsync(boxId, ct);
+        var occupied = alive.Count > 0;
         var avgWeight = alive.Count == 0
             ? 0m
             : alive.Where(c => c.WeightGram.HasValue).Select(c => c.WeightGram!.Value).DefaultIfEmpty(0).Average();
@@ -63,8 +62,8 @@ public class BoxDetailService : IBoxDetailService
             row?.Name,
             area?.Name,
             box.Code,
-            box.Status,
-            box.IsOccupied,
+            occupied ? "active" : (box.Status ?? "empty"),
+            occupied,
             QrCode: qrCode,
             FarmId: areaId,
             PondId: box.FarmingRowId,
@@ -81,7 +80,7 @@ public class BoxDetailService : IBoxDetailService
         Guid boxId, CancellationToken ct = default)
     {
         _ = await _uow.Boxes.GetByIdAsync(boxId, ct) ?? throw AppException.NotFound("Box");
-        var crabs = (await _uow.Crabs.FindAsync(c => c.BoxId == boxId, ct)).ToList();
+        var crabs = await LiveCrabsInBoxAsync(boxId, ct);
         var lotIds = crabs.Select(c => c.CrabLotId).Where(id => id != Guid.Empty).Distinct().ToList();
         var lots = lotIds.Count == 0
             ? new Dictionary<Guid, CrabLot>()
@@ -374,8 +373,7 @@ public class BoxDetailService : IBoxDetailService
     {
         var box = await _uow.Boxes.GetByIdAsync(boxId, ct) ?? throw AppException.NotFound("Box");
 
-        var liveInBox = (await _uow.Crabs.FindAsync(c => c.BoxId == boxId, ct))
-            .Any(c => c.Status is CrabStatus.Alive or CrabStatus.Molting or CrabStatus.Quarantined);
+        var liveInBox = (await LiveCrabsInBoxAsync(boxId, ct)).Count > 0;
         if (liveInBox)
             throw AppException.Conflict($"Box '{box.Code}' already has a live crab.");
 
@@ -488,5 +486,32 @@ public class BoxDetailService : IBoxDetailService
             CarapaceLengthMm: crab.CarapaceLengthMm,
             CarapaceWidthMm: crab.CarapaceWidthMm,
             ImageUrls: JsonStringList.Parse(crab.ImageUrlsJson)));
+    }
+
+    /// Cùng quy tắc với FarmingService: BoxId snapshot, rồi allocation đang mở.
+    private async Task<List<Crab>> LiveCrabsInBoxAsync(Guid boxId, CancellationToken ct)
+    {
+        var crabs = (await _uow.Crabs.GetAllAsync(ct) ?? Enumerable.Empty<Crab>())
+            .Where(c =>
+                c.Status is CrabStatus.Alive or CrabStatus.Molting or CrabStatus.Quarantined)
+            .ToList();
+        var ids = crabs.Select(c => c.Id).ToHashSet();
+        var allocRepo = _uow.CrabBoxAllocations;
+        var open = (ids.Count == 0 || allocRepo is null)
+            ? new List<CrabBoxAllocation>()
+            : (await allocRepo.FindAsync(
+                a => a.EndTime == null && ids.Contains(a.CrabId), ct)
+              ?? Enumerable.Empty<CrabBoxAllocation>()).ToList();
+        var allocByCrab = open
+            .GroupBy(a => a.CrabId)
+            .ToDictionary(g => g.Key, g => g.OrderByDescending(a => a.StartTime).First().BoxId);
+
+        return crabs.Where(c =>
+        {
+            var current = c.BoxId is Guid snap && snap != Guid.Empty
+                ? snap
+                : allocByCrab.GetValueOrDefault(c.Id);
+            return current == boxId;
+        }).ToList();
     }
 }
