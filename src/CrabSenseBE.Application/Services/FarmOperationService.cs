@@ -162,6 +162,7 @@ public class FarmOperationService : IFarmOperationService
         // Đánh dấu tình trạng khi cho ăn → cập nhật luôn con cua, để hộp/hồ sơ/
         // cảnh báo thấy ngay. Ghi chung 1 SaveChanges với phiếu: hoặc cả hai, hoặc không.
         await ApplyConditionToCrabsAsync(crabIds, condition, op.Timestamp, ct);
+        await TouchBoxesAsync(req.BoxIds, op.Timestamp, ct);
 
         await _uow.SaveChangesAsync(ct);
         return ApiResponse<FarmOperationDto>.Ok(Map(op), "Created.");
@@ -432,6 +433,19 @@ public class FarmOperationService : IFarmOperationService
         "weak" => CrabCondition.Weak,
         _ => null
     };
+
+    private async Task TouchBoxesAsync(IEnumerable<string>? boxIds, DateTime at, CancellationToken ct)
+    {
+        if (boxIds is null) return;
+        foreach (var raw in boxIds)
+        {
+            if (!Guid.TryParse(raw, out var boxId)) continue;
+            var box = await _uow.Boxes.GetByIdAsync(boxId, ct);
+            if (box is null) continue;
+            box.UpdatedAt = at;
+            _uow.Boxes.Update(box);
+        }
+    }
 
     /// <summary>
     /// Đồng bộ tình trạng của các cua trong phiếu + ghi CrabStatusHistory để
