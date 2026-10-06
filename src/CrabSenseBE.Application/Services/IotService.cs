@@ -36,8 +36,34 @@ public class IotService : IIotService
         if (string.IsNullOrWhiteSpace(req.SensorCode))
             throw AppException.BadRequest("SensorCode is required.");
 
-        var sensor = await _uow.Sensors.FirstOrDefaultAsync(s => s.SensorCode == req.SensorCode, ct)
-            ?? throw AppException.NotFound($"Sensor '{req.SensorCode}' — register it first (POST /api/sensors).");
+        var sensor = await _uow.Sensors.FirstOrDefaultAsync(s => s.SensorCode == req.SensorCode, ct);
+        if (sensor is null)
+        {
+            var spec = MeterSpec(req.SensorCode);
+            if (spec is null)
+                throw AppException.NotFound($"Sensor '{req.SensorCode}' — register it first (POST /api/sensors).");
+
+            sensor = new Sensor
+            {
+                SensorCode = req.SensorCode.Trim(),
+                SensorType = spec.Value.Type,
+                Unit = spec.Value.Unit,
+                IsActive = true
+            };
+            if (!string.IsNullOrWhiteSpace(req.DeviceCode))
+            {
+                var known = await _uow.Devices.FirstOrDefaultAsync(
+                    d => d.DeviceCode == req.DeviceCode.Trim(), ct);
+                if (known is not null)
+                {
+                    sensor.DeviceId = known.Id;
+                    var sibling = await _uow.Sensors.FirstOrDefaultAsync(
+                        s => s.DeviceId == known.Id && s.WaterSystemId != null, ct);
+                    sensor.WaterSystemId = sibling?.WaterSystemId;
+                }
+            }
+            await _uow.Sensors.AddAsync(sensor, ct);
+        }
 
         // Upsert device (ESP32) by DeviceCode so first heartbeat doesn't 404
         Device? device = null;
@@ -669,6 +695,18 @@ public class IotService : IIotService
         new(s.Id, s.WaterSystemId, s.DeviceId, s.SensorCode, s.SensorType, s.Unit,
             s.MinThreshold, s.MaxThreshold, s.IsActive, s.LastSeenAt, s.RasComponentId,
             s.FarmingRowId);
+
+    private static (string Type, string Unit)? MeterSpec(string? code) => code?.Trim() switch
+    {
+        "meter_v" => ("Voltage", "V"),
+        "meter_a" => ("Current", "A"),
+        "meter_w" => ("Power", "W"),
+        "meter_va" => ("ApparentPower", "VA"),
+        "meter_kwh" => ("Energy", "kWh"),
+        "meter_hz" => ("Frequency", "Hz"),
+        "meter_pf" => ("PowerFactor", "%"),
+        _ => null
+    };
 
     /// <summary>
     /// URL stream hiệu lực của camera: StreamUrl khai báo → FirmwareVersion là URL (cách cũ)
