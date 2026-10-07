@@ -98,4 +98,43 @@ public class FrozenStorageController : ControllerBase
         return Ok(await _service.GetExpiringLotsAsync(days, ct));
     }
 
+    /// <summary>
+    /// Ghi nhận từng cua trong lô và tạo một barcode riêng cho mỗi cua.
+    /// </summary>
+    [HttpPost("{lotId:guid}/crab-items")]
+    [Authorize(Roles = "SystemAdmin, Staff")]
+    public async Task<IActionResult> RegisterCrabItems(
+        Guid lotId,
+        [FromBody] RegisterFrozenCrabItemsRequest request,
+        CancellationToken ct)
+        => Ok(await _service.RegisterCrabItemsAsync(lotId, request, ct));
+
+    /// <summary>
+    /// Tra cứu thông tin một cua cấp đông bằng barcode.
+    /// Người gọi phải đăng nhập.
+    /// </summary>
+    [HttpGet("crab-items/barcode/{barcodeValue}")]
+    [Authorize]
+    public async Task<IActionResult> GetCrabItemByBarcode(
+        string barcodeValue,
+        CancellationToken ct)
+        => Ok(await _service.GetCrabItemByBarcodeAsync(barcodeValue, ct));
+
+    /// <summary>
+/// Tạo ảnh PNG Code 128 để in barcode cho một cua cấp đông.
+/// Route này yêu cầu đăng nhập do controller có [Authorize].
+/// </summary>
+[HttpGet("crab-items/barcode/{barcodeValue}/image.png")]
+[Authorize]
+[Produces("image/png")]
+public async Task<IActionResult> GetCrabItemBarcodePng(
+    string barcodeValue,
+    CancellationToken ct)
+{
+    var bytes = await _service.GetCrabItemBarcodePngAsync(barcodeValue, ct);
+
+    // Trình duyệt tải về ảnh PNG để người dùng in tem.
+    return File(bytes, "image/png", $"crab-{barcodeValue}.png");
+}
+
 }

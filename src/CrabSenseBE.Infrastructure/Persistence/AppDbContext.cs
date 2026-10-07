@@ -21,11 +21,12 @@ public class AppDbContext : DbContext
     public DbSet<CrabBoxAllocation> CrabBoxAllocations => Set<CrabBoxAllocation>();
     public DbSet<MoltingRecord> MoltingRecords => Set<MoltingRecord>();
     public DbSet<BoxStatusHistory> BoxStatusHistories => Set<BoxStatusHistory>();
-    public DbSet<CrabMortalityRecord> CrabMortalityRecords=> Set<CrabMortalityRecord>();
+    public DbSet<CrabMortalityRecord> CrabMortalityRecords => Set<CrabMortalityRecord>();
     public DbSet<CrabStatusHistory> CrabStatusHistories => Set<CrabStatusHistory>();
     public DbSet<CrabWeightHistory> CrabWeightHistories => Set<CrabWeightHistory>();
     public DbSet<CrabAiAnalysis> CrabAiAnalyses => Set<CrabAiAnalysis>();
     public DbSet<CrabHarvestHistory> CrabHarvestHistories => Set<CrabHarvestHistory>();
+    public DbSet<FrozenCrabItem> FrozenCrabItems => Set<FrozenCrabItem>();
 
     // IoT
     public DbSet<WaterSystem> WaterSystems => Set<WaterSystem>();
@@ -424,6 +425,52 @@ public class AppDbContext : DbContext
             .WithMany(c => c.Sensors)
             .HasForeignKey(s => s.RasComponentId)
             .OnDelete(DeleteBehavior.SetNull);
+
+        modelBuilder.Entity<FrozenCrabItem>(entity =>
+{
+    // Barcode phải duy nhất vì mỗi sản phẩm cua có một mã riêng.
+    entity.HasIndex(x => x.BarcodeValue).IsUnique();
+
+    // Một dòng thu hoạch chỉ được đóng gói thành một sản phẩm cua.
+    entity.HasIndex(x => x.HarvestLineId).IsUnique();
+
+    entity.Property(x => x.BarcodeValue)
+        .HasMaxLength(40)
+        .IsRequired();
+
+    entity.Property(x => x.LotCode)
+        .HasMaxLength(64)
+        .IsRequired();
+
+    entity.Property(x => x.CrabCode)
+        .HasMaxLength(64)
+        .IsRequired();
+
+    entity.Property(x => x.HarvestVoucherCode)
+        .HasMaxLength(64);
+
+    entity.Property(x => x.WeightGram)
+        .HasPrecision(10, 2);
+
+    entity.Property(x => x.Grade)
+        .HasMaxLength(1)
+        .IsRequired();
+
+    entity.HasOne(x => x.FrozenLot)
+        .WithMany()
+        .HasForeignKey(x => x.FrozenLotId)
+        .OnDelete(DeleteBehavior.Restrict);
+
+    entity.HasOne(x => x.HarvestLine)
+        .WithMany()
+        .HasForeignKey(x => x.HarvestLineId)
+        .OnDelete(DeleteBehavior.Restrict);
+
+    entity.HasOne(x => x.Crab)
+        .WithMany()
+        .HasForeignKey(x => x.CrabId)
+        .OnDelete(DeleteBehavior.Restrict);
+});
     }
 
     public override Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)

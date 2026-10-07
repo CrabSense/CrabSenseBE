@@ -39,13 +39,13 @@ public class BoxQrController : ControllerBase
 
     /// <summary>[READ] Scan QR → box + crab info</summary>
     [HttpGet("api/box-qr/scan")]
-    [Authorize(Roles = AppRoles.Any)]
+    [AllowAnonymous] // Cho phép quét QR công khai, không cần đăng nhập
     public async Task<IActionResult> Scan([FromQuery] string code, CancellationToken ct)
         => Ok(await _service.ScanAsync(code, ct));
 
     /// <summary>[READ] Scan QR by path /api/box-qr/{code}</summary>
     [HttpGet("api/box-qr/{code}")]
-    [Authorize(Roles = AppRoles.Any)]
+    [AllowAnonymous] // Cho phép quét QR công khai, không cần đăng nhập
     public async Task<IActionResult> ScanByPath(string code, CancellationToken ct)
         => Ok(await _service.ScanAsync(code, ct));
 

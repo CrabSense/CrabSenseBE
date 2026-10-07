@@ -71,6 +71,10 @@ public class UnitOfWork : IUnitOfWork
     private IRepository<CrabMortalityRecord>? _crabMortalityRecords;
     public IRepository<CrabMortalityRecord> CrabMortalityRecords =>
     _crabMortalityRecords ??= new GenericRepository<CrabMortalityRecord>(_context);
+    private IRepository<FrozenCrabItem>? _frozenCrabItems;
+
+    public IRepository<FrozenCrabItem> FrozenCrabItems =>
+        _frozenCrabItems ??= new GenericRepository<FrozenCrabItem>(_context);
 
     // IoT
     private IRepository<WaterSystem>? _waterSystems;
