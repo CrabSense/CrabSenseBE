@@ -63,7 +63,9 @@ public record DeviceDto(
     string? RowCode = null,
     string? StreamUrl = null,
     string? SnapshotUrl = null,
-    string? Resolution = null);
+    string? Resolution = null,
+    string? InstallationLocation = null,
+    string? Note = null);
 
 public record DeviceActuatorDto(
     Guid Id,
@@ -98,7 +100,9 @@ public record DeviceDetailDto(
     string? RowCode = null,
     string? StreamUrl = null,
     string? SnapshotUrl = null,
-    string? Resolution = null);
+    string? Resolution = null,
+    string? InstallationLocation = null,
+    string? Note = null);
 
 public record CreateDeviceRequest(
     string DeviceCode,
@@ -112,10 +116,14 @@ public record CreateDeviceRequest(
     Guid? FarmingRowId = null,
     string? StreamUrl = null,
     string? SnapshotUrl = null,
-    string? Resolution = null);
+    string? Resolution = null,
+    string? InstallationLocation = null,
+    string? Note = null,
+    string? Notes = null);
 
 /// <remarks>
-/// FarmingRowId = Guid.Empty → gỡ khỏi dãy. StreamUrl/SnapshotUrl/Resolution = "" → xoá giá trị.
+/// FarmingRowId = Guid.Empty → gỡ khỏi dãy.
+/// StreamUrl/SnapshotUrl/Resolution/InstallationLocation/Note = "" → xoá giá trị.
 /// </remarks>
 public record UpdateDeviceRequest(
     string? DeviceType,
@@ -131,7 +139,10 @@ public record UpdateDeviceRequest(
     Guid? FarmingRowId = null,
     string? StreamUrl = null,
     string? SnapshotUrl = null,
-    string? Resolution = null);
+    string? Resolution = null,
+    string? InstallationLocation = null,
+    string? Note = null,
+    string? Notes = null);
 
 public record UpdateDeviceStatusRequest(
     string Status,

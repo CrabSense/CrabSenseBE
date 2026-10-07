@@ -64,7 +64,9 @@ public enum AlertStatus
 {
     Active,
     Acknowledged,
-    Resolved
+    Resolved,
+    InProgress,
+    Recovered
 }
 
 public enum DeviceStatus

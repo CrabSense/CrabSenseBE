@@ -25,6 +25,9 @@ public class FarmOperationService : IFarmOperationService
             .Select(offset => start.Date.AddDays(offset))
             .ToDictionary(date => date, _ => new int[3]);
 
+        // Một hộp / ngày: phiếu mới nhất. Cộng mọi phiếu thì BOX-0005 test làm phình "ăn nhiều".
+        var latest = new Dictionary<(DateTime Day, string BoxId), (DateTime At, int Bucket)>();
+
         foreach (var operation in operations)
         {
             var isFeedingRecord =
@@ -46,10 +49,24 @@ public class FarmOperationService : IFarmOperationService
             };
             if (bucket < 0) continue;
 
-            var crabIds = ParseStringList(operation.CrabIdsJson);
-            if (crabIds.Count == 0) continue;
-            totals[operation.Timestamp.Date][bucket] += crabIds.Count;
+            var boxIds = ParseStringList(operation.BoxIdsJson);
+            if (boxIds.Count == 0)
+                boxIds = ParseStringList(operation.CrabIdsJson);
+            if (boxIds.Count == 0) continue;
+
+            var day = operation.Timestamp.Date;
+            if (!totals.ContainsKey(day)) continue;
+
+            foreach (var boxId in boxIds)
+            {
+                var key = (day, boxId);
+                if (!latest.TryGetValue(key, out var prev) || operation.Timestamp >= prev.At)
+                    latest[key] = (operation.Timestamp, bucket);
+            }
         }
+
+        foreach (var item in latest)
+            totals[item.Key.Day][item.Value.Bucket] += 1;
 
         var result = totals
             .OrderBy(item => item.Key)
@@ -88,8 +105,9 @@ public class FarmOperationService : IFarmOperationService
         DateTime? startDate = null, DateTime? endDate = null, CancellationToken ct = default)
     {
         var boxKey = boxId.ToString();
+        var crabKeys = await OccupantCrabKeysAsync(boxId, ct);
         var all = (await _uow.FarmOperations.GetAllAsync(ct)).AsEnumerable();
-        all = all.Where(o => o.BoxIdsJson.Contains(boxKey, StringComparison.OrdinalIgnoreCase));
+        all = all.Where(o => MatchesBox(o, boxKey, crabKeys));
         if (!string.IsNullOrWhiteSpace(type))
             all = all.Where(o => string.Equals(o.Type, type, StringComparison.OrdinalIgnoreCase));
         if (startDate.HasValue)
@@ -113,7 +131,7 @@ public class FarmOperationService : IFarmOperationService
         if (string.IsNullOrWhiteSpace(req.Type))
             throw AppException.BadRequest("Type is required.");
 
-        var crabIds = NormalizeIds(req.CrabIds);
+        var crabIds = await ResolveCrabIdsAsync(req.CrabIds, req.BoxIds, ct);
         var condition = NormalizeConditionKey(req.Condition);
         ValidateFeedingAmounts(req.Quantity, req.EatenQuantity);
 
@@ -145,6 +163,7 @@ public class FarmOperationService : IFarmOperationService
         // Đánh dấu tình trạng khi cho ăn → cập nhật luôn con cua, để hộp/hồ sơ/
         // cảnh báo thấy ngay. Ghi chung 1 SaveChanges với phiếu: hoặc cả hai, hoặc không.
         await ApplyConditionToCrabsAsync(crabIds, condition, op.Timestamp, ct);
+        await TouchBoxesAsync(req.BoxIds, op.Timestamp, ct);
 
         await _uow.SaveChangesAsync(ct);
         return ApiResponse<FarmOperationDto>.Ok(Map(op), "Created.");
@@ -186,9 +205,9 @@ public class FarmOperationService : IFarmOperationService
         Guid crabId, int page = 1, int limit = 50, string? type = null,
         DateTime? startDate = null, DateTime? endDate = null, CancellationToken ct = default)
     {
-        var crabKey = crabId.ToString();
+        var allocs = (await _uow.CrabBoxAllocations.FindAsync(a => a.CrabId == crabId, ct)).ToList();
         var all = (await _uow.FarmOperations.GetAllAsync(ct)).AsEnumerable();
-        all = all.Where(o => o.CrabIdsJson.Contains(crabKey, StringComparison.OrdinalIgnoreCase));
+        all = all.Where(o => MatchesCrab(o, crabId, allocs));
         if (!string.IsNullOrWhiteSpace(type))
             all = all.Where(o => string.Equals(o.Type, type, StringComparison.OrdinalIgnoreCase));
         if (startDate.HasValue)
@@ -234,10 +253,9 @@ public class FarmOperationService : IFarmOperationService
         var hourly = span.TotalHours <= 36;
         var granularity = hourly ? "hour" : "day";
 
-        var crabKey = crabId.ToString();
+        var allocs = (await _uow.CrabBoxAllocations.FindAsync(a => a.CrabId == crabId, ct)).ToList();
         var all = (await _uow.FarmOperations.GetAllAsync(ct))
-            .Where(o => IsFeedingOp(o) &&
-                        o.CrabIdsJson.Contains(crabKey, StringComparison.OrdinalIgnoreCase))
+            .Where(o => IsFeedingOp(o) && MatchesCrab(o, crabId, allocs))
             .ToList();
 
         var current = all.Where(o => o.Timestamp >= start && o.Timestamp < end)
@@ -416,6 +434,19 @@ public class FarmOperationService : IFarmOperationService
         _ => null
     };
 
+    private async Task TouchBoxesAsync(IEnumerable<string>? boxIds, DateTime at, CancellationToken ct)
+    {
+        if (boxIds is null) return;
+        foreach (var raw in boxIds)
+        {
+            if (!Guid.TryParse(raw, out var boxId)) continue;
+            var box = await _uow.Boxes.GetByIdAsync(boxId, ct);
+            if (box is null) continue;
+            box.UpdatedAt = at;
+            _uow.Boxes.Update(box);
+        }
+    }
+
     /// <summary>
     /// Đồng bộ tình trạng của các cua trong phiếu + ghi CrabStatusHistory để
     /// hồ sơ cua / cảnh báo thấy được. Không đổi nếu tình trạng y hệt (tránh rác lịch sử).
@@ -453,6 +484,73 @@ public class FarmOperationService : IFarmOperationService
                 Reason = "Ghi nhận khi cho ăn"
             }, ct);
         }
+    }
+
+    private async Task<IReadOnlyList<string>> ResolveCrabIdsAsync(
+        IReadOnlyList<string>? requested, IReadOnlyList<string>? boxIds, CancellationToken ct)
+    {
+        var crabIds = NormalizeIds(requested);
+        if (crabIds.Count > 0 || boxIds is null || boxIds.Count == 0)
+            return crabIds;
+
+        var filled = new List<string>();
+        foreach (var raw in boxIds)
+        {
+            if (!Guid.TryParse(raw, out var boxId)) continue;
+            var occupants = await _uow.Crabs.FindAsync(c => c.BoxId == boxId, ct);
+            foreach (var crab in occupants)
+            {
+                var id = crab.Id.ToString();
+                if (!filled.Contains(id, StringComparer.OrdinalIgnoreCase))
+                    filled.Add(id);
+            }
+        }
+        return filled;
+    }
+
+    private async Task<HashSet<string>> OccupantCrabKeysAsync(Guid boxId, CancellationToken ct)
+    {
+        var keys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var occupants = await _uow.Crabs.FindAsync(c => c.BoxId == boxId, ct);
+        foreach (var crab in occupants)
+            keys.Add(crab.Id.ToString());
+        return keys;
+    }
+
+    private static bool MatchesBox(FarmOperation o, string boxKey, HashSet<string> crabKeys)
+    {
+        if (o.BoxIdsJson.Contains(boxKey, StringComparison.OrdinalIgnoreCase))
+            return true;
+        foreach (var key in crabKeys)
+        {
+            if (o.CrabIdsJson.Contains(key, StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+        return false;
+    }
+
+    private static bool MatchesCrab(
+        FarmOperation o, Guid crabId, IReadOnlyList<CrabBoxAllocation> allocs)
+    {
+        var crabKey = crabId.ToString();
+        if (o.CrabIdsJson.Contains(crabKey, StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        if (ParseStringList(o.CrabIdsJson).Count > 0)
+            return false;
+
+        var boxes = ParseStringList(o.BoxIdsJson);
+        if (boxes.Count == 0) return false;
+
+        foreach (var alloc in allocs)
+        {
+            if (alloc.StartTime > o.Timestamp) continue;
+            if (alloc.EndTime is DateTime end && end <= o.Timestamp) continue;
+            var allocBox = alloc.BoxId.ToString();
+            if (boxes.Any(b => string.Equals(b, allocBox, StringComparison.OrdinalIgnoreCase)))
+                return true;
+        }
+        return false;
     }
 
     private static IReadOnlyList<string> ParseStringList(string? json)

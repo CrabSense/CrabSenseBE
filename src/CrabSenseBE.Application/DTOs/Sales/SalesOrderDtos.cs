@@ -26,7 +26,10 @@ public record SalesOrderLineDto(
     decimal WeightGram,
     decimal QuantityKg,
     decimal UnitPricePerKg,
-    decimal TotalAmount);
+    decimal TotalAmount,
+    string? HarvestSlipCode = null,
+    string? BoxCode = null,
+    string? LotCode = null);
 
 public record SalesOrderDto(
     Guid Id,
@@ -50,7 +53,8 @@ public record SalesOrderDto(
     string? SellerName,
     Guid? FarmingAreaId,
     string? Notes,
-    IReadOnlyList<SalesOrderLineDto> Lines);
+    IReadOnlyList<SalesOrderLineDto> Lines,
+    string? CustomerType = null);
 
 public record CreateSalesOrderRequest(
     DateTime? OrderDate,
@@ -67,7 +71,8 @@ public record CreateSalesOrderRequest(
     decimal? ShippingFee,
     decimal? PaidAmount,
     string? DeliveryStatus,
-    IEnumerable<CreateSalesOrderLineRequest> Lines);
+    IEnumerable<CreateSalesOrderLineRequest>? Lines,
+    string? CustomerType = null);
 
 public record CreateSalesOrderLineRequest(
     Guid CrabId,
@@ -79,7 +84,12 @@ public record SalesOverviewDto(
     decimal RevenueToday,
     int SoldToday,
     int InventoryCount,
-    decimal InventoryWeightKg);
+    decimal InventoryWeightKg,
+    int OrdersToday = 0,
+    decimal UnpaidAmount = 0,
+    decimal RevenueChangePercent = 0,
+    int SoldChange = 0,
+    int UnpaidOrdersChange = 0);
 
 public record InventoryCrabDto(
     Guid Id,
@@ -89,4 +99,8 @@ public record InventoryCrabDto(
     string? Grade,
     string? Condition,
     string? CrabType,
-    DateTime? HarvestedAt);
+    DateTime? HarvestedAt,
+    string? HarvestSlipCode = null,
+    string? LotCode = null,
+    string SaleEligibility = "READY",
+    bool IsSoftshell = false);

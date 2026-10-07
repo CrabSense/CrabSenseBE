@@ -89,7 +89,9 @@ public class AlertService : IAlertService
         IEnumerable<Alert> items;
         if (activeOnly == true)
             items = await _uow.Alerts.FindAsync(
-                a => a.Status == AlertStatus.Active || a.Status == AlertStatus.Acknowledged, ct);
+                a => a.Status == AlertStatus.Active
+                     || a.Status == AlertStatus.Acknowledged
+                     || a.Status == AlertStatus.InProgress, ct);
         else
             items = await _uow.Alerts.GetAllAsync(ct);
 
@@ -107,7 +109,9 @@ public class AlertService : IAlertService
         days = Math.Clamp(days, 1, 90);
         var cutoff = DateTime.UtcNow.AddDays(-days);
         var items = await _uow.Alerts.FindAsync(
-            a => (a.Status == AlertStatus.Resolved || a.Status == AlertStatus.Acknowledged)
+            a => (a.Status == AlertStatus.Resolved
+                    || a.Status == AlertStatus.Recovered
+                    || a.Status == AlertStatus.Acknowledged)
                  && a.CreatedAt >= cutoff,
             ct);
         items = await FilterByFarmingAreaAsync(items, farmingAreaId, ct);
@@ -144,11 +148,36 @@ public class AlertService : IAlertService
         return ApiResponse<AlertDto>.Ok(dto);
     }
 
-    public async Task<ApiResponse<AlertDto>> ResolveAsync(Guid id, CancellationToken ct = default)
+    public async Task<ApiResponse<AlertDto>> StartProcessingAsync(
+        Guid id, StartProcessingRequest? req, CancellationToken ct = default)
     {
         var alert = await _uow.Alerts.GetByIdAsync(id, ct)
             ?? throw AppException.NotFound("Alert");
-        alert.Status = AlertStatus.Resolved;
+        alert.Status = AlertStatus.InProgress;
+        alert.ProcessingStartedAt = DateTime.UtcNow;
+        alert.ProcessingBy = req?.UserId;
+        if (alert.AcknowledgedAt is null)
+        {
+            alert.AcknowledgedAt = DateTime.UtcNow;
+            alert.AcknowledgedBy = req?.UserId;
+        }
+        _uow.Alerts.Update(alert);
+        await _uow.SaveChangesAsync(ct);
+        var dto = (await MapAlertsAsync(new[] { alert }, ct)).First();
+        return ApiResponse<AlertDto>.Ok(dto);
+    }
+
+    public async Task<ApiResponse<AlertDto>> ResolveAsync(
+        Guid id, ResolveAlertRequest? req, CancellationToken ct = default)
+    {
+        var alert = await _uow.Alerts.GetByIdAsync(id, ct)
+            ?? throw AppException.NotFound("Alert");
+        alert.Status = req?.DeviceRecovered == true ? AlertStatus.Recovered : AlertStatus.Resolved;
+        alert.ResolvedAt = DateTime.UtcNow;
+        alert.ResolvedBy = req?.UserId;
+        alert.ResolutionReason = string.IsNullOrWhiteSpace(req?.Reason) ? null : req!.Reason!.Trim();
+        alert.ResolutionAction = string.IsNullOrWhiteSpace(req?.Action) ? null : req!.Action!.Trim();
+        alert.ResolutionNote = string.IsNullOrWhiteSpace(req?.Note) ? null : req!.Note!.Trim();
         _uow.Alerts.Update(alert);
         await _uow.SaveChangesAsync(ct);
         var dto = (await MapAlertsAsync(new[] { alert }, ct)).First();
@@ -177,9 +206,17 @@ public class AlertService : IAlertService
 
         if (value >= min && value <= max) return;
 
-        var exists = await _uow.Alerts.AnyAsync(
-            a => a.SensorId == sensor.Id && a.Status == AlertStatus.Active, ct);
-        if (exists) return;
+        var existing = (await _uow.Alerts.FindAsync(
+            a => a.SensorId == sensor.Id && a.Status == AlertStatus.Active, ct)).FirstOrDefault();
+        if (existing is not null)
+        {
+            existing.OccurrenceCount = Math.Max(1, existing.OccurrenceCount) + 1;
+            existing.LastOccurredAt = DateTime.UtcNow;
+            existing.TriggerValue = value;
+            _uow.Alerts.Update(existing);
+            await _uow.SaveChangesAsync(ct);
+            return;
+        }
 
         var msg = value < min
             ? $"{sensor.SensorType} thấp: {value} < {min} (sensor {sensor.SensorCode})"
@@ -192,7 +229,9 @@ public class AlertService : IAlertService
             Message = msg,
             Severity = severity,
             Status = AlertStatus.Active,
-            TriggerValue = value
+            TriggerValue = value,
+            OccurrenceCount = 1,
+            LastOccurredAt = DateTime.UtcNow
         };
         await _uow.Alerts.AddAsync(alert, ct);
         await _uow.SaveChangesAsync(ct);
@@ -210,17 +249,25 @@ public class AlertService : IAlertService
             s => s.IsActive && s.LastSeenAt != null && s.LastSeenAt < cutoff, ct);
         foreach (var sensor in sensors)
         {
-            var exists = await _uow.Alerts.AnyAsync(
+            var existing = (await _uow.Alerts.FindAsync(
                 a => a.SensorId == sensor.Id && a.Status == AlertStatus.Active
-                     && a.Message.Contains("mất kết nối"), ct);
-            if (exists) continue;
+                     && a.Message.Contains("mất kết nối"), ct)).FirstOrDefault();
+            if (existing is not null)
+            {
+                existing.OccurrenceCount = Math.Max(1, existing.OccurrenceCount) + 1;
+                existing.LastOccurredAt = DateTime.UtcNow;
+                _uow.Alerts.Update(existing);
+                continue;
+            }
 
             var alert = new Alert
             {
                 SensorId = sensor.Id,
                 Message = $"Cảm biến mất kết nối: {sensor.SensorCode} (>{timeoutMinutes} phút)",
                 Severity = AlertSeverity.Critical,
-                Status = AlertStatus.Active
+                Status = AlertStatus.Active,
+                OccurrenceCount = 1,
+                LastOccurredAt = DateTime.UtcNow
             };
             await _uow.Alerts.AddAsync(alert, ct);
             created++;
@@ -237,15 +284,24 @@ public class AlertService : IAlertService
 
             var kind = string.IsNullOrWhiteSpace(device.DeviceType) ? "thiết bị" : device.DeviceType;
             var msg = $"{kind} mất kết nối: {device.DeviceCode}";
-            var exists = await _uow.Alerts.AnyAsync(
-                a => a.Status == AlertStatus.Active && a.Message == msg, ct);
-            if (exists) continue;
+            var existing = (await _uow.Alerts.FindAsync(
+                a => a.Status == AlertStatus.Active && a.Message == msg, ct)).FirstOrDefault();
+            if (existing is not null)
+            {
+                existing.OccurrenceCount = Math.Max(1, existing.OccurrenceCount) + 1;
+                existing.LastOccurredAt = DateTime.UtcNow;
+                _uow.Alerts.Update(existing);
+                continue;
+            }
 
             var alert = new Alert
             {
                 Message = msg,
                 Severity = AlertSeverity.Critical,
-                Status = AlertStatus.Active
+                Status = AlertStatus.Active,
+                OccurrenceCount = 1,
+                LastOccurredAt = DateTime.UtcNow,
+                IncidentId = $"INC-{DateTime.UtcNow:yyyyMMdd}-{device.DeviceCode}"
             };
             await _uow.Alerts.AddAsync(alert, ct);
             created++;
@@ -362,6 +418,8 @@ public class AlertService : IAlertService
             var (aiTip, confidence) = BuildAiTip(category, sensorType, a, min, max);
             var location = area?.Name
                 ?? (sensor is null ? "Hệ thống" : sensor.SensorCode);
+            var kind = InferKind(a.Message, category, sensorType);
+            var deviceCode = sensor?.SensorCode ?? ExtractDeviceCode(a.Message);
 
             result.Add(new AlertDto(
                 a.Id,
@@ -387,7 +445,20 @@ public class AlertService : IAlertService
                 sla,
                 aiTip,
                 confidence,
-                a.AcknowledgedBy));
+                a.AcknowledgedBy,
+                FriendlyMessage(a.Message),
+                SourceLabelOf(kind),
+                kind,
+                deviceCode,
+                area?.Code,
+                a.ProcessingStartedAt,
+                a.ResolvedAt,
+                a.ResolutionReason,
+                a.ResolutionAction,
+                a.ResolutionNote,
+                a.OccurrenceCount < 1 ? 1 : a.OccurrenceCount,
+                a.LastOccurredAt ?? a.CreatedAt,
+                a.IncidentId));
         }
 
         return result;
@@ -408,6 +479,48 @@ public class AlertService : IAlertService
         if (m.Contains("esp32") || m.Contains("gateway")) return "Device";
         if (m.Contains("cảm biến") || m.Contains("sensor") || m.Contains("mất kết nối")) return "Sensor";
         return "System";
+    }
+
+    private static string InferKind(string message, string category, string? sensorType)
+    {
+        var m = message.ToLowerInvariant();
+        if (m.Contains("no2") || m.Contains("nh3") || m.Contains("no3") || m.Contains("phân tích"))
+            return "waterAnalysis";
+        if (m.Contains("camera") || string.Equals(sensorType, "Camera", StringComparison.OrdinalIgnoreCase))
+            return "camera";
+        if (m.Contains("bơm") || m.Contains("pump") || m.Contains("van") || m.Contains("ras"))
+            return "ras";
+        if (m.Contains("cua") || m.Contains("hộp") || m.Contains("crab"))
+            return "crab";
+        if (m.Contains("controller") || m.Contains("esp32") || m.Contains("crabsense-c")
+            || m.Contains("heartbeat"))
+            return "controller";
+        if (category == "Device" && (m.Contains("mất kết nối") || m.Contains("offline")))
+            return m.Contains("camera") ? "camera" : "controller";
+        if (category == "WaterQuality") return "sensor";
+        return "system";
+    }
+
+    private static string SourceLabelOf(string kind) => kind switch
+    {
+        "controller" => "Controller Monitor",
+        "camera" => "Camera AI",
+        "sensor" => "Realtime Sensor",
+        "ras" => "RAS",
+        "waterAnalysis" => "Water Analysis",
+        "crab" => "Crab AI",
+        _ => "System"
+    };
+
+    private static string? ExtractDeviceCode(string message)
+    {
+        var parts = message.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        foreach (var p in parts)
+        {
+            if (p.Contains('-') && p.Length >= 5 && p.Any(char.IsDigit))
+                return p.Trim(',', '.', ';');
+        }
+        return null;
     }
 
     private static string InferCategory(string message, string? sensorType)
@@ -434,9 +547,27 @@ public class AlertService : IAlertService
     private static string BuildTitle(string message, string? sensorType)
     {
         if (string.IsNullOrWhiteSpace(message)) return "Cảnh báo hệ thống";
-        var cut = message.Split('(')[0].Trim();
+        var mapped = FriendlyMessage(message);
+        var cut = mapped.Split('(')[0].Trim();
         if (cut.Length > 72) cut = cut[..69] + "...";
         return cut;
+    }
+
+    private static string FriendlyMessage(string message)
+    {
+        var key = message.Trim().ToLowerInvariant();
+        return key switch
+        {
+            "realtime_sensor" => "Cảm biến vượt ngưỡng",
+            "controller_disconnect" => "Controller mất kết nối",
+            "sensor_timeout" => "Sensor không gửi dữ liệu",
+            "ras_component_error" => "Thiết bị RAS lỗi",
+            _ when key.Contains("realtime_sensor") => "Cảm biến vượt ngưỡng",
+            _ when key.Contains("controller_disconnect") => "Controller mất kết nối",
+            _ when key.Contains("sensor_timeout") => "Sensor không gửi dữ liệu",
+            _ when key.Contains("ras_component_error") => "Thiết bị RAS lỗi",
+            _ => message
+        };
     }
 
     private static (int Score, string Explanation, string Sla) ComputePriority(

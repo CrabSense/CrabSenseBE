@@ -100,6 +100,17 @@ public class BoxOverviewService : IBoxOverviewService
             .GroupBy(m => m.BoxId!.Value)
             .ToDictionary(g => g.Key, g => g.OrderByDescending(x => x.MoltTime).First());
 
+        var lastOpByBox = new Dictionary<Guid, DateTime>();
+        foreach (var op in await _uow.FarmOperations.GetAllAsync(ct))
+        {
+            foreach (var raw in JsonStringList.Parse(op.BoxIdsJson))
+            {
+                if (!Guid.TryParse(raw, out var bid) || !boxIds.Contains(bid)) continue;
+                if (!lastOpByBox.TryGetValue(bid, out var prev) || op.Timestamp > prev)
+                    lastOpByBox[bid] = op.Timestamp;
+            }
+        }
+
         // Layout indices: group by area then row
         var layoutIndex = BuildLayoutIndices(boxList, rowMap);
 
@@ -152,14 +163,20 @@ public class BoxOverviewService : IBoxOverviewService
                 .OrderByDescending(a => a.CreatedAt)
                 .FirstOrDefault();
 
+            DateTime? lastOp = lastOpByBox.TryGetValue(box.Id, out var opAt) ? opAt : null;
+            DateTime? crabTouch = alive.Count == 0
+                ? null
+                : alive.Max(c => c.UpdatedAt ?? c.CreatedAt);
+            // Lần cập nhật hộp = phiếu chăm sóc / tình trạng cua, không lấy
+            // sensor khu (mọi hộp cùng một mốc đo nước).
             var lastUpdated = new[]
                 {
                     box.UpdatedAt,
                     box.CreatedAt,
-                    water.MeasuredAt,
-                    devices.MaxBy(d => d.LastSeenAt)?.LastSeenAt,
                     lastMolt?.MoltTime,
-                    alloc?.StartTime
+                    alloc?.StartTime,
+                    crabTouch,
+                    lastOp
                 }
                 .Where(d => d.HasValue)
                 .Select(d => d!.Value)

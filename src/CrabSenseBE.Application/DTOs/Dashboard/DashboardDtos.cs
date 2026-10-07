@@ -6,7 +6,8 @@ public record DashboardOverviewDto(
     int ActiveBoxes,
     int OpenAlerts,
     double IotOnlinePercentage,
-    DateTime LastUpdated
+    DateTime LastUpdated,
+    DashboardKpiSummaryDto? KpiSummary  // KPI tổng quan
 );
 
 public record DashboardMetricsDto(
@@ -50,4 +51,14 @@ public record RecentActivityDto(
     string Description,
     string Type,
     DateTime Timestamp
+);
+
+/// <summary>KPI tóm tắt cho dashboard.</summary>
+public record DashboardKpiSummaryDto(
+    decimal SurvivalRate,
+    decimal MoltingRate,
+    decimal HarvestRate,
+    decimal MortalityRate,
+    decimal TotalHarvestWeightKg,
+    decimal FrozenInventoryWeightKg
 );

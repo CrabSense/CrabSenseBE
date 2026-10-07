@@ -24,14 +24,15 @@ public class BoxDetailService : IBoxDetailService
     {
         var box = await _uow.Boxes.GetByIdAsync(boxId, ct)
             ?? throw AppException.NotFound("Box");
-        var row = await _uow.FarmingRows.GetByIdAsync(box.FarmingRowId, ct);
+        var row = _uow.FarmingRows is null
+            ? null
+            : await _uow.FarmingRows.GetByIdAsync(box.FarmingRowId, ct);
         FarmingArea? area = null;
         if (row is not null)
             area = await _uow.FarmingAreas.GetByIdAsync(row.FarmingAreaId, ct);
 
-        var crabs = (await _uow.Crabs.FindAsync(c => c.BoxId == boxId, ct)).ToList();
-        var alive = crabs.Where(c =>
-            c.Status is CrabStatus.Alive or CrabStatus.Molting or CrabStatus.Quarantined).ToList();
+        var alive = await LiveCrabsInBoxAsync(boxId, ct);
+        var occupied = alive.Count > 0;
         var avgWeight = alive.Count == 0
             ? 0m
             : alive.Where(c => c.WeightGram.HasValue).Select(c => c.WeightGram!.Value).DefaultIfEmpty(0).Average();
@@ -61,15 +62,15 @@ public class BoxDetailService : IBoxDetailService
             row?.Name,
             area?.Name,
             box.Code,
-            box.Status,
-            box.IsOccupied,
+            occupied ? "active" : (box.Status ?? "empty"),
+            occupied,
             QrCode: qrCode,
             FarmId: areaId,
             PondId: box.FarmingRowId,
             Location: new BoxLocationDto(0, 0, area?.Name ?? row?.Name ?? box.Code),
             CurrentCrabCount: alive.Count,
             Capacity: row?.Capacity > 0 ? row.Capacity : Math.Max(alive.Count, 1),
-            Species: "mudCrab",
+            Species: "",
             AverageWeight: Math.Round(avgWeight, 1),
             CreatedAt: box.CreatedAt,
             LastVideoAt: lastVideo?.CreatedAt));
@@ -79,21 +80,34 @@ public class BoxDetailService : IBoxDetailService
         Guid boxId, CancellationToken ct = default)
     {
         _ = await _uow.Boxes.GetByIdAsync(boxId, ct) ?? throw AppException.NotFound("Box");
-        var crabs = (await _uow.Crabs.FindAsync(c => c.BoxId == boxId, ct)).ToList();
+        var crabs = await LiveCrabsInBoxAsync(boxId, ct);
+        var lotIds = crabs.Select(c => c.CrabLotId).Where(id => id != Guid.Empty).Distinct().ToList();
+        var lots = lotIds.Count == 0
+            ? new Dictionary<Guid, CrabLot>()
+            : (await _uow.CrabLots.FindAsync(l => lotIds.Contains(l.Id), ct))
+                .ToDictionary(l => l.Id);
         var list = crabs.Select(c =>
         {
-            var health = c.Status switch
+            var health = c.Condition switch
             {
-                CrabStatus.Quarantined => "disease",
-                CrabStatus.Dead => "unknown",
-                CrabStatus.Molting => "stress",
-                _ => "normal"
+                CrabCondition.Problem => "disease",
+                CrabCondition.Weak => "weak",
+                CrabCondition.Dead => "unknown",
+                CrabCondition.Molting or CrabCondition.Premolt or CrabCondition.Softshell => "stress",
+                _ => c.Status switch
+                {
+                    CrabStatus.Quarantined => "disease",
+                    CrabStatus.Dead => "unknown",
+                    CrabStatus.Molting => "stress",
+                    _ => "normal"
+                }
             };
             var molt = string.IsNullOrWhiteSpace(c.MoltingStage) ? "hardShell" : c.MoltingStage;
+            lots.TryGetValue(c.CrabLotId, out var lot);
             return new BoxCrabItemDto(
                 c.Id,
                 boxId,
-                Species: "mudCrab",
+                Species: string.IsNullOrWhiteSpace(c.CrabType) ? "" : c.CrabType,
                 Weight: c.WeightGram ?? 0,
                 MoltingStatus: molt,
                 HealthStatus: health,
@@ -103,6 +117,10 @@ public class BoxDetailService : IBoxDetailService
                 WeightGram: c.WeightGram,
                 MoltingStage: c.MoltingStage,
                 Tag: c.Tag,
+                LotCode: lot?.LotCode,
+                LotName: string.IsNullOrWhiteSpace(lot?.Name) ? lot?.LotCode : lot!.Name,
+                CarapaceLengthMm: c.CarapaceLengthMm,
+                CarapaceWidthMm: c.CarapaceWidthMm,
                 ImageUrls: JsonStringList.Parse(c.ImageUrlsJson));
         });
         return ApiResponse<IEnumerable<BoxCrabItemDto>>.Ok(list);
@@ -355,22 +373,22 @@ public class BoxDetailService : IBoxDetailService
     {
         var box = await _uow.Boxes.GetByIdAsync(boxId, ct) ?? throw AppException.NotFound("Box");
 
-        var liveInBox = (await _uow.Crabs.FindAsync(c => c.BoxId == boxId, ct))
-            .Any(c => c.Status is CrabStatus.Alive or CrabStatus.Molting or CrabStatus.Quarantined);
+        var liveInBox = (await LiveCrabsInBoxAsync(boxId, ct)).Count > 0;
         if (liveInBox)
             throw AppException.Conflict($"Box '{box.Code}' already has a live crab.");
 
         Guid crabLotId;
+        CrabLot? lot;
         if (req.CrabLotId is Guid lotId && lotId != Guid.Empty)
         {
-            _ = await _uow.CrabLots.GetByIdAsync(lotId, ct) ?? throw AppException.NotFound("CrabLot");
+            lot = await _uow.CrabLots.GetByIdAsync(lotId, ct) ?? throw AppException.NotFound("CrabLot");
             crabLotId = lotId;
         }
         else
         {
-            var anyLot = (await _uow.CrabLots.GetAllAsync(ct)).OrderBy(l => l.CreatedAt).FirstOrDefault()
+            lot = (await _uow.CrabLots.GetAllAsync(ct)).OrderBy(l => l.CreatedAt).FirstOrDefault()
                 ?? throw AppException.BadRequest("No CrabLot available — create a crab lot first, or pass crabLotId.");
-            crabLotId = anyLot.Id;
+            crabLotId = lot.Id;
         }
 
         var weight = req.WeightGram ?? req.Weight;
@@ -453,7 +471,7 @@ public class BoxDetailService : IBoxDetailService
         return ApiResponse<BoxCrabItemDto>.Ok(new BoxCrabItemDto(
             crab.Id,
             boxId,
-            Species: string.IsNullOrWhiteSpace(req.Species) ? "mudCrab" : req.Species!,
+            Species: string.IsNullOrWhiteSpace(req.Species) ? (crab.CrabType ?? "") : req.Species!,
             Weight: weight ?? 0,
             MoltingStatus: molt,
             HealthStatus: "normal",
@@ -463,6 +481,37 @@ public class BoxDetailService : IBoxDetailService
             WeightGram: weight,
             MoltingStage: molt,
             Tag: crab.Tag,
+            LotCode: lot?.LotCode,
+            LotName: string.IsNullOrWhiteSpace(lot?.Name) ? lot?.LotCode : lot!.Name,
+            CarapaceLengthMm: crab.CarapaceLengthMm,
+            CarapaceWidthMm: crab.CarapaceWidthMm,
             ImageUrls: JsonStringList.Parse(crab.ImageUrlsJson)));
+    }
+
+    /// Cùng quy tắc với FarmingService: BoxId snapshot, rồi allocation đang mở.
+    private async Task<List<Crab>> LiveCrabsInBoxAsync(Guid boxId, CancellationToken ct)
+    {
+        var crabs = (await _uow.Crabs.GetAllAsync(ct) ?? Enumerable.Empty<Crab>())
+            .Where(c =>
+                c.Status is CrabStatus.Alive or CrabStatus.Molting or CrabStatus.Quarantined)
+            .ToList();
+        var ids = crabs.Select(c => c.Id).ToHashSet();
+        var allocRepo = _uow.CrabBoxAllocations;
+        var open = (ids.Count == 0 || allocRepo is null)
+            ? new List<CrabBoxAllocation>()
+            : (await allocRepo.FindAsync(
+                a => a.EndTime == null && ids.Contains(a.CrabId), ct)
+              ?? Enumerable.Empty<CrabBoxAllocation>()).ToList();
+        var allocByCrab = open
+            .GroupBy(a => a.CrabId)
+            .ToDictionary(g => g.Key, g => g.OrderByDescending(a => a.StartTime).First().BoxId);
+
+        return crabs.Where(c =>
+        {
+            var current = c.BoxId is Guid snap && snap != Guid.Empty
+                ? snap
+                : allocByCrab.GetValueOrDefault(c.Id);
+            return current == boxId;
+        }).ToList();
     }
 }

@@ -135,6 +135,12 @@ public class Device : BaseEntity
     /// <summary>Camera: độ phân giải khai báo, ví dụ "1080p", "720p".</summary>
     public string? Resolution { get; set; }
 
+    /// <summary>Vị trí lắp đặt do người vận hành nhập (không phải IP/MAC).</summary>
+    public string? InstallationLocation { get; set; }
+
+    /// <summary>Ghi chú quản lý Controller. Tối đa 500 ký tự.</summary>
+    public string? Notes { get; set; }
+
     public string? FirmwareVersion { get; set; }
     public decimal? BatteryLevel { get; set; }
     public decimal? RssiDbm { get; set; }

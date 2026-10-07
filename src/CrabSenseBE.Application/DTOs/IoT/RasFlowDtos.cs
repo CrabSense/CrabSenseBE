@@ -97,4 +97,10 @@ public record CreateRasFlowNodeRequest(
 
 public record ReorderRasFlowRequest(IReadOnlyList<Guid> NodeIds);
 
+public record UpdateRasFlowNodeRelayRequest(
+    Guid? RelayDeviceId,
+    string? RelayChannel,
+    string? RelayDeviceCode = null,
+    string? ParamDefaultsJson = null);
+
 public record RasFlowCommandRequest(string Command);

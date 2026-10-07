@@ -28,7 +28,7 @@ public static class RasComponentCatalog
             "skimmer" => Skimmer,
             "sand_coral_200" or "coral" or "coral_tank" => CoralTank,
             "settling" or "settling_tank" => SettlingTank,
-            "pump" => Pump,
+            "pump" or "pump_1" or "pump_2" or "pump1" or "pump2" => Pump,
             "valve" => Valve,
             "uv" => Uv,
             "ozone" => Ozone,

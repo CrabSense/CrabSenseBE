@@ -75,12 +75,16 @@ public class SalesOrderService : ISalesOrderService
         CreateSalesOrderRequest request,
         CancellationToken ct = default)
     {
-        var lines = request.Lines?.ToList()
-            ?? throw AppException.BadRequest("Danh sách cua bán là bắt buộc.");
-        if (lines.Count == 0)
+        var lines = request.Lines?.ToList() ?? [];
+        var orderStatus = ParseOrderStatus(request.OrderStatus);
+        if (lines.Count == 0 && orderStatus != OrderStatus.Draft)
             throw AppException.BadRequest("Chọn ít nhất một con cua để bán.");
-        if (string.IsNullOrWhiteSpace(request.CustomerName))
+        if (string.IsNullOrWhiteSpace(request.CustomerName)
+            && orderStatus != OrderStatus.Draft)
             throw AppException.BadRequest("Tên khách hàng là bắt buộc.");
+        if (string.IsNullOrWhiteSpace(request.CustomerName)
+            && orderStatus == OrderStatus.Draft)
+            throw AppException.BadRequest("Nháp vẫn cần tên khách hàng.");
 
         var duplicate = lines.GroupBy(l => l.CrabId).FirstOrDefault(g => g.Count() > 1);
         if (duplicate is not null)
@@ -91,10 +95,8 @@ public class SalesOrderService : ISalesOrderService
             request.CustomerPhone,
             null,
             request.CustomerAddress,
-            null,
+            request.CustomerType,
             ct);
-
-        var orderStatus = ParseOrderStatus(request.OrderStatus);
         var payment = ParsePayment(request.PaymentStatus, request.PaymentMethod);
         var method = NormalizePaymentMethod(request.PaymentMethod, payment);
         var delivery = NormalizeDelivery(request.DeliveryStatus);
@@ -224,13 +226,55 @@ public class SalesOrderService : ISalesOrderService
                     l => todayIds.Contains(l.SalesOrderId), ct))
                 .Sum(l => l.Quantity <= 0 ? 1 : l.Quantity);
 
+        var allArea = (await _uow.SalesOrders.GetAllAsync(ct))
+            .Where(o =>
+                farmingAreaId is null
+                || farmingAreaId == Guid.Empty
+                || o.FarmingAreaId == farmingAreaId)
+            .ToList();
+        var yesterday = today.AddDays(-1);
+        var yOrders = allArea
+            .Where(o =>
+                o.Status == OrderStatus.Completed
+                && o.OrderDate >= yesterday
+                && o.OrderDate < today)
+            .ToList();
+        var yIds = yOrders.Select(o => o.Id).ToHashSet();
+        var soldYesterday = yIds.Count == 0
+            ? 0
+            : (await _uow.SalesOrderLines.FindAsync(
+                    l => yIds.Contains(l.SalesOrderId), ct))
+                .Sum(l => l.Quantity <= 0 ? 1 : l.Quantity);
+        var yRevenue = yOrders.Sum(o => o.TotalAmount);
+        var todayRevenue = todayOrders.Sum(o => o.TotalAmount);
+        var revenueChange = yRevenue <= 0
+            ? (todayRevenue > 0 ? 100m : 0m)
+            : decimal.Round((todayRevenue - yRevenue) / yRevenue * 100m, 1);
+
+        var unpaid = allArea
+            .Where(o =>
+                o.Status != OrderStatus.Cancelled
+                && o.PaymentStatus is PaymentStatus.Pending
+                    or PaymentStatus.Partial
+                    or PaymentStatus.Overdue)
+            .ToList();
+        var unpaidAmount = unpaid.Sum(o => Math.Max(0, o.TotalAmount - o.PaidAmount));
+        var unpaidToday = unpaid.Count(o => o.OrderDate >= today && o.OrderDate < tomorrow);
+        var unpaidYesterday = unpaid.Count(o => o.OrderDate >= yesterday && o.OrderDate < today);
+        var ordersToday = allArea.Count(o => o.OrderDate >= today && o.OrderDate < tomorrow);
+
         var inventory = await GetInventoryAsync(farmingAreaId, ct);
         var items = inventory.Data?.ToList() ?? [];
         return ApiResponse<SalesOverviewDto>.Ok(new SalesOverviewDto(
-            todayOrders.Sum(o => o.TotalAmount),
+            todayRevenue,
             soldToday,
             items.Count,
-            decimal.Round(items.Sum(i => i.WeightGram ?? 0) / 1000m, 3)));
+            decimal.Round(items.Sum(i => i.WeightGram ?? 0) / 1000m, 3),
+            ordersToday,
+            decimal.Round(unpaidAmount, 0),
+            revenueChange,
+            soldToday - soldYesterday,
+            unpaidToday - unpaidYesterday));
     }
 
     public async Task<ApiResponse<IEnumerable<InventoryCrabDto>>> GetInventoryAsync(
@@ -243,14 +287,14 @@ public class SalesOrderService : ISalesOrderService
             .ToList();
         if (farmingAreaId is Guid areaId && areaId != Guid.Empty)
         {
-            var voucherIds = (await _uow.HarvestVouchers.FindAsync(
+            var areaVoucherIds = (await _uow.HarvestVouchers.FindAsync(
                     v => v.FarmingAreaId == areaId && v.Status == HarvestStatus.Completed, ct))
                 .Select(v => v.Id)
                 .ToHashSet();
-            var crabIds = voucherIds.Count == 0
+            var crabIds = areaVoucherIds.Count == 0
                 ? new HashSet<Guid>()
                 : (await _uow.HarvestLines.FindAsync(
-                        l => l.CrabId != null && voucherIds.Contains(l.HarvestVoucherId),
+                        l => l.CrabId != null && areaVoucherIds.Contains(l.HarvestVoucherId),
                         ct))
                     .Select(l => l.CrabId!.Value)
                     .ToHashSet();
@@ -267,23 +311,49 @@ public class SalesOrderService : ISalesOrderService
             .ToDictionary(g => g.Key, g => g.OrderByDescending(h => h.HarvestedAt).First());
 
         var boxes = (await _uow.Boxes.GetAllAsync(ct)).ToDictionary(b => b.Id, b => b.Code);
+        var harvestedIds = harvested.Select(c => c.Id).ToHashSet();
+        var harvestLines = harvestedIds.Count == 0
+            ? []
+            : (await _uow.HarvestLines.FindAsync(
+                    l => l.CrabId != null && harvestedIds.Contains(l.CrabId.Value), ct))
+                .ToList();
+        var voucherIds = harvestLines.Select(l => l.HarvestVoucherId).Distinct().ToHashSet();
+        var vouchers = voucherIds.Count == 0
+            ? new Dictionary<Guid, HarvestVoucher>()
+            : (await _uow.HarvestVouchers.FindAsync(v => voucherIds.Contains(v.Id), ct))
+                .ToDictionary(v => v.Id);
+        var harvestByCrab = harvestLines
+            .GroupBy(l => l.CrabId!.Value)
+            .ToDictionary(g => g.Key, g => g.Last());
+
         var rows = harvested
             .OrderByDescending(c => latest.GetValueOrDefault(c.Id)?.HarvestedAt ?? c.UpdatedAt)
             .Select(c =>
             {
                 latest.TryGetValue(c.Id, out var hist);
-                string? boxCode = null;
-                if (c.BoxId is Guid bid)
+                harvestByCrab.TryGetValue(c.Id, out var hLine);
+                string? boxCode = hLine?.BoxCode;
+                if (string.IsNullOrWhiteSpace(boxCode) && c.BoxId is Guid bid)
                     boxes.TryGetValue(bid, out boxCode);
+                var eligibility = c.Condition is CrabCondition.Problem or CrabCondition.Dead
+                    ? "REVIEW"
+                    : "READY";
+                var voucherCode = hLine != null && vouchers.TryGetValue(hLine.HarvestVoucherId, out var v)
+                    ? v.VoucherCode
+                    : null;
                 return new InventoryCrabDto(
                     c.Id,
                     c.Code,
                     boxCode,
                     c.WeightGram ?? hist?.WeightGram,
-                    hist?.Grade,
+                    hist?.Grade ?? hLine?.Grade,
                     c.Condition.ToString(),
                     c.CrabType,
-                    hist?.HarvestedAt);
+                    hist?.HarvestedAt,
+                    voucherCode,
+                    hLine?.LotCode,
+                    eligibility,
+                    c.Condition == CrabCondition.Softshell || (hLine?.IsSoftshell ?? false));
             })
             .ToList();
         return ApiResponse<IEnumerable<InventoryCrabDto>>.Ok(rows);
@@ -456,6 +526,7 @@ public class SalesOrderService : ISalesOrderService
             if (trimmedPhone is not null) existing.Phone = trimmedPhone;
             if (!string.IsNullOrWhiteSpace(email)) existing.Email = email.Trim();
             if (!string.IsNullOrWhiteSpace(address)) existing.Address = address.Trim();
+            if (!string.IsNullOrWhiteSpace(customerType)) existing.CustomerType = customerType.Trim();
             existing.IsActive = true;
             _uow.Customers.Update(existing);
             return existing;
@@ -506,7 +577,43 @@ public class SalesOrderService : ISalesOrderService
             order.SellerName,
             order.FarmingAreaId,
             order.Notes,
-            lines.Select(l => new SalesOrderLineDto(
+            await MapLinesAsync(lines, ct),
+            customer?.CustomerType);
+    }
+
+    private async Task<IReadOnlyList<SalesOrderLineDto>> MapLinesAsync(
+        IEnumerable<SalesOrderLine> lines,
+        CancellationToken ct)
+    {
+        var list = lines.ToList();
+        var crabIds = list.Where(l => l.CrabId.HasValue).Select(l => l.CrabId!.Value).ToHashSet();
+        var harvestLines = crabIds.Count == 0
+            ? []
+            : (await _uow.HarvestLines.FindAsync(
+                    l => l.CrabId != null && crabIds.Contains(l.CrabId.Value), ct))
+                .ToList();
+        var voucherIds = harvestLines.Select(l => l.HarvestVoucherId).Distinct().ToHashSet();
+        var vouchers = voucherIds.Count == 0
+            ? new Dictionary<Guid, HarvestVoucher>()
+            : (await _uow.HarvestVouchers.FindAsync(v => voucherIds.Contains(v.Id), ct))
+                .ToDictionary(v => v.Id);
+        var byCrab = harvestLines
+            .GroupBy(l => l.CrabId!.Value)
+            .ToDictionary(g => g.Key, g => g.Last());
+
+        return list.Select(l =>
+        {
+            string? slip = null;
+            string? box = null;
+            string? lot = null;
+            if (l.CrabId is Guid cid && byCrab.TryGetValue(cid, out var found))
+            {
+                if (vouchers.TryGetValue(found.HarvestVoucherId, out var v))
+                    slip = v.VoucherCode;
+                box = found.BoxCode;
+                lot = found.LotCode;
+            }
+            return new SalesOrderLineDto(
                 l.Id,
                 l.CrabId,
                 l.CrabCode,
@@ -516,7 +623,11 @@ public class SalesOrderService : ISalesOrderService
                 l.WeightGram ?? decimal.Round(l.QuantityKg * 1000m, 1),
                 l.QuantityKg,
                 l.UnitPricePerKg,
-                l.TotalAmount)).ToList());
+                l.TotalAmount,
+                slip,
+                box,
+                lot);
+        }).ToList();
     }
 
     private static CustomerDto MapCustomer(Customer c) =>
@@ -556,6 +667,8 @@ public class SalesOrderService : ISalesOrderService
         return key switch
         {
             "transfer" or "bank" or "chuyển khoản" or "chuyenkhoan" => "transfer",
+            "credit" or "congno" or "công nợ" or "debt" => "credit",
+            "other" or "khác" or "khac" => "other",
             "unpaid" or "chua" => "unpaid",
             _ => "cash"
         };
@@ -567,7 +680,8 @@ public class SalesOrderService : ISalesOrderService
         var key = raw.Trim().ToLowerInvariant();
         return key switch
         {
-            "delivery" or "giao" or "giao hàng" => "delivery",
+            "delivery" or "giao" or "giao hàng" or "giao tận nơi" => "delivery",
+            "self" or "self_transport" or "tự vận chuyển" or "tu van chuyen" => "self",
             "shipping" or "danggiao" or "đang giao" => "shipping",
             "delivered" or "dagiao" or "đã giao" => "delivered",
             _ => "pickup"

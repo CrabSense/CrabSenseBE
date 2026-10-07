@@ -15,12 +15,18 @@ public class IotService : IIotService
     private readonly IUnitOfWork _uow;
     private readonly IStorageService _storage;
     private readonly IAlertService _alerts;
+    private readonly IRasFlowService _rasFlow;
 
-    public IotService(IUnitOfWork uow, IStorageService storage, IAlertService alerts)
+    public IotService(
+        IUnitOfWork uow,
+        IStorageService storage,
+        IAlertService alerts,
+        IRasFlowService rasFlow)
     {
         _uow = uow;
         _storage = storage;
         _alerts = alerts;
+        _rasFlow = rasFlow;
     }
 
     // ─── Ingest (ESP32 HTTP) ────────────────────────────────────────────────
@@ -30,8 +36,34 @@ public class IotService : IIotService
         if (string.IsNullOrWhiteSpace(req.SensorCode))
             throw AppException.BadRequest("SensorCode is required.");
 
-        var sensor = await _uow.Sensors.FirstOrDefaultAsync(s => s.SensorCode == req.SensorCode, ct)
-            ?? throw AppException.NotFound($"Sensor '{req.SensorCode}' — register it first (POST /api/sensors).");
+        var sensor = await _uow.Sensors.FirstOrDefaultAsync(s => s.SensorCode == req.SensorCode, ct);
+        if (sensor is null)
+        {
+            var spec = MeterSpec(req.SensorCode);
+            if (spec is null)
+                throw AppException.NotFound($"Sensor '{req.SensorCode}' — register it first (POST /api/sensors).");
+
+            sensor = new Sensor
+            {
+                SensorCode = req.SensorCode.Trim(),
+                SensorType = spec.Value.Type,
+                Unit = spec.Value.Unit,
+                IsActive = true
+            };
+            if (!string.IsNullOrWhiteSpace(req.DeviceCode))
+            {
+                var known = await _uow.Devices.FirstOrDefaultAsync(
+                    d => d.DeviceCode == req.DeviceCode.Trim(), ct);
+                if (known is not null)
+                {
+                    sensor.DeviceId = known.Id;
+                    var sibling = await _uow.Sensors.FirstOrDefaultAsync(
+                        s => s.DeviceId == known.Id && s.WaterSystemId != null, ct);
+                    sensor.WaterSystemId = sibling?.WaterSystemId;
+                }
+            }
+            await _uow.Sensors.AddAsync(sensor, ct);
+        }
 
         // Upsert device (ESP32) by DeviceCode so first heartbeat doesn't 404
         Device? device = null;
@@ -80,6 +112,8 @@ public class IotService : IIotService
         await _uow.SaveChangesAsync(ct);
 
         await _alerts.EvaluateMeasurementAsync(sensor, req.Value, ct);
+        if (sensor.DeviceId is Guid deviceId)
+            await _rasFlow.ApplyAutoRelaysAsync(deviceId, ct);
         return ApiResponse.Ok("Sensor data ingested.");
     }
 
@@ -388,11 +422,21 @@ public class IotService : IIotService
         }
         var row = await _uow.FarmingRows.GetByIdAsync(farmingRowId.Value, ct)
             ?? throw AppException.NotFound("FarmingRow");
+        if (device.FarmingAreaId is Guid aid && row.FarmingAreaId != aid)
+            throw AppException.BadRequest("Dãy không thuộc khu vực của Controller.");
         device.FarmingRowId = row.Id;
         device.FarmingAreaId ??= row.FarmingAreaId;
     }
 
     private static string? Clean(string? v) => string.IsNullOrWhiteSpace(v) ? null : v.Trim();
+
+    private static string? Limit(string? v, int max)
+    {
+        if (v is null) return null;
+        if (v.Length > max)
+            throw AppException.BadRequest($"Trường vượt quá {max} ký tự.");
+        return v;
+    }
 
     public async Task<ApiResponse<DeviceDetailDto>> GetDeviceAsync(Guid id, CancellationToken ct = default)
     {
@@ -453,6 +497,8 @@ public class IotService : IIotService
             StreamUrl = Clean(req.StreamUrl),
             SnapshotUrl = Clean(req.SnapshotUrl),
             Resolution = Clean(req.Resolution),
+            InstallationLocation = Limit(Clean(req.InstallationLocation), 200),
+            Notes = Limit(Clean(req.Note ?? req.Notes), 500),
             Status = DeviceStatus.Offline
         };
         await ApplyRowAsync(device, req.FarmingRowId, ct);
@@ -487,6 +533,15 @@ public class IotService : IIotService
             {
                 _ = await _uow.FarmingAreas.GetByIdAsync(req.FarmingAreaId.Value, ct)
                     ?? throw AppException.NotFound("FarmingArea");
+                if (device.FarmingAreaId != req.FarmingAreaId)
+                {
+                    if (req.FarmingRowId is null && device.FarmingRowId is Guid currentRowId)
+                    {
+                        var currentRow = await _uow.FarmingRows.GetByIdAsync(currentRowId, ct);
+                        if (currentRow is not null && currentRow.FarmingAreaId != req.FarmingAreaId)
+                            device.FarmingRowId = null;
+                    }
+                }
                 device.FarmingAreaId = req.FarmingAreaId;
             }
         }
@@ -494,6 +549,10 @@ public class IotService : IIotService
         if (req.StreamUrl is not null) device.StreamUrl = Clean(req.StreamUrl);
         if (req.SnapshotUrl is not null) device.SnapshotUrl = Clean(req.SnapshotUrl);
         if (req.Resolution is not null) device.Resolution = Clean(req.Resolution);
+        if (req.InstallationLocation is not null)
+            device.InstallationLocation = Limit(Clean(req.InstallationLocation), 200);
+        if (req.Note is not null || req.Notes is not null)
+            device.Notes = Limit(Clean(req.Note ?? req.Notes), 500);
         if (!string.IsNullOrWhiteSpace(req.Status)
             && Enum.TryParse<DeviceStatus>(req.Status, true, out var st))
             device.Status = st;
@@ -637,6 +696,18 @@ public class IotService : IIotService
             s.MinThreshold, s.MaxThreshold, s.IsActive, s.LastSeenAt, s.RasComponentId,
             s.FarmingRowId);
 
+    private static (string Type, string Unit)? MeterSpec(string? code) => code?.Trim() switch
+    {
+        "meter_v" => ("Voltage", "V"),
+        "meter_a" => ("Current", "A"),
+        "meter_w" => ("Power", "W"),
+        "meter_va" => ("ApparentPower", "VA"),
+        "meter_kwh" => ("Energy", "kWh"),
+        "meter_hz" => ("Frequency", "Hz"),
+        "meter_pf" => ("PowerFactor", "%"),
+        _ => null
+    };
+
     /// <summary>
     /// URL stream hiệu lực của camera: StreamUrl khai báo → FirmwareVersion là URL (cách cũ)
     /// → suy từ IpAddress theo quy ước ESP32-CAM (http://ip/stream). Không phải camera → null.
@@ -678,7 +749,8 @@ public class IotService : IIotService
             d.MacAddress, d.IpAddress, d.FarmingAreaId,
             area?.Name, area?.Code, actuatorCount,
             d.FarmingRowId, row?.Name, row?.Code,
-            stream, snapshot, d.Resolution);
+            stream, snapshot, d.Resolution,
+            d.InstallationLocation, d.Notes);
     }
 
     private static DeviceDetailDto MapDeviceDetail(
@@ -698,7 +770,8 @@ public class IotService : IIotService
             area?.Name, area?.Code, d.BatteryLevel, d.RssiDbm,
             sensors, actuators,
             d.FarmingRowId, row?.Name, row?.Code,
-            stream, snapshot, d.Resolution);
+            stream, snapshot, d.Resolution,
+            d.InstallationLocation, d.Notes);
     }
 
     private static WaterSystemDto MapWs(WaterSystem w) =>

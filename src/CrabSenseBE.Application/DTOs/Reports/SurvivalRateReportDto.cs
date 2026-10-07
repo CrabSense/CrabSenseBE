@@ -14,7 +14,8 @@ public record SurvivalRateReportDto
     decimal MortalityRate,
     decimal HarvestRate,
 
-    List<SurvivalByAreaDto> ByAreas
+    List<SurvivalByAreaDto> ByAreas,
+    List<SurvivalTrendDto> Trend               // Xu hướng theo thời gian
 );
 
 /// <summary>
@@ -43,4 +44,15 @@ public record SurvivalRateFilterDto
     Guid? AreaId,
     DateTime? FromDate,
     DateTime? ToDate
+);
+
+/// <summary>Dữ liệu xu hướng tỷ lệ sống theo ngày.</summary>
+public record SurvivalTrendDto
+(
+    DateTime Date,
+    int TotalCrabs,
+    int AliveCrabs,
+    int DeadCrabs,
+    int HarvestedCrabs,
+    decimal SurvivalRate
 );

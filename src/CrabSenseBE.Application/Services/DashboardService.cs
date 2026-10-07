@@ -28,10 +28,14 @@ public class DashboardService : IDashboardService
             string.Equals(b.Status, BoxStatuses.Active, StringComparison.OrdinalIgnoreCase)
             || string.Equals(b.Status, BoxStatuses.Molting, StringComparison.OrdinalIgnoreCase)
             || b.IsOccupied);
-        var totalCrabs = crabs.Count(c => c.Status == CrabStatus.Alive);
+        var totalCrabs = crabs.Count;
         var openAlerts = alerts.Count;
         var online = devices.Count(d => d.Status == DeviceStatus.Online);
         var iotPct = devices.Count == 0 ? 0 : Math.Round(online * 100.0 / devices.Count, 1);
+        // ============================================================
+        // MỚI: TÍNH KPI SUMMARY
+        // ============================================================
+        var kpiSummary = await CalculateKpiSummaryAsync(scope, farmingAreaId, ct);
 
         return ApiResponse<DashboardOverviewDto>.Ok(new DashboardOverviewDto(
             totalBoxes,
@@ -39,7 +43,8 @@ public class DashboardService : IDashboardService
             activeBoxes,
             openAlerts,
             iotPct,
-            DateTime.UtcNow));
+            DateTime.UtcNow,
+            kpiSummary));
     }
 
     public async Task<ApiResponse<DashboardMetricsDto>> GetMetricsAsync(
@@ -238,5 +243,76 @@ public class DashboardService : IDashboardService
             List<Domain.Entities.Device> devices) =>
             new(false, boxes, boxes.Select(b => b.Id).ToHashSet(),
                 sensors, sensors.Select(s => s.Id).ToHashSet(), devices);
+    }
+    // ============================================================
+    // MỚI: TÍNH KPI SUMMARY CHO DASHBOARD
+    // ============================================================
+    private async Task<DashboardKpiSummaryDto?> CalculateKpiSummaryAsync(
+        AreaScope scope, Guid? farmingAreaId, CancellationToken ct)
+    {
+        var crabs = (await _uow.Crabs.GetAllAsync(ct))
+            .Where(c => c.BoxId is Guid bid && scope.BoxIds.Contains(bid))
+            .ToList();
+
+        if (crabs.Count == 0) return null;
+
+        var total = crabs.Count;
+
+        var alive = crabs.Count(c =>
+            c.Status == CrabStatus.Alive
+            || c.Status == CrabStatus.Molting
+            || c.Status == CrabStatus.Quarantined);
+
+        var dead = crabs.Count(c => c.Status == CrabStatus.Dead);
+        var harvested = crabs.Count(c => c.Status == CrabStatus.Harvested);
+        var molting = crabs.Count(c => c.Status == CrabStatus.Molting);
+
+        var survivalRate = total > 0
+            ? decimal.Round((decimal)alive / total * 100, 2) : 0;
+        var moltingRate = total > 0
+            ? decimal.Round((decimal)molting / total * 100, 2) : 0;
+        var harvestRate = total > 0
+            ? decimal.Round((decimal)harvested / total * 100, 2) : 0;
+        var mortalityRate = total > 0
+            ? decimal.Round((decimal)dead / total * 100, 2) : 0;
+
+        // Tổng sản lượng thu hoạch (từ HarvestVouchers)
+        var harvestVouchers = await _uow.HarvestVouchers.FindAsync(
+    v =>
+        v.Status == HarvestStatus.Completed &&
+        (!farmingAreaId.HasValue ||
+         v.FarmingAreaId == farmingAreaId.Value),
+    ct);
+        var totalHarvestWeightKg = harvestVouchers.Sum(v => v.TotalWeightKg);
+
+        // Tồn kho cấp đông
+        HashSet<Guid>? areaVoucherIds = null;
+
+        if (farmingAreaId.HasValue)
+        {
+            var areaVouchers = await _uow.HarvestVouchers.FindAsync(
+                v => v.FarmingAreaId == farmingAreaId.Value,
+                ct);
+
+            areaVoucherIds = areaVouchers
+                .Select(v => v.Id)
+                .ToHashSet();
+        }
+        var frozenLots = await _uow.FrozenLots.GetAllAsync(ct);
+        var frozenWeightKg = frozenLots
+            .Where(l =>
+                (l.Status == FrozenLotStatus.Available ||
+                l.Status == FrozenLotStatus.Reserved) &&
+                (areaVoucherIds is null ||
+                (l.HarvestVoucherId.HasValue &&
+                areaVoucherIds.Contains(l.HarvestVoucherId.Value))))
+            .Sum(l => l.WeightKg);
+        return new DashboardKpiSummaryDto(
+            SurvivalRate: survivalRate,
+            MoltingRate: moltingRate,
+            HarvestRate: harvestRate,
+            MortalityRate: mortalityRate,
+            TotalHarvestWeightKg: totalHarvestWeightKg,
+            FrozenInventoryWeightKg: frozenWeightKg);
     }
 }

@@ -146,9 +146,11 @@ public class OperationsController : ControllerBase
     public async Task<IActionResult> UploadPhoto(
         IFormFile file,
         [FromForm] Guid? boxId = null,
+        [FromForm] Guid? crabId = null,
         [FromForm] Guid? operationId = null,
         [FromForm] string? relatedEntityType = null,
         [FromForm] Guid? relatedEntityId = null,
+        [FromForm] string? photoKind = null,
         [FromServices] IMediaService media = null!,
         CancellationToken ct = default)
     {
@@ -162,14 +164,15 @@ public class OperationsController : ControllerBase
         await using var stream = file.OpenReadStream();
         var entityType = string.IsNullOrWhiteSpace(relatedEntityType) ? "FarmOperation" : relatedEntityType;
         var entityId = relatedEntityId ?? operationId;
+        var kind = string.IsNullOrWhiteSpace(photoKind) ? "operation-photo" : photoKind.Trim();
         var meta = new CrabSenseBE.Application.DTOs.Media.MediaUploadMeta(
             Category: "image",
             BoxId: boxId,
-            CrabId: null,
+            CrabId: crabId,
             DeviceId: null,
             RelatedEntityType: entityType,
             RelatedEntityId: entityId,
-            Notes: "operation-photo",
+            Notes: kind,
             SharePublic: true);
 
         var uploaded = await media.UploadAsync(stream, file.FileName, file.ContentType, meta, userId, ct);

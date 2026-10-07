@@ -3,6 +3,7 @@ using CrabSenseBE.Application.Interfaces;
 using CrabSenseBE.Domain.Enums;
 using CrabSenseBE.Domain.Interfaces;
 using Microsoft.EntityFrameworkCore;
+using CrabSenseBE.Application.Common;
 
 namespace CrabSenseBE.Application.Services;
 
@@ -38,6 +39,19 @@ public class OperationalEfficiencyReportService
             OperationalEfficiencyFilterDto filter,
             CancellationToken cancellationToken = default)
     {
+        if (filter is null)
+        {
+            throw AppException.BadRequest(
+                "Operational efficiency filter is required.");
+        }
+
+        if (filter.FromDate.HasValue &&
+            filter.ToDate.HasValue &&
+            filter.FromDate.Value.Date > filter.ToDate.Value.Date)
+        {
+            throw AppException.BadRequest(
+                "FromDate cannot be greater than ToDate.");
+        }
         // ============================================================
         // 1. XÁC ĐỊNH KHOẢNG THỜI GIAN
         // ============================================================
@@ -54,83 +68,126 @@ public class OperationalEfficiencyReportService
         DateTime.UtcNow.Month,
         1);
 
-var toDate = filter.ToDate?.Date.AddDays(1)
-    ?? fromDate.AddMonths(1);
-
-// ============================================================
-// 2. LOAD ALL CRABS + FILTER IN MEMORY
-// ============================================================
-// Tránh DateTime Kind mismatch giữa
-// parameter (Unspecified) và DB column (Utc).
-// ============================================================
-
-var allCrabs = await _uow.Crabs
-    .Query()
-    .ToListAsync(cancellationToken);
-
-var crabs = allCrabs
-    .Where(c => c.StockedAt >= fromDate
-             && c.StockedAt < toDate)
-    .ToList();
-
-        // // ============================================================
-        // // 2. QUERY CRABS
-        // // ============================================================
-
-        // var crabs = await _uow.Crabs
-        //     .Query()
-        //     .Where(c => c.StockedAt >= fromDate
-        //              && c.StockedAt < toDate)
-        //     .ToListAsync(cancellationToken);
+        var toDate = filter.ToDate?.Date.AddDays(1)
+            ?? fromDate.AddMonths(1);
 
         // ============================================================
-        // 3. LẤY MOLTING RECORDS
+        // 2. LOAD ALL CRABS + FILTER IN MEMORY
+        // ============================================================
+        // Tránh DateTime Kind mismatch giữa
+        // parameter (Unspecified) và DB column (Utc).
+        // ============================================================
+
+        var allCrabs = await _uow.Crabs
+            .Query()
+            .ToListAsync(cancellationToken);
+
+        var crabs = allCrabs
+            .Where(c => c.StockedAt >= fromDate
+                     && c.StockedAt < toDate)
+            .ToList();
+
+        // ============================================================
+        // 3. PHÂN LOẠI MUTUALLY EXCLUSIVE
         // ============================================================
         //
-        // HashSet chứa Id của mọi cua đã lột.
-        // Chỉ cần 1 MoltingRecord là tính là đã lột.
+        // Mỗi con cua thuộc 1 nhóm duy nhất:
+        //
+        // Alive:     Status=Alive/Quarantined, MoltedAt=null
+        // Molting:   Status=Molting
+        // Molted:    MoltedAt != null, Status != Harvested/Dead
+        // Harvested: Status=Harvested
+        // Dead:      Status=Dead
         // ============================================================
 
-        var moltedCrabIds = (await _uow.MoltingRecords
-            .GetAllAsync(cancellationToken))
-            .Select(m => m.CrabId)
-            .ToHashSet();
+        var alive = crabs.Count(c =>
+            c.MoltedAt == null
+            && (c.Status == CrabStatus.Alive
+                || c.Status == CrabStatus.Quarantined));
 
-        // ============================================================
-        // 4. TÍNH TOÁN
-        // ============================================================
+        var molting = crabs.Count(c =>
+            c.Status == CrabStatus.Molting);
+
+        var molted = crabs.Count(c =>
+    c.MoltedAt != null
+    && c.Status != CrabStatus.Molting
+    && c.Status != CrabStatus.Harvested
+    && c.Status != CrabStatus.Dead
+    && c.Status != CrabStatus.Missing
+    && c.Status != CrabStatus.Sold);
+
+        var harvested = crabs.Count(c =>
+            c.Status == CrabStatus.Harvested
+            || c.Status == CrabStatus.Sold);
+
+        var dead = crabs.Count(c =>
+            c.Status == CrabStatus.Dead);
 
         var total = crabs.Count;
 
-        var molted = crabs
-            .Count(c => c.MoltedAt != null);
+        // ============================================================
+        // 4. TÍNH TỶ LỆ
+        // ============================================================
 
-        var harvested = crabs
-            .Count(c => c.Status == CrabStatus.Harvested);
+        var survivalRate = CalculateRate(alive + molting, total);
+        var moltingRate = CalculateRate(molting, total);
+        var harvestRate = CalculateRate(harvested, total);
+        var mortalityRate = CalculateRate(dead, total);
+        var aliveRate = CalculateRate(alive, total);
 
-        var alive = crabs
-            .Count(c => c.MoltedAt == null 
-                    && (c.Status == CrabStatus.Alive
-                    || c.Status == CrabStatus.Quarantined));
+        //debug
+        var classified =
+    alive +
+    molting +
+    molted +
+    harvested +
+    dead;
 
-        var dead = crabs
-            .Count(c => c.Status == CrabStatus.Dead);
+        var unclassified = total - classified;
 
         // ============================================================
-        // 5. TRẢ KẾT QUẢ
+        // 5. TÍNH HEALTH SCORE (composite)
+        // ============================================================
+        //
+        // Công thức:
+        //   HealthScore = SurvivalRate × 0.4
+        //               + (100 - MortalityRate) × 0.3
+        //               + HarvestRate × 0.2
+        //               + MoltingRate × 0.1
+        //
+        // MoltingRate có trọng số thấp vì lột là tự nhiên,
+        // không xấu cũng không tốt — chỉ cho thấy hoạt động.
+        // ============================================================
+
+        var healthScore = (int)Math.Round(
+            survivalRate * 0.4m
+            + (100 - mortalityRate) * 0.3m
+            + harvestRate * 0.2m
+            + moltingRate * 0.1m);
+
+        healthScore = Math.Clamp(healthScore, 0, 100);
+
+        // ============================================================
+        // 6. TRẢ KẾT QUẢ
         // ============================================================
 
         return new OperationalEfficiencyDto(
             TotalCrabs: total,
+            AliveCrabs: alive,
+            MoltingCrabs: molting,
             MoltedCrabs: molted,
             HarvestedCrabs: harvested,
-            AliveCrabs: alive,
             DeadCrabs: dead,
+            UnclassifiedCrabs: unclassified,
 
-            MoltingRate: CalculateRate(molted, total),
-            HarvestRate: CalculateRate(harvested, total),
-            MortalityRate: CalculateRate(dead, total),
-            AliveRate: CalculateRate(alive, total));
+
+            SurvivalRate: survivalRate,
+            MoltingRate: moltingRate,
+            HarvestRate: harvestRate,
+            MortalityRate: mortalityRate,
+            AliveRate: aliveRate,
+
+            HealthScore: healthScore);
     }
 
     private static decimal CalculateRate(int count, int total)

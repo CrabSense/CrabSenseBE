@@ -12,4 +12,7 @@ public interface IInventoryReportService
     /// </summary>
     Task<InventoryReportDto> GetInventoryReportAsync(
         CancellationToken cancellationToken = default);
+    Task<InventoryReportDto> GetInventoryReportAsync(
+        InventoryReportFilterDto filter,
+        CancellationToken cancellationToken = default);
 }

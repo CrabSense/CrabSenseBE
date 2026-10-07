@@ -56,6 +56,10 @@ public interface IUnitOfWork : IDisposable
     IRepository<FarmOperation> FarmOperations { get; }
     IRepository<SaleTransaction> SaleTransactions { get; }
     IRepository<ScheduledFarmTask> ScheduledFarmTasks { get; }
+    IRepository<FeedingEvent> FeedingEvents { get; }
+    IRepository<ObservationEvent> ObservationEvents { get; }
+    IRepository<TrainingLabel> TrainingLabels { get; }
+    IRepository<EdgeCommand> EdgeCommands { get; }
 
     Task<int> SaveChangesAsync(CancellationToken ct = default);
 

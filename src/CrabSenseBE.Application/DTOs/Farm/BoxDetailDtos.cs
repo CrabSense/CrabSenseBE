@@ -40,6 +40,10 @@ public record BoxCrabItemDto(
     decimal? WeightGram,
     string? MoltingStage,
     string? Tag,
+    string? LotCode,
+    string? LotName,
+    decimal? CarapaceLengthMm,
+    decimal? CarapaceWidthMm,
     IReadOnlyList<string> ImageUrls);
 
 /// <summary>Mobile video list item (mapped from MediaAsset).</summary>

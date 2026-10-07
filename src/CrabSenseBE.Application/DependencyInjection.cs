@@ -20,6 +20,7 @@ public static class DependencyInjection
         services.AddScoped<IBoxQrService, BoxQrService>();
         services.AddScoped<ITraceabilityService, TraceabilityService>();
         services.AddScoped<IIotService, IotService>();
+        services.AddScoped<IEdgeCommandService, EdgeCommandService>();
         services.AddScoped<IRasFlowService, RasFlowService>();
         services.AddScoped<IWaterAnalysisService, WaterAnalysisService>();
         // Notification trước Alert vì AlertService phụ thuộc INotificationService
@@ -38,11 +39,13 @@ public static class DependencyInjection
         services.AddScoped<IManualInspectionService, ManualInspectionService>();
         services.AddScoped<ICrabConditionService, CrabConditionService>();
         services.AddScoped<IAiOpsService, AiOpsService>();
+        services.AddScoped<ITrainingDataService, TrainingDataService>();
         services.AddScoped<IOperationLogService, OperationLogService>();
         services.AddScoped<IScheduledTaskService, ScheduledTaskService>();
         services.AddScoped<ISalesService, SalesService>();
         services.AddScoped<ISalesOrderService, SalesOrderService>();
         services.AddScoped<IBoxCameraService, BoxCameraService>();
+        services.AddScoped<IOperationalEfficiencyReportService, OperationalEfficiencyReportService>();
 
         services.AddHttpClient("telegram");
         services.AddHttpClient("zalo");

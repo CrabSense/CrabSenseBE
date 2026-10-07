@@ -9,9 +9,9 @@ namespace CrabSenseBE.Domain.Entities;
 public class WaterAnalysisRun : BaseEntity
 {
     public Guid FarmingAreaId { get; set; }
-    /// <summary>running | completed | failed</summary>
+    /// <summary>running | completed | failed | cancelled</summary>
     public string Status { get; set; } = "running";
-    /// <summary>1 lấy mẫu … 6 lưu kết quả</summary>
+    /// <summary>1 lấy mẫu … 8 xả &amp; làm sạch</summary>
     public int CurrentStep { get; set; } = 1;
     public DateTime StartedAt { get; set; } = DateTime.UtcNow;
     public DateTime LastStepAt { get; set; } = DateTime.UtcNow;
@@ -25,6 +25,18 @@ public class WaterAnalysisRun : BaseEntity
     public string? ImageUrl { get; set; }
     public string? Error { get; set; }
     public string Source { get; set; } = "colorimetric-ai";
+
+    public string? Analyte { get; set; }
+    public string? SampleSource { get; set; }
+    public string? SampleLocation { get; set; }
+    public string? Notes { get; set; }
+    public string? TestCode { get; set; }
+    public decimal? Confidence { get; set; }
+    public string? PerformedBy { get; set; }
+    public string? StepLogJson { get; set; }
+    public string? ControllerId { get; set; }
+    public string? CameraId { get; set; }
+    public string? HardwareJson { get; set; }
 
     public FarmingArea? FarmingArea { get; set; }
 }

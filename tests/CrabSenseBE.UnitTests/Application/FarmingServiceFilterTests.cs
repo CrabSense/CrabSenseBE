@@ -104,7 +104,8 @@ public class FarmingServiceFilterTests
                     BoxId = boxId,
                     Tag = "CRAB-001",
                     Status = CrabSenseBE.Domain.Enums.CrabStatus.Alive,
-                    MoltingStage = "pre-molt"
+                    MoltingStage = "pre-molt",
+                    Condition = CrabSenseBE.Domain.Enums.CrabCondition.Premolt
                 }
             });
         var alertRepo = new Mock<IRepository<Alert>>();

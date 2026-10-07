@@ -32,6 +32,8 @@ public class AlertServiceTests
         var alertRepo = new Mock<IRepository<Alert>>();
         alertRepo.Setup(r => r.AnyAsync(It.IsAny<System.Linq.Expressions.Expression<Func<Alert, bool>>>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(false);
+        alertRepo.Setup(r => r.FindAsync(It.IsAny<System.Linq.Expressions.Expression<Func<Alert, bool>>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Array.Empty<Alert>());
         alertRepo.Setup(r => r.AddAsync(It.IsAny<Alert>(), It.IsAny<CancellationToken>()))
             .Returns(Task.CompletedTask);
 
@@ -101,6 +103,8 @@ public class AlertServiceTests
         var alertRepo = new Mock<IRepository<Alert>>();
         alertRepo.Setup(r => r.AnyAsync(It.IsAny<System.Linq.Expressions.Expression<Func<Alert, bool>>>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(false);
+        alertRepo.Setup(r => r.FindAsync(It.IsAny<System.Linq.Expressions.Expression<Func<Alert, bool>>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Array.Empty<Alert>());
         alertRepo.Setup(r => r.AddAsync(It.IsAny<Alert>(), It.IsAny<CancellationToken>()))
             .Returns(Task.CompletedTask);
 
