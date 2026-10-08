@@ -31,6 +31,23 @@ public sealed class KiosksController : ControllerBase
     public Task<IActionResult> Revoke(Guid id, CancellationToken ct)
         => Execute(() => _kiosks.RevokeAsync(id, ct));
 
+    [HttpGet("controllers")]
+    public Task<IActionResult> Controllers([FromQuery] Guid farmingAreaId, CancellationToken ct)
+        => Execute(() => _kiosks.ListControllersAsync(farmingAreaId, ct));
+
+    [HttpPost("/api/controllers/{id:guid}/approve")]
+    public Task<IActionResult> Approve(Guid id, CancellationToken ct)
+        => Execute(() => _kiosks.ApproveControllerAsync(id, ct));
+
+    [HttpPost("/api/controllers/{id:guid}/reject")]
+    public Task<IActionResult> Reject(Guid id, CancellationToken ct)
+        => Execute(() => _kiosks.RejectControllerAsync(id, ct));
+
+    [AllowAnonymous]
+    [HttpPost("/api/controllers/register")]
+    public Task<IActionResult> Register([FromBody] RegisterControllerRequest request, CancellationToken ct)
+        => Execute(() => _kiosks.RegisterControllerAsync(EdgeKey(), request, ct));
+
     [AllowAnonymous]
     [HttpPost("heartbeat")]
     public Task<IActionResult> Heartbeat([FromBody] KioskHeartbeatBody? body, CancellationToken ct)

@@ -4,6 +4,7 @@ using CrabSenseBE.Application.Common;
 using CrabSenseBE.Application.DTOs.Kiosk;
 using CrabSenseBE.Application.Interfaces;
 using CrabSenseBE.Domain.Entities;
+using CrabSenseBE.Domain.Enums;
 using CrabSenseBE.Domain.Interfaces;
 
 namespace CrabSenseBE.Application.Services;
@@ -146,6 +147,134 @@ public sealed class KioskProvisioningService : IKioskProvisioningService
             credential.RevokedAt = now;
         await _uow.SaveChangesAsync(ct);
         return ApiResponse<KioskListItemDto>.Ok(MapItem(kiosk, null), "Kiosk revoked.");
+    }
+
+    public async Task<ApiResponse<RegisterControllerDto>> RegisterControllerAsync(
+        string secret,
+        RegisterControllerRequest request,
+        CancellationToken ct = default)
+    {
+        var credential = await FindCredentialAsync(secret, ct);
+        var kiosk = await _uow.FarmKiosks.GetByIdAsync(credential.KioskId, ct)
+            ?? throw AppException.NotFound("Kiosk");
+        if (kiosk.Status == "Revoked")
+            throw AppException.Forbidden("Kiosk is revoked.");
+
+        var code = request.DeviceCode?.Trim();
+        if (string.IsNullOrWhiteSpace(code))
+            throw AppException.BadRequest("DeviceCode is required.");
+
+        var now = DateTime.UtcNow;
+        var device = await _uow.Devices.FirstOrDefaultAsync(d => d.DeviceCode == code, ct);
+        if (device is null)
+        {
+            device = new Device
+            {
+                DeviceCode = code,
+                EdgeState = "Pending",
+                KioskId = kiosk.Id,
+                Status = DeviceStatus.Offline
+            };
+            await _uow.Devices.AddAsync(device, ct);
+        }
+        else if (device.EdgeState is "Rejected" or "Revoked")
+        {
+            device.KioskId = kiosk.Id;
+        }
+        else if (device.KioskId is null)
+        {
+            device.KioskId = kiosk.Id;
+            device.EdgeState = "Pending";
+        }
+
+        if (!string.IsNullOrWhiteSpace(request.Mac))
+            device.MacAddress = request.Mac.Trim();
+        if (!string.IsNullOrWhiteSpace(request.IpAddress))
+            device.IpAddress = request.IpAddress.Trim();
+        if (!string.IsNullOrWhiteSpace(request.Firmware))
+            device.FirmwareVersion = request.Firmware.Trim();
+        device.LastSeenAt = now;
+        if (device.EdgeState is "Approved" or "Online")
+        {
+            device.EdgeState = "Online";
+            device.Status = DeviceStatus.Online;
+        }
+
+        var oneTime = device.EdgeState == "Online" ? device.PendingSecret : null;
+        if (oneTime != null)
+            device.PendingSecret = null;
+        await _uow.SaveChangesAsync(ct);
+        return ApiResponse<RegisterControllerDto>.Ok(
+            new RegisterControllerDto(device.Id, device.DeviceCode, device.EdgeState, oneTime));
+    }
+
+    public async Task<ApiResponse<IReadOnlyList<EdgeControllerDto>>> ListControllersAsync(
+        Guid farmingAreaId,
+        CancellationToken ct = default)
+    {
+        var kiosks = (await _uow.FarmKiosks.FindAsync(k => k.FarmingAreaId == farmingAreaId, ct))
+            .ToDictionary(k => k.Id);
+        var devices = (await _uow.Devices.GetAllAsync(ct))
+            .Where(d => d.KioskId is Guid id && kiosks.ContainsKey(id))
+            .OrderBy(d => d.DeviceCode)
+            .Select(d => MapController(d, kiosks[d.KioskId!.Value].Code))
+            .ToList();
+        return ApiResponse<IReadOnlyList<EdgeControllerDto>>.Ok(devices);
+    }
+
+    public async Task<ApiResponse<EdgeControllerDto>> ApproveControllerAsync(Guid deviceId, CancellationToken ct = default)
+    {
+        var device = await _uow.Devices.GetByIdAsync(deviceId, ct)
+            ?? throw AppException.NotFound("Device");
+        if (device.EdgeState == "Revoked")
+            throw AppException.Conflict("Controller is revoked.");
+        var secret = Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
+        device.EdgeState = "Approved";
+        device.CredentialHash = Hash(secret);
+        device.PendingSecret = secret;
+        device.Status = DeviceStatus.Online;
+        await _uow.SaveChangesAsync(ct);
+        var kioskCode = await KioskCodeAsync(device.KioskId, ct);
+        return ApiResponse<EdgeControllerDto>.Ok(MapController(device, kioskCode), "Controller approved.");
+    }
+
+    public async Task<ApiResponse<EdgeControllerDto>> RejectControllerAsync(Guid deviceId, CancellationToken ct = default)
+    {
+        var device = await _uow.Devices.GetByIdAsync(deviceId, ct)
+            ?? throw AppException.NotFound("Device");
+        device.EdgeState = "Rejected";
+        device.PendingSecret = null;
+        device.CredentialHash = null;
+        device.Status = DeviceStatus.Offline;
+        await _uow.SaveChangesAsync(ct);
+        var kioskCode = await KioskCodeAsync(device.KioskId, ct);
+        return ApiResponse<EdgeControllerDto>.Ok(MapController(device, kioskCode), "Controller rejected.");
+    }
+
+    private async Task<string?> KioskCodeAsync(Guid? kioskId, CancellationToken ct)
+    {
+        if (kioskId is not Guid id)
+            return null;
+        var kiosk = await _uow.FarmKiosks.GetByIdAsync(id, ct);
+        return kiosk?.Code;
+    }
+
+    private static EdgeControllerDto MapController(Device device, string? kioskCode) =>
+        new(device.Id, device.DeviceCode, device.MacAddress, device.IpAddress,
+            device.EdgeState, LinkStatus(device), device.KioskId, kioskCode, device.LastSeenAt);
+
+    private static string LinkStatus(Device device)
+    {
+        if (device.EdgeState is "Pending" or "Rejected" or "Revoked" or "Approved")
+            return device.EdgeState;
+        if (device.LastSeenAt is not DateTime seen)
+            return "Offline";
+        var age = DateTime.UtcNow - seen;
+        if (age > TimeSpan.FromSeconds(90))
+            return "Offline";
+        if (age > TimeSpan.FromSeconds(30))
+            return "Warning";
+        return "Online";
     }
 
     private async Task<KioskCredential> FindCredentialAsync(string secret, CancellationToken ct)

@@ -746,6 +746,7 @@ public static class DevDbBootstrap
             ALTER TABLE be."Devices" ADD COLUMN IF NOT EXISTS "KioskId" uuid NULL;
             ALTER TABLE be."Devices" ADD COLUMN IF NOT EXISTS "EdgeState" character varying(32) NOT NULL DEFAULT 'Approved';
             ALTER TABLE be."Devices" ADD COLUMN IF NOT EXISTS "CredentialHash" character varying(64) NULL;
+            ALTER TABLE be."Devices" ADD COLUMN IF NOT EXISTS "PendingSecret" character varying(128) NULL;
             """).ConfigureAwait(false);
         logger.LogInformation("Ensured Kiosk provisioning tables.");
     }

@@ -157,6 +157,9 @@ public class Device : BaseEntity
     /// <summary>SHA-256 hex của credential controller. Không phải secret của Kiosk.</summary>
     public string? CredentialHash { get; set; }
 
+    /// <summary>Secret một lần, Kiosk lấy rồi xóa. Không trả về Desktop.</summary>
+    public string? PendingSecret { get; set; }
+
     // Navigation
     public FarmingArea? FarmingArea { get; set; }
     public ICollection<Sensor> Sensors { get; set; } = new List<Sensor>();

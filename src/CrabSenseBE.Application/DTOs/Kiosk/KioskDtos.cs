@@ -33,3 +33,27 @@ public record KioskSessionDto(
     string KioskCode,
     string SiteCode,
     string Status);
+
+public record RegisterControllerRequest(
+    string? DeviceCode,
+    string? Mac,
+    string? Firmware,
+    string? Hardware,
+    string? IpAddress);
+
+public record RegisterControllerDto(
+    Guid DeviceId,
+    string DeviceCode,
+    string EdgeState,
+    string? Secret);
+
+public record EdgeControllerDto(
+    Guid Id,
+    string DeviceCode,
+    string? Mac,
+    string? IpAddress,
+    string EdgeState,
+    string LinkStatus,
+    Guid? KioskId,
+    string? KioskCode,
+    DateTime? LastSeenAt);
