@@ -579,12 +579,17 @@ public class IotService : IIotService
     public async Task<ApiResponse> DeleteDeviceAsync(Guid id, CancellationToken ct = default)
     {
         var device = await _uow.Devices.GetByIdAsync(id, ct) ?? throw AppException.NotFound("Device");
-        var linked = await _uow.Sensors.AnyAsync(s => s.DeviceId == id, ct);
-        if (linked)
-            throw AppException.Conflict("Controller still has sensors — unlink sensors first.");
-        var relays = await _uow.RasComponents.AnyAsync(c => c.RelayDeviceId == id, ct);
-        if (relays)
-            throw AppException.Conflict("Controller still has RAS outputs — unlink relays first.");
+        foreach (var sensor in await _uow.Sensors.FindAsync(s => s.DeviceId == id, ct))
+            sensor.DeviceId = null;
+        foreach (var relay in await _uow.RasComponents.FindAsync(c => c.RelayDeviceId == id, ct))
+            relay.RelayDeviceId = null;
+        foreach (var row in await _uow.Hdf5Uploads.FindAsync(x => x.DeviceId == id, ct))
+            row.DeviceId = null;
+        foreach (var row in await _uow.MediaAssets.FindAsync(x => x.DeviceId == id, ct))
+            row.DeviceId = null;
+        foreach (var row in await _uow.AiDetections.FindAsync(x => x.DeviceId == id, ct))
+            row.DeviceId = null;
+        await _uow.SaveChangesAsync(ct);
         _uow.Devices.Remove(device);
         await _uow.SaveChangesAsync(ct);
         return ApiResponse.Ok("Device deleted.");

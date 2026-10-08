@@ -149,14 +149,32 @@ public sealed class KioskProvisioningService : IKioskProvisioningService
         return ApiResponse<KioskListItemDto>.Ok(MapItem(kiosk, null), "Kiosk revoked.");
     }
 
+    public async Task<ApiResponse<KioskResetDto>> DeleteAsync(Guid kioskId, CancellationToken ct = default)
+    {
+        _ = await _uow.FarmKiosks.GetByIdAsync(kioskId, ct)
+            ?? throw AppException.NotFound("Kiosk");
+        return await RemoveKiosksAsync(new[] { kioskId }, ct);
+    }
+
     public async Task<ApiResponse<KioskResetDto>> ResetAreaAsync(Guid farmingAreaId, CancellationToken ct = default)
     {
         _ = await _uow.FarmingAreas.GetByIdAsync(farmingAreaId, ct)
             ?? throw AppException.NotFound("FarmingArea");
-        var kiosks = (await _uow.FarmKiosks.FindAsync(k => k.FarmingAreaId == farmingAreaId, ct)).ToList();
-        var kioskIds = kiosks.Select(k => k.Id).ToHashSet();
+        var ids = (await _uow.FarmKiosks.FindAsync(k => k.FarmingAreaId == farmingAreaId, ct))
+            .Select(k => k.Id);
+        return await RemoveKiosksAsync(ids, ct);
+    }
+
+    private async Task<ApiResponse<KioskResetDto>> RemoveKiosksAsync(
+        IEnumerable<Guid> kioskIds,
+        CancellationToken ct)
+    {
+        var ids = kioskIds.ToHashSet();
+        if (ids.Count == 0)
+            return ApiResponse<KioskResetDto>.Ok(new KioskResetDto(0, 0), "No kiosk to delete.");
+
         var devices = (await _uow.Devices.GetAllAsync(ct))
-            .Where(d => d.KioskId is Guid id && kioskIds.Contains(id))
+            .Where(d => d.KioskId is Guid id && ids.Contains(id))
             .ToList();
         foreach (var device in devices)
         {
@@ -167,20 +185,23 @@ public sealed class KioskProvisioningService : IKioskProvisioningService
             device.Status = DeviceStatus.Offline;
         }
 
-        var codes = (await _uow.KioskProvisioningCodes.GetAllAsync(ct))
-            .Where(c => kioskIds.Contains(c.KioskId));
-        foreach (var code in codes)
+        foreach (var code in (await _uow.KioskProvisioningCodes.GetAllAsync(ct)).Where(c => ids.Contains(c.KioskId)))
             _uow.KioskProvisioningCodes.Remove(code);
-        var credentials = (await _uow.KioskCredentials.GetAllAsync(ct))
-            .Where(c => kioskIds.Contains(c.KioskId));
-        foreach (var credential in credentials)
+        foreach (var credential in (await _uow.KioskCredentials.GetAllAsync(ct)).Where(c => ids.Contains(c.KioskId)))
             _uow.KioskCredentials.Remove(credential);
-        foreach (var kiosk in kiosks)
+        var removed = 0;
+        foreach (var id in ids)
+        {
+            var kiosk = await _uow.FarmKiosks.GetByIdAsync(id, ct);
+            if (kiosk is null)
+                continue;
             _uow.FarmKiosks.Remove(kiosk);
+            removed++;
+        }
         await _uow.SaveChangesAsync(ct);
         return ApiResponse<KioskResetDto>.Ok(
-            new KioskResetDto(kiosks.Count, devices.Count),
-            "Kiosk and controller links removed.");
+            new KioskResetDto(removed, devices.Count),
+            "Kiosk deleted.");
     }
 
     public async Task<ApiResponse<RegisterControllerDto>> RegisterControllerAsync(

@@ -31,6 +31,10 @@ public sealed class KiosksController : ControllerBase
     public Task<IActionResult> Revoke(Guid id, CancellationToken ct)
         => Execute(() => _kiosks.RevokeAsync(id, ct));
 
+    [HttpDelete("{id:guid}")]
+    public Task<IActionResult> Delete(Guid id, CancellationToken ct)
+        => Execute(() => _kiosks.DeleteAsync(id, ct));
+
     [HttpPost("reset")]
     public Task<IActionResult> Reset([FromQuery] Guid farmingAreaId, CancellationToken ct)
         => Execute(() => _kiosks.ResetAreaAsync(farmingAreaId, ct));
