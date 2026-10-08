@@ -499,7 +499,8 @@ public class RasFlowService : IRasFlowService
         var pumps = (await _uow.RasComponents.FindAsync(
             c => c.RelayDeviceId == deviceId
                  && c.HasRelay
-                 && string.Equals(c.ControlMode, "auto", StringComparison.OrdinalIgnoreCase),
+                 && c.ControlMode != null
+                 && c.ControlMode.ToLower() == "auto",
             ct)).ToList();
         if (pumps.Count == 0)
             return;

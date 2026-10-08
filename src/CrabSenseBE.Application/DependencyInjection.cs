@@ -21,6 +21,7 @@ public static class DependencyInjection
         services.AddScoped<ITraceabilityService, TraceabilityService>();
         services.AddScoped<IIotService, IotService>();
         services.AddScoped<IEdgeCommandService, EdgeCommandService>();
+        services.AddScoped<IKioskProvisioningService, KioskProvisioningService>();
         services.AddScoped<IRasFlowService, RasFlowService>();
         services.AddScoped<IWaterAnalysisService, WaterAnalysisService>();
         // Notification trước Alert vì AlertService phụ thuộc INotificationService

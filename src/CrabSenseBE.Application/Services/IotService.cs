@@ -4,6 +4,7 @@ using CrabSenseBE.Application.Interfaces;
 using CrabSenseBE.Domain.Entities;
 using CrabSenseBE.Domain.Enums;
 using CrabSenseBE.Domain.Interfaces;
+using Microsoft.Extensions.Logging;
 
 namespace CrabSenseBE.Application.Services;
 
@@ -16,17 +17,20 @@ public class IotService : IIotService
     private readonly IStorageService _storage;
     private readonly IAlertService _alerts;
     private readonly IRasFlowService _rasFlow;
+    private readonly ILogger<IotService> _logger;
 
     public IotService(
         IUnitOfWork uow,
         IStorageService storage,
         IAlertService alerts,
-        IRasFlowService rasFlow)
+        IRasFlowService rasFlow,
+        ILogger<IotService> logger)
     {
         _uow = uow;
         _storage = storage;
         _alerts = alerts;
         _rasFlow = rasFlow;
+        _logger = logger;
     }
 
     // ─── Ingest (ESP32 HTTP) ────────────────────────────────────────────────
@@ -87,7 +91,6 @@ public class IotService : IIotService
                 device.Status = DeviceStatus.Online;
                 if (!string.IsNullOrWhiteSpace(req.IpAddress))
                     device.IpAddress = req.IpAddress.Trim();
-                _uow.Devices.Update(device);
             }
 
             if (sensor.DeviceId is null || sensor.DeviceId != device.Id)
@@ -108,12 +111,18 @@ public class IotService : IIotService
         await _uow.WaterMeasurements.AddAsync(measurement, ct);
 
         sensor.LastSeenAt = DateTime.UtcNow;
-        _uow.Sensors.Update(sensor);
         await _uow.SaveChangesAsync(ct);
 
-        await _alerts.EvaluateMeasurementAsync(sensor, req.Value, ct);
-        if (sensor.DeviceId is Guid deviceId)
-            await _rasFlow.ApplyAutoRelaysAsync(deviceId, ct);
+        try
+        {
+            await _alerts.EvaluateMeasurementAsync(sensor, req.Value, ct);
+            if (sensor.DeviceId is Guid deviceId)
+                await _rasFlow.ApplyAutoRelaysAsync(deviceId, ct);
+        }
+        catch (Exception ex) when (ex is not AppException)
+        {
+            _logger.LogWarning(ex, "Ingest saved but follow-up failed for {SensorCode}", sensor.SensorCode);
+        }
         return ApiResponse.Ok("Sensor data ingested.");
     }
 

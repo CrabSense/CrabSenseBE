@@ -207,6 +207,18 @@ public class UnitOfWork : IUnitOfWork
     public IRepository<EdgeCommand> EdgeCommands =>
         _edgeCommands ??= new GenericRepository<EdgeCommand>(_context);
 
+    private IRepository<FarmKiosk>? _farmKiosks;
+    public IRepository<FarmKiosk> FarmKiosks =>
+        _farmKiosks ??= new GenericRepository<FarmKiosk>(_context);
+
+    private IRepository<KioskProvisioningCode>? _kioskProvisioningCodes;
+    public IRepository<KioskProvisioningCode> KioskProvisioningCodes =>
+        _kioskProvisioningCodes ??= new GenericRepository<KioskProvisioningCode>(_context);
+
+    private IRepository<KioskCredential>? _kioskCredentials;
+    public IRepository<KioskCredential> KioskCredentials =>
+        _kioskCredentials ??= new GenericRepository<KioskCredential>(_context);
+
     public Task<int> SaveChangesAsync(CancellationToken ct = default)
         => _context.SaveChangesAsync(ct);
 

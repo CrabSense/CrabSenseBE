@@ -76,6 +76,9 @@ public class AppDbContext : DbContext
     public DbSet<TrainingLabel> TrainingLabels => Set<TrainingLabel>();
     public DbSet<SyncInboxItem> SyncInboxItems => Set<SyncInboxItem>();
     public DbSet<EdgeCommand> EdgeCommands => Set<EdgeCommand>();
+    public DbSet<FarmKiosk> FarmKiosks => Set<FarmKiosk>();
+    public DbSet<KioskProvisioningCode> KioskProvisioningCodes => Set<KioskProvisioningCode>();
+    public DbSet<KioskCredential> KioskCredentials => Set<KioskCredential>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -96,6 +99,11 @@ public class AppDbContext : DbContext
             .HasColumnType("jsonb");
         modelBuilder.Entity<EdgeCommand>()
             .HasIndex(command => new { command.DeviceCode, command.Status, command.CreatedAt });
+        modelBuilder.Entity<FarmKiosk>()
+            .HasIndex(kiosk => kiosk.Code)
+            .IsUnique();
+        modelBuilder.Entity<KioskProvisioningCode>()
+            .HasIndex(code => code.Code);
         // Enum conversions stored as string
         modelBuilder.Entity<AppUser>()
             .Property(u => u.Role)
