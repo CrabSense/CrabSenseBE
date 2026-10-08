@@ -582,7 +582,13 @@ public class IotService : IIotService
         foreach (var sensor in await _uow.Sensors.FindAsync(s => s.DeviceId == id, ct))
             sensor.DeviceId = null;
         foreach (var relay in await _uow.RasComponents.FindAsync(c => c.RelayDeviceId == id, ct))
+        {
             relay.RelayDeviceId = null;
+            relay.RelayChannel = null;
+            relay.HasRelay = false;
+            relay.IsOn = false;
+            relay.ControlMode = null;
+        }
         foreach (var row in await _uow.Hdf5Uploads.FindAsync(x => x.DeviceId == id, ct))
             row.DeviceId = null;
         foreach (var row in await _uow.MediaAssets.FindAsync(x => x.DeviceId == id, ct))
