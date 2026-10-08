@@ -23,11 +23,23 @@ public class AreaRasFlowController : ControllerBase
     public async Task<IActionResult> Get(Guid areaId, CancellationToken ct)
         => Ok(await _service.GetDiagramByAreaAsync(areaId, ct));
 
-    /// <summary>[UPDATE] Đổi thứ tự node + dựng lại WaterFlow tuần tự.</summary>
+    /// <summary>[UPDATE] Đổi thứ tự hiển thị. Không dùng để dựng ống nước.</summary>
     [HttpPost("{areaId:guid}/ras-flow/reorder")]
     [Authorize(Roles = AppRoles.FarmWrite)]
     public async Task<IActionResult> Reorder(Guid areaId, [FromBody] ReorderRasFlowRequest req, CancellationToken ct)
         => Ok(await _service.ReorderAsync(areaId, req, ct));
+
+    /// <summary>[CREATE] Ống nước từ node này sang node khác. Không xếp lại thành một hàng.</summary>
+    [HttpPost("{areaId:guid}/ras-flow/flows")]
+    [Authorize(Roles = AppRoles.FarmWrite)]
+    public async Task<IActionResult> AddFlow(Guid areaId, [FromBody] CreateWaterFlowRequest req, CancellationToken ct)
+        => Ok(await _service.AddFlowAsync(areaId, req, ct));
+
+    /// <summary>[DELETE] Gỡ một ống nước. Các ống khác giữ nguyên.</summary>
+    [HttpDelete("{areaId:guid}/ras-flow/flows/{flowId:guid}")]
+    [Authorize(Roles = AppRoles.FarmWrite)]
+    public async Task<IActionResult> DeleteFlow(Guid areaId, Guid flowId, CancellationToken ct)
+        => Ok(await _service.DeleteFlowAsync(areaId, flowId, ct));
 
     /// <summary>[CREATE] Thêm RASComponent (Type suy ra từ nodeCode).</summary>
     [HttpPost("{areaId:guid}/ras-flow/nodes")]

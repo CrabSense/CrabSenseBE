@@ -71,13 +71,6 @@ public class RasFlowService : IRasFlowService
         };
         await _uow.RasComponents.AddAsync(node, ct);
         await _uow.SaveChangesAsync(ct);
-
-        var prev = existing.OrderBy(c => c.Position).LastOrDefault(c => c.Position < node.Position)
-                   ?? existing.OrderBy(c => c.Position).LastOrDefault();
-        if (prev is not null)
-            await AddFlowIfMissingAsync(ws.Id, prev.Id, node.Id, existing.Count, ct);
-
-        await _uow.SaveChangesAsync(ct);
         return ApiResponse<RasFlowDiagramDto>.Ok(await BuildDiagramAsync(area, ws, ct), "Node added.");
     }
 
@@ -146,23 +139,59 @@ public class RasFlowService : IRasFlowService
             _uow.RasComponents.Update(node);
         }
 
-        var oldFlows = (await _uow.WaterFlows.FindAsync(f => f.WaterSystemId == ws.Id, ct)).ToList();
-        foreach (var f in oldFlows) _uow.WaterFlows.Remove(f);
+        await _uow.SaveChangesAsync(ct);
+        return ApiResponse<RasFlowDiagramDto>.Ok(await BuildDiagramAsync(area, ws, ct), "Reordered.");
+    }
 
-        for (var i = 0; i < req.NodeIds.Count - 1; i++)
+    public async Task<ApiResponse<RasFlowDiagramDto>> AddFlowAsync(
+        Guid areaId, CreateWaterFlowRequest req, CancellationToken ct = default)
+    {
+        if (req.FromComponentId == Guid.Empty || req.ToComponentId == Guid.Empty)
+            throw AppException.BadRequest("fromComponentId and toComponentId are required.");
+        if (req.FromComponentId == req.ToComponentId)
+            throw AppException.BadRequest("A node cannot connect to itself.");
+
+        var area = await RequireAreaAsync(areaId, ct);
+        var ws = await EnsureSystemAsync(area, ct);
+        var from = await _uow.RasComponents.GetByIdAsync(req.FromComponentId, ct)
+            ?? throw AppException.NotFound("RasComponent");
+        var to = await _uow.RasComponents.GetByIdAsync(req.ToComponentId, ct)
+            ?? throw AppException.NotFound("RasComponent");
+        if (from.WaterSystemId != ws.Id || to.WaterSystemId != ws.Id)
+            throw AppException.BadRequest("Both nodes must belong to this area RAS.");
+
+        var exists = await _uow.WaterFlows.AnyAsync(
+            f => f.WaterSystemId == ws.Id
+                 && f.FromComponentId == from.Id
+                 && f.ToComponentId == to.Id, ct);
+        if (!exists)
         {
             await _uow.WaterFlows.AddAsync(new WaterFlow
             {
                 WaterSystemId = ws.Id,
-                FromComponentId = req.NodeIds[i],
-                ToComponentId = req.NodeIds[i + 1],
+                FromComponentId = from.Id,
+                ToComponentId = to.Id,
                 Status = "active",
-                SortOrder = i
+                SortOrder = 0
             }, ct);
+            await _uow.SaveChangesAsync(ct);
         }
 
+        return ApiResponse<RasFlowDiagramDto>.Ok(await BuildDiagramAsync(area, ws, ct), "Flow added.");
+    }
+
+    public async Task<ApiResponse<RasFlowDiagramDto>> DeleteFlowAsync(
+        Guid areaId, Guid flowId, CancellationToken ct = default)
+    {
+        var area = await RequireAreaAsync(areaId, ct);
+        var ws = await EnsureSystemAsync(area, ct);
+        var flow = await _uow.WaterFlows.GetByIdAsync(flowId, ct)
+            ?? throw AppException.NotFound("WaterFlow");
+        if (flow.WaterSystemId != ws.Id)
+            throw AppException.BadRequest("Flow does not belong to this area RAS.");
+        _uow.WaterFlows.Remove(flow);
         await _uow.SaveChangesAsync(ct);
-        return ApiResponse<RasFlowDiagramDto>.Ok(await BuildDiagramAsync(area, ws, ct), "Reordered.");
+        return ApiResponse<RasFlowDiagramDto>.Ok(await BuildDiagramAsync(area, ws, ct), "Flow removed.");
     }
 
     public async Task<ApiResponse> DeleteNodeAsync(Guid areaId, Guid nodeId, CancellationToken ct = default)
@@ -347,22 +376,6 @@ public class RasFlowService : IRasFlowService
             }, ct);
         }
         await _uow.SaveChangesAsync(ct);
-    }
-
-    private async Task AddFlowIfMissingAsync(
-        Guid wsId, Guid fromId, Guid toId, int sortOrder, CancellationToken ct)
-    {
-        var exists = await _uow.WaterFlows.AnyAsync(
-            f => f.WaterSystemId == wsId && f.FromComponentId == fromId && f.ToComponentId == toId, ct);
-        if (exists) return;
-        await _uow.WaterFlows.AddAsync(new WaterFlow
-        {
-            WaterSystemId = wsId,
-            FromComponentId = fromId,
-            ToComponentId = toId,
-            Status = "active",
-            SortOrder = sortOrder
-        }, ct);
     }
 
     private async Task<RasFlowDiagramDto> BuildDiagramAsync(FarmingArea area, WaterSystem ws, CancellationToken ct)
