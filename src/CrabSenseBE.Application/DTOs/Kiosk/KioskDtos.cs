@@ -34,6 +34,8 @@ public record KioskSessionDto(
     string SiteCode,
     string Status);
 
+public record KioskResetDto(int KiosksRemoved, int ControllersUnlinked);
+
 public record RegisterControllerRequest(
     string? DeviceCode,
     string? Mac,

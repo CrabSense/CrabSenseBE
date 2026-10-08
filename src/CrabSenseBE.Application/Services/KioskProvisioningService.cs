@@ -149,6 +149,40 @@ public sealed class KioskProvisioningService : IKioskProvisioningService
         return ApiResponse<KioskListItemDto>.Ok(MapItem(kiosk, null), "Kiosk revoked.");
     }
 
+    public async Task<ApiResponse<KioskResetDto>> ResetAreaAsync(Guid farmingAreaId, CancellationToken ct = default)
+    {
+        _ = await _uow.FarmingAreas.GetByIdAsync(farmingAreaId, ct)
+            ?? throw AppException.NotFound("FarmingArea");
+        var kiosks = (await _uow.FarmKiosks.FindAsync(k => k.FarmingAreaId == farmingAreaId, ct)).ToList();
+        var kioskIds = kiosks.Select(k => k.Id).ToHashSet();
+        var devices = (await _uow.Devices.GetAllAsync(ct))
+            .Where(d => d.KioskId is Guid id && kioskIds.Contains(id))
+            .ToList();
+        foreach (var device in devices)
+        {
+            device.KioskId = null;
+            device.EdgeState = "Unprovisioned";
+            device.CredentialHash = null;
+            device.PendingSecret = null;
+            device.Status = DeviceStatus.Offline;
+        }
+
+        var codes = (await _uow.KioskProvisioningCodes.GetAllAsync(ct))
+            .Where(c => kioskIds.Contains(c.KioskId));
+        foreach (var code in codes)
+            _uow.KioskProvisioningCodes.Remove(code);
+        var credentials = (await _uow.KioskCredentials.GetAllAsync(ct))
+            .Where(c => kioskIds.Contains(c.KioskId));
+        foreach (var credential in credentials)
+            _uow.KioskCredentials.Remove(credential);
+        foreach (var kiosk in kiosks)
+            _uow.FarmKiosks.Remove(kiosk);
+        await _uow.SaveChangesAsync(ct);
+        return ApiResponse<KioskResetDto>.Ok(
+            new KioskResetDto(kiosks.Count, devices.Count),
+            "Kiosk and controller links removed.");
+    }
+
     public async Task<ApiResponse<RegisterControllerDto>> RegisterControllerAsync(
         string secret,
         RegisterControllerRequest request,
@@ -177,14 +211,12 @@ public sealed class KioskProvisioningService : IKioskProvisioningService
             };
             await _uow.Devices.AddAsync(device, ct);
         }
-        else if (device.EdgeState is "Rejected" or "Revoked")
-        {
-            device.KioskId = kiosk.Id;
-        }
-        else if (device.KioskId is null)
+        else if (device.EdgeState is "Rejected" or "Revoked" or "Unprovisioned" || device.KioskId is null)
         {
             device.KioskId = kiosk.Id;
             device.EdgeState = "Pending";
+            device.CredentialHash = null;
+            device.PendingSecret = null;
         }
 
         if (!string.IsNullOrWhiteSpace(request.Mac))
