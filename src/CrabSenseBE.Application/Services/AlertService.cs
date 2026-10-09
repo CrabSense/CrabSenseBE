@@ -239,6 +239,43 @@ public class AlertService : IAlertService
         await NotifyOperatorsAsync(alert.Message, alert.Id, ct);
     }
 
+    public async Task RaiseOnceAsync(string message, CancellationToken ct = default)
+    {
+        var existing = (await _uow.Alerts.FindAsync(
+            a => a.Status == AlertStatus.Active && a.Message == message, ct)).FirstOrDefault();
+        if (existing is not null)
+        {
+            existing.OccurrenceCount = Math.Max(1, existing.OccurrenceCount) + 1;
+            existing.LastOccurredAt = DateTime.UtcNow;
+            _uow.Alerts.Update(existing);
+            await _uow.SaveChangesAsync(ct);
+            return;
+        }
+
+        var alert = new Alert
+        {
+            Message = message,
+            Severity = AlertSeverity.Warning,
+            Status = AlertStatus.Active,
+            OccurrenceCount = 1,
+            LastOccurredAt = DateTime.UtcNow
+        };
+        await _uow.Alerts.AddAsync(alert, ct);
+        await _uow.SaveChangesAsync(ct);
+        await NotifyOperatorsAsync(alert.Message, alert.Id, ct);
+    }
+
+    public async Task ClearAsync(string message, CancellationToken ct = default)
+    {
+        var existing = (await _uow.Alerts.FindAsync(
+            a => a.Status == AlertStatus.Active && a.Message == message, ct)).FirstOrDefault();
+        if (existing is null) return;
+        existing.Status = AlertStatus.Resolved;
+        existing.ResolvedAt = DateTime.UtcNow;
+        _uow.Alerts.Update(existing);
+        await _uow.SaveChangesAsync(ct);
+    }
+
     public async Task<ApiResponse<int>> CheckDisconnectsAsync(
         int timeoutMinutes = 15, CancellationToken ct = default)
     {
