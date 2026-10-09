@@ -113,3 +113,32 @@ public record ExpiringFrozenLotDto(
     decimal WeightKg,
     string? StorageLocation
 );
+/// <summary>
+/// Thông tin của một cua được đóng gói trong lô.
+/// WeightGram và Grade là số liệu riêng của từng cua.
+/// </summary>
+public record FrozenCrabItemInput(
+    Guid HarvestLineId,
+    decimal WeightGram,
+    string Grade);
+
+/// <summary>
+/// Đăng ký toàn bộ sản phẩm cua trong lô để sinh barcode.
+/// </summary>
+public record RegisterFrozenCrabItemsRequest(
+    IReadOnlyCollection<FrozenCrabItemInput> Items);
+
+/// <summary>
+/// Dữ liệu trả về khi tạo hoặc tra cứu barcode cua cấp đông.
+/// </summary>
+public record FrozenCrabItemDto(
+    Guid Id,
+    string BarcodeValue,
+    string LotCode,
+    string CrabCode,
+    string? HarvestVoucherCode,
+    DateTime HarvestDate,
+    DateTime FrozenDate,
+    DateTime ExpiryDate,
+    decimal WeightGram,
+    string Grade);

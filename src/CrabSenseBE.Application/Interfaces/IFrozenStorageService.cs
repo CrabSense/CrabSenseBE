@@ -35,4 +35,17 @@ public interface IFrozenStorageService
     Task<ApiResponse<IEnumerable<ExpiringFrozenLotDto>>> GetExpiringLotsAsync(
     int days,
     CancellationToken ct = default);
+
+    Task<ApiResponse<IEnumerable<FrozenCrabItemDto>>> RegisterCrabItemsAsync(
+    Guid lotId,
+    RegisterFrozenCrabItemsRequest request,
+    CancellationToken ct = default);
+
+    Task<ApiResponse<FrozenCrabItemDto>> GetCrabItemByBarcodeAsync(
+        string barcodeValue,
+        CancellationToken ct = default);
+
+    Task<byte[]> GetCrabItemBarcodePngAsync(
+    string barcodeValue,
+    CancellationToken ct = default);
 }

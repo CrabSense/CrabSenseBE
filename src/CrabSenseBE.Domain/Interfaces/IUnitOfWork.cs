@@ -60,6 +60,7 @@ public interface IUnitOfWork : IDisposable
     IRepository<ObservationEvent> ObservationEvents { get; }
     IRepository<TrainingLabel> TrainingLabels { get; }
     IRepository<EdgeCommand> EdgeCommands { get; }
+    IRepository<FrozenCrabItem> FrozenCrabItems { get; }
     IRepository<FarmKiosk> FarmKiosks { get; }
     IRepository<KioskProvisioningCode> KioskProvisioningCodes { get; }
     IRepository<KioskCredential> KioskCredentials { get; }

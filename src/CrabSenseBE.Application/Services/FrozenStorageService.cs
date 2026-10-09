@@ -4,6 +4,10 @@ using CrabSenseBE.Application.Interfaces;
 using CrabSenseBE.Domain.Entities;
 using CrabSenseBE.Domain.Enums;
 using CrabSenseBE.Domain.Interfaces;
+using SkiaSharp;
+using ZXing;
+using ZXing.Common;
+using ZXing.SkiaSharp;
 
 namespace CrabSenseBE.Application.Services;
 
@@ -200,90 +204,90 @@ public class FrozenStorageService : IFrozenStorageService
     public async Task<ApiResponse<FrozenInventorySummaryDto>>
     GetInventorySummaryAsync(CancellationToken ct = default)
     {
-    var allLots = await _uow.FrozenLots.GetAllAsync(ct);
-    var today = DateTime.UtcNow.Date;
+        var allLots = await _uow.FrozenLots.GetAllAsync(ct);
+        var today = DateTime.UtcNow.Date;
 
-    /*
-     * Shipped không còn nằm trong kho nên không được tính vào tồn kho.
-     *
-     * Một lô đã quá ExpiryDate được xem là Expired,
-     * ngay cả khi Status trong database vẫn là Available hoặc Reserved.
-     */
-    var inventoryLots = allLots
-        .Where(x => x.Status != FrozenLotStatus.Shipped)
-        .Select(x => new FrozenInventoryItem(
-            x,
-            GetEffectiveStatus(x, today)))
-        .ToList();
+        /*
+         * Shipped không còn nằm trong kho nên không được tính vào tồn kho.
+         *
+         * Một lô đã quá ExpiryDate được xem là Expired,
+         * ngay cả khi Status trong database vẫn là Available hoặc Reserved.
+         */
+        var inventoryLots = allLots
+            .Where(x => x.Status != FrozenLotStatus.Shipped)
+            .Select(x => new FrozenInventoryItem(
+                x,
+                GetEffectiveStatus(x, today)))
+            .ToList();
 
-    var availableLots = inventoryLots
-        .Where(x => x.Status == FrozenLotStatus.Available)
-        .ToList();
+        var availableLots = inventoryLots
+            .Where(x => x.Status == FrozenLotStatus.Available)
+            .ToList();
 
-    var reservedLots = inventoryLots
-        .Where(x => x.Status == FrozenLotStatus.Reserved)
-        .ToList();
+        var reservedLots = inventoryLots
+            .Where(x => x.Status == FrozenLotStatus.Reserved)
+            .ToList();
 
-    var expiredLots = inventoryLots
-        .Where(x => x.Status == FrozenLotStatus.Expired)
-        .ToList();
+        var expiredLots = inventoryLots
+            .Where(x => x.Status == FrozenLotStatus.Expired)
+            .ToList();
 
-    var byGrade = inventoryLots
-        .GroupBy(x => NormalizeGroupValue(x.Lot.Grade, "Unclassified"))
-        .Select(group => new FrozenInventoryByGradeDto(
-            Grade: group.Key,
-            TotalLots: group.Count(),
-            TotalQuantity: group.Sum(x => x.Lot.Quantity),
-            TotalWeightKg: group.Sum(x => x.Lot.WeightKg)))
-        .OrderBy(x => x.Grade)
-        .ToList();
+        var byGrade = inventoryLots
+            .GroupBy(x => NormalizeGroupValue(x.Lot.Grade, "Unclassified"))
+            .Select(group => new FrozenInventoryByGradeDto(
+                Grade: group.Key,
+                TotalLots: group.Count(),
+                TotalQuantity: group.Sum(x => x.Lot.Quantity),
+                TotalWeightKg: group.Sum(x => x.Lot.WeightKg)))
+            .OrderBy(x => x.Grade)
+            .ToList();
 
-    var byLocation = inventoryLots
-        .GroupBy(x => NormalizeGroupValue(
-            x.Lot.StorageLocation,
-            "Unassigned"))
-        .Select(group => new FrozenInventoryByLocationDto(
-            StorageLocation: group.Key,
-            TotalLots: group.Count(),
-            TotalQuantity: group.Sum(x => x.Lot.Quantity),
-            TotalWeightKg: group.Sum(x => x.Lot.WeightKg)))
-        .OrderBy(x => x.StorageLocation)
-        .ToList();
+        var byLocation = inventoryLots
+            .GroupBy(x => NormalizeGroupValue(
+                x.Lot.StorageLocation,
+                "Unassigned"))
+            .Select(group => new FrozenInventoryByLocationDto(
+                StorageLocation: group.Key,
+                TotalLots: group.Count(),
+                TotalQuantity: group.Sum(x => x.Lot.Quantity),
+                TotalWeightKg: group.Sum(x => x.Lot.WeightKg)))
+            .OrderBy(x => x.StorageLocation)
+            .ToList();
 
-    var byStatus = inventoryLots
-        .GroupBy(x => x.Status)
-        .Select(group => new FrozenInventoryByStatusDto(
-            Status: group.Key.ToString(),
-            TotalLots: group.Count(),
-            TotalQuantity: group.Sum(x => x.Lot.Quantity),
-            TotalWeightKg: group.Sum(x => x.Lot.WeightKg)))
-        .OrderBy(x => x.Status)
-        .ToList();
+        var byStatus = inventoryLots
+            .GroupBy(x => x.Status)
+            .Select(group => new FrozenInventoryByStatusDto(
+                Status: group.Key.ToString(),
+                TotalLots: group.Count(),
+                TotalQuantity: group.Sum(x => x.Lot.Quantity),
+                TotalWeightKg: group.Sum(x => x.Lot.WeightKg)))
+            .OrderBy(x => x.Status)
+            .ToList();
 
-    var summary = new FrozenInventorySummaryDto(
-        TotalLots: inventoryLots.Count,
-        TotalQuantity: inventoryLots.Sum(x => x.Lot.Quantity),
-        TotalWeightKg: inventoryLots.Sum(x => x.Lot.WeightKg),
+        var summary = new FrozenInventorySummaryDto(
+            TotalLots: inventoryLots.Count,
+            TotalQuantity: inventoryLots.Sum(x => x.Lot.Quantity),
+            TotalWeightKg: inventoryLots.Sum(x => x.Lot.WeightKg),
 
-        AvailableLots: availableLots.Count,
-        AvailableQuantity: availableLots.Sum(x => x.Lot.Quantity),
-        AvailableWeightKg: availableLots.Sum(x => x.Lot.WeightKg),
+            AvailableLots: availableLots.Count,
+            AvailableQuantity: availableLots.Sum(x => x.Lot.Quantity),
+            AvailableWeightKg: availableLots.Sum(x => x.Lot.WeightKg),
 
-        ReservedLots: reservedLots.Count,
-        ReservedQuantity: reservedLots.Sum(x => x.Lot.Quantity),
-        ReservedWeightKg: reservedLots.Sum(x => x.Lot.WeightKg),
+            ReservedLots: reservedLots.Count,
+            ReservedQuantity: reservedLots.Sum(x => x.Lot.Quantity),
+            ReservedWeightKg: reservedLots.Sum(x => x.Lot.WeightKg),
 
-        ExpiredLots: expiredLots.Count,
-        ExpiredQuantity: expiredLots.Sum(x => x.Lot.Quantity),
-        ExpiredWeightKg: expiredLots.Sum(x => x.Lot.WeightKg),
+            ExpiredLots: expiredLots.Count,
+            ExpiredQuantity: expiredLots.Sum(x => x.Lot.Quantity),
+            ExpiredWeightKg: expiredLots.Sum(x => x.Lot.WeightKg),
 
-        ByGrade: byGrade,
-        ByLocation: byLocation,
-        ByStatus: byStatus);
+            ByGrade: byGrade,
+            ByLocation: byLocation,
+            ByStatus: byStatus);
 
-    return ApiResponse<FrozenInventorySummaryDto>.Ok(
-        summary,
-        "Lấy thống kê tồn kho cấp đông thành công.");
+        return ApiResponse<FrozenInventorySummaryDto>.Ok(
+            summary,
+            "Lấy thống kê tồn kho cấp đông thành công.");
     }
 
 
@@ -393,6 +397,232 @@ public class FrozenStorageService : IFrozenStorageService
             $"Lấy danh sách lô cấp đông sắp hết hạn trong {days} ngày thành công.");
     }
 
+
+    public async Task<ApiResponse<IEnumerable<FrozenCrabItemDto>>> RegisterCrabItemsAsync(
+    Guid lotId,
+    RegisterFrozenCrabItemsRequest request,
+    CancellationToken ct = default)
+    {
+        if (lotId == Guid.Empty)
+            throw AppException.BadRequest("Frozen lot id is required.");
+
+        if (request.Items is null || request.Items.Count == 0)
+            throw AppException.BadRequest("At least one frozen crab item is required.");
+
+        var lot = await _uow.FrozenLots.GetByIdAsync(lotId, ct)
+            ?? throw AppException.NotFound("Frozen lot");
+
+        if (lot.HarvestVoucherId is not Guid voucherId || voucherId == Guid.Empty)
+            throw AppException.BadRequest(
+                "The frozen lot must be linked to a harvest voucher before registering crab items.");
+
+        var voucher = await _uow.HarvestVouchers.GetByIdAsync(voucherId, ct)
+            ?? throw AppException.NotFound("Harvest voucher");
+
+        // Request đăng ký toàn bộ sản phẩm cua của lô trong một lần.
+        if (request.Items.Count != lot.Quantity)
+            throw AppException.BadRequest(
+                $"The number of crab items ({request.Items.Count}) must match the lot quantity ({lot.Quantity}).");
+
+        var inputs = request.Items.ToList();
+
+        if (inputs.Any(x => x.HarvestLineId == Guid.Empty))
+            throw AppException.BadRequest("Every item must have a valid HarvestLineId.");
+
+        var harvestLineIds = inputs
+            .Select(x => x.HarvestLineId)
+            .ToList();
+
+        // Mỗi dòng thu hoạch chỉ được xuất hiện một lần trong request.
+        if (harvestLineIds.Distinct().Count() != harvestLineIds.Count)
+            throw AppException.BadRequest(
+                "A HarvestLineId cannot be used more than once in the same request.");
+
+        // Kiểm tra cân nặng riêng của từng con cua.
+        if (inputs.Any(x => x.WeightGram <= 0))
+            throw AppException.BadRequest("Every crab weight must be greater than zero.");
+
+        // Chuẩn hóa size và chỉ chấp nhận S, M hoặc L.
+        var normalizedGrades = inputs
+            .Select(x => string.IsNullOrWhiteSpace(x.Grade)
+                ? string.Empty
+                : x.Grade.Trim().ToUpperInvariant())
+            .ToList();
+
+        if (normalizedGrades.Any(grade => !AllowedGrades.Contains(grade)))
+            throw AppException.BadRequest("Crab size must be S, M, or L.");
+
+        // Không cho đăng ký sản phẩm cua lần thứ hai cho cùng một lô.
+        var existingItemsForLot = await _uow.FrozenCrabItems.FindAsync(
+            x => x.FrozenLotId == lotId,
+            ct);
+
+        if (existingItemsForLot.Any())
+            throw AppException.Conflict(
+                "Crab items have already been registered for this frozen lot.");
+
+        var requestedIds = harvestLineIds.ToHashSet();
+
+        // Chỉ chấp nhận các dòng thu hoạch thuộc phiếu đã liên kết với lô này.
+        var harvestLines = (await _uow.HarvestLines.FindAsync(
+            line => line.HarvestVoucherId == voucherId
+                    && requestedIds.Contains(line.Id),
+            ct)).ToList();
+
+        if (harvestLines.Count != inputs.Count)
+            throw AppException.BadRequest(
+                "Every HarvestLineId must belong to the harvest voucher linked to this frozen lot.");
+
+        var linesById = harvestLines.ToDictionary(line => line.Id);
+
+        // Đảm bảo mỗi dòng thu hoạch hợp lệ và thực sự tham chiếu đến một con cua.
+        foreach (var input in inputs)
+        {
+            var line = linesById[input.HarvestLineId];
+
+            if (!line.CrabId.HasValue || line.CrabId.Value == Guid.Empty)
+                throw AppException.BadRequest(
+                    $"Harvest line '{line.Id}' is not linked to a crab.");
+
+            if (!string.Equals(line.Result, "passed", StringComparison.OrdinalIgnoreCase))
+                throw AppException.BadRequest(
+                    $"Harvest line '{line.Id}' is not a passed harvest item.");
+        }
+
+        // Không cho cùng một con cua được đăng ký nhiều lần qua các dòng khác nhau.
+        var crabIds = inputs
+            .Select(input => linesById[input.HarvestLineId].CrabId!.Value)
+            .ToList();
+
+        if (crabIds.Distinct().Count() != crabIds.Count)
+            throw AppException.BadRequest(
+                "A crab cannot be registered more than once in the same frozen lot.");
+
+        // Không cho một dòng thu hoạch đã đăng ký ở lô khác được dùng lại.
+        var registeredLines = await _uow.FrozenCrabItems.FindAsync(
+            item => requestedIds.Contains(item.HarvestLineId),
+            ct);
+
+        if (registeredLines.Any())
+            throw AppException.Conflict(
+                "One or more harvest lines have already been registered as frozen crab items.");
+
+        var createdItems = new List<FrozenCrabItem>(inputs.Count);
+
+        for (var i = 0; i < inputs.Count; i++)
+        {
+            var input = inputs[i];
+            var line = linesById[input.HarvestLineId];
+            var crabId = line.CrabId!.Value;
+
+            // Mã barcode được lưu cố định để các lần tra cứu sau dùng cùng một mã.
+            var item = new FrozenCrabItem
+            {
+                FrozenLotId = lot.Id,
+                HarvestLineId = line.Id,
+                CrabId = crabId,
+                BarcodeValue = $"FC-{Guid.NewGuid():N}".ToUpperInvariant(),
+
+                // Lưu snapshot mã lô, mã cua và mã phiếu tại thời điểm đóng gói.
+                LotCode = lot.LotCode,
+                CrabCode = string.IsNullOrWhiteSpace(line.CrabCode)
+                    ? crabId.ToString()
+                    : line.CrabCode.Trim(),
+                HarvestVoucherCode = voucher.VoucherCode,
+
+                // Lưu snapshot các mốc thời gian để tra cứu sản phẩm.
+                HarvestDate = voucher.HarvestDate,
+                FrozenDate = lot.FrozenDate,
+                ExpiryDate = lot.ExpiryDate,
+
+                // Đây là cân nặng và size của từng con, không phải tổng của cả lô.
+                WeightGram = input.WeightGram,
+                Grade = normalizedGrades[i]
+            };
+
+            createdItems.Add(item);
+        }
+
+        // Chỉ thêm dữ liệu sau khi đã kiểm tra hợp lệ toàn bộ request.
+        foreach (var item in createdItems)
+            await _uow.FrozenCrabItems.AddAsync(item, ct);
+
+        // Lưu cả lô sản phẩm trong một lần.
+        await _uow.SaveChangesAsync(ct);
+
+        return ApiResponse<IEnumerable<FrozenCrabItemDto>>.Ok(
+            createdItems.Select(MapToFrozenCrabItemDto).ToList(),
+            "Frozen crab items and barcodes registered.");
+    }
+
+    public async Task<ApiResponse<FrozenCrabItemDto>> GetCrabItemByBarcodeAsync(
+        string barcodeValue,
+        CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(barcodeValue))
+            throw AppException.BadRequest("Barcode value is required.");
+
+        // Chuẩn hóa mã trước khi tìm kiếm.
+        var normalizedBarcode = barcodeValue.Trim().ToUpperInvariant();
+
+        var item = await _uow.FrozenCrabItems.FirstOrDefaultAsync(
+            x => x.BarcodeValue == normalizedBarcode,
+            ct)
+            ?? throw AppException.NotFound("Frozen crab item");
+
+        return ApiResponse<FrozenCrabItemDto>.Ok(
+            MapToFrozenCrabItemDto(item));
+    }
+
+    public async Task<byte[]> GetCrabItemBarcodePngAsync(
+    string barcodeValue,
+    CancellationToken ct = default)
+{
+    if (string.IsNullOrWhiteSpace(barcodeValue))
+        throw AppException.BadRequest("Barcode value is required.");
+
+    // Chuẩn hóa giá trị trước khi tìm barcode đã lưu.
+    var normalizedBarcode = barcodeValue.Trim().ToUpperInvariant();
+
+    var item = await _uow.FrozenCrabItems.FirstOrDefaultAsync(
+        x => x.BarcodeValue == normalizedBarcode,
+        ct)
+        ?? throw AppException.NotFound("Frozen crab item");
+
+    // Tạo ảnh Code 128; giá trị encode chính là mã đã lưu cho cua này.
+    var writer = new BarcodeWriter
+    {
+        Format = BarcodeFormat.CODE_128,
+        Options = new EncodingOptions
+        {
+            Width = 600,
+            Height = 160,
+            Margin = 20
+        }
+    };
+
+    using var bitmap = writer.Write(item.BarcodeValue);
+    using var image = SKImage.FromBitmap(bitmap);
+    using var png = image.Encode(SKEncodedImageFormat.Png, quality: 100);
+
+    return png.ToArray();
+}
+
+    // Chuyển entity sản phẩm cua cấp đông sang DTO trả về cho API.
+    private static FrozenCrabItemDto MapToFrozenCrabItemDto(FrozenCrabItem item)
+    {
+        return new FrozenCrabItemDto(
+            item.Id,
+            item.BarcodeValue,
+            item.LotCode,
+            item.CrabCode,
+            item.HarvestVoucherCode,
+            item.HarvestDate,
+            item.FrozenDate,
+            item.ExpiryDate,
+            item.WeightGram,
+            item.Grade);
+    }
     //helper//
 
     private static void ValidateCreateRequest(CreateFrozenLotRequest request)
@@ -517,15 +747,15 @@ public class FrozenStorageService : IFrozenStorageService
     FrozenLot lot,
     DateTime today)
     {
-    if (lot.Status == FrozenLotStatus.Shipped)
-    {
+        if (lot.Status == FrozenLotStatus.Shipped)
+        {
             return FrozenLotStatus.Shipped;
-    }
+        }
 
-    if (lot.ExpiryDate.Date < today)
-    {
-        return FrozenLotStatus.Expired;
-    }
+        if (lot.ExpiryDate.Date < today)
+        {
+            return FrozenLotStatus.Expired;
+        }
 
         return lot.Status;
     }
