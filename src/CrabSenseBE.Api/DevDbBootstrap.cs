@@ -41,6 +41,8 @@ public static class DevDbBootstrap
                 await EnsureCrabLotInboundSchemaAsync(db, logger);
                 await EnsureRasFlowSchemaAsync(db, logger);
                 await EnsureDeviceControllerSchemaAsync(db, logger);
+                await EnsureEdgeCommandSchemaAsync(db, logger);
+                await EnsureKioskSchemaAsync(db, logger);
                 await EnsureCameraAndSensorRowSchemaAsync(db, logger);
                 await EnsureWaterAnalysisSchemaAsync(db, logger);
                 await EnsureFarmOperationLogColumnsAsync(db, logger);
@@ -667,6 +669,86 @@ public static class DevDbBootstrap
             """).ConfigureAwait(false);
 
         logger.LogInformation("Ensured camera/sensor row-binding columns (FarmingRowId, StreamUrl, SnapshotUrl, Resolution).");
+    }
+
+    private static async Task EnsureEdgeCommandSchemaAsync(AppDbContext db, ILogger logger)
+    {
+        await db.Database.ExecuteSqlRawAsync(
+            """
+            CREATE TABLE IF NOT EXISTS be."EdgeCommands" (
+                "Id" uuid NOT NULL,
+                "DeviceCode" text NOT NULL,
+                "Command" text NOT NULL,
+                "Channel" text NULL,
+                "Status" text NOT NULL,
+                "DeliveredAt" timestamp with time zone NULL,
+                "AcknowledgedAt" timestamp with time zone NULL,
+                "ResultMessage" text NULL,
+                "CorrelationId" text NULL,
+                "CreatedAt" timestamp with time zone NOT NULL,
+                "UpdatedAt" timestamp with time zone NULL,
+                CONSTRAINT "PK_EdgeCommands" PRIMARY KEY ("Id")
+            );
+            CREATE INDEX IF NOT EXISTS "IX_EdgeCommands_DeviceCode_Status_CreatedAt"
+                ON be."EdgeCommands" ("DeviceCode", "Status", "CreatedAt");
+            """).ConfigureAwait(false);
+        logger.LogInformation("Ensured EdgeCommands table.");
+    }
+
+    private static async Task EnsureKioskSchemaAsync(AppDbContext db, ILogger logger)
+    {
+        await db.Database.ExecuteSqlRawAsync(
+            """
+            CREATE TABLE IF NOT EXISTS be."FarmKiosks" (
+                "Id" uuid NOT NULL,
+                "Code" character varying(32) NOT NULL,
+                "FarmingAreaId" uuid NOT NULL,
+                "Name" character varying(200) NULL,
+                "Status" character varying(32) NOT NULL,
+                "LastSeenAt" timestamp with time zone NULL,
+                "LanIp" character varying(64) NULL,
+                "CreatedAt" timestamp with time zone NOT NULL,
+                "UpdatedAt" timestamp with time zone NULL,
+                CONSTRAINT "PK_FarmKiosks" PRIMARY KEY ("Id"),
+                CONSTRAINT "FK_FarmKiosks_FarmingAreas_FarmingAreaId"
+                    FOREIGN KEY ("FarmingAreaId") REFERENCES be."FarmingAreas" ("Id") ON DELETE CASCADE
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS "IX_FarmKiosks_Code" ON be."FarmKiosks" ("Code");
+
+            CREATE TABLE IF NOT EXISTS be."KioskProvisioningCodes" (
+                "Id" uuid NOT NULL,
+                "KioskId" uuid NOT NULL,
+                "Code" character varying(16) NOT NULL,
+                "ExpiresAt" timestamp with time zone NOT NULL,
+                "UsedAt" timestamp with time zone NULL,
+                "RevokedAt" timestamp with time zone NULL,
+                "CreatedAt" timestamp with time zone NOT NULL,
+                "UpdatedAt" timestamp with time zone NULL,
+                CONSTRAINT "PK_KioskProvisioningCodes" PRIMARY KEY ("Id"),
+                CONSTRAINT "FK_KioskProvisioningCodes_FarmKiosks_KioskId"
+                    FOREIGN KEY ("KioskId") REFERENCES be."FarmKiosks" ("Id") ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS "IX_KioskProvisioningCodes_Code"
+                ON be."KioskProvisioningCodes" ("Code");
+
+            CREATE TABLE IF NOT EXISTS be."KioskCredentials" (
+                "Id" uuid NOT NULL,
+                "KioskId" uuid NOT NULL,
+                "SecretHash" character varying(64) NOT NULL,
+                "RevokedAt" timestamp with time zone NULL,
+                "CreatedAt" timestamp with time zone NOT NULL,
+                "UpdatedAt" timestamp with time zone NULL,
+                CONSTRAINT "PK_KioskCredentials" PRIMARY KEY ("Id"),
+                CONSTRAINT "FK_KioskCredentials_FarmKiosks_KioskId"
+                    FOREIGN KEY ("KioskId") REFERENCES be."FarmKiosks" ("Id") ON DELETE CASCADE
+            );
+
+            ALTER TABLE be."Devices" ADD COLUMN IF NOT EXISTS "KioskId" uuid NULL;
+            ALTER TABLE be."Devices" ADD COLUMN IF NOT EXISTS "EdgeState" character varying(32) NOT NULL DEFAULT 'Approved';
+            ALTER TABLE be."Devices" ADD COLUMN IF NOT EXISTS "CredentialHash" character varying(64) NULL;
+            ALTER TABLE be."Devices" ADD COLUMN IF NOT EXISTS "PendingSecret" character varying(128) NULL;
+            """).ConfigureAwait(false);
+        logger.LogInformation("Ensured Kiosk provisioning tables.");
     }
 
     private static async Task EnsureDeviceControllerSchemaAsync(AppDbContext db, ILogger logger)

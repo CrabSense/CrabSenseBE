@@ -613,7 +613,12 @@ public class FarmHistoryService : IFarmHistoryService
 
         var events = new List<BoxFarmingEventDto>();
 
-        var allocs = await _uow.CrabBoxAllocations.FindAsync(a => a.BoxId == boxId, ct);
+        var occupantIds = (await _uow.Crabs.FindAsync(c => c.BoxId == boxId, ct))
+            .Select(c => c.Id)
+            .ToHashSet();
+
+        var allocs = await _uow.CrabBoxAllocations.FindAsync(
+            a => a.BoxId == boxId || occupantIds.Contains(a.CrabId), ct);
         foreach (var a in FilterByRange(allocs, x => x.StartTime, from, to))
         {
             events.Add(new BoxFarmingEventDto(
@@ -627,7 +632,8 @@ public class FarmHistoryService : IFarmHistoryService
             }
         }
 
-        var molts = await _uow.MoltingRecords.FindAsync(m => m.BoxId == boxId, ct);
+        var molts = await _uow.MoltingRecords.FindAsync(
+            m => m.BoxId == boxId || (m.CrabId != Guid.Empty && occupantIds.Contains(m.CrabId)), ct);
         foreach (var m in FilterByRange(molts, x => x.MoltTime, from, to))
         {
             events.Add(new BoxFarmingEventDto(

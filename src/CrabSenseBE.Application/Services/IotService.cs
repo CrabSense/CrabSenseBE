@@ -4,6 +4,7 @@ using CrabSenseBE.Application.Interfaces;
 using CrabSenseBE.Domain.Entities;
 using CrabSenseBE.Domain.Enums;
 using CrabSenseBE.Domain.Interfaces;
+using Microsoft.Extensions.Logging;
 
 namespace CrabSenseBE.Application.Services;
 
@@ -16,17 +17,20 @@ public class IotService : IIotService
     private readonly IStorageService _storage;
     private readonly IAlertService _alerts;
     private readonly IRasFlowService _rasFlow;
+    private readonly ILogger<IotService> _logger;
 
     public IotService(
         IUnitOfWork uow,
         IStorageService storage,
         IAlertService alerts,
-        IRasFlowService rasFlow)
+        IRasFlowService rasFlow,
+        ILogger<IotService> logger)
     {
         _uow = uow;
         _storage = storage;
         _alerts = alerts;
         _rasFlow = rasFlow;
+        _logger = logger;
     }
 
     // ─── Ingest (ESP32 HTTP) ────────────────────────────────────────────────
@@ -36,8 +40,34 @@ public class IotService : IIotService
         if (string.IsNullOrWhiteSpace(req.SensorCode))
             throw AppException.BadRequest("SensorCode is required.");
 
-        var sensor = await _uow.Sensors.FirstOrDefaultAsync(s => s.SensorCode == req.SensorCode, ct)
-            ?? throw AppException.NotFound($"Sensor '{req.SensorCode}' — register it first (POST /api/sensors).");
+        var sensor = await _uow.Sensors.FirstOrDefaultAsync(s => s.SensorCode == req.SensorCode, ct);
+        if (sensor is null)
+        {
+            var spec = MeterSpec(req.SensorCode);
+            if (spec is null)
+                throw AppException.NotFound($"Sensor '{req.SensorCode}' — register it first (POST /api/sensors).");
+
+            sensor = new Sensor
+            {
+                SensorCode = req.SensorCode.Trim(),
+                SensorType = spec.Value.Type,
+                Unit = spec.Value.Unit,
+                IsActive = true
+            };
+            if (!string.IsNullOrWhiteSpace(req.DeviceCode))
+            {
+                var known = await _uow.Devices.FirstOrDefaultAsync(
+                    d => d.DeviceCode == req.DeviceCode.Trim(), ct);
+                if (known is not null)
+                {
+                    sensor.DeviceId = known.Id;
+                    var sibling = await _uow.Sensors.FirstOrDefaultAsync(
+                        s => s.DeviceId == known.Id && s.WaterSystemId != null, ct);
+                    sensor.WaterSystemId = sibling?.WaterSystemId;
+                }
+            }
+            await _uow.Sensors.AddAsync(sensor, ct);
+        }
 
         // Upsert device (ESP32) by DeviceCode so first heartbeat doesn't 404
         Device? device = null;
@@ -61,7 +91,6 @@ public class IotService : IIotService
                 device.Status = DeviceStatus.Online;
                 if (!string.IsNullOrWhiteSpace(req.IpAddress))
                     device.IpAddress = req.IpAddress.Trim();
-                _uow.Devices.Update(device);
             }
 
             if (sensor.DeviceId is null || sensor.DeviceId != device.Id)
@@ -82,12 +111,18 @@ public class IotService : IIotService
         await _uow.WaterMeasurements.AddAsync(measurement, ct);
 
         sensor.LastSeenAt = DateTime.UtcNow;
-        _uow.Sensors.Update(sensor);
         await _uow.SaveChangesAsync(ct);
 
-        await _alerts.EvaluateMeasurementAsync(sensor, req.Value, ct);
-        if (sensor.DeviceId is Guid deviceId)
-            await _rasFlow.ApplyAutoRelaysAsync(deviceId, ct);
+        try
+        {
+            await _alerts.EvaluateMeasurementAsync(sensor, req.Value, ct);
+            if (sensor.DeviceId is Guid deviceId)
+                await _rasFlow.ApplyAutoRelaysAsync(deviceId, ct);
+        }
+        catch (Exception ex) when (ex is not AppException)
+        {
+            _logger.LogWarning(ex, "Ingest saved but follow-up failed for {SensorCode}", sensor.SensorCode);
+        }
         return ApiResponse.Ok("Sensor data ingested.");
     }
 
@@ -544,12 +579,23 @@ public class IotService : IIotService
     public async Task<ApiResponse> DeleteDeviceAsync(Guid id, CancellationToken ct = default)
     {
         var device = await _uow.Devices.GetByIdAsync(id, ct) ?? throw AppException.NotFound("Device");
-        var linked = await _uow.Sensors.AnyAsync(s => s.DeviceId == id, ct);
-        if (linked)
-            throw AppException.Conflict("Controller still has sensors — unlink sensors first.");
-        var relays = await _uow.RasComponents.AnyAsync(c => c.RelayDeviceId == id, ct);
-        if (relays)
-            throw AppException.Conflict("Controller still has RAS outputs — unlink relays first.");
+        foreach (var sensor in await _uow.Sensors.FindAsync(s => s.DeviceId == id, ct))
+            sensor.DeviceId = null;
+        foreach (var relay in await _uow.RasComponents.FindAsync(c => c.RelayDeviceId == id, ct))
+        {
+            relay.RelayDeviceId = null;
+            relay.RelayChannel = null;
+            relay.HasRelay = false;
+            relay.IsOn = false;
+            relay.ControlMode = null;
+        }
+        foreach (var row in await _uow.Hdf5Uploads.FindAsync(x => x.DeviceId == id, ct))
+            row.DeviceId = null;
+        foreach (var row in await _uow.MediaAssets.FindAsync(x => x.DeviceId == id, ct))
+            row.DeviceId = null;
+        foreach (var row in await _uow.AiDetections.FindAsync(x => x.DeviceId == id, ct))
+            row.DeviceId = null;
+        await _uow.SaveChangesAsync(ct);
         _uow.Devices.Remove(device);
         await _uow.SaveChangesAsync(ct);
         return ApiResponse.Ok("Device deleted.");
@@ -669,6 +715,18 @@ public class IotService : IIotService
         new(s.Id, s.WaterSystemId, s.DeviceId, s.SensorCode, s.SensorType, s.Unit,
             s.MinThreshold, s.MaxThreshold, s.IsActive, s.LastSeenAt, s.RasComponentId,
             s.FarmingRowId);
+
+    private static (string Type, string Unit)? MeterSpec(string? code) => code?.Trim() switch
+    {
+        "meter_v" => ("Voltage", "V"),
+        "meter_a" => ("Current", "A"),
+        "meter_w" => ("Power", "W"),
+        "meter_va" => ("ApparentPower", "VA"),
+        "meter_kwh" => ("Energy", "kWh"),
+        "meter_hz" => ("Frequency", "Hz"),
+        "meter_pf" => ("PowerFactor", "%"),
+        _ => null
+    };
 
     /// <summary>
     /// URL stream hiệu lực của camera: StreamUrl khai báo → FirmwareVersion là URL (cách cũ)
