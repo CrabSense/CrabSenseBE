@@ -7,7 +7,7 @@ public interface IIotService
 {
     Task<ApiResponse> IngestSensorDataAsync(SensorDataRequest request, CancellationToken ct = default);
     Task<ApiResponse> IngestSensorDataBatchAsync(SensorDataBatchRequest request, CancellationToken ct = default);
-    Task ReportRelayAsync(string deviceCode, int channel, bool on, CancellationToken ct = default);
+    Task ReportRelayAsync(string deviceCode, int channel, bool on, Guid? actorId = null, CancellationToken ct = default);
     Task<ApiResponse<PagedResult<SensorDataDto>>> GetSensorDataAsync(Guid sensorId, DateTime? from, DateTime? to, int page, int pageSize, CancellationToken ct = default);
     Task<ApiResponse<SensorDataDto?>> GetLatestSensorDataAsync(Guid sensorId, CancellationToken ct = default);
     Task<ApiResponse<IEnumerable<SensorLiveDto>>> GetLiveSnapshotAsync(

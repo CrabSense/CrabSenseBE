@@ -128,7 +128,7 @@ public class IotService : IIotService
         return ApiResponse.Ok("Sensor data ingested.");
     }
 
-    public async Task ReportRelayAsync(string deviceCode, int channel, bool on, CancellationToken ct = default)
+    public async Task ReportRelayAsync(string deviceCode, int channel, bool on, Guid? actorId = null, CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(deviceCode) || channel < 1) return;
         var device = await _uow.Devices.FirstOrDefaultAsync(
@@ -137,6 +137,7 @@ public class IotService : IIotService
         var channelText = channel.ToString();
         var nodes = await _uow.RasComponents.FindAsync(
             c => c.RelayDeviceId == device.Id && c.RelayChannel == channelText, ct);
+        var logged = false;
         foreach (var node in nodes)
         {
             var wasOn = node.IsOn;
@@ -144,13 +145,46 @@ public class IotService : IIotService
             node.RunStartedAt = on ? (wasOn ? node.RunStartedAt : DateTime.UtcNow) : null;
             node.LastCommandAt = DateTime.UtcNow;
             _uow.RasComponents.Update(node);
-            var message = $"{node.Name} đã tắt";
+            var offMessage = $"{node.Name} đã tắt";
+            var onMessage = $"{node.Name} đã bật";
             if (wasOn && !on)
-                await _alerts.RaiseOnceAsync(message, ct);
+            {
+                await _alerts.ClearAsync(onMessage, ct);
+                await _alerts.RaiseOnceAsync(offMessage, ct);
+            }
             else if (!wasOn && on)
-                await _alerts.ClearAsync(message, ct);
+            {
+                await _alerts.ClearAsync(offMessage, ct);
+                await _alerts.RaiseOnceAsync(onMessage, ct);
+            }
+            logged |= await LogRelayAsync(actorId, node.Id, "RasComponent", node.WaterSystemId, node.Name, device.DeviceCode, channel, on, ct);
         }
+        if (!logged)
+            await LogRelayAsync(actorId, device.Id, "Device", null, $"kênh {channel}", device.DeviceCode, channel, on, ct);
         await _uow.SaveChangesAsync(ct);
+    }
+
+    private async Task<bool> LogRelayAsync(
+        Guid? actorId, Guid entityId, string entityType, Guid? waterSystemId,
+        string name, string deviceCode, int channel, bool on, CancellationToken ct)
+    {
+        if (actorId is not Guid uid || uid == Guid.Empty) return false;
+        var areaKey = "";
+        if (waterSystemId is Guid wsId)
+        {
+            var ws = await _uow.WaterSystems.GetByIdAsync(wsId, ct);
+            if (ws?.FarmingAreaId is Guid areaId && areaId != Guid.Empty)
+                areaKey = areaId.ToString("N");
+        }
+        await _uow.OperationLogs.AddAsync(new OperationLog
+        {
+            UserId = uid,
+            Action = on ? "ras_on" : "ras_off",
+            EntityType = entityType,
+            EntityId = entityId,
+            Details = $"{areaKey}|{(on ? "Bật" : "Tắt")} {name}|{deviceCode}|ch{channel}"
+        }, ct);
+        return true;
     }
 
     private async Task EvaluateTanksAsync(string code, decimal value, CancellationToken ct)
