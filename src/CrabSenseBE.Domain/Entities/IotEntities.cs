@@ -148,6 +148,18 @@ public class Device : BaseEntity
     public DateTime? LastSeenAt { get; set; }
     public string? ApiKey { get; set; } // API key for edge sync
 
+    /// <summary>Kiosk đã duyệt controller này. Null = luồng cũ, chưa gắn kiosk.</summary>
+    public Guid? KioskId { get; set; }
+
+    /// <summary>Unprovisioned | Pending | Approved | Online | Offline | Revoked. Mặc định Approved để board đang chạy không bị chặn.</summary>
+    public string EdgeState { get; set; } = "Approved";
+
+    /// <summary>SHA-256 hex của credential controller. Không phải secret của Kiosk.</summary>
+    public string? CredentialHash { get; set; }
+
+    /// <summary>Secret một lần, Kiosk lấy rồi xóa. Không trả về Desktop.</summary>
+    public string? PendingSecret { get; set; }
+
     // Navigation
     public FarmingArea? FarmingArea { get; set; }
     public ICollection<Sensor> Sensors { get; set; } = new List<Sensor>();
