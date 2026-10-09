@@ -116,6 +116,8 @@ public class IotService : IIotService
         try
         {
             await _alerts.EvaluateMeasurementAsync(sensor, req.Value, ct);
+            if (sensor.SensorCode.StartsWith("float_", StringComparison.Ordinal))
+                await EvaluateTanksAsync(sensor.SensorCode, req.Value, ct);
             if (sensor.DeviceId is Guid deviceId)
                 await _rasFlow.ApplyAutoRelaysAsync(deviceId, ct);
         }
@@ -124,6 +126,110 @@ public class IotService : IIotService
             _logger.LogWarning(ex, "Ingest saved but follow-up failed for {SensorCode}", sensor.SensorCode);
         }
         return ApiResponse.Ok("Sensor data ingested.");
+    }
+
+    public async Task ReportRelayAsync(string deviceCode, int channel, bool on, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(deviceCode) || channel < 1) return;
+        var device = await _uow.Devices.FirstOrDefaultAsync(
+            d => d.DeviceCode == deviceCode.Trim(), ct);
+        if (device is null) return;
+        var channelText = channel.ToString();
+        var nodes = await _uow.RasComponents.FindAsync(
+            c => c.RelayDeviceId == device.Id && c.RelayChannel == channelText, ct);
+        foreach (var node in nodes)
+        {
+            var wasOn = node.IsOn;
+            node.IsOn = on;
+            node.RunStartedAt = on ? (wasOn ? node.RunStartedAt : DateTime.UtcNow) : null;
+            node.LastCommandAt = DateTime.UtcNow;
+            _uow.RasComponents.Update(node);
+            var message = $"{node.Name} đã tắt";
+            if (wasOn && !on)
+                await _alerts.RaiseOnceAsync(message, ct);
+            else if (!wasOn && on)
+                await _alerts.ClearAsync(message, ct);
+        }
+        await _uow.SaveChangesAsync(ct);
+    }
+
+    private async Task EvaluateTanksAsync(string code, decimal value, CancellationToken ct)
+    {
+        var nodes = await _uow.RasComponents.FindAsync(c => c.ParamDefaultsJson != null, ct);
+        foreach (var node in nodes)
+        {
+            System.Text.Json.JsonDocument doc;
+            try
+            {
+                doc = System.Text.Json.JsonDocument.Parse(node.ParamDefaultsJson!);
+            }
+            catch (System.Text.Json.JsonException)
+            {
+                continue;
+            }
+            using (doc)
+            {
+            var root = doc.RootElement;
+            string text(string key) =>
+                root.TryGetProperty(key, out var item) ? item.ToString() : "";
+            var group = text("group");
+            if (group is "electric" or "pump") continue;
+            var low = text("lowFloat");
+            var high = text("highFloat");
+            if (low != code && high != code) continue;
+            var name = text("label");
+            if (string.IsNullOrWhiteSpace(name)) name = node.Name;
+            var lowVal = low == code ? value : await LatestFloatAsync(low, ct);
+            var highVal = high == code ? value : await LatestFloatAsync(high, ct);
+            var level = TankLevel(low, text("lowWhen"), lowVal, high, text("highWhen"), highVal);
+            if (level == "Tràn")
+            {
+                await _alerts.ClearAsync($"{name} đang cạn", ct);
+                await _alerts.RaiseOnceAsync($"{name} đang tràn", ct);
+            }
+            else if (level == "Cạn")
+            {
+                await _alerts.ClearAsync($"{name} đang tràn", ct);
+                await _alerts.RaiseOnceAsync($"{name} đang cạn", ct);
+            }
+            else if (level == "Bình thường")
+            {
+                await _alerts.ClearAsync($"{name} đang tràn", ct);
+                await _alerts.ClearAsync($"{name} đang cạn", ct);
+            }
+            }
+        }
+    }
+
+    private async Task<decimal?> LatestFloatAsync(string code, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(code)) return null;
+        var sensor = await _uow.Sensors.FirstOrDefaultAsync(s => s.SensorCode == code, ct);
+        if (sensor is null) return null;
+        var latest = (await _uow.WaterMeasurements.FindAsync(m => m.SensorId == sensor.Id, ct))
+            .OrderByDescending(m => m.MeasuredAt)
+            .FirstOrDefault();
+        return latest?.Value;
+    }
+
+    /// <summary>Cạn and tràn come from the two assigned floats. Bình thường is neither.</summary>
+    private static string? TankLevel(
+        string low, string lowWhen, decimal? lowVal,
+        string high, string highWhen, decimal? highVal)
+    {
+        bool assigned(string sensor) => !string.IsNullOrWhiteSpace(sensor);
+        if (!assigned(low) && !assigned(high)) return null;
+        bool hit(string sensor, string when, decimal? reading)
+        {
+            if (!assigned(sensor) || reading is null) return false;
+            var isOn = reading >= 0.5m;
+            var wantOn = when != "off";
+            return isOn == wantOn;
+        }
+        if (hit(high, highWhen, highVal)) return "Tràn";
+        if (hit(low, lowWhen, lowVal)) return "Cạn";
+        if ((assigned(low) && lowVal is null) || (assigned(high) && highVal is null)) return null;
+        return "Bình thường";
     }
 
     public async Task<ApiResponse> IngestSensorDataBatchAsync(SensorDataBatchRequest req, CancellationToken ct = default)
@@ -725,6 +831,8 @@ public class IotService : IIotService
         "meter_kwh" => ("Energy", "kWh"),
         "meter_hz" => ("Frequency", "Hz"),
         "meter_pf" => ("PowerFactor", "%"),
+        "meter_min" => ("Runtime", "min"),
+        "meter_c" => ("Temperature", "C"),
         _ => null
     };
 

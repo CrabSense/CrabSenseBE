@@ -37,7 +37,7 @@ public class AuthService : IAuthService
         var refreshToken = _jwt.GenerateRefreshToken();
 
         user.RefreshToken = refreshToken;
-        user.RefreshTokenExpiry = DateTime.UtcNow.AddDays(7);
+        user.RefreshTokenExpiry = DateTime.UtcNow.AddDays(30);
         user.LastLoginAt = DateTime.UtcNow;
         _uow.Users.Update(user);
         await _uow.SaveChangesAsync(ct);
@@ -45,7 +45,7 @@ public class AuthService : IAuthService
         return ApiResponse<LoginResponse>.Ok(new LoginResponse(
             accessToken,
             refreshToken,
-            DateTime.UtcNow.AddHours(1),
+            DateTime.UtcNow.AddDays(30),
             MapToDto(user)
         ));
     }
@@ -67,12 +67,12 @@ public class AuthService : IAuthService
         var accessToken = _jwt.GenerateAccessToken(user);
         var newRefresh = _jwt.GenerateRefreshToken();
         user.RefreshToken = newRefresh;
-        user.RefreshTokenExpiry = DateTime.UtcNow.AddDays(7);
+        user.RefreshTokenExpiry = DateTime.UtcNow.AddDays(30);
         _uow.Users.Update(user);
         await _uow.SaveChangesAsync(ct);
 
         return ApiResponse<LoginResponse>.Ok(new LoginResponse(
-            accessToken, newRefresh, DateTime.UtcNow.AddHours(1), MapToDto(user)));
+            accessToken, newRefresh, DateTime.UtcNow.AddDays(30), MapToDto(user)));
     }
 
     public async Task<ApiResponse> LogoutAsync(Guid userId, CancellationToken ct = default)

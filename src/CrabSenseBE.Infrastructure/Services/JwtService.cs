@@ -11,19 +11,15 @@ namespace CrabSenseBE.Infrastructure.Services;
 
 public class JwtService : IJwtService
 {
-    private readonly IConfiguration _config;
     private readonly string _secret;
     private readonly string _issuer;
     private readonly string _audience;
-    private readonly int _expiryMinutes;
 
     public JwtService(IConfiguration config)
     {
-        _config = config;
         _secret = config["Jwt:Secret"] ?? throw new InvalidOperationException("Jwt:Secret not configured");
         _issuer = config["Jwt:Issuer"] ?? "CrabSenseBE";
         _audience = config["Jwt:Audience"] ?? "CrabSenseClients";
-        _expiryMinutes = int.Parse(config["Jwt:ExpiryMinutes"] ?? "60");
     }
 
     public string GenerateAccessToken(AppUser user)
@@ -47,7 +43,7 @@ public class JwtService : IJwtService
             issuer: _issuer,
             audience: _audience,
             claims: claims,
-            expires: DateTime.UtcNow.AddMinutes(_expiryMinutes),
+            expires: DateTime.UtcNow.AddDays(30),
             signingCredentials: creds
         );
 

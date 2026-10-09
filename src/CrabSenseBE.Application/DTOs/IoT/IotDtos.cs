@@ -220,3 +220,5 @@ public record Hdf5UploadRequest(
     DateTime ChunkStartTime,
     DateTime ChunkEndTime
 );
+
+public record RelayStateRequest(string DeviceCode, int Channel, bool On);

@@ -1,3 +1,4 @@
+using CrabSenseBE.Application.Common;
 using CrabSenseBE.Application.DTOs.IoT;
 using CrabSenseBE.Application.Interfaces;
 using CrabSenseBE.Domain.Enums;
@@ -26,6 +27,15 @@ public class IotController : ControllerBase
     [AllowAnonymous]
     public async Task<IActionResult> IngestBatch([FromBody] SensorDataBatchRequest req, CancellationToken ct)
         => Ok(await _service.IngestSensorDataBatchAsync(req, ct));
+
+    /// <summary>Desktop báo relay vừa bật hoặc tắt để đẩy thông báo mobile.</summary>
+    [HttpPost("relay-state")]
+    [Authorize]
+    public async Task<IActionResult> ReportRelay([FromBody] RelayStateRequest req, CancellationToken ct)
+    {
+        await _service.ReportRelayAsync(req.DeviceCode, req.Channel, req.On, ct);
+        return Ok(ApiResponse.Ok("Relay state recorded."));
+    }
 
     /// <summary>[READ] Sensor history (charts)</summary>
     [HttpGet("sensor-data/{sensorId:guid}")]
