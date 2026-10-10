@@ -104,8 +104,8 @@ public class RasFlowService : IRasFlowService
         {
             var device = await _uow.Devices.GetByIdAsync(relayDeviceId.Value, ct)
                 ?? throw AppException.NotFound("Controller");
-            if (req.RelayChannel is not ("1" or "2"))
-                throw AppException.BadRequest("SSR channel must be 1 or 2.");
+            if (!int.TryParse(req.RelayChannel.Trim(), out var channelNo) || channelNo < 1)
+                throw AppException.BadRequest("SSR channel must be a positive number.");
             node.RelayDeviceId = device.Id;
             node.RelayChannel = req.RelayChannel.Trim();
             node.HasRelay = true;
