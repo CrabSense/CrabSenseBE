@@ -619,6 +619,11 @@ public class FarmHistoryService : IFarmHistoryService
 
         var allocs = await _uow.CrabBoxAllocations.FindAsync(
             a => a.BoxId == boxId || occupantIds.Contains(a.CrabId), ct);
+
+        // Bao gồm cả cua hiện tại và cua từng có allocation trong box này.
+        var relatedCrabIds = occupantIds
+            .Concat(allocs.Select(a => a.CrabId))
+            .ToHashSet();
         foreach (var a in FilterByRange(allocs, x => x.StartTime, from, to))
         {
             events.Add(new BoxFarmingEventDto(
@@ -633,7 +638,7 @@ public class FarmHistoryService : IFarmHistoryService
         }
 
         var molts = await _uow.MoltingRecords.FindAsync(
-            m => m.BoxId == boxId || (m.CrabId != Guid.Empty && occupantIds.Contains(m.CrabId)), ct);
+            m => m.BoxId == boxId || relatedCrabIds.Contains(m.CrabId), ct);
         foreach (var m in FilterByRange(molts, x => x.MoltTime, from, to))
         {
             events.Add(new BoxFarmingEventDto(
@@ -649,6 +654,22 @@ public class FarmHistoryService : IFarmHistoryService
                 $"Status {h.OldStatus ?? "(none)"} → {h.NewStatus}" +
                 (string.IsNullOrWhiteSpace(h.Reason) ? "" : $" ({h.Reason})"),
                 null, h.Id));
+        }
+
+        //Thêm các lần đổi trạng thái cua vào timeline
+        var crabStatuses = await _uow.CrabStatusHistories.FindAsync(h => relatedCrabIds.Contains(h.CrabId), ct);
+
+        foreach (var h in FilterByRange(crabStatuses, x => x.ChangedAt, from, to))
+        {
+            var oldStatus = h.OldStatus?.ToString() ?? "(none)";
+
+            events.Add(new BoxFarmingEventDto(
+                "crab_status",
+                h.ChangedAt,
+                $"Crab status {oldStatus} → {h.NewStatus}" +
+                (string.IsNullOrWhiteSpace(h.Reason) ? "" : $" ({h.Reason})"),
+                h.CrabId,
+                h.Id));
         }
 
         return ApiResponse<IEnumerable<BoxFarmingEventDto>>.Ok(
