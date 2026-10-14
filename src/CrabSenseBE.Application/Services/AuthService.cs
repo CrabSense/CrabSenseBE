@@ -25,13 +25,29 @@ public class AuthService : IAuthService
         _jwt = jwt;
     }
 
-    public async Task<ApiResponse<LoginResponse>> LoginAsync(LoginRequest request, CancellationToken ct = default)
+    public async Task<ApiResponse<LoginResponse>> LoginAsync(
+        LoginRequest request, CancellationToken ct = default, string? ipAddress = null, string? userAgent = null)
     {
         var user = await _uow.Users.FirstOrDefaultAsync(
             u => (u.Username == request.Username || u.Email == request.Username) && u.IsActive, ct);
 
         if (user is null || !BCrypt.Net.BCrypt.Verify(request.Password, user.PasswordHash))
+        {
+            if (user is not null)
+            {
+                await _uow.OperationLogs.AddAsync(new OperationLog
+                {
+                    UserId = user.Id,
+                    Action = "LoginFailed",
+                    EntityType = "AppUser",
+                    EntityId = user.Id,
+                    Details = request.Username,
+                    IpAddress = ipAddress,
+                }, ct);
+                await _uow.SaveChangesAsync(ct);
+            }
             throw AppException.Unauthorized("Invalid username or password.");
+        }
 
         var accessToken = _jwt.GenerateAccessToken(user);
         var refreshToken = _jwt.GenerateRefreshToken();
@@ -39,7 +55,17 @@ public class AuthService : IAuthService
         user.RefreshToken = refreshToken;
         user.RefreshTokenExpiry = DateTime.UtcNow.AddDays(30);
         user.LastLoginAt = DateTime.UtcNow;
+        user.LastLoginIp = ipAddress;
+        user.LastUserAgent = userAgent;
         _uow.Users.Update(user);
+        await _uow.OperationLogs.AddAsync(new OperationLog
+        {
+            UserId = user.Id,
+            Action = "Login",
+            EntityType = "AppUser",
+            EntityId = user.Id,
+            IpAddress = ipAddress,
+        }, ct);
         await _uow.SaveChangesAsync(ct);
 
         return ApiResponse<LoginResponse>.Ok(new LoginResponse(
@@ -93,9 +119,13 @@ public class AuthService : IAuthService
         if (await _uow.Users.AnyAsync(u => u.Email == request.Email, ct))
             throw AppException.Conflict("Email already registered.");
 
-        if (!Enum.TryParse<UserRole>(request.Role, ignoreCase: true, out var role)
-            || !Enum.IsDefined(role))
-            throw AppException.BadRequest("Role phải là SystemAdmin | FarmOwner | Staff.");
+        if (!UserRoleParsing.TryParse(request.Role, out var role))
+            throw AppException.BadRequest(
+                "Role phải là FarmAdministrator | FarmManager | FarmStaff.");
+
+        if (role == UserRole.SystemAdministrator)
+            throw AppException.BadRequest(
+                "Không thể đăng ký System Administrator qua API.");
 
         var user = new AppUser
         {

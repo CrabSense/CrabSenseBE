@@ -77,7 +77,7 @@ public class IotController : ControllerBase
 
 [ApiController]
 [Route("api/sensors")]
-[Authorize]
+[Authorize(Roles = AppRoles.Platform)]
 [Tags("08. IoT — Sensors")]
 [Produces("application/json")]
 public class SensorsController : ControllerBase
@@ -101,19 +101,16 @@ public class SensorsController : ControllerBase
 
     /// <summary>[CREATE] Register sensor under optional ESP32 device</summary>
     [HttpPost]
-    [Authorize(Roles = AppRoles.FarmWrite)]
     public async Task<IActionResult> Create([FromBody] CreateSensorRequest req, CancellationToken ct)
         => Ok(await _service.CreateSensorAsync(req, ct));
 
     /// <summary>[UPDATE] Update sensor</summary>
     [HttpPut("{id:guid}")]
-    [Authorize(Roles = AppRoles.FarmWrite)]
     public async Task<IActionResult> Update(Guid id, [FromBody] UpdateSensorRequest req, CancellationToken ct)
         => Ok(await _service.UpdateSensorAsync(id, req, ct));
 
     /// <summary>[DELETE] Delete sensor (blocked if has measurements)</summary>
     [HttpDelete("{id:guid}")]
-    [Authorize(Roles = AppRoles.FarmWrite)]
     public async Task<IActionResult> Delete(Guid id, CancellationToken ct)
         => Ok(await _service.DeleteSensorAsync(id, ct));
 }
@@ -121,7 +118,7 @@ public class SensorsController : ControllerBase
 [ApiController]
 [Route("api/devices")]
 [Route("api/controllers")]
-[Authorize]
+[Authorize(Roles = AppRoles.Platform)]
 [Tags("09. IoT — Controllers (ESP32)")]
 [Produces("application/json")]
 public class DevicesController : ControllerBase
@@ -144,27 +141,33 @@ public class DevicesController : ControllerBase
 
     /// <summary>[CREATE] Register ESP32 gateway</summary>
     [HttpPost]
-    [Authorize(Roles = AppRoles.FarmWrite)]
     public async Task<IActionResult> Create([FromBody] CreateDeviceRequest req, CancellationToken ct)
-        => Ok(await _service.CreateDeviceAsync(req, ct));
+        => Ok(await _service.CreateDeviceAsync(req, ct, UserId(), Ip()));
 
     /// <summary>[UPDATE] Update device metadata</summary>
     [HttpPut("{id:guid}")]
-    [Authorize(Roles = AppRoles.FarmWrite)]
     public async Task<IActionResult> Update(Guid id, [FromBody] UpdateDeviceRequest req, CancellationToken ct)
-        => Ok(await _service.UpdateDeviceAsync(id, req, ct));
+        => Ok(await _service.UpdateDeviceAsync(id, req, ct, UserId(), Ip()));
 
     /// <summary>[DELETE] Delete device (no linked sensors)</summary>
     [HttpDelete("{id:guid}")]
-    [Authorize(Roles = AppRoles.FarmWrite)]
     public async Task<IActionResult> Delete(Guid id, CancellationToken ct)
-        => Ok(await _service.DeleteDeviceAsync(id, ct));
+        => Ok(await _service.DeleteDeviceAsync(id, ct, UserId(), Ip()));
 
     /// <summary>[UPDATE] Heartbeat / status from edge</summary>
     [HttpPut("{id:guid}/status")]
     [AllowAnonymous]
     public async Task<IActionResult> UpdateStatus(Guid id, [FromBody] UpdateDeviceStatusRequest req, CancellationToken ct)
         => Ok(await _service.UpdateDeviceStatusAsync(id, req, ct));
+
+    private Guid? UserId()
+    {
+        var raw = User.FindFirstValue(JwtRegisteredClaimNames.Sub)
+            ?? User.FindFirstValue(ClaimTypes.NameIdentifier);
+        return Guid.TryParse(raw, out var id) ? id : null;
+    }
+
+    private string? Ip() => HttpContext.Connection.RemoteIpAddress?.ToString();
 }
 
 [ApiController]

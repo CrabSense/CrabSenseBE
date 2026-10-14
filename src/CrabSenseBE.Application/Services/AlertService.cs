@@ -681,7 +681,7 @@ public class AlertService : IAlertService
     private async Task NotifyOperatorsAsync(string message, Guid alertId, CancellationToken ct)
     {
         var users = await _uow.Users.FindAsync(
-            u => u.IsActive && (u.Role == UserRole.FarmOwner || u.Role == UserRole.Staff), ct);
+            u => u.IsActive && AppRoles.IsFarmPortalRole(u.Role), ct);
         var ids = users.Select(u => u.Id).ToList();
         if (ids.Count == 0) return;
         await _notifications.NotifyUsersAsync(ids, "CrabSense Alert", message, alertId, ct);

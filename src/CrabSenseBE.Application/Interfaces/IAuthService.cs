@@ -5,7 +5,7 @@ namespace CrabSenseBE.Application.Interfaces;
 
 public interface IAuthService
 {
-    Task<ApiResponse<LoginResponse>> LoginAsync(LoginRequest request, CancellationToken ct = default);
+    Task<ApiResponse<LoginResponse>> LoginAsync(LoginRequest request, CancellationToken ct = default, string? ipAddress = null, string? userAgent = null);
     Task<ApiResponse<LoginResponse>> RefreshTokenAsync(RefreshTokenRequest request, CancellationToken ct = default);
     Task<ApiResponse> LogoutAsync(Guid userId, CancellationToken ct = default);
     Task<ApiResponse<UserDto>> RegisterAsync(RegisterRequest request, CancellationToken ct = default);

@@ -73,7 +73,12 @@ public class IotService : IIotService
         Device? device = null;
         if (!string.IsNullOrWhiteSpace(req.DeviceCode))
         {
-            device = await _uow.Devices.FirstOrDefaultAsync(d => d.DeviceCode == req.DeviceCode, ct);
+            var codeKey = req.DeviceCode.Trim().ToLowerInvariant();
+            var matches = (await _uow.Devices.FindAsync(
+                    d => d.DeviceCode.ToLower() == codeKey, ct))
+                .OrderBy(d => d.CreatedAt)
+                .ToList();
+            device = matches.FirstOrDefault();
             if (device is null)
             {
                 device = new Device
@@ -162,6 +167,21 @@ public class IotService : IIotService
         if (!logged)
             await LogRelayAsync(actorId, device.Id, "Device", null, $"kênh {channel}", device.DeviceCode, channel, on, ct);
         await _uow.SaveChangesAsync(ct);
+    }
+
+    private async Task WriteDeviceAuditAsync(
+        Guid? actorId, string action, Guid entityId, string? details, string? ip, CancellationToken ct)
+    {
+        if (actorId is not Guid uid || uid == Guid.Empty) return;
+        await _uow.OperationLogs.AddAsync(new OperationLog
+        {
+            UserId = uid,
+            Action = action,
+            EntityType = "Device",
+            EntityId = entityId,
+            Details = details,
+            IpAddress = ip
+        }, ct);
     }
 
     private async Task<bool> LogRelayAsync(
@@ -621,13 +641,18 @@ public class IotService : IIotService
             MapDeviceDetail(d, sensors, actuators, area, await RowOfAsync(d, ct)));
     }
 
-    public async Task<ApiResponse<DeviceDto>> CreateDeviceAsync(CreateDeviceRequest req, CancellationToken ct = default)
+    public async Task<ApiResponse<DeviceDto>> CreateDeviceAsync(
+        CreateDeviceRequest req, CancellationToken ct = default, Guid? actorId = null, string? ip = null)
     {
         if (string.IsNullOrWhiteSpace(req.DeviceCode))
             throw AppException.BadRequest("DeviceCode is required (ESP32 id / MAC).");
         var code = req.DeviceCode.Trim();
-        if (await _uow.Devices.AnyAsync(d => d.DeviceCode == code, ct))
+        var codeKey = code.ToLowerInvariant();
+        if (await _uow.Devices.AnyAsync(d => d.DeviceCode.ToLower() == codeKey, ct))
             throw AppException.Conflict($"DeviceCode '{code}' already exists.");
+        var deviceIp = string.IsNullOrWhiteSpace(req.IpAddress) ? null : req.IpAddress.Trim();
+        if (deviceIp is not null && await _uow.Devices.AnyAsync(d => d.IpAddress == deviceIp, ct))
+            throw AppException.Conflict($"IP '{deviceIp}' đang được thiết bị khác sử dụng.");
 
         if (req.FarmingAreaId is Guid areaId && areaId != Guid.Empty)
             _ = await _uow.FarmingAreas.GetByIdAsync(areaId, ct)
@@ -639,7 +664,7 @@ public class IotService : IIotService
             Name = string.IsNullOrWhiteSpace(req.Name) ? null : req.Name.Trim(),
             DeviceType = string.IsNullOrWhiteSpace(req.DeviceType) ? "esp32" : req.DeviceType.Trim().ToLowerInvariant(),
             MacAddress = string.IsNullOrWhiteSpace(req.MacAddress) ? null : req.MacAddress.Trim(),
-            IpAddress = string.IsNullOrWhiteSpace(req.IpAddress) ? null : req.IpAddress.Trim(),
+            IpAddress = deviceIp,
             FarmingAreaId = req.FarmingAreaId is Guid a && a != Guid.Empty ? a : null,
             FirmwareVersion = req.FirmwareVersion,
             ApiKey = req.ApiKey,
@@ -652,6 +677,7 @@ public class IotService : IIotService
         };
         await ApplyRowAsync(device, req.FarmingRowId, ct);
         await _uow.Devices.AddAsync(device, ct);
+        await WriteDeviceAuditAsync(actorId, "CreateDevice", device.Id, device.DeviceCode, ip, ct);
         await _uow.SaveChangesAsync(ct);
         FarmingArea? area = null;
         if (device.FarmingAreaId is Guid aid)
@@ -661,7 +687,7 @@ public class IotService : IIotService
     }
 
     public async Task<ApiResponse<DeviceDto>> UpdateDeviceAsync(
-        Guid id, UpdateDeviceRequest req, CancellationToken ct = default)
+        Guid id, UpdateDeviceRequest req, CancellationToken ct = default, Guid? actorId = null, string? ip = null)
     {
         var device = await _uow.Devices.GetByIdAsync(id, ct) ?? throw AppException.NotFound("Device");
         if (req.DeviceType is not null) device.DeviceType = req.DeviceType.Trim().ToLowerInvariant();
@@ -673,7 +699,12 @@ public class IotService : IIotService
         if (req.MacAddress is not null)
             device.MacAddress = string.IsNullOrWhiteSpace(req.MacAddress) ? null : req.MacAddress.Trim();
         if (req.IpAddress is not null)
-            device.IpAddress = string.IsNullOrWhiteSpace(req.IpAddress) ? null : req.IpAddress.Trim();
+        {
+            var nextIp = string.IsNullOrWhiteSpace(req.IpAddress) ? null : req.IpAddress.Trim();
+            if (nextIp is not null && await _uow.Devices.AnyAsync(d => d.Id != id && d.IpAddress == nextIp, ct))
+                throw AppException.Conflict($"IP '{nextIp}' đang được thiết bị khác sử dụng.");
+            device.IpAddress = nextIp;
+        }
         if (req.FarmingAreaId.HasValue)
         {
             if (req.FarmingAreaId.Value == Guid.Empty)
@@ -706,6 +737,7 @@ public class IotService : IIotService
             && Enum.TryParse<DeviceStatus>(req.Status, true, out var st))
             device.Status = st;
         _uow.Devices.Update(device);
+        await WriteDeviceAuditAsync(actorId, "UpdateDevice", device.Id, device.DeviceCode, ip, ct);
         await _uow.SaveChangesAsync(ct);
         var n = await _uow.Sensors.CountAsync(s => s.DeviceId == id, ct);
         var acts = await _uow.RasComponents.CountAsync(c => c.RelayDeviceId == id, ct);
@@ -716,7 +748,8 @@ public class IotService : IIotService
             MapDevice(device, n, acts, area, await RowOfAsync(device, ct)), "Controller updated.");
     }
 
-    public async Task<ApiResponse> DeleteDeviceAsync(Guid id, CancellationToken ct = default)
+    public async Task<ApiResponse> DeleteDeviceAsync(
+        Guid id, CancellationToken ct = default, Guid? actorId = null, string? ip = null)
     {
         var device = await _uow.Devices.GetByIdAsync(id, ct) ?? throw AppException.NotFound("Device");
         foreach (var sensor in await _uow.Sensors.FindAsync(s => s.DeviceId == id, ct))
@@ -736,6 +769,7 @@ public class IotService : IIotService
         foreach (var row in await _uow.AiDetections.FindAsync(x => x.DeviceId == id, ct))
             row.DeviceId = null;
         await _uow.SaveChangesAsync(ct);
+        await WriteDeviceAuditAsync(actorId, "DeleteDevice", device.Id, device.DeviceCode, ip, ct);
         _uow.Devices.Remove(device);
         await _uow.SaveChangesAsync(ct);
         return ApiResponse.Ok("Device deleted.");

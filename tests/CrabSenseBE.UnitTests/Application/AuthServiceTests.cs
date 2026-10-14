@@ -29,7 +29,7 @@ public class AuthServiceTests
             Email = "test@example.com",
             PasswordHash = passwordHash,
             FullName = "Test User",
-            Role = UserRole.Staff,
+            Role = UserRole.FarmStaff,
             IsActive = true
         };
 

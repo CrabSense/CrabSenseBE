@@ -25,7 +25,8 @@ public static class DemoDataSeeder
         await ClearPartialDemoAsync(db, logger, ct);
 
         var owner = await db.AppUsers.FirstOrDefaultAsync(u => u.Username == "owner", ct)
-            ?? await db.AppUsers.FirstOrDefaultAsync(u => u.Role == UserRole.FarmOwner, ct);
+            ?? await db.AppUsers.FirstOrDefaultAsync(
+                u => u.Role == UserRole.FarmAdministrator, ct);
         if (owner is null)
         {
             logger.LogWarning("Demo seed skipped — no FarmOwner user.");

@@ -5,7 +5,7 @@ using Microsoft.EntityFrameworkCore;
 using Npgsql;
 
 /// <summary>
-/// Development: migrate schema + seed 3 role user (SystemAdmin / FarmOwner / Staff).
+/// Development: migrate schema + seed 4 role user (chỉ khanhtn45 = SystemAdministrator).
 /// Không crash app nếu Supabase transient timeout.
 /// </summary>
 public static class DevDbBootstrap
@@ -54,19 +54,26 @@ public static class DevDbBootstrap
                 logger.LogInformation("Schema ready (attempt {A}).", attempt);
 
                 await RemapLegacyRolesAsync(db, logger);
+                await EnsureSystemAdministratorExclusiveAsync(db, logger);
                 await EnsureUserAsync(db, "sysadmin", "admin-sys@crabsense.local", "Admin hệ thống",
-                    "SysAdmin@123", UserRole.SystemAdmin);
+                    "SysAdmin@123", UserRole.FarmAdministrator);
                 await EnsureUserAsync(db, "admin", "admin@crabsense.local", "Admin CrabSense",
-                    "Admin@123", UserRole.SystemAdmin);
+                    "Admin@123", UserRole.FarmAdministrator);
+                await EnsureUserAsync(db, "khanhtn45", "khanhtn45@sysadmin.crabsense.local",
+                    "Khanh TN", "Khanhtn45@0", UserRole.SystemAdministrator);
                 await EnsureUserAsync(db, "owner", "owner@crabsense.local", "Chủ trại",
-                    "Owner@123", UserRole.FarmOwner);
+                    "Owner@123", UserRole.FarmAdministrator);
+                await EnsureUserAsync(db, "manager", "manager@crabsense.local", "Quản lý trại",
+                    "Manager@123", UserRole.FarmManager);
                 await EnsureUserAsync(db, "staff", "staff@crabsense.local", "Nhân viên",
-                    "Staff@123", UserRole.Staff);
+                    "Staff@123", UserRole.FarmStaff);
 
+                await db.SaveChangesAsync();
+                await EnsureSystemAdministratorExclusiveAsync(db, logger);
                 await db.SaveChangesAsync();
                 await EnsureScheduledTaskDemoDataAsync(db, logger);
                 logger.LogInformation(
-                    "Users sẵn sàng: sysadmin/SysAdmin@123 | owner/Owner@123 | staff/Staff@123 (admin/Admin@123 = SystemAdmin).");
+                    "Users: khanhtn45=SystemAdministrator | owner=FarmAdministrator | manager=FarmManager | staff=FarmStaff.");
 
                 // DemoDataSeeder đã tắt — không auto-insert khu/dãy/hộp/cua khi start API.
                 await EnsureBoxQrsForAllBoxesAsync(db, logger);
@@ -1020,27 +1027,54 @@ public static class DevDbBootstrap
 
     /// <summary>
     /// Role lưu dạng string trong Postgres — remap legacy trước khi EF đọc entity.
-    /// Admin/SystemAdmin → SystemAdmin; Operator/Sales → FarmOwner nếu chưa có owner riêng;
-    /// Viewer/khác → Staff.
-    /// </summary>
+    /// <summary>Map chuỗi role cũ sang 4 role mới (trước bước exclusive SystemAdministrator).</summary>
     private static async Task RemapLegacyRolesAsync(AppDbContext db, ILogger logger)
     {
+        await db.Database.ExecuteSqlRawAsync("""
+            UPDATE be."AppUsers" SET "Role" = 'FarmAdministrator'
+            WHERE "Role" IN ('FarmOwner', 'Admin', 'SystemAdmin')
+              AND lower("Username") <> 'khanhtn45'
+            """);
+
+        await db.Database.ExecuteSqlRawAsync("""
+            UPDATE be."AppUsers" SET "Role" = 'FarmStaff'
+            WHERE "Role" IN ('Staff', 'Viewer', 'Sales', 'Operator')
+            """);
+
         var updated = await db.Database.ExecuteSqlRawAsync("""
             UPDATE be."AppUsers" SET "Role" = CASE "Role"
-                WHEN 'Admin' THEN 'SystemAdmin'
-                WHEN 'SystemAdmin' THEN 'SystemAdmin'
-                WHEN 'Operator' THEN 'Staff'
-                WHEN 'Viewer' THEN 'Staff'
-                WHEN 'Sales' THEN 'Staff'
-                WHEN 'FarmOwner' THEN 'FarmOwner'
-                WHEN 'Staff' THEN 'Staff'
-                ELSE 'Staff'
+                WHEN 'SystemAdministrator' THEN 'SystemAdministrator'
+                WHEN 'FarmAdministrator' THEN 'FarmAdministrator'
+                WHEN 'FarmManager' THEN 'FarmManager'
+                WHEN 'FarmStaff' THEN 'FarmStaff'
+                ELSE 'FarmStaff'
             END
-            WHERE "Role" NOT IN ('SystemAdmin', 'FarmOwner', 'Staff')
+            WHERE "Role" NOT IN (
+                'SystemAdministrator', 'FarmAdministrator', 'FarmManager', 'FarmStaff')
             """);
 
         if (updated > 0)
             logger.LogInformation("Remapped {N} legacy user role string(s).", updated);
+    }
+
+    /// <summary>Chỉ khanhtn45 được giữ SystemAdministrator.</summary>
+    private static async Task EnsureSystemAdministratorExclusiveAsync(AppDbContext db, ILogger logger)
+    {
+        var demoted = await db.Database.ExecuteSqlRawAsync("""
+            UPDATE be."AppUsers" SET "Role" = 'FarmAdministrator'
+            WHERE "Role" = 'SystemAdministrator'
+              AND lower("Username") <> 'khanhtn45'
+            """);
+
+        await db.Database.ExecuteSqlRawAsync("""
+            UPDATE be."AppUsers" SET "Role" = 'SystemAdministrator'
+            WHERE lower("Username") = 'khanhtn45'
+            """);
+
+        if (demoted > 0)
+            logger.LogInformation(
+                "Demoted {N} non-khanhtn45 user(s) from SystemAdministrator to FarmAdministrator.",
+                demoted);
     }
 
     private static async Task EnsureUserAsync(

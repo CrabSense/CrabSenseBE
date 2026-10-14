@@ -25,9 +25,13 @@ public class AuthController : ControllerBase
     [HttpPost("login")]
     [ProducesResponseType(typeof(ApiResponse<LoginResponse>), 200)]
     public async Task<IActionResult> Login([FromBody] LoginRequest request, CancellationToken ct)
-        => Ok(await _authService.LoginAsync(request, ct));
+        => Ok(await _authService.LoginAsync(
+            request,
+            ct,
+            HttpContext.Connection.RemoteIpAddress?.ToString(),
+            Request.Headers.UserAgent.ToString()));
 
-    /// <summary>[CREATE] Register user — Role: SystemAdmin | FarmOwner | Staff</summary>
+    /// <summary>[CREATE] Register user — Role: FarmAdministrator | FarmManager | FarmStaff</summary>
     [HttpPost("register")]
     [AllowAnonymous]
     public async Task<IActionResult> Register([FromBody] RegisterRequest request, CancellationToken ct)

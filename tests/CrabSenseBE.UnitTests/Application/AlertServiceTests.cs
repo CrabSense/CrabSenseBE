@@ -39,7 +39,7 @@ public class AlertServiceTests
 
         var userRepo = new Mock<IRepository<AppUser>>();
         userRepo.Setup(r => r.FindAsync(It.IsAny<System.Linq.Expressions.Expression<Func<AppUser, bool>>>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new[] { new AppUser { Id = Guid.NewGuid(), Role = UserRole.FarmOwner, IsActive = true } });
+            .ReturnsAsync(new[] { new AppUser { Id = Guid.NewGuid(), Role = UserRole.FarmAdministrator, IsActive = true } });
 
         _uow.Setup(u => u.Alerts).Returns(alertRepo.Object);
         _uow.Setup(u => u.Users).Returns(userRepo.Object);

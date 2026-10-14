@@ -1,5 +1,6 @@
 using CrabSenseBE.Application.DTOs.FrozenStorage;
 using CrabSenseBE.Application.Interfaces;
+using CrabSenseBE.Domain.Enums;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -102,7 +103,7 @@ public class FrozenStorageController : ControllerBase
     /// Ghi nhận từng cua trong lô và tạo một barcode riêng cho mỗi cua.
     /// </summary>
     [HttpPost("{lotId:guid}/crab-items")]
-    [Authorize(Roles = "SystemAdmin, Staff")]
+    [Authorize(Roles = AppRoles.FarmWrite)]
     public async Task<IActionResult> RegisterCrabItems(
         Guid lotId,
         [FromBody] RegisterFrozenCrabItemsRequest request,

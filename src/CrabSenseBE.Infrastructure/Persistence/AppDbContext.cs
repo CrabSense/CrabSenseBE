@@ -1,4 +1,5 @@
 using CrabSenseBE.Domain.Entities;
+using CrabSenseBE.Domain.Enums;
 using Microsoft.EntityFrameworkCore;
 
 namespace CrabSenseBE.Infrastructure.Persistence;
@@ -80,6 +81,12 @@ public class AppDbContext : DbContext
     public DbSet<FarmKiosk> FarmKiosks => Set<FarmKiosk>();
     public DbSet<KioskProvisioningCode> KioskProvisioningCodes => Set<KioskProvisioningCode>();
     public DbSet<KioskCredential> KioskCredentials => Set<KioskCredential>();
+    public DbSet<CameraRecordingSetting> CameraRecordingSettings => Set<CameraRecordingSetting>();
+    public DbSet<AiManagedService> AiManagedServices => Set<AiManagedService>();
+    public DbSet<BackupScheduleSetting> BackupScheduleSettings => Set<BackupScheduleSetting>();
+    public DbSet<SystemDeployment> SystemDeployments => Set<SystemDeployment>();
+    public DbSet<ServiceApiKey> ServiceApiKeys => Set<ServiceApiKey>();
+    public DbSet<SecurityPolicySetting> SecurityPolicySettings => Set<SecurityPolicySetting>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -108,7 +115,9 @@ public class AppDbContext : DbContext
         // Enum conversions stored as string
         modelBuilder.Entity<AppUser>()
             .Property(u => u.Role)
-            .HasConversion<string>();
+            .HasConversion(
+                v => v.ToString(),
+                v => UserRoleParsing.FromStorage(v));
 
         modelBuilder.Entity<Alert>()
             .Property(a => a.Severity)
@@ -479,6 +488,23 @@ public class AppDbContext : DbContext
         .HasForeignKey(x => x.CrabId)
         .OnDelete(DeleteBehavior.Restrict);
 });
+
+        modelBuilder.Entity<CameraRecordingSetting>()
+            .HasIndex(x => x.DeviceId)
+            .IsUnique();
+        modelBuilder.Entity<CameraRecordingSetting>()
+            .HasOne(x => x.Device)
+            .WithMany()
+            .HasForeignKey(x => x.DeviceId)
+            .OnDelete(DeleteBehavior.Cascade);
+        modelBuilder.Entity<AiManagedService>()
+            .Property(x => x.ConfidenceThreshold)
+            .HasPrecision(5, 2);
+        modelBuilder.Entity<AiManagedService>()
+            .Property(x => x.FrameSamplingFps)
+            .HasPrecision(6, 2);
+        modelBuilder.Entity<ServiceApiKey>()
+            .HasIndex(x => x.Prefix);
     }
 
     public override Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)
