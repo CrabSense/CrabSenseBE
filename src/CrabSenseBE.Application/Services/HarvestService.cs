@@ -43,12 +43,12 @@ public class HarvestService : IHarvestService
     {
         var voucher = await GetVoucherOrThrowAsync(id, ct);
 
-    var lines = await _uow.HarvestLines.FindAsync(
-        line => line.HarvestVoucherId == id,
-        ct);
+        var lines = await _uow.HarvestLines.FindAsync(
+            line => line.HarvestVoucherId == id,
+            ct);
 
-    return ApiResponse<HarvestVoucherDetailDto>.Ok(
-        MapVoucherDetail(voucher, lines, await AreaNameAsync(voucher.FarmingAreaId, ct)));
+        return ApiResponse<HarvestVoucherDetailDto>.Ok(
+            MapVoucherDetail(voucher, lines, await AreaNameAsync(voucher.FarmingAreaId, ct)));
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -716,36 +716,36 @@ public class HarvestService : IHarvestService
         var softshellQuantity = lines.Count(
             line => line.IsSoftshell);
 
-    var lineDtos = lines.Select(MapLine).ToList();
-    var passed = lineDtos.Count(l => IsPassed(l.Result));
-    var failed = lineDtos.Count - passed;
-    var avg = voucher.TotalQuantity <= 0
-        ? 0
-        : decimal.Round(voucher.TotalWeightKg * 1000m / voucher.TotalQuantity, 1);
+        var lineDtos = lines.Select(MapLine).ToList();
+        var passed = lineDtos.Count(l => IsPassed(l.Result));
+        var failed = lineDtos.Count - passed;
+        var avg = voucher.TotalQuantity <= 0
+            ? 0
+            : decimal.Round(voucher.TotalWeightKg * 1000m / voucher.TotalQuantity, 1);
 
-    return new HarvestVoucherDto(
-        Id: voucher.Id,
-        VoucherCode: voucher.VoucherCode,
-        // CropBatchId: voucher.CropBatchId,
-        HarvestDate: voucher.HarvestDate,
-        Status: voucher.Status.ToString(),
-        TotalQuantity: voucher.TotalQuantity,
-        TotalWeightKg: voucher.TotalWeightKg,
-        SoftshellQuantity: softshellQuantity,
-        SoftshellRate: CalculateRate(
-            softshellQuantity,
-            voucher.TotalQuantity),
-        Notes: voucher.Notes,
-        CreatedBy: voucher.CreatedBy,
-        CreatedAt: voucher.CreatedAt,
-        FarmingAreaId: voucher.FarmingAreaId,
-        PerformedByName: voucher.PerformedByName,
-        AreaName: areaName,
-        PassedCount: passed,
-        FailedCount: failed,
-        AverageWeightGram: avg,
-        PhotoUrls: JsonStringList.Parse(voucher.PhotoUrlsJson),
-        Lines: lineDtos);
+        return new HarvestVoucherDto(
+            Id: voucher.Id,
+            VoucherCode: voucher.VoucherCode,
+            // CropBatchId: voucher.CropBatchId,
+            HarvestDate: voucher.HarvestDate,
+            Status: voucher.Status.ToString(),
+            TotalQuantity: voucher.TotalQuantity,
+            TotalWeightKg: voucher.TotalWeightKg,
+            SoftshellQuantity: softshellQuantity,
+            SoftshellRate: CalculateRate(
+                softshellQuantity,
+                voucher.TotalQuantity),
+            Notes: voucher.Notes,
+            CreatedBy: voucher.CreatedBy,
+            CreatedAt: voucher.CreatedAt,
+            FarmingAreaId: voucher.FarmingAreaId,
+            PerformedByName: voucher.PerformedByName,
+            AreaName: areaName,
+            PassedCount: passed,
+            FailedCount: failed,
+            AverageWeightGram: avg,
+            PhotoUrls: JsonStringList.Parse(voucher.PhotoUrlsJson),
+            Lines: lineDtos);
     }
 
     private static HarvestVoucherDetailDto MapVoucherDetail(
@@ -1053,9 +1053,28 @@ public class HarvestService : IHarvestService
                         .Any();
                     if (!stillLive)
                     {
+                        var oldBoxStatus = box.Status;
+                        var oldBoxIsOccupied = box.IsOccupied;
+
                         box.IsOccupied = false;
-                        box.Status = "empty";
+                        box.Status = BoxStatuses.Empty;
                         _uow.Boxes.Update(box);
+
+                        // Chỉ ghi lịch sử nếu trạng thái hộp thực sự thay đổi.
+                        if (!string.Equals(oldBoxStatus, box.Status, StringComparison.OrdinalIgnoreCase)
+                            || oldBoxIsOccupied != box.IsOccupied)
+                        {
+                            await _uow.BoxStatusHistories.AddAsync(new BoxStatusHistory
+                            {
+                                BoxId = box.Id,
+                                OldStatus = oldBoxStatus,
+                                NewStatus = box.Status,
+                                OldIsOccupied = oldBoxIsOccupied,
+                                NewIsOccupied = box.IsOccupied,
+                                ChangedAt = DateTime.UtcNow,
+                                Reason = $"Thu hoạch hoàn tất: {voucher.VoucherCode}"
+                            }, ct);
+                        }
                     }
                 }
             }
