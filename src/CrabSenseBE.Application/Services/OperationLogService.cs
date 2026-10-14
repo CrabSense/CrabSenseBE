@@ -87,7 +87,8 @@ public class OperationLogService : IOperationLogService
             {
                 if (farmingAreaId is null || farmingAreaId == Guid.Empty) return true;
                 if (l.EntityId is Guid eid && boxIds.Contains(eid)) return true;
-                // Keep user/system logs without entity when not area-scoped tightly
+                if (l.EntityType is "RasComponent" or "Device")
+                    return l.Details != null && l.Details.Contains(farmingAreaId.Value.ToString("N"));
                 return l.EntityId is null;
             })
             .Take(limit)
@@ -154,6 +155,7 @@ public class OperationLogService : IOperationLogService
     {
         var a = (action ?? "").ToLowerInvariant();
         var e = (entityType ?? "").ToLowerInvariant();
+        if (a.StartsWith("ras") || e.Contains("rascomponent")) return "ras";
         if (a.Contains("qr") || e.Contains("qr")) return "qrScan";
         if (a.Contains("sensor") || a.Contains("iot") || e.Contains("sensor")) return "sensorUpdate";
         if (a.Contains("ai") || a.Contains("detect")) return "aiDetection";
@@ -173,6 +175,8 @@ public class OperationLogService : IOperationLogService
             "crab_added" => "Thêm cua",
             "crab_assigned" => "Gán cua vào hộp",
             "crab_transferred" => "Chuyển hộp cua",
+            "ras_on" => "Bật thiết bị",
+            "ras_off" => "Tắt thiết bị",
             _ => action.Replace('_', ' ')
         };
     }

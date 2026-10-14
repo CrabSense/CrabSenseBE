@@ -1,3 +1,5 @@
+using System.IdentityModel.Tokens.Jwt;
+using System.Security.Claims;
 using CrabSenseBE.Application.Common;
 using CrabSenseBE.Application.DTOs.IoT;
 using CrabSenseBE.Application.Interfaces;
@@ -33,8 +35,16 @@ public class IotController : ControllerBase
     [Authorize]
     public async Task<IActionResult> ReportRelay([FromBody] RelayStateRequest req, CancellationToken ct)
     {
-        await _service.ReportRelayAsync(req.DeviceCode, req.Channel, req.On, ct);
+        await _service.ReportRelayAsync(req.DeviceCode, req.Channel, req.On, TryGetUserId(), ct);
         return Ok(ApiResponse.Ok("Relay state recorded."));
+    }
+
+    private Guid? TryGetUserId()
+    {
+        var raw = User.FindFirstValue(JwtRegisteredClaimNames.Sub)
+            ?? User.FindFirstValue(ClaimTypes.NameIdentifier)
+            ?? User.FindFirstValue("sub");
+        return raw is not null && Guid.TryParse(raw, out var id) && id != Guid.Empty ? id : null;
     }
 
     /// <summary>[READ] Sensor history (charts)</summary>
