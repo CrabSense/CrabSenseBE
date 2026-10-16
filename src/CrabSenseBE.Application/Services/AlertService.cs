@@ -345,8 +345,48 @@ public class AlertService : IAlertService
             await NotifyOperatorsAsync(alert.Message, alert.Id, ct);
         }
 
-        if (created > 0)
-            await _uow.SaveChangesAsync(ct);
+        var kioskCutoff = DateTime.UtcNow.AddMinutes(-2);
+        var kiosks = await _uow.FarmKiosks.FindAsync(
+            k => k.Status != "Revoked" && k.Status != "Created", ct);
+        foreach (var kiosk in kiosks)
+        {
+            var message = $"Kiosk mất kết nối: {kiosk.Code} (>2 phút)";
+            var active = (await _uow.Alerts.FindAsync(
+                a => a.Status == AlertStatus.Active && a.Message == message, ct))
+                .FirstOrDefault();
+
+            if (kiosk.LastSeenAt is not null && kiosk.LastSeenAt >= kioskCutoff)
+            {
+                if (active is not null)
+                {
+                    active.Status = AlertStatus.Resolved;
+                    active.ResolvedAt = DateTime.UtcNow;
+                    _uow.Alerts.Update(active);
+                }
+                continue;
+            }
+
+            if (kiosk.LastSeenAt is null || kiosk.LastSeenAt < kioskCutoff)
+            {
+                if (active is null)
+                {
+                    var alert = new Alert
+                    {
+                        Message = message,
+                        Severity = AlertSeverity.Critical,
+                        Status = AlertStatus.Active,
+                        OccurrenceCount = 1,
+                        LastOccurredAt = DateTime.UtcNow,
+                        IncidentId = $"INC-{DateTime.UtcNow:yyyyMMdd}-KIOSK-{kiosk.Code}"
+                    };
+                    await _uow.Alerts.AddAsync(alert, ct);
+                    created++;
+                    await NotifyOperatorsAsync(alert.Message, alert.Id, ct);
+                }
+            }
+        }
+
+        await _uow.SaveChangesAsync(ct);
 
         return ApiResponse<int>.Ok(created, $"Created {created} disconnect alert(s).");
     }
