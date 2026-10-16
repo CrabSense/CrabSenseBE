@@ -180,7 +180,8 @@ public record SensorDataRequest(
     decimal Value,
     string? Unit,
     DateTime MeasuredAt,
-    string? IpAddress = null
+    string? IpAddress = null,
+    string? EventId = null
 );
 public record SensorDataBatchRequest(IEnumerable<SensorDataRequest> Measurements);
 public record SensorDataDto(Guid Id, Guid SensorId, decimal Value, string? Unit, DateTime MeasuredAt, string? Source);

@@ -40,6 +40,13 @@ public class IotService : IIotService
         if (string.IsNullOrWhiteSpace(req.SensorCode))
             throw AppException.BadRequest("SensorCode is required.");
 
+        var eventKey = string.IsNullOrWhiteSpace(req.EventId)
+            ? null
+            : $"edge:{req.EventId.Trim()}:{req.SensorCode.Trim()}";
+        if (eventKey is not null
+            && await _uow.WaterMeasurements.AnyAsync(m => m.Source == eventKey, ct))
+            return ApiResponse.Ok("Sensor data already ingested.");
+
         var sensor = await _uow.Sensors.FirstOrDefaultAsync(s => s.SensorCode == req.SensorCode, ct);
         if (sensor is null)
         {
@@ -111,7 +118,7 @@ public class IotService : IIotService
             Value = req.Value,
             Unit = req.Unit ?? sensor.Unit,
             MeasuredAt = req.MeasuredAt == default ? DateTime.UtcNow : req.MeasuredAt,
-            Source = "realtime"
+            Source = eventKey ?? "realtime"
         };
         await _uow.WaterMeasurements.AddAsync(measurement, ct);
 
