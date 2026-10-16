@@ -118,7 +118,7 @@ public class SensorsController : ControllerBase
 [ApiController]
 [Route("api/devices")]
 [Route("api/controllers")]
-[Authorize(Roles = AppRoles.Platform)]
+[Authorize(Roles = AppRoles.FarmWrite)]
 [Tags("09. IoT — Controllers (ESP32)")]
 [Produces("application/json")]
 public class DevicesController : ControllerBase
