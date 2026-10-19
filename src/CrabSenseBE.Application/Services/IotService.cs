@@ -4,6 +4,7 @@ using CrabSenseBE.Application.Interfaces;
 using CrabSenseBE.Domain.Entities;
 using CrabSenseBE.Domain.Enums;
 using CrabSenseBE.Domain.Interfaces;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 
 namespace CrabSenseBE.Application.Services;
@@ -364,10 +365,21 @@ public class IotService : IIotService
                 || DeviceInArea(s.DeviceId));
         }
         var components = (await _uow.RasComponents.GetAllAsync(ct)).ToDictionary(c => c.Id);
-        var allMeas = await _uow.WaterMeasurements.GetAllAsync(ct);
-        var latestBySensor = allMeas
-            .GroupBy(m => m.SensorId)
-            .ToDictionary(g => g.Key, g => g.OrderByDescending(x => x.MeasuredAt).First());
+
+        // Only the newest reading per sensor. WaterMeasurements grows with every telemetry
+        // tick, so loading the whole table here made /iot/live take seconds over WAN.
+        var latestBySensor = new Dictionary<Guid, WaterMeasurement>();
+        var sensorIds = sensors.Select(s => s.Id).ToList();
+        if (sensorIds.Count > 0)
+        {
+            var latest = await _uow.WaterMeasurements.Query()
+                .AsNoTracking()
+                .Where(m => sensorIds.Contains(m.SensorId))
+                .GroupBy(m => m.SensorId)
+                .Select(g => g.OrderByDescending(x => x.MeasuredAt).First())
+                .ToListAsync(ct);
+            foreach (var m in latest) latestBySensor[m.SensorId] = m;
+        }
 
         var list = new List<SensorLiveDto>();
         foreach (var s in sensors.OrderBy(s => s.SensorCode))

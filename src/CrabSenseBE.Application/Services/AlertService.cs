@@ -718,10 +718,17 @@ public class AlertService : IAlertService
         return ("Kiểm tra nguồn gốc cảnh báo và cập nhật trạng thái sau khi xử lý.", 65);
     }
 
+    private static readonly UserRole[] FarmPortalRoles =
+    {
+        UserRole.FarmAdministrator, UserRole.FarmManager, UserRole.FarmStaff
+    };
+
     private async Task NotifyOperatorsAsync(string message, Guid alertId, CancellationToken ct)
     {
+        // AppRoles.IsFarmPortalRole() cannot be translated by EF, which made every
+        // disconnect check throw and never notify anyone. An IN list translates fine.
         var users = await _uow.Users.FindAsync(
-            u => u.IsActive && AppRoles.IsFarmPortalRole(u.Role), ct);
+            u => u.IsActive && FarmPortalRoles.Contains(u.Role), ct);
         var ids = users.Select(u => u.Id).ToList();
         if (ids.Count == 0) return;
         await _notifications.NotifyUsersAsync(ids, "CrabSense Alert", message, alertId, ct);
