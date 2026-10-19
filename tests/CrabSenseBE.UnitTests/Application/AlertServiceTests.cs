@@ -112,10 +112,15 @@ public class AlertServiceTests
         userRepo.Setup(r => r.FindAsync(It.IsAny<System.Linq.Expressions.Expression<Func<AppUser, bool>>>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(Enumerable.Empty<AppUser>());
 
+        var kioskRepo = new Mock<IRepository<FarmKiosk>>();
+        kioskRepo.Setup(r => r.FindAsync(It.IsAny<System.Linq.Expressions.Expression<Func<FarmKiosk, bool>>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Enumerable.Empty<FarmKiosk>());
+
         _uow.Setup(u => u.Sensors).Returns(sensorRepo.Object);
         _uow.Setup(u => u.Devices).Returns(deviceRepo.Object);
         _uow.Setup(u => u.Alerts).Returns(alertRepo.Object);
         _uow.Setup(u => u.Users).Returns(userRepo.Object);
+        _uow.Setup(u => u.FarmKiosks).Returns(kioskRepo.Object);
         _uow.Setup(u => u.SaveChangesAsync(It.IsAny<CancellationToken>())).ReturnsAsync(1);
 
         var result = await Create().CheckDisconnectsAsync(15);
