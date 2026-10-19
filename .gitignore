@@ -43,3 +43,10 @@ coverage/
 
 # Docker
 docker-compose.override.yml
+
+# Local publish/deploy output and tool scratch files
+.deploy_publish/
+deploy_crabsense/
+*.tar.gz
+tools/_*.py
+.serena/
