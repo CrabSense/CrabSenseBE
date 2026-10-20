@@ -6,6 +6,8 @@ public record LoginRequest(string Username, string Password);
 public record RegisterRequest(string Username, string Email, string Password, string FullName, string Role);
 public record RefreshTokenRequest(string RefreshToken);
 public record ChangePasswordRequest(string CurrentPassword, string NewPassword);
+public record SetUserActiveRequest(bool IsActive);
+public record ResetUserPasswordRequest(string NewPassword);
 public record UpdateProfileRequest(
     string? FullName,
     string? Email,

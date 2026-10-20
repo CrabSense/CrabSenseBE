@@ -14,6 +14,7 @@ public static class DependencyInjection
         services.Configure<WaterAnalysisOptions>(configuration.GetSection(WaterAnalysisOptions.SectionName));
         services.Configure<NotificationOptions>(configuration.GetSection(NotificationOptions.SectionName));
         services.AddScoped<IAuthService, AuthService>();
+        services.AddScoped<IUserAdminService, UserAdminService>();
         services.AddScoped<IFarmingService, FarmingService>();
         services.AddScoped<IFarmLotService, FarmLotService>();
         services.AddScoped<IHarvestService, HarvestService>();

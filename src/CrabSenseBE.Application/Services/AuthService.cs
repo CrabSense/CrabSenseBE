@@ -252,7 +252,7 @@ public class AuthService : IAuthService
         }
     }
 
-    private static UserDto MapToDto(AppUser u) => new(
+    internal static UserDto MapToDto(AppUser u) => new(
         u.Id,
         u.Username,
         u.Email,

@@ -50,3 +50,5 @@ deploy_crabsense/
 *.tar.gz
 tools/_*.py
 .serena/
+
+/artifacts/
