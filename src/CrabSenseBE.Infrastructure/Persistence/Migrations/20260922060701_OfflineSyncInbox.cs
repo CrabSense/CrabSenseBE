@@ -37,7 +37,9 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     ON be."SyncInboxItems" ("Status", "ReceivedAt");
                 """);
             return;
-
+            // Các cột dưới đây đã tồn tại trong baseline của DB dev nên cố tình bỏ qua.
+            // Giữ nguyên code để lịch sử migration không lệch; compiler cảnh báo unreachable.
+#pragma warning disable CS0162
             migrationBuilder.AddColumn<string>(
                 name: "DeliveryStatus",
                 schema: "be",
@@ -392,6 +394,7 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                 schema: "be",
                 table: "WaterAnalysisRuns",
                 columns: new[] { "FarmingAreaId", "StartedAt" });
+#pragma warning restore CS0162
         }
 
         /// <inheritdoc />

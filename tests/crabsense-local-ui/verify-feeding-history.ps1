@@ -28,7 +28,7 @@ function Pass([string]$m) { Write-Host "  ok    $m" -ForegroundColor Green }
 
 function Login {
   $r = Invoke-RestMethod "$base/api/auth/login" -Method Post -ContentType 'application/json' `
-        -Body (@{ username = 'owner'; password = 'Owner@123' } | ConvertTo-Json -Compress)
+        -Body (@{ username = $env:CRABSENSE_USER; password = $env:CRABSENSE_PASSWORD } | ConvertTo-Json -Compress)
   return @{ Authorization = "Bearer $($r.data.accessToken)"; 'Content-Type' = 'application/json' }
 }
 

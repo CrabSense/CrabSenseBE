@@ -1386,6 +1386,8 @@
   async function api(method, path, body) {
     const headers = { Accept: "application/json" };
     if (token) headers.Authorization = `Bearer ${token}`;
+    const edgeKey = $("edgeKey")?.value?.trim();
+    if (edgeKey) headers["X-Edge-Key"] = edgeKey;
     const isForm = typeof FormData !== "undefined" && body instanceof FormData;
     if (body !== undefined && !isForm) headers["Content-Type"] = "application/json";
     const res = await fetch(baseUrl() + path, {
@@ -2700,6 +2702,7 @@
       if (!token) throw new Error("no accessToken");
       localStorage.setItem("cs_token", token);
       localStorage.setItem("cs_api", baseUrl());
+      localStorage.setItem("cs_edge", $("edgeKey")?.value?.trim() || "");
       $("loginInfo").textContent = "OK";
       $("app").style.display = "block";
       $("userLine").textContent = user
@@ -2730,6 +2733,8 @@
 
   const savedApi = localStorage.getItem("cs_api");
   if (savedApi) $("apiBase").value = savedApi;
+  const savedEdge = localStorage.getItem("cs_edge");
+  if (savedEdge) $("edgeKey").value = savedEdge;
 
   async function bootWithCachedToken() {
     if (!token) return;

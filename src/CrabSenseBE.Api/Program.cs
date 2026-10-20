@@ -36,6 +36,13 @@ builder.Services.AddScoped< IMortalityService, MortalityService>();
 // ─── JWT Authentication ─────────────────────────────────────────────────────
 var jwtSecret = builder.Configuration["Jwt:Secret"]
     ?? throw new InvalidOperationException("Jwt:Secret is required");
+// Không cho chạy với secret placeholder/ngắn: kẻ tấn công biết secret là tự ký được token admin.
+if (jwtSecret.Length < 32
+    || jwtSecret.Contains("CHANGE_ME", StringComparison.OrdinalIgnoreCase))
+{
+    throw new InvalidOperationException(
+        "Jwt:Secret must be at least 32 characters and must not be a CHANGE_ME placeholder.");
+}
 
 builder.Services
     .AddAuthentication(options =>
@@ -151,7 +158,9 @@ var app = builder.Build();
 app.UseSerilogRequestLogging();
 app.UseMiddleware<ExceptionMiddleware>();
 
-if (app.Environment.IsDevelopment())
+// Swagger và HTTPS redirect đọc từ config, không phụ thuộc tên environment:
+// production có thể bật Swagger (admin UI) mà không phải chạy ASPNETCORE_ENVIRONMENT=Development.
+if (builder.Configuration.GetValue("Swagger:Enabled", app.Environment.IsDevelopment()))
 {
     app.UseSwagger();
     app.UseSwaggerUI(c =>
@@ -162,7 +171,7 @@ if (app.Environment.IsDevelopment())
 }
 
 app.UseCors("AllowFrontend");
-if (!app.Environment.IsDevelopment())
+if (builder.Configuration.GetValue("Https:Redirect", false))
     app.UseHttpsRedirection();
 app.UseAuthentication();
 app.UseAuthorization();

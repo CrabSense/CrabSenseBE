@@ -9,9 +9,14 @@ namespace CrabSenseBE.Infrastructure.Services;
 /// <summary>Triển khai IStorageService bằng MinIO (edge HDF5 archive).</summary>
 public class MinioStorageService : IStorageService
 {
-    private readonly IMinioClient _minio;
+    // ponytail: lazy — thiếu cấu hình MinIO chỉ fail khi thực sự dùng HDF5,
+    // không làm 500 các endpoint khác cùng inject IStorageService.
+    private readonly Lazy<IMinioClient> _minio;
 
     public MinioStorageService(IConfiguration config)
+        => _minio = new Lazy<IMinioClient>(() => CreateClient(config));
+
+    private static IMinioClient CreateClient(IConfiguration config)
     {
         // Không có credential mặc định: thiếu config thì báo lỗi rõ thay vì dùng minioadmin.
         var endpoint = config["MinIO:Endpoint"];
@@ -27,19 +32,21 @@ public class MinioStorageService : IStorageService
 
         var useSSL = bool.Parse(config["MinIO:UseSSL"] ?? "false");
 
-        _minio = new MinioClient()
+        return new MinioClient()
             .WithEndpoint(endpoint)
             .WithCredentials(accessKey, secretKey)
             .WithSSL(useSSL)
             .Build();
     }
 
+    private IMinioClient Minio => _minio.Value;
+
     public async Task EnsureBucketExistsAsync(string bucketName, CancellationToken ct = default)
     {
-        var exists = await _minio.BucketExistsAsync(
+        var exists = await Minio.BucketExistsAsync(
             new BucketExistsArgs().WithBucket(bucketName), ct);
         if (!exists)
-            await _minio.MakeBucketAsync(
+            await Minio.MakeBucketAsync(
                 new MakeBucketArgs().WithBucket(bucketName), ct);
     }
 
@@ -47,7 +54,7 @@ public class MinioStorageService : IStorageService
         string contentType, CancellationToken ct = default)
     {
         await EnsureBucketExistsAsync(bucketName, ct);
-        await _minio.PutObjectAsync(new PutObjectArgs()
+        await Minio.PutObjectAsync(new PutObjectArgs()
             .WithBucket(bucketName)
             .WithObject(objectName)
             .WithStreamData(data)
@@ -60,7 +67,7 @@ public class MinioStorageService : IStorageService
     public async Task<Stream> DownloadAsync(string bucketName, string objectName, CancellationToken ct = default)
     {
         var ms = new MemoryStream();
-        await _minio.GetObjectAsync(new GetObjectArgs()
+        await Minio.GetObjectAsync(new GetObjectArgs()
             .WithBucket(bucketName)
             .WithObject(objectName)
             .WithCallbackStream(s => s.CopyTo(ms)), ct);
@@ -70,7 +77,7 @@ public class MinioStorageService : IStorageService
 
     public async Task DeleteAsync(string bucketName, string objectName, CancellationToken ct = default)
     {
-        await _minio.RemoveObjectAsync(new RemoveObjectArgs()
+        await Minio.RemoveObjectAsync(new RemoveObjectArgs()
             .WithBucket(bucketName)
             .WithObject(objectName), ct);
     }

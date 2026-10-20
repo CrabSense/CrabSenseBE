@@ -116,9 +116,8 @@ public static class DevDbBootstrap
                 if (seedDemo)
                     await EnsureScheduledTaskDemoDataAsync(db, logger);
                 logger.LogInformation(
-                    "Users: admin seed={AdminState} ({Admin}) | demo users={DemoState}.",
+                    "Users: admin seed={AdminState} | demo users={DemoState}.",
                     seedAdmin ? "enabled" : "skipped",
-                    seedAdmin ? adminUsername : "-",
                     seedDemo ? "enabled" : "disabled");
 
                 // DemoDataSeeder đã tắt — không auto-insert khu/dãy/hộp/cua khi start API.

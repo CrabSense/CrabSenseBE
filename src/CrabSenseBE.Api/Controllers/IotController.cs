@@ -223,11 +223,17 @@ public class SyncController : ControllerBase
     private readonly IIotService _service;
     public SyncController(IIotService service) => _service = service;
 
-    /// <summary>[CREATE] Kiosk HDF5 upload</summary>
+    /// <summary>[CREATE] Kiosk HDF5 upload — yêu cầu X-Edge-Key</summary>
     [HttpPost("hdf5")]
     [AllowAnonymous]
-    public async Task<IActionResult> UploadHdf5([FromForm] Hdf5UploadRequest req, IFormFile file, CancellationToken ct)
+    public async Task<IActionResult> UploadHdf5(
+        [FromForm] Hdf5UploadRequest req,
+        IFormFile file,
+        CancellationToken ct,
+        [FromServices] IConfiguration configuration)
     {
+        var denied = EdgeKeyGuard.Check(Request, configuration);
+        if (denied is not null) return denied;
         using var stream = file.OpenReadStream();
         return Ok(await _service.ProcessHdf5UploadAsync(req, stream, ct));
     }

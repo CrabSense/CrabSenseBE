@@ -5,7 +5,7 @@ $port = 5500
 $root = $PSScriptRoot
 
 Write-Host "Serving $root at http://localhost:$port"
-Write-Host "Login: owner / Owner@123  (API must be running on :5080)"
+Write-Host "Login: user tự nhập trên UI (demo account đã tắt; cần tài khoản thật)"
 Write-Host "Ctrl+C to stop."
 
 # Prefer real Python (avoid WindowsApps stub)
