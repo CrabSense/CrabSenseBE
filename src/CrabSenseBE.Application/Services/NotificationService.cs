@@ -44,6 +44,13 @@ public class NotificationService : INotificationService
             list.OrderByDescending(n => n.CreatedAt).Select(Map));
     }
 
+    public async Task<ApiResponse<AlertUnreadCountDto>> GetUnreadCountAsync(
+        Guid userId, CancellationToken ct = default)
+    {
+        var count = await _uow.Notifications.CountAsync(n => n.UserId == userId && !n.IsRead, ct);
+        return ApiResponse<AlertUnreadCountDto>.Ok(new AlertUnreadCountDto(count, count));
+    }
+
     public async Task<ApiResponse> MarkReadAsync(Guid id, CancellationToken ct = default)
     {
         var n = await _uow.Notifications.GetByIdAsync(id, ct)
@@ -53,6 +60,23 @@ public class NotificationService : INotificationService
         _uow.Notifications.Update(n);
         await _uow.SaveChangesAsync(ct);
         return ApiResponse.Ok("Marked as read.");
+    }
+
+    public async Task<ApiResponse> MarkAllReadAsync(Guid userId, CancellationToken ct = default)
+    {
+        var unread = (await _uow.Notifications.FindAsync(
+            n => n.UserId == userId && !n.IsRead, ct)).ToList();
+        if (unread.Count == 0) return ApiResponse.Ok("No unread notifications.");
+
+        var now = DateTime.UtcNow;
+        foreach (var n in unread)
+        {
+            n.IsRead = true;
+            n.ReadAt = now;
+            _uow.Notifications.Update(n);
+        }
+        await _uow.SaveChangesAsync(ct);
+        return ApiResponse.Ok($"Marked {unread.Count} notification(s) as read.");
     }
 
     public async Task<ApiResponse<IEnumerable<NotificationChannelDto>>> GetChannelsAsync(CancellationToken ct = default)

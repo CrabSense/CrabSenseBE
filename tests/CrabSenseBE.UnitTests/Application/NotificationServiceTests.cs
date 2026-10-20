@@ -62,6 +62,54 @@ public class NotificationServiceTests
     }
 
     [Fact]
+    public async Task GetUnreadCount_CountsOnlyUnread()
+    {
+        var userId = Guid.NewGuid();
+        var all = new List<Notification>
+        {
+            new() { Id = Guid.NewGuid(), UserId = userId, IsRead = false },
+            new() { Id = Guid.NewGuid(), UserId = userId, IsRead = true },
+            new() { Id = Guid.NewGuid(), UserId = userId, IsRead = false },
+        };
+        var repo = new Mock<IRepository<Notification>>();
+        repo.Setup(r => r.CountAsync(It.IsAny<System.Linq.Expressions.Expression<Func<Notification, bool>>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((System.Linq.Expressions.Expression<Func<Notification, bool>> pred, CancellationToken _) =>
+                all.AsQueryable().Count(pred));
+
+        _uow.Setup(u => u.Notifications).Returns(repo.Object);
+
+        var result = await Create().GetUnreadCountAsync(userId);
+
+        result.Success.Should().BeTrue();
+        result.Data!.Count.Should().Be(2);
+    }
+
+    [Fact]
+    public async Task MarkAllRead_UpdatesEveryUnreadRow()
+    {
+        var userId = Guid.NewGuid();
+        var all = new List<Notification>
+        {
+            new() { Id = Guid.NewGuid(), UserId = userId, IsRead = false },
+            new() { Id = Guid.NewGuid(), UserId = userId, IsRead = true, ReadAt = DateTime.UtcNow },
+            new() { Id = Guid.NewGuid(), UserId = userId, IsRead = false },
+        };
+        var repo = new Mock<IRepository<Notification>>();
+        repo.Setup(r => r.FindAsync(It.IsAny<System.Linq.Expressions.Expression<Func<Notification, bool>>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((System.Linq.Expressions.Expression<Func<Notification, bool>> pred, CancellationToken _) =>
+                all.AsQueryable().Where(pred).ToList());
+        repo.Setup(r => r.Update(It.IsAny<Notification>()));
+
+        _uow.Setup(u => u.Notifications).Returns(repo.Object);
+        _uow.Setup(u => u.SaveChangesAsync(It.IsAny<CancellationToken>())).ReturnsAsync(1);
+
+        var result = await Create().MarkAllReadAsync(userId);
+
+        result.Success.Should().BeTrue();
+        all.Should().OnlyContain(n => n.IsRead && n.ReadAt != null);
+    }
+
+    [Fact]
     public async Task RegisterPushToken_CreatesNewToken()
     {
         var userId = Guid.NewGuid();

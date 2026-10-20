@@ -7,7 +7,9 @@ namespace CrabSenseBE.Application.Interfaces;
 public interface INotificationService
 {
     Task<ApiResponse<IEnumerable<NotificationDto>>> GetByUserAsync(Guid userId, bool unreadOnly = false, CancellationToken ct = default);
+    Task<ApiResponse<AlertUnreadCountDto>> GetUnreadCountAsync(Guid userId, CancellationToken ct = default);
     Task<ApiResponse> MarkReadAsync(Guid id, CancellationToken ct = default);
+    Task<ApiResponse> MarkAllReadAsync(Guid userId, CancellationToken ct = default);
 
     Task<ApiResponse<IEnumerable<NotificationChannelDto>>> GetChannelsAsync(CancellationToken ct = default);
     Task<ApiResponse<NotificationChannelDto>> GetChannelAsync(Guid id, CancellationToken ct = default);

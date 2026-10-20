@@ -136,7 +136,27 @@ public class NotificationsController : ControllerBase
     /// <summary>[READ] Notifications by user</summary>
     [HttpGet("user/{userId:guid}")]
     public async Task<IActionResult> GetByUser(Guid userId, [FromQuery] bool unreadOnly = false, CancellationToken ct = default)
-        => Ok(await _service.GetByUserAsync(userId, unreadOnly, ct));
+    {
+        // Only self (or a system administrator) may read a user's notifications.
+        if (userId != _currentUser.UserId && !User.IsInRole(AppRoles.SystemAdministrator))
+            return Forbid();
+        return Ok(await _service.GetByUserAsync(userId, unreadOnly, ct));
+    }
+
+    /// <summary>[READ] Notifications of the current user (Notification Center)</summary>
+    [HttpGet("me")]
+    public async Task<IActionResult> GetMine([FromQuery] bool unreadOnly = false, CancellationToken ct = default)
+        => Ok(await _service.GetByUserAsync(_currentUser.UserId, unreadOnly, ct));
+
+    /// <summary>[READ] Unread notification count of the current user</summary>
+    [HttpGet("unread/count")]
+    public async Task<IActionResult> UnreadCount(CancellationToken ct)
+        => Ok(await _service.GetUnreadCountAsync(_currentUser.UserId, ct));
+
+    /// <summary>[UPDATE] Mark every notification of the current user as read</summary>
+    [HttpPatch("read-all")]
+    public async Task<IActionResult> MarkAllRead(CancellationToken ct)
+        => Ok(await _service.MarkAllReadAsync(_currentUser.UserId, ct));
 
     /// <summary>[UPDATE] Mark notification as read</summary>
     [HttpPatch("{id:guid}/read")]
