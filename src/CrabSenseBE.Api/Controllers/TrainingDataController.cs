@@ -1,6 +1,7 @@
 using System.Security.Claims;
 using CrabSenseBE.Application.DTOs.TrainingData;
 using CrabSenseBE.Application.Interfaces;
+using CrabSenseBE.Domain.Enums;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -8,7 +9,7 @@ namespace CrabSenseBE.Api.Controllers;
 
 [ApiController]
 [Route("api/training-data")]
-[Authorize]
+[Authorize(Roles = AppRoles.Platform)]
 [Produces("application/json")]
 public class TrainingDataController : ControllerBase
 {

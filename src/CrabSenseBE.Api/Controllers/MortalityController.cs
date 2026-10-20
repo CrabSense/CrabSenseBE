@@ -1,5 +1,6 @@
 using CrabSenseBE.Application.DTOs.Mortality;
 using CrabSenseBE.Application.Interfaces;
+using CrabSenseBE.Domain.Enums;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using System.Security.Claims;
@@ -26,6 +27,7 @@ public class MortalityController : ControllerBase
     /// Ghi nhận một cá thể cua chết.
     /// </summary>
     [HttpPost]
+    [Authorize(Roles = AppRoles.FarmWriteWithPlatform)]
     public async Task<IActionResult> RecordMortality(
         [FromBody] RecordMortalityRequest request,
         CancellationToken cancellationToken)

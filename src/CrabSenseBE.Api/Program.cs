@@ -67,6 +67,30 @@ builder.Services
 
 builder.Services.AddAuthorization();
 
+// ─── Rate limiting (chống brute-force đăng nhập) ────────────────────────────
+// ponytail: partition theo IP, 20 lần / 5 phút. Nhiều user sau cùng NAT có thể
+// dùng chung hạn mức; nâng cấp: partition thêm username khi tách được body.
+builder.Services.AddRateLimiter(options =>
+{
+    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+    options.OnRejected = async (context, ct) =>
+    {
+        context.HttpContext.Response.ContentType = "application/json";
+        await context.HttpContext.Response.WriteAsync(
+            "{\"success\":false,\"message\":\"Quá nhiều lần thử đăng nhập. Vui lòng thử lại sau ít phút.\"}",
+            ct);
+    };
+    options.AddPolicy("login", context =>
+        System.Threading.RateLimiting.RateLimitPartition.GetFixedWindowLimiter(
+            context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+            _ => new System.Threading.RateLimiting.FixedWindowRateLimiterOptions
+            {
+                PermitLimit = 20,
+                Window = TimeSpan.FromMinutes(5),
+                QueueLimit = 0
+            }));
+});
+
 // ─── Controllers + JSON ─────────────────────────────────────────────────────
 builder.Services.AddControllers()
     .AddJsonOptions(opts =>
@@ -171,6 +195,7 @@ if (builder.Configuration.GetValue("Swagger:Enabled", app.Environment.IsDevelopm
 }
 
 app.UseCors("AllowFrontend");
+app.UseRateLimiter();
 if (builder.Configuration.GetValue("Https:Redirect", false))
     app.UseHttpsRedirection();
 app.UseAuthentication();

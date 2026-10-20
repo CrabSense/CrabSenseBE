@@ -24,17 +24,20 @@ public class NotificationService : INotificationService
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly ILogger<NotificationService> _logger;
     private readonly FcmOptions _fcm;
+    private readonly NotificationOptions _fallback;
 
     public NotificationService(
         IUnitOfWork uow,
         IHttpClientFactory httpClientFactory,
         ILogger<NotificationService> logger,
-        IOptions<FcmOptions> fcm)
+        IOptions<FcmOptions> fcm,
+        IOptions<NotificationOptions> fallback)
     {
         _uow = uow;
         _httpClientFactory = httpClientFactory;
         _logger = logger;
         _fcm = fcm.Value;
+        _fallback = fallback.Value;
     }
 
     public async Task<ApiResponse<IEnumerable<NotificationDto>>> GetByUserAsync(
@@ -364,7 +367,7 @@ public class NotificationService : INotificationService
         if (rule is not null && !rule.IsEnabled) return;
         if (!SeverityPasses(rule?.MinSeverity, severity)) return;
 
-        var roles = SplitCsv(rule?.RecipientRoles ?? LegacyRoles)
+        var roles = SplitCsv(rule?.RecipientRoles ?? _fallback.FallbackRecipientRoles)
             .Select(r => UserRoleParsing.TryParse(r, out var v) ? (UserRole?)v : null)
             .Where(r => r is not null)
             .Select(r => r!.Value)
@@ -380,7 +383,7 @@ public class NotificationService : INotificationService
         var body = Render(
             string.IsNullOrWhiteSpace(rule?.BodyTemplate) ? "{message}" : rule!.BodyTemplate!, values);
 
-        var channelCodes = SplitCsv(rule?.ChannelCodes ?? LegacyChannels);
+        var channelCodes = SplitCsv(rule?.ChannelCodes ?? _fallback.FallbackChannels);
         var channels = (await _uow.NotificationChannels.FindAsync(
             c => c.IsEnabled && channelCodes.Contains(c.ChannelCode), ct)).ToList();
         var pushChannel = channels.FirstOrDefault(c => c.ChannelCode == "push");
@@ -445,9 +448,6 @@ public class NotificationService : INotificationService
     }
 
     // ─── Rule resolution ────────────────────────────────────────────────────
-
-    private const string LegacyRoles = "FarmAdministrator,FarmManager,FarmStaff";
-    private const string LegacyChannels = "in_app,push,telegram,zalo_oa,email";
 
     private static readonly HashSet<string> KnownChannelCodes =
         new(StringComparer.OrdinalIgnoreCase) { "in_app", "push", "telegram", "zalo_oa", "email" };

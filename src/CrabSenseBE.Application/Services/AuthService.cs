@@ -112,7 +112,8 @@ public class AuthService : IAuthService
         return ApiResponse.Ok("Logged out successfully.");
     }
 
-    public async Task<ApiResponse<UserDto>> RegisterAsync(RegisterRequest request, CancellationToken ct = default)
+    public async Task<ApiResponse<UserDto>> RegisterAsync(
+        RegisterRequest request, UserRole callerRole, CancellationToken ct = default)
     {
         if (await _uow.Users.AnyAsync(u => u.Username == request.Username, ct))
             throw AppException.Conflict("Username already taken.");
@@ -126,6 +127,18 @@ public class AuthService : IAuthService
         if (role == UserRole.SystemAdministrator)
             throw AppException.BadRequest(
                 "Không thể đăng ký System Administrator qua API.");
+
+        // Chỉ System Administrator được tạo Farm Administrator; Farm Administrator
+        // chỉ được tạo Manager/Staff. Role khác không được tạo tài khoản.
+        var allowed = callerRole switch
+        {
+            UserRole.SystemAdministrator => true,
+            UserRole.FarmAdministrator => role != UserRole.FarmAdministrator,
+            _ => false
+        };
+        if (!allowed)
+            throw AppException.Forbidden(
+                "Role của bạn không được phép tạo tài khoản với role này.");
 
         var user = new AppUser
         {

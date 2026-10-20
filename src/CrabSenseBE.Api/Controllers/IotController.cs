@@ -138,7 +138,12 @@ public class SensorsController : ControllerBase
 public class DevicesController : ControllerBase
 {
     private readonly IIotService _service;
-    public DevicesController(IIotService service) => _service = service;
+    private readonly IConfiguration _configuration;
+    public DevicesController(IIotService service, IConfiguration configuration)
+    {
+        _service = service;
+        _configuration = configuration;
+    }
 
     /// <summary>[READ] List ESP32 / gateways — optional farmingAreaId</summary>
     [HttpGet]
@@ -168,11 +173,15 @@ public class DevicesController : ControllerBase
     public async Task<IActionResult> Delete(Guid id, CancellationToken ct)
         => Ok(await _service.DeleteDeviceAsync(id, ct, UserId(), Ip()));
 
-    /// <summary>[UPDATE] Heartbeat / status from edge</summary>
+    /// <summary>[UPDATE] Heartbeat / status from edge — yêu cầu X-Edge-Key</summary>
     [HttpPut("{id:guid}/status")]
     [AllowAnonymous]
     public async Task<IActionResult> UpdateStatus(Guid id, [FromBody] UpdateDeviceStatusRequest req, CancellationToken ct)
-        => Ok(await _service.UpdateDeviceStatusAsync(id, req, ct));
+    {
+        var denied = EdgeKeyGuard.Check(Request, _configuration);
+        if (denied is not null) return denied;
+        return Ok(await _service.UpdateDeviceStatusAsync(id, req, ct));
+    }
 
     private Guid? UserId()
     {

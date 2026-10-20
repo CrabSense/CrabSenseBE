@@ -1,6 +1,7 @@
 using CrabSenseBE.Api.Services;
 using CrabSenseBE.Application.DTOs.IoT;
 using CrabSenseBE.Application.Interfaces;
+using CrabSenseBE.Domain.Enums;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -23,7 +24,7 @@ public sealed class EdgeCommandsController : ControllerBase
     }
 
     [HttpPost]
-    [Authorize]
+    [Authorize(Roles = AppRoles.FarmWriteWithPlatform)]
     public Task<IActionResult> Enqueue(
         [FromBody] EnqueueEdgeCommandRequest request,
         CancellationToken ct)

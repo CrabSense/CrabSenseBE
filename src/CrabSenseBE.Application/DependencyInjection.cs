@@ -11,6 +11,8 @@ public static class DependencyInjection
     public static IServiceCollection AddApplication(this IServiceCollection services, IConfiguration configuration)
     {
         services.Configure<FcmOptions>(configuration.GetSection(FcmOptions.SectionName));
+        services.Configure<WaterAnalysisOptions>(configuration.GetSection(WaterAnalysisOptions.SectionName));
+        services.Configure<NotificationOptions>(configuration.GetSection(NotificationOptions.SectionName));
         services.AddScoped<IAuthService, AuthService>();
         services.AddScoped<IFarmingService, FarmingService>();
         services.AddScoped<IFarmLotService, FarmLotService>();

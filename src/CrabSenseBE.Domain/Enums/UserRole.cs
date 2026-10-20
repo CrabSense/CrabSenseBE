@@ -34,6 +34,12 @@ public static class AppRoles
     /// <summary>Quản trị cấu trúc trại — Farm Administrator.</summary>
     public const string FarmManage = "FarmAdministrator,FarmOwner";
 
+    /// <summary>FarmWrite + System Administrator (admin vẫn thao tác được khi cần).</summary>
+    public const string FarmWriteWithPlatform = FarmWrite + "," + Platform;
+
+    /// <summary>FarmManage + System Administrator.</summary>
+    public const string FarmManageWithPlatform = FarmManage + "," + Platform;
+
     /// <summary>
     /// Camera, sensor, controller, AI, lịch ghi, trạng thái thiết bị,
     /// lưu trữ, backup, triển khai và bảo mật hệ thống.

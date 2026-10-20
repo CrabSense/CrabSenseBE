@@ -18,9 +18,10 @@ public class NotificationServiceTests
     private readonly Mock<IHttpClientFactory> _httpClientFactory = new();
     private readonly Mock<ILogger<NotificationService>> _logger = new();
     private readonly IOptions<FcmOptions> _fcm = Options.Create(new FcmOptions());
+    private readonly IOptions<NotificationOptions> _fallback = Options.Create(new NotificationOptions());
 
     private NotificationService Create() =>
-        new(_uow.Object, _httpClientFactory.Object, _logger.Object, _fcm);
+        new(_uow.Object, _httpClientFactory.Object, _logger.Object, _fcm, _fallback);
 
     [Fact]
     public async Task GetChannels_SeedsDefaultsIncludingZalo()

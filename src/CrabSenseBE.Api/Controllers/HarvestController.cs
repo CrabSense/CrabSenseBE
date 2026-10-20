@@ -1,5 +1,6 @@
 using CrabSenseBE.Application.DTOs.Harvest;
 using CrabSenseBE.Application.Interfaces;
+using CrabSenseBE.Domain.Enums;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -76,6 +77,7 @@ public class HarvestController : ControllerBase
     /// CreatedBy được lấy từ JWT, không truyền trong request body.
     /// </remarks>
     [HttpPost]
+    [Authorize(Roles = AppRoles.FarmWriteWithPlatform)]
     [ProducesResponseType(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status401Unauthorized)]
@@ -105,6 +107,7 @@ public class HarvestController : ControllerBase
     /// InProgress → Cancelled
     /// </remarks>
     [HttpPatch("{id:guid}/status")]
+    [Authorize(Roles = AppRoles.FarmWriteWithPlatform)]
     [ProducesResponseType(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status401Unauthorized)]
@@ -133,6 +136,7 @@ public class HarvestController : ControllerBase
     /// và chưa được sử dụng để tạo lô cấp đông.
     /// </remarks>
     [HttpDelete("{id:guid}")]
+    [Authorize(Roles = AppRoles.FarmManageWithPlatform)]
     [ProducesResponseType(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status401Unauthorized)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
