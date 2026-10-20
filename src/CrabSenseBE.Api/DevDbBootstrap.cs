@@ -5,11 +5,26 @@ using Microsoft.EntityFrameworkCore;
 using Npgsql;
 
 /// <summary>
-/// Development: migrate schema + seed 4 role user (chỉ khanhtn45 = SystemAdministrator).
+/// Development: migrate schema + seed tài khoản admin/demo theo config (không có credential trong code).
 /// Không crash app nếu Supabase transient timeout.
 /// </summary>
 public static class DevDbBootstrap
 {
+    /// <summary>
+    /// Fixture demo — CHỈ chạy khi Auth:SeedDemoUsers:Enabled=true và Password được cấu hình.
+    /// Username giữ cố định vì script test/local UI tham chiếu tới; mật khẩu không nằm trong code.
+    /// </summary>
+    private static readonly (string Username, string FullName, UserRole Role)[] DemoUsers =
+    [
+        (DemoOwnerUsername, "Chủ trại", UserRole.FarmAdministrator),
+        ("sysadmin", "Admin hệ thống", UserRole.FarmAdministrator),
+        ("admin", "Admin CrabSense", UserRole.FarmAdministrator),
+        ("manager", "Quản lý trại", UserRole.FarmManager),
+        ("staff", "Nhân viên", UserRole.FarmStaff)
+    ];
+
+    private const string DemoOwnerUsername = "owner";
+
     public static async Task InitializeAsync(WebApplication app)
     {
         using var scope = app.Services.CreateScope();
@@ -17,13 +32,28 @@ public static class DevDbBootstrap
         var logger = scope.ServiceProvider.GetRequiredService<ILoggerFactory>()
             .CreateLogger("DevDbBootstrap");
 
-        // Platform admin lấy từ config; mặc định giữ tài khoản cũ để deploy hiện tại không đổi hành vi.
-        var adminUsername = app.Configuration["Auth:SeedAdmin:Username"];
-        if (string.IsNullOrWhiteSpace(adminUsername)) adminUsername = "khanhtn45";
+        // Tài khoản platform admin CHỈ đến từ config — không có giá trị mặc định trong code.
+        var adminUsername = app.Configuration["Auth:SeedAdmin:Username"]?.Trim();
         var adminPassword = app.Configuration["Auth:SeedAdmin:Password"];
-        if (string.IsNullOrWhiteSpace(adminPassword)) adminPassword = "Khanhtn45@0";
-        var adminEmail = app.Configuration["Auth:SeedAdmin:Email"];
-        if (string.IsNullOrWhiteSpace(adminEmail)) adminEmail = "khanhtn45@sysadmin.crabsense.local";
+        var adminEmail = app.Configuration["Auth:SeedAdmin:Email"]?.Trim();
+        var seedAdmin = !string.IsNullOrWhiteSpace(adminUsername)
+                        && !string.IsNullOrWhiteSpace(adminPassword)
+                        && !string.IsNullOrWhiteSpace(adminEmail);
+
+        // Tài khoản demo chỉ tạo khi bật rõ ràng; mật khẩu đọc từ config, không nằm trong source.
+        var demoSection = app.Configuration.GetSection("Auth:SeedDemoUsers");
+        var seedDemo = demoSection.GetValue("Enabled", false);
+        var demoPassword = demoSection["Password"];
+        if (seedDemo && string.IsNullOrWhiteSpace(demoPassword))
+        {
+            logger.LogWarning("Auth:SeedDemoUsers:Enabled=true nhưng thiếu Password — bỏ qua seed demo.");
+            seedDemo = false;
+        }
+
+        if (!seedAdmin)
+            logger.LogWarning(
+                "Auth:SeedAdmin:Username/Password/Email chưa cấu hình — bỏ qua seed/đồng bộ tài khoản admin.");
+
 
         for (var attempt = 1; attempt <= 3; attempt++)
         {
@@ -62,28 +92,34 @@ public static class DevDbBootstrap
                 await EnsureOrphanAlertCleanupAsync(db, logger);
                 logger.LogInformation("Schema ready (attempt {A}).", attempt);
 
-                await RemapLegacyRolesAsync(db, logger);
-                await EnsureSystemAdministratorExclusiveAsync(db, logger, adminUsername);
-                await EnsureUserAsync(db, "sysadmin", "admin-sys@crabsense.local", "Admin hệ thống",
-                    "SysAdmin@123", UserRole.FarmAdministrator);
-                await EnsureUserAsync(db, "admin", "admin@crabsense.local", "Admin CrabSense",
-                    "Admin@123", UserRole.FarmAdministrator);
-                await EnsureUserAsync(db, adminUsername, adminEmail!, "Khanh TN",
-                    adminPassword!, UserRole.SystemAdministrator);
-                await EnsureUserAsync(db, "owner", "owner@crabsense.local", "Chủ trại",
-                    "Owner@123", UserRole.FarmAdministrator);
-                await EnsureUserAsync(db, "manager", "manager@crabsense.local", "Quản lý trại",
-                    "Manager@123", UserRole.FarmManager);
-                await EnsureUserAsync(db, "staff", "staff@crabsense.local", "Nhân viên",
-                    "Staff@123", UserRole.FarmStaff);
+                if (seedAdmin)
+                {
+                    await RemapLegacyRolesAsync(db, logger, adminUsername!);
+                    await EnsureSystemAdministratorExclusiveAsync(db, logger, adminUsername!);
+                }
+
+                if (seedDemo)
+                {
+                    foreach (var (username, fullName, role) in DemoUsers)
+                        await EnsureUserAsync(
+                            db, username, $"{username}@crabsense.local", fullName, demoPassword!, role);
+                }
+
+                if (seedAdmin)
+                    await EnsureUserAsync(db, adminUsername!, adminEmail!, "Khanh TN",
+                        adminPassword!, UserRole.SystemAdministrator);
 
                 await db.SaveChangesAsync();
-                await EnsureSystemAdministratorExclusiveAsync(db, logger, adminUsername);
+                if (seedAdmin)
+                    await EnsureSystemAdministratorExclusiveAsync(db, logger, adminUsername!);
                 await db.SaveChangesAsync();
-                await EnsureScheduledTaskDemoDataAsync(db, logger);
+                if (seedDemo)
+                    await EnsureScheduledTaskDemoDataAsync(db, logger);
                 logger.LogInformation(
-                    "Users: {Admin}=SystemAdministrator | owner=FarmAdministrator | manager=FarmManager | staff=FarmStaff.",
-                    adminUsername);
+                    "Users: admin seed={AdminState} ({Admin}) | demo users={DemoState}.",
+                    seedAdmin ? "enabled" : "skipped",
+                    seedAdmin ? adminUsername : "-",
+                    seedDemo ? "enabled" : "disabled");
 
                 // DemoDataSeeder đã tắt — không auto-insert khu/dãy/hộp/cua khi start API.
                 await EnsureBoxQrsForAllBoxesAsync(db, logger);
@@ -1062,7 +1098,7 @@ public static class DevDbBootstrap
             Rule(NotificationTypeCodes.System, "Hệ thống", "CrabSense Alert"));
 
         await db.SaveChangesAsync();
-        logger.LogInformation("Seeded {N} notification rule(s).", 9);
+        logger.LogInformation("Seeded {N} notification rule(s).", db.NotificationRules.Count());
     }
 
     private static async Task EnsureOrphanAlertCleanupAsync(AppDbContext db, ILogger logger)
@@ -1094,13 +1130,15 @@ public static class DevDbBootstrap
 
     /// <summary>
     /// Role lưu dạng string trong Postgres — remap legacy trước khi EF đọc entity.
-    /// <summary>Map chuỗi role cũ sang 4 role mới (trước bước exclusive SystemAdministrator).</summary>
-    private static async Task RemapLegacyRolesAsync(AppDbContext db, ILogger logger)
+    /// Username admin nhận từ config để không phải sửa code khi đổi tài khoản.
+    /// </summary>
+    private static async Task RemapLegacyRolesAsync(
+        AppDbContext db, ILogger logger, string adminUsername)
     {
-        await db.Database.ExecuteSqlRawAsync("""
+        await db.Database.ExecuteSqlInterpolatedAsync($"""
             UPDATE be."AppUsers" SET "Role" = 'FarmAdministrator'
             WHERE "Role" IN ('FarmOwner', 'Admin', 'SystemAdmin')
-              AND lower("Username") <> 'khanhtn45'
+              AND lower("Username") <> lower({adminUsername})
             """);
 
         await db.Database.ExecuteSqlRawAsync("""
@@ -1172,7 +1210,7 @@ public static class DevDbBootstrap
         AppDbContext db, ILogger logger)
     {
         var owner = await db.AppUsers
-            .FirstOrDefaultAsync(user => user.Username == "owner");
+            .FirstOrDefaultAsync(user => user.Username == DemoOwnerUsername);
         if (owner is null)
             return;
 

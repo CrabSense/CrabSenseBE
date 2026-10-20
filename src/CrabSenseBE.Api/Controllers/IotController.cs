@@ -1,5 +1,6 @@
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
+using CrabSenseBE.Api.Services;
 using CrabSenseBE.Application.Common;
 using CrabSenseBE.Application.DTOs.IoT;
 using CrabSenseBE.Application.Interfaces;
@@ -16,19 +17,32 @@ namespace CrabSenseBE.Api.Controllers;
 public class IotController : ControllerBase
 {
     private readonly IIotService _service;
-    public IotController(IIotService service) => _service = service;
+    private readonly IConfiguration _configuration;
+    public IotController(IIotService service, IConfiguration configuration)
+    {
+        _service = service;
+        _configuration = configuration;
+    }
 
-    /// <summary>[CREATE] ESP32 / edge: ingest single reading (HTTP)</summary>
+    /// <summary>[CREATE] ESP32 / edge: ingest single reading (HTTP) — yêu cầu X-Edge-Key</summary>
     [HttpPost("sensor-data")]
     [AllowAnonymous]
     public async Task<IActionResult> IngestSingle([FromBody] SensorDataRequest req, CancellationToken ct)
-        => Ok(await _service.IngestSensorDataAsync(req, ct));
+    {
+        var denied = EdgeKeyGuard.Check(Request, _configuration);
+        if (denied is not null) return denied;
+        return Ok(await _service.IngestSensorDataAsync(req, ct));
+    }
 
-    /// <summary>[CREATE] ESP32 / edge: ingest batch</summary>
+    /// <summary>[CREATE] ESP32 / edge: ingest batch — yêu cầu X-Edge-Key</summary>
     [HttpPost("sensor-data/batch")]
     [AllowAnonymous]
     public async Task<IActionResult> IngestBatch([FromBody] SensorDataBatchRequest req, CancellationToken ct)
-        => Ok(await _service.IngestSensorDataBatchAsync(req, ct));
+    {
+        var denied = EdgeKeyGuard.Check(Request, _configuration);
+        if (denied is not null) return denied;
+        return Ok(await _service.IngestSensorDataBatchAsync(req, ct));
+    }
 
     /// <summary>Desktop báo relay vừa bật hoặc tắt để đẩy thông báo mobile.</summary>
     [HttpPost("relay-state")]

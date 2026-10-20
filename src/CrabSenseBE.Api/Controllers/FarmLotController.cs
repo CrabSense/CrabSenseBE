@@ -94,37 +94,3 @@ public class CrabLotsController : ControllerBase
         return raw is not null && Guid.TryParse(raw, out var id) && id != Guid.Empty ? id : null;
     }
 }
-
-[ApiController]
-[Route("api/crop-batches")]
-[Authorize]
-[Tags("06. CRUD — Crop Batches")]
-[Produces("application/json")]
-public class CropBatchesController : ControllerBase
-{
-    private readonly IFarmLotService _service;
-    public CropBatchesController(IFarmLotService service) => _service = service;
-
-    /// <summary>[READ] List all crop batches</summary>
-    // [HttpGet]
-    // public async Task<IActionResult> GetAll(CancellationToken ct)
-    //     => Ok(await _service.GetBatchesAsync(ct));
-
-    /// <summary>[CREATE] Create crop batch</summary>
-    // [HttpPost]
-    // [Authorize(Roles = AppRoles.FarmWrite)]
-    // public async Task<IActionResult> Create([FromBody] CreateCropBatchRequest req, CancellationToken ct)
-    //     => Ok(await _service.CreateBatchAsync(req, ct));
-
-    /// <summary>[UPDATE] Update crop batch</summary>
-//     [HttpPut("{id:guid}")]
-//     [Authorize(Roles = AppRoles.FarmWrite)]
-//     public async Task<IActionResult> Update(Guid id, [FromBody] UpdateCropBatchRequest req, CancellationToken ct)
-//         => Ok(await _service.UpdateBatchAsync(id, req, ct));
-
-//     /// <summary>[DELETE] Delete crop batch / vụ nuôi (no crabs referencing it)</summary>
-//     [HttpDelete("{id:guid}")]
-//     [Authorize(Roles = AppRoles.FarmWrite)]
-//     public async Task<IActionResult> Delete(Guid id, CancellationToken ct)
-//         => Ok(await _service.DeleteBatchAsync(id, ct));
-}

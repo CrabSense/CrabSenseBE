@@ -46,8 +46,6 @@ public static class AppRoles
 
 public static class UserRoleParsing
 {
-    public const string Khanhtn45Username = "khanhtn45";
-
     public static bool TryParse(string? raw, out UserRole role)
     {
         role = default;

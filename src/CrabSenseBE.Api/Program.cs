@@ -116,6 +116,10 @@ builder.Services.AddSwaggerGen(c =>
 });
 
 // ─── CORS ───────────────────────────────────────────────────────────────────
+// Origin hợp lệ CHỈ đến từ config AllowedOrigins (không hardcode IP/tên miền).
+var allowedOrigins = builder.Configuration.GetSection("AllowedOrigins").Get<string[]>()
+    ?? Array.Empty<string>();
+
 builder.Services.AddCors(options =>
 {
     options.AddPolicy("AllowFrontend", policy =>
@@ -123,11 +127,12 @@ builder.Services.AddCors(options =>
         policy.SetIsOriginAllowed(origin =>
             {
                 if (string.IsNullOrWhiteSpace(origin)) return false;
-                if (!Uri.TryCreate(origin, UriKind.Absolute, out var uri)) return false;
-                if (uri.Host is "localhost" or "127.0.0.1" or "103.69.96.143") return true;
-                var configured = builder.Configuration.GetSection("AllowedOrigins").Get<string[]>()
-                    ?? new[] { "http://localhost:3000", "http://localhost:5173" };
-                return configured.Contains(origin, StringComparer.OrdinalIgnoreCase);
+                if (allowedOrigins.Contains(origin, StringComparer.OrdinalIgnoreCase)) return true;
+
+                // Dev: cho phép mọi cổng loopback để tooling local không phải thêm config.
+                return builder.Environment.IsDevelopment()
+                       && Uri.TryCreate(origin, UriKind.Absolute, out var uri)
+                       && uri.IsLoopback;
             })
             .AllowAnyHeader()
             .AllowAnyMethod()

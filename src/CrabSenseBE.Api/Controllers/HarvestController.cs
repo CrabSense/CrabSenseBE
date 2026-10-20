@@ -49,6 +49,7 @@ public class HarvestController : ControllerBase
     /// [READ] Lấy chi tiết một phiếu thu hoạch.
     /// </summary>
     /// <param name="id">ID phiếu thu hoạch.</param>
+    /// <param name="ct">Cancellation token.</param>
     [HttpGet("{id:guid}")]
     [ProducesResponseType(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status401Unauthorized)]
@@ -92,6 +93,8 @@ public class HarvestController : ControllerBase
     /// [ACTION] Cập nhật trạng thái phiếu thu hoạch.
     /// </summary>
     /// <param name="id">ID phiếu thu hoạch.</param>
+    /// <param name="request">Trạng thái mới và ghi chú.</param>
+    /// <param name="ct">Cancellation token.</param>
     /// <remarks>
     /// Luồng trạng thái hợp lệ:
     ///
@@ -124,6 +127,7 @@ public class HarvestController : ControllerBase
     /// [DELETE] Xóa phiếu thu hoạch.
     /// </summary>
     /// <param name="id">ID phiếu thu hoạch.</param>
+    /// <param name="ct">Cancellation token.</param>
     /// <remarks>
     /// Chỉ cho phép xóa phiếu có trạng thái Planned hoặc Cancelled
     /// và chưa được sử dụng để tạo lô cấp đông.
@@ -154,6 +158,7 @@ public class HarvestController : ControllerBase
     /// <param name="period">
     /// Kiểu nhóm dữ liệu: day, week hoặc month.
     /// </param>
+    /// <param name="ct">Cancellation token.</param>
     /// <example>
     /// GET /api/harvest-vouchers/statistics
     /// ?from=2026-07-01T00:00:00Z
@@ -187,6 +192,7 @@ public class HarvestController : ControllerBase
     /// [READ] Danh sách box tham chiếu trong phiếu thu hoạch.
     /// </summary>
     /// <param name="id">ID phiếu thu hoạch.</param>
+    /// <param name="ct">Cancellation token.</param>
     /// <remarks>
     /// Trả về danh sách box (BoxId, BoxCode) đã được ghi nhận trong các dòng
     /// thu hoạch, kèm số lượng cua và tổng khối lượng từng box.
@@ -208,6 +214,7 @@ public class HarvestController : ControllerBase
     /// [READ] Danh sách phiếu thu hoạch tham chiếu đến một box.
     /// </summary>
     /// <param name="boxId">ID box nuôi.</param>
+    /// <param name="ct">Cancellation token.</param>
     /// <remarks>
     /// Trả về tất cả phiếu thu hoạch đã ghi nhận cua từ box này,
     /// kèm số lượng cua và tổng khối lượng từng phiếu.

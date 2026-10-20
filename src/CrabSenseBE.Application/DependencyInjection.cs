@@ -52,8 +52,6 @@ public static class DependencyInjection
         services.AddHttpClient("zalo");
         services.AddHttpClient("fcm");
         services.AddHostedService<DisconnectCheckHostedService>();
-
-        services.AddAutoMapper(typeof(DependencyInjection).Assembly);
         return services;
     }
 }

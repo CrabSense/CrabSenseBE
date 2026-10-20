@@ -13,9 +13,18 @@ public class MinioStorageService : IStorageService
 
     public MinioStorageService(IConfiguration config)
     {
-        var endpoint = config["MinIO:Endpoint"] ?? "localhost:9000";
-        var accessKey = config["MinIO:AccessKey"] ?? "minioadmin";
-        var secretKey = config["MinIO:SecretKey"] ?? "minioadmin";
+        // Không có credential mặc định: thiếu config thì báo lỗi rõ thay vì dùng minioadmin.
+        var endpoint = config["MinIO:Endpoint"];
+        var accessKey = config["MinIO:AccessKey"];
+        var secretKey = config["MinIO:SecretKey"];
+        if (string.IsNullOrWhiteSpace(endpoint)
+            || string.IsNullOrWhiteSpace(accessKey)
+            || string.IsNullOrWhiteSpace(secretKey))
+        {
+            throw new InvalidOperationException(
+                "MinIO:Endpoint/AccessKey/SecretKey chưa được cấu hình.");
+        }
+
         var useSSL = bool.Parse(config["MinIO:UseSSL"] ?? "false");
 
         _minio = new MinioClient()

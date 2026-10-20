@@ -1,3 +1,4 @@
+using CrabSenseBE.Api.Services;
 using CrabSenseBE.Application.DTOs.IoT;
 using CrabSenseBE.Application.Interfaces;
 using Microsoft.AspNetCore.Authorization;
@@ -39,8 +40,8 @@ public sealed class EdgeCommandsController : ControllerBase
     public Task<IActionResult> Pending([FromQuery] string deviceCode, CancellationToken ct)
         => Execute(async () =>
         {
-            if (!IsEdgeRequest())
-                return Unauthorized();
+            var denied = RequireEdgeKey();
+            if (denied is not null) return denied;
             return Ok(await _service.GetPendingAsync(deviceCode, ct));
         });
 
@@ -52,20 +53,13 @@ public sealed class EdgeCommandsController : ControllerBase
         CancellationToken ct)
         => Execute(async () =>
         {
-            if (!IsEdgeRequest())
-                return Unauthorized();
+            var denied = RequireEdgeKey();
+            if (denied is not null) return denied;
             return Ok(await _service.AcknowledgeAsync(id, request, ct));
         });
 
-    private bool IsEdgeRequest()
-    {
-        var expected = _configuration["EdgeSync:ApiKey"];
-        return string.IsNullOrWhiteSpace(expected)
-            || string.Equals(
-                Request.Headers["X-Edge-Key"].FirstOrDefault(),
-                expected,
-                StringComparison.Ordinal);
-    }
+    private IActionResult? RequireEdgeKey() =>
+        CrabSenseBE.Api.Services.EdgeKeyGuard.Check(Request, _configuration);
 
     private static async Task<IActionResult> Execute(
         Func<Task<IActionResult>> action)
