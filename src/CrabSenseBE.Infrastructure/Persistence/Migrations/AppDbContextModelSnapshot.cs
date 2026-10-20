@@ -871,6 +871,17 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uuid");
 
+                    b.Property<Guid?>("BoxId")
+                        .HasColumnType("uuid");
+
+                    b.Property<decimal?>("CarapaceLengthMm")
+                        .HasPrecision(10, 2)
+                        .HasColumnType("numeric(10,2)");
+
+                    b.Property<decimal?>("CarapaceWidthMm")
+                        .HasPrecision(10, 2)
+                        .HasColumnType("numeric(10,2)");
+
                     b.Property<int>("Cause")
                         .HasColumnType("integer");
 
@@ -895,7 +906,13 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.Property<DateTime?>("UpdatedAt")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<decimal?>("WeightGram")
+                        .HasPrecision(10, 2)
+                        .HasColumnType("numeric(10,2)");
+
                     b.HasKey("Id");
+
+                    b.HasIndex("BoxId");
 
                     b.HasIndex("CrabId");
 
@@ -3651,6 +3668,10 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
 
             modelBuilder.Entity("CrabSenseBE.Domain.Entities.CrabMortalityRecord", b =>
                 {
+                    b.HasOne("CrabSenseBE.Domain.Entities.Box", "Box")
+                        .WithMany()
+                        .HasForeignKey("BoxId");
+
                     b.HasOne("CrabSenseBE.Domain.Entities.Crab", "Crab")
                         .WithMany("MortalityRecords")
                         .HasForeignKey("CrabId")
@@ -3660,6 +3681,8 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.HasOne("CrabSenseBE.Domain.Entities.AppUser", "Recorder")
                         .WithMany()
                         .HasForeignKey("RecorderId");
+
+                    b.Navigation("Box");
 
                     b.Navigation("Crab");
 

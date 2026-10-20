@@ -377,6 +377,13 @@ public class AppDbContext : DbContext
             .Property(h => h.WeightGram)
             .HasPrecision(10, 2);
 
+        modelBuilder.Entity<CrabMortalityRecord>(b =>
+        {
+            b.Property(r => r.WeightGram).HasPrecision(10, 2);
+            b.Property(r => r.CarapaceWidthMm).HasPrecision(10, 2);
+            b.Property(r => r.CarapaceLengthMm).HasPrecision(10, 2);
+        });
+
         modelBuilder.Entity<UserPushToken>()
             .HasIndex(t => new { t.UserId, t.Token })
             .IsUnique();

@@ -209,7 +209,9 @@ public static class CrabConditions
 /// <summary>
 /// Nguyên nhân cua chết.
 /// Dùng cho báo cáo tỷ lệ sống và phân tích nguyên nhân tử vong.
+/// Nhận cả chuỗi ("Unknown") lẫn số (0) từ JSON — mobile gửi chuỗi.
 /// </summary>
+[System.Text.Json.Serialization.JsonConverter(typeof(System.Text.Json.Serialization.JsonStringEnumConverter))]
 public enum MortalityCause
 {
     /// <summary>Chưa xác định được nguyên nhân.</summary>

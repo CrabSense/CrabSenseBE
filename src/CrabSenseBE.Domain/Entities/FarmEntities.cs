@@ -251,8 +251,25 @@ public class CrabMortalityRecord : BaseEntity
     /// </summary>
     public Guid RecordedBy { get; set; }
 
+    // ── Snapshot tại thời điểm chết (bất biến, không phụ thuộc dữ liệu Crabs) ──
+
+    /// <summary>Trọng lượng lúc chết (g).</summary>
+    public decimal? WeightGram { get; set; }
+
+    /// <summary>Bề rộng mai lúc chết (mm).</summary>
+    public decimal? CarapaceWidthMm { get; set; }
+
+    /// <summary>Bề ngang mai lúc chết (mm).</summary>
+    public decimal? CarapaceLengthMm { get; set; }
+
+    /// <summary>Hộp chứa cua lúc chết — giữ lại vì cua bị gỡ khỏi hộp sau khi chết.</summary>
+    public Guid? BoxId { get; set; }
+
     // Navigation
     public Crab? Crab { get; set; }
 
     public AppUser? Recorder { get; set; }
+
+    /// <summary>Hộp lúc chết (snapshot BoxId) — chỉ để đọc lại khu/dãy.</summary>
+    public Box? Box { get; set; }
 }

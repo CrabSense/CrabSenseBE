@@ -233,7 +233,12 @@ public class UnitOfWork : IUnitOfWork
     public async Task<List<CrabMortalityRecord>> GetMortalityRecordsWithDetailsAsync(CancellationToken ct = default)
     {
         return await _context.CrabMortalityRecords
+            .AsNoTracking()
             .Include(x => x.Crab)
+            .Include(x => x.Box!)
+                .ThenInclude(b => b.FarmingRow!)
+                    .ThenInclude(r => r.FarmingArea)
+            .OrderByDescending(x => x.MortalityDate)
             .ToListAsync(ct);
     }
 
