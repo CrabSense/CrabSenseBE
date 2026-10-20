@@ -44,15 +44,19 @@ public class AlertServiceTests
         _uow.Setup(u => u.Alerts).Returns(alertRepo.Object);
         _uow.Setup(u => u.Users).Returns(userRepo.Object);
         _uow.Setup(u => u.SaveChangesAsync(It.IsAny<CancellationToken>())).ReturnsAsync(1);
-        _notify.Setup(n => n.NotifyUsersAsync(It.IsAny<IEnumerable<Guid>>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<Guid?>(), It.IsAny<CancellationToken>()))
+        _notify.Setup(n => n.NotifyAsync(
+                It.IsAny<string>(), It.IsAny<string>(), It.IsAny<Guid?>(), It.IsAny<Guid?>(),
+                It.IsAny<string?>(), It.IsAny<IReadOnlyDictionary<string, string?>?>(), It.IsAny<CancellationToken>()))
             .Returns(Task.CompletedTask);
 
         await Create().EvaluateMeasurementAsync(sensor, 35m);
 
         alertRepo.Verify(r => r.AddAsync(It.Is<Alert>(a =>
             a.TriggerValue == 35m && a.Status == AlertStatus.Active), It.IsAny<CancellationToken>()), Times.Once);
-        _notify.Verify(n => n.NotifyUsersAsync(
-            It.IsAny<IEnumerable<Guid>>(), "CrabSense Alert", It.IsAny<string>(), It.IsAny<Guid?>(), It.IsAny<CancellationToken>()), Times.Once);
+        _notify.Verify(n => n.NotifyAsync(
+            NotificationTypeCodes.SensorThreshold, It.IsAny<string>(), It.IsAny<Guid?>(), It.IsAny<Guid?>(),
+            nameof(AlertSeverity.Warning), It.IsAny<IReadOnlyDictionary<string, string?>?>(), It.IsAny<CancellationToken>()),
+            Times.Once);
     }
 
     [Fact]

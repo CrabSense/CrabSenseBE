@@ -158,45 +158,56 @@ public class NotificationsController : ControllerBase
     public async Task<IActionResult> MarkAllRead(CancellationToken ct)
         => Ok(await _service.MarkAllReadAsync(_currentUser.UserId, ct));
 
-    /// <summary>[UPDATE] Mark notification as read</summary>
+    /// <summary>[UPDATE] Mark notification as read (chỉ notification của chính mình hoặc SystemAdmin)</summary>
     [HttpPatch("{id:guid}/read")]
     public async Task<IActionResult> MarkRead(Guid id, CancellationToken ct)
-        => Ok(await _service.MarkReadAsync(id, ct));
+        => Ok(await _service.MarkReadAsync(
+            id, _currentUser.UserId,
+            User.IsInRole(AppRoles.SystemAdministrator), ct));
 
-    /// <summary>[READ] Notification channels (Telegram/Zalo/...)</summary>
+    /// <summary>[READ] Notification channels (Telegram/Zalo/...) — admin only (ConfigJson chứa token)</summary>
     [HttpGet("channels")]
+    [Authorize(Roles = AppRoles.Platform)]
     public async Task<IActionResult> GetChannels(CancellationToken ct)
         => Ok(await _service.GetChannelsAsync(ct));
 
-    /// <summary>[READ] Channel by id</summary>
+    /// <summary>[READ] Channel by id — admin only</summary>
     [HttpGet("channels/{id:guid}")]
+    [Authorize(Roles = AppRoles.Platform)]
     public async Task<IActionResult> GetChannel(Guid id, CancellationToken ct)
         => Ok(await _service.GetChannelAsync(id, ct));
 
     /// <summary>[CREATE] Add notification channel</summary>
     [HttpPost("channels")]
-    [Authorize(Roles = AppRoles.FarmWrite)]
+    [Authorize(Roles = AppRoles.Platform)]
     public async Task<IActionResult> CreateChannel([FromBody] CreateNotificationChannelRequest req, CancellationToken ct)
         => Ok(await _service.CreateChannelAsync(req, ct));
 
     /// <summary>[UPDATE] Enable/disable + configure channel (Telegram/Zalo/...)</summary>
     [HttpPut("channels/{id:guid}")]
-    [Authorize(Roles = AppRoles.FarmWrite)]
+    [Authorize(Roles = AppRoles.Platform)]
     public async Task<IActionResult> UpdateChannel(Guid id, [FromBody] UpdateNotificationChannelRequest req, CancellationToken ct)
         => Ok(await _service.UpdateChannelAsync(id, req, ct));
 
     /// <summary>[DELETE] Remove notification channel</summary>
     [HttpDelete("channels/{id:guid}")]
-    [Authorize(Roles = AppRoles.FarmWrite)]
+    [Authorize(Roles = AppRoles.Platform)]
     public async Task<IActionResult> DeleteChannel(Guid id, CancellationToken ct)
         => Ok(await _service.DeleteChannelAsync(id, ct));
 
     /// <summary>[ACTION] Test send via channel</summary>
     [HttpPost("channels/{id:guid}/test")]
-    [Authorize(Roles = AppRoles.FarmWrite)]
+    [Authorize(Roles = AppRoles.Platform)]
     public async Task<IActionResult> TestChannel(
         Guid id, [FromBody] TestNotificationChannelRequest? req, CancellationToken ct)
         => Ok(await _service.TestChannelAsync(id, req ?? new TestNotificationChannelRequest(), ct));
+
+    /// <summary>[READ] Delivery log (sent/failed) — admin only</summary>
+    [HttpGet("deliveries")]
+    [Authorize(Roles = AppRoles.Platform)]
+    public async Task<IActionResult> GetDeliveries(
+        [FromQuery] string? status, [FromQuery] int take = 100, CancellationToken ct = default)
+        => Ok(await _service.GetDeliveriesAsync(status, take, ct));
 
     /// <summary>[CREATE] Register FCM push token (Mobile)</summary>
     [HttpPost("register")]
@@ -214,15 +225,15 @@ public class NotificationsController : ControllerBase
     public async Task<IActionResult> GetPushTokens(CancellationToken ct)
         => Ok(await _service.GetPushTokensAsync(_currentUser.UserId, ct));
 
-    /// <summary>[READ] Notification settings (push / Telegram / Zalo)</summary>
+    /// <summary>[READ] Notification settings (push / Telegram / Zalo) — admin only</summary>
     [HttpGet("settings")]
-    [Authorize(Roles = AppRoles.FarmWrite)]
+    [Authorize(Roles = AppRoles.Platform)]
     public async Task<IActionResult> GetSettings(CancellationToken ct)
         => Ok(await _service.GetSettingsAsync(ct));
 
     /// <summary>[UPDATE] Notification settings (push / Telegram / Zalo)</summary>
     [HttpPut("settings")]
-    [Authorize(Roles = AppRoles.FarmWrite)]
+    [Authorize(Roles = AppRoles.Platform)]
     public async Task<IActionResult> UpdateSettings(
         [FromBody] UpdateNotificationSettingsRequest req, CancellationToken ct)
         => Ok(await _service.UpdateSettingsAsync(req, ct));

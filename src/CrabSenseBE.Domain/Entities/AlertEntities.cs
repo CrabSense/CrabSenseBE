@@ -46,6 +46,10 @@ public class Notification : BaseEntity
 {
     public Guid UserId { get; set; }
     public Guid? AlertId { get; set; }
+
+    /// <summary>Loại thông báo — khớp NotificationRule.TypeCode. Null với dữ liệu cũ.</summary>
+    public string? TypeCode { get; set; }
+
     public string Title { get; set; } = string.Empty;
     public string Body { get; set; } = string.Empty;
 
@@ -87,6 +91,34 @@ public class NotificationDelivery : BaseEntity
     public string? ErrorMessage { get; set; }
 
     public Notification? Notification { get; set; }
+}
+
+/// <summary>
+/// Quy tắc thông báo theo loại: bật/tắt, người nhận, kênh, mẫu nội dung.
+/// Admin cấu hình qua /api/notification-rules.
+/// </summary>
+public class NotificationRule : BaseEntity
+{
+    /// <summary>Mã loại — xem NotificationTypeCodes.</summary>
+    public string TypeCode { get; set; } = string.Empty;
+    public string DisplayName { get; set; } = string.Empty;
+    public bool IsEnabled { get; set; } = true;
+
+    /// <summary>Ngưỡng tối thiểu (Info/Warning/Critical). Null = mọi mức.</summary>
+    public string? MinSeverity { get; set; }
+
+    /// <summary>Role nhận, phân tách bằng dấu phẩy. Rỗng = không gửi.</summary>
+    public string RecipientRoles { get; set; } = "FarmAdministrator,FarmManager,FarmStaff";
+
+    /// <summary>Chỉ FarmAdministrator sở hữu khu liên quan mới nhận.</summary>
+    public bool ScopeByArea { get; set; }
+
+    /// <summary>Kênh gửi, phân tách bằng dấu phẩy: in_app, push, telegram, zalo_oa, email.</summary>
+    public string ChannelCodes { get; set; } = "in_app,push";
+
+    /// <summary>Mẫu tiêu đề, hỗ trợ {message} {severity} {sensor} {value} {code} {name}…</summary>
+    public string? TitleTemplate { get; set; }
+    public string? BodyTemplate { get; set; }
 }
 
 /// <summary>FCM device token đăng ký từ Mobile App.</summary>

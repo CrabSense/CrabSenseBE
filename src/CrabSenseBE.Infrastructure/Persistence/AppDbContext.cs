@@ -44,6 +44,7 @@ public class AppDbContext : DbContext
     public DbSet<Alert> Alerts => Set<Alert>();
     public DbSet<Notification> Notifications => Set<Notification>();
     public DbSet<NotificationChannel> NotificationChannels => Set<NotificationChannel>();
+    public DbSet<NotificationRule> NotificationRules => Set<NotificationRule>();
     public DbSet<NotificationDelivery> NotificationDeliveries => Set<NotificationDelivery>();
     public DbSet<UserPushToken> UserPushTokens => Set<UserPushToken>();
     public DbSet<MediaAsset> MediaAssets => Set<MediaAsset>();
@@ -379,6 +380,23 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<UserPushToken>()
             .HasIndex(t => new { t.UserId, t.Token })
             .IsUnique();
+
+        modelBuilder.Entity<NotificationRule>(b =>
+        {
+            b.Property(r => r.TypeCode).HasMaxLength(64).IsRequired();
+            b.Property(r => r.DisplayName).HasMaxLength(128);
+            b.Property(r => r.MinSeverity).HasMaxLength(16);
+            b.Property(r => r.RecipientRoles).HasMaxLength(256);
+            b.Property(r => r.ChannelCodes).HasMaxLength(128);
+            b.Property(r => r.TitleTemplate).HasMaxLength(256);
+            b.HasIndex(r => r.TypeCode).IsUnique();
+        });
+
+        modelBuilder.Entity<Notification>()
+            .Property(n => n.TypeCode)
+            .HasMaxLength(64);
+        modelBuilder.Entity<Notification>()
+            .HasIndex(n => new { n.UserId, n.TypeCode });
 
         modelBuilder.Entity<WaterSystem>()
             .Property(w => w.Status)

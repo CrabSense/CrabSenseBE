@@ -163,12 +163,26 @@ public class IotService : IIotService
             if (wasOn && !on)
             {
                 await _alerts.ClearAsync(onMessage, ct);
-                await _alerts.RaiseOnceAsync(offMessage, ct);
+                await _alerts.RaiseOnceAsync(offMessage, NotificationTypeCodes.RasRelayOff,
+                    await AreaOfWaterSystemAsync(node.WaterSystemId, ct),
+                    new Dictionary<string, string?>
+                    {
+                        ["name"] = node.Name,
+                        ["code"] = node.Code,
+                        ["device"] = device.DeviceCode
+                    }, ct);
             }
             else if (!wasOn && on)
             {
                 await _alerts.ClearAsync(offMessage, ct);
-                await _alerts.RaiseOnceAsync(onMessage, ct);
+                await _alerts.RaiseOnceAsync(onMessage, NotificationTypeCodes.RasRelayOn,
+                    await AreaOfWaterSystemAsync(node.WaterSystemId, ct),
+                    new Dictionary<string, string?>
+                    {
+                        ["name"] = node.Name,
+                        ["code"] = node.Code,
+                        ["device"] = device.DeviceCode
+                    }, ct);
             }
             logged |= await LogRelayAsync(actorId, node.Id, "RasComponent", node.WaterSystemId, node.Name, device.DeviceCode, channel, on, ct);
         }
@@ -244,15 +258,17 @@ public class IotService : IIotService
             var lowVal = low == code ? value : await LatestFloatAsync(low, ct);
             var highVal = high == code ? value : await LatestFloatAsync(high, ct);
             var level = TankLevel(low, text("lowWhen"), lowVal, high, text("highWhen"), highVal);
+            var areaId = await AreaOfWaterSystemAsync(node.WaterSystemId, ct);
+            var tokens = new Dictionary<string, string?> { ["name"] = name, ["code"] = node.Code };
             if (level == "Tràn")
             {
                 await _alerts.ClearAsync($"{name} đang cạn", ct);
-                await _alerts.RaiseOnceAsync($"{name} đang tràn", ct);
+                await _alerts.RaiseOnceAsync($"{name} đang tràn", NotificationTypeCodes.TankOverflow, areaId, tokens, ct);
             }
             else if (level == "Cạn")
             {
                 await _alerts.ClearAsync($"{name} đang tràn", ct);
-                await _alerts.RaiseOnceAsync($"{name} đang cạn", ct);
+                await _alerts.RaiseOnceAsync($"{name} đang cạn", NotificationTypeCodes.TankEmpty, areaId, tokens, ct);
             }
             else if (level == "Bình thường")
             {
@@ -261,6 +277,12 @@ public class IotService : IIotService
             }
             }
         }
+    }
+
+    private async Task<Guid?> AreaOfWaterSystemAsync(Guid? waterSystemId, CancellationToken ct)
+    {
+        if (waterSystemId is not Guid id || id == Guid.Empty) return null;
+        return (await _uow.WaterSystems.GetByIdAsync(id, ct))?.FarmingAreaId;
     }
 
     private async Task<decimal?> LatestFloatAsync(string code, CancellationToken ct)

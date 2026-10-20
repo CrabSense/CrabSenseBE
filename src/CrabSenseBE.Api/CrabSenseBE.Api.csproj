@@ -26,4 +26,10 @@
     <ProjectReference Include="..\CrabSenseBE.Infrastructure\CrabSenseBE.Infrastructure.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- Server-owned runtime config; publishing would overwrite prod values (DB/JWT/origins). -->
+    <Content Update="appsettings.Local.json" CopyToPublishDirectory="Never" />
+    <Content Update="appsettings.Development.json" CopyToPublishDirectory="Never" />
+  </ItemGroup>
+
 </Project>

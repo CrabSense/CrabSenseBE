@@ -66,7 +66,42 @@ public record AlertUnreadCountDto(int Count, int UnreadCount);
 // --- Thông báo ---
 public record NotificationDto(
     Guid Id, Guid UserId, Guid? AlertId, string Title, string Body,
-    string Channel, bool IsRead, DateTime CreatedAt);
+    string Channel, bool IsRead, DateTime CreatedAt, string? TypeCode = null);
+
+// --- Quy tắc thông báo (admin) ---
+public record NotificationRuleDto(
+    Guid Id,
+    string TypeCode,
+    string DisplayName,
+    bool IsEnabled,
+    string? MinSeverity,
+    string RecipientRoles,
+    bool ScopeByArea,
+    string ChannelCodes,
+    string? TitleTemplate,
+    string? BodyTemplate);
+
+public record UpdateNotificationRuleRequest(
+    bool? IsEnabled = null,
+    string? DisplayName = null,
+    string? MinSeverity = null,
+    string? RecipientRoles = null,
+    bool? ScopeByArea = null,
+    string? ChannelCodes = null,
+    string? TitleTemplate = null,
+    string? BodyTemplate = null);
+
+public record NotificationRulePreviewDto(string Title, string Body);
+
+public record NotificationDeliveryDto(
+    Guid Id,
+    Guid NotificationId,
+    string ChannelCode,
+    string? Recipient,
+    string Status,
+    DateTime? SentAt,
+    string? ErrorMessage,
+    DateTime CreatedAt);
 
 public record NotificationChannelDto(
     Guid Id, string ChannelCode, string DisplayName, bool IsEnabled, string? ConfigJson);

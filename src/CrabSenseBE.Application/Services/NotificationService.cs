@@ -3,9 +3,11 @@ using System.Text;
 using System.Text.Json;
 using CrabSenseBE.Application.Common;
 using CrabSenseBE.Application.DTOs.Alert;
+using CrabSenseBE.Application.DTOs.Auth;
 using CrabSenseBE.Application.Interfaces;
 using CrabSenseBE.Application.Options;
 using CrabSenseBE.Domain.Entities;
+using CrabSenseBE.Domain.Enums;
 using CrabSenseBE.Domain.Interfaces;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -51,10 +53,16 @@ public class NotificationService : INotificationService
         return ApiResponse<AlertUnreadCountDto>.Ok(new AlertUnreadCountDto(count, count));
     }
 
-    public async Task<ApiResponse> MarkReadAsync(Guid id, CancellationToken ct = default)
+    public async Task<ApiResponse> MarkReadAsync(
+        Guid id, Guid userId, bool isSystemAdmin = false, CancellationToken ct = default)
     {
         var n = await _uow.Notifications.GetByIdAsync(id, ct)
             ?? throw AppException.NotFound("Notification");
+
+        // Notification là dữ liệu riêng của từng user: chỉ chủ sở hữu (hoặc SystemAdmin) được ghi.
+        if (n.UserId != userId && !isSystemAdmin)
+            throw AppException.NotFound("Notification");
+
         n.IsRead = true;
         n.ReadAt = DateTime.UtcNow;
         _uow.Notifications.Update(n);
@@ -252,47 +260,173 @@ public class NotificationService : INotificationService
         return ApiResponse<NotificationSettingsDto>.Ok(BuildSettings(channels), "Settings updated.");
     }
 
-    public async Task NotifyUsersAsync(
-        IEnumerable<Guid> userIds, string title, string body, Guid? alertId = null, CancellationToken ct = default)
+    public async Task<ApiResponse<IEnumerable<NotificationRuleDto>>> GetRulesAsync(CancellationToken ct = default)
+    {
+        var rules = await _uow.NotificationRules.GetAllAsync(ct);
+        return ApiResponse<IEnumerable<NotificationRuleDto>>.Ok(
+            rules.OrderBy(r => r.TypeCode).Select(MapRule));
+    }
+
+    public async Task<ApiResponse<NotificationRuleDto>> UpdateRuleAsync(
+        string typeCode, UpdateNotificationRuleRequest req, CancellationToken ct = default)
+    {
+        var code = NormalizeCode(typeCode);
+        var rule = (await _uow.NotificationRules.FindAsync(r => r.TypeCode == code, ct)).FirstOrDefault()
+            ?? throw AppException.NotFound("NotificationRule");
+
+        if (req.MinSeverity is not null && !string.IsNullOrWhiteSpace(req.MinSeverity)
+            && !Enum.TryParse<AlertSeverity>(req.MinSeverity.Trim(), true, out _))
+            throw AppException.BadRequest("minSeverity must be Info, Warning or Critical.");
+
+        if (req.RecipientRoles is not null)
+        {
+            var roles = SplitCsv(req.RecipientRoles);
+            if (roles.Length == 0 || roles.Any(r => !UserRoleParsing.TryParse(r, out _)))
+                throw AppException.BadRequest(
+                    "recipientRoles must be a comma list of SystemAdministrator, FarmAdministrator, FarmManager, FarmStaff.");
+            rule.RecipientRoles = string.Join(',', roles.Select(r => UserRoleParsing.TryParse(r, out var v) ? v.ToString() : r));
+        }
+
+        if (req.ChannelCodes is not null)
+        {
+            var codes = SplitCsv(req.ChannelCodes).Select(c => c.ToLowerInvariant()).ToArray();
+            var unknown = codes.Where(c => !KnownChannelCodes.Contains(c)).ToArray();
+            if (unknown.Length > 0)
+                throw AppException.BadRequest($"Unknown channel(s): {string.Join(", ", unknown)}.");
+            rule.ChannelCodes = string.Join(',', codes);
+        }
+
+        if (req.IsEnabled is not null) rule.IsEnabled = req.IsEnabled.Value;
+        if (req.ScopeByArea is not null) rule.ScopeByArea = req.ScopeByArea.Value;
+        if (req.DisplayName is not null && !string.IsNullOrWhiteSpace(req.DisplayName))
+            rule.DisplayName = req.DisplayName.Trim();
+        if (req.MinSeverity is not null)
+            rule.MinSeverity = string.IsNullOrWhiteSpace(req.MinSeverity) ? null : req.MinSeverity.Trim();
+        if (req.TitleTemplate is not null)
+            rule.TitleTemplate = string.IsNullOrWhiteSpace(req.TitleTemplate) ? null : req.TitleTemplate.Trim();
+        if (req.BodyTemplate is not null)
+            rule.BodyTemplate = string.IsNullOrWhiteSpace(req.BodyTemplate) ? null : req.BodyTemplate.Trim();
+
+        _uow.NotificationRules.Update(rule);
+        await _uow.SaveChangesAsync(ct);
+        return ApiResponse<NotificationRuleDto>.Ok(MapRule(rule), "Rule updated.");
+    }
+
+    public async Task<ApiResponse<NotificationRulePreviewDto>> PreviewRuleAsync(
+        string typeCode, IReadOnlyDictionary<string, string?> tokens, CancellationToken ct = default)
+    {
+        var code = NormalizeCode(typeCode);
+        var rule = (await _uow.NotificationRules.FindAsync(r => r.TypeCode == code, ct)).FirstOrDefault()
+            ?? throw AppException.NotFound("NotificationRule");
+
+        var sample = new Dictionary<string, string?>(tokens, StringComparer.OrdinalIgnoreCase)
+        {
+            ["message"] = tokens.TryGetValue("message", out var m) && !string.IsNullOrWhiteSpace(m)
+                ? m
+                : "Nội dung mẫu"
+        };
+        var values = BuildTokens(code, sample["message"]!, sample.TryGetValue("severity", out var s) ? s : "Warning", sample);
+        return ApiResponse<NotificationRulePreviewDto>.Ok(new NotificationRulePreviewDto(
+            Render(rule.TitleTemplate ?? "CrabSense Alert", values),
+            Render(string.IsNullOrWhiteSpace(rule.BodyTemplate) ? "{message}" : rule.BodyTemplate!, values)));
+    }
+
+    public async Task<ApiResponse<IEnumerable<NotificationDeliveryDto>>> GetDeliveriesAsync(
+        string? status = null, int take = 100, CancellationToken ct = default)
+    {
+        take = Math.Clamp(take, 1, 500);
+        var rows = string.IsNullOrWhiteSpace(status)
+            ? await _uow.NotificationDeliveries.GetAllAsync(ct)
+            : await _uow.NotificationDeliveries.FindAsync(
+                d => d.Status == status.Trim().ToLowerInvariant(), ct);
+
+        return ApiResponse<IEnumerable<NotificationDeliveryDto>>.Ok(
+            rows.OrderByDescending(d => d.CreatedAt).Take(take).Select(d => new NotificationDeliveryDto(
+                d.Id, d.NotificationId, d.ChannelCode, d.Recipient, d.Status,
+                d.SentAt, d.ErrorMessage, d.CreatedAt)));
+    }
+
+    public async Task NotifyAsync(
+        string typeCode,
+        string message,
+        Guid? alertId = null,
+        Guid? areaId = null,
+        string? severity = null,
+        IReadOnlyDictionary<string, string?>? tokens = null,
+        CancellationToken ct = default)
     {
         await EnsureDefaultChannelsAsync(ct);
-        var channels = (await _uow.NotificationChannels.FindAsync(c => c.IsEnabled, ct)).ToList();
-        var userList = userIds.Distinct().ToList();
-        if (userList.Count == 0) return;
+
+        var code = NormalizeCode(typeCode);
+        var rule = (await _uow.NotificationRules.FindAsync(r => r.TypeCode == code, ct)).FirstOrDefault();
+
+        // Rule chưa seed (loại mới) → giữ hành vi cũ; rule bị tắt → không gửi gì.
+        if (rule is not null && !rule.IsEnabled) return;
+        if (!SeverityPasses(rule?.MinSeverity, severity)) return;
+
+        var roles = SplitCsv(rule?.RecipientRoles ?? LegacyRoles)
+            .Select(r => UserRoleParsing.TryParse(r, out var v) ? (UserRole?)v : null)
+            .Where(r => r is not null)
+            .Select(r => r!.Value)
+            .Distinct()
+            .ToArray();
+        if (roles.Length == 0) return;
+
+        var recipients = (await _uow.Users.FindAsync(u => u.IsActive && roles.Contains(u.Role), ct)).ToList();
+        recipients = await FilterByAreaAsync(recipients, rule?.ScopeByArea == true, areaId, ct);
+
+        var values = BuildTokens(code, message, severity, tokens);
+        var title = Render(rule?.TitleTemplate ?? "CrabSense Alert", values);
+        var body = Render(
+            string.IsNullOrWhiteSpace(rule?.BodyTemplate) ? "{message}" : rule!.BodyTemplate!, values);
+
+        var channelCodes = SplitCsv(rule?.ChannelCodes ?? LegacyChannels);
+        var channels = (await _uow.NotificationChannels.FindAsync(
+            c => c.IsEnabled && channelCodes.Contains(c.ChannelCode), ct)).ToList();
+        var pushChannel = channels.FirstOrDefault(c => c.ChannelCode == "push");
+        var createInApp = channelCodes.Contains("in_app", StringComparer.OrdinalIgnoreCase);
 
         Notification? anchor = null;
-        foreach (var userId in userList)
+        foreach (var user in recipients)
         {
-            var notification = new Notification
-            {
-                UserId = userId,
-                AlertId = alertId,
-                Title = title,
-                Body = body,
-                Channel = "in-app"
-            };
-            await _uow.Notifications.AddAsync(notification, ct);
-            anchor ??= notification;
+            if (!PrefsAllow(user.NotificationPrefsJson, code, severity)) continue;
 
-            var pushChannel = channels.FirstOrDefault(c => c.ChannelCode == "push");
+            Notification? own = null;
+            if (createInApp)
+            {
+                own = new Notification
+                {
+                    UserId = user.Id,
+                    AlertId = alertId,
+                    TypeCode = code,
+                    Title = title,
+                    Body = body,
+                    Channel = "in_app"
+                };
+                await _uow.Notifications.AddAsync(own, ct);
+                anchor ??= own;
+            }
+
             if (pushChannel is not null)
             {
-                var (ok, detail) = await DispatchChannelAsync(pushChannel, title, body, userId, ct);
-                await _uow.NotificationDeliveries.AddAsync(new NotificationDelivery
-                {
-                    NotificationId = notification.Id,
-                    ChannelCode = pushChannel.ChannelCode,
-                    Recipient = userId.ToString(),
-                    Status = ok ? "sent" : "failed",
-                    ErrorMessage = ok ? null : detail,
-                    SentAt = ok ? DateTime.UtcNow : null
-                }, ct);
+                var (ok, detail) = await DispatchChannelAsync(pushChannel, title, body, user.Id, ct);
+                if (own is not null)
+                    await _uow.NotificationDeliveries.AddAsync(new NotificationDelivery
+                    {
+                        NotificationId = own.Id,
+                        ChannelCode = pushChannel.ChannelCode,
+                        Recipient = user.Id.ToString(),
+                        Status = ok ? "sent" : "failed",
+                        ErrorMessage = ok ? null : detail,
+                        SentAt = ok ? DateTime.UtcNow : null
+                    }, ct);
             }
         }
 
+        // Telegram / Zalo / Email: một đích chung toàn hệ thống (ConfigJson), gắn vào notification đầu tiên.
         if (anchor is not null)
         {
-            foreach (var ch in channels.Where(c => c.ChannelCode is "telegram" or "zalo_oa"))
+            foreach (var ch in channels.Where(c => c.ChannelCode is "telegram" or "zalo_oa" or "email"))
             {
                 var (ok, detail) = await DispatchChannelAsync(ch, title, body, null, ct);
                 await _uow.NotificationDeliveries.AddAsync(new NotificationDelivery
@@ -309,6 +443,93 @@ public class NotificationService : INotificationService
 
         await _uow.SaveChangesAsync(ct);
     }
+
+    // ─── Rule resolution ────────────────────────────────────────────────────
+
+    private const string LegacyRoles = "FarmAdministrator,FarmManager,FarmStaff";
+    private const string LegacyChannels = "in_app,push,telegram,zalo_oa,email";
+
+    private static readonly HashSet<string> KnownChannelCodes =
+        new(StringComparer.OrdinalIgnoreCase) { "in_app", "push", "telegram", "zalo_oa", "email" };
+
+    private static string NormalizeCode(string? typeCode) =>
+        string.IsNullOrWhiteSpace(typeCode) ? NotificationTypeCodes.System : typeCode.Trim().ToLowerInvariant();
+
+    private static string[] SplitCsv(string? csv) =>
+        string.IsNullOrWhiteSpace(csv)
+            ? Array.Empty<string>()
+            : csv.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+    private static bool SeverityPasses(string? minSeverity, string? severity)
+    {
+        if (string.IsNullOrWhiteSpace(minSeverity)) return true;
+        if (!Enum.TryParse<AlertSeverity>(minSeverity.Trim(), true, out var min)) return true;
+        if (!Enum.TryParse<AlertSeverity>(severity ?? "Warning", true, out var actual)) actual = AlertSeverity.Warning;
+        return actual >= min;
+    }
+
+    private async Task<List<AppUser>> FilterByAreaAsync(
+        List<AppUser> users, bool scopeByArea, Guid? areaId, CancellationToken ct)
+    {
+        if (!scopeByArea || areaId is not Guid id || id == Guid.Empty) return users;
+        var area = await _uow.FarmingAreas.GetByIdAsync(id, ct);
+        if (area is null) return users;
+
+        // ponytail: chỉ FarmAdministrator có ràng buộc khu (FarmingArea.OwnerId). Manager/Staff chưa có
+        // bảng phân công khu nên vẫn nhận — cần UserAreaAssignment mới siết được hoàn toàn.
+        return users.Where(u => u.Role != UserRole.FarmAdministrator || u.Id == area.OwnerId).ToList();
+    }
+
+    private static bool PrefsAllow(string? prefsJson, string typeCode, string? severity)
+    {
+        if (string.Equals(severity, nameof(AlertSeverity.Critical), StringComparison.OrdinalIgnoreCase))
+            return true; // cảnh báo nghiêm trọng không cho tắt
+        if (string.IsNullOrWhiteSpace(prefsJson)) return true;
+
+        try
+        {
+            var prefs = JsonSerializer.Deserialize<NotificationPreferencesDto>(prefsJson, PrefsJsonOpts);
+            if (prefs is null) return true;
+            return NotificationTypeCodes.IsWarningType(typeCode)
+                ? prefs.WarningsEnabled
+                : prefs.SystemUpdatesEnabled;
+        }
+        catch (JsonException)
+        {
+            return true;
+        }
+    }
+
+    private static readonly JsonSerializerOptions PrefsJsonOpts = new() { PropertyNameCaseInsensitive = true };
+
+    private static Dictionary<string, string?> BuildTokens(
+        string typeCode, string message, string? severity, IReadOnlyDictionary<string, string?>? extra)
+    {
+        var values = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["message"] = message,
+            ["type"] = typeCode,
+            ["severity"] = severity ?? nameof(AlertSeverity.Warning)
+        };
+        if (extra is null) return values;
+        foreach (var (key, value) in extra)
+            if (!string.IsNullOrWhiteSpace(key))
+                values[key.Trim()] = value;
+        return values;
+    }
+
+    /// <summary>Thay {token} — token lạ giữ nguyên để admin thấy lỗi khi preview.</summary>
+    private static string Render(string template, IReadOnlyDictionary<string, string?> values)
+    {
+        var result = template;
+        foreach (var (key, value) in values)
+            result = result.Replace("{" + key + "}", value ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+        return result;
+    }
+
+    private static NotificationRuleDto MapRule(NotificationRule r) =>
+        new(r.Id, r.TypeCode, r.DisplayName, r.IsEnabled, r.MinSeverity, r.RecipientRoles,
+            r.ScopeByArea, r.ChannelCodes, r.TitleTemplate, r.BodyTemplate);
 
     private async Task UpsertChannelSettingAsync(
         List<NotificationChannel> channels,
@@ -364,7 +585,7 @@ public class NotificationService : INotificationService
                 "zalo_oa" => await SendZaloAsync(ch.ConfigJson, title, body, ct),
                 "push" when userId is null => (false, "userId required for push"),
                 "push" => await SendPushAsync(userId!.Value, title, body, ct),
-                "email" => (true, "queued-stub (provider not configured)"),
+                "email" => (false, "email provider not configured"),
                 _ => (true, "noop")
             };
         }
@@ -539,7 +760,7 @@ public class NotificationService : INotificationService
         s.Replace("_", "\\_").Replace("*", "\\*").Replace("[", "\\[").Replace("`", "\\`");
 
     private static NotificationDto Map(Notification n) =>
-        new(n.Id, n.UserId, n.AlertId, n.Title, n.Body, n.Channel, n.IsRead, n.CreatedAt);
+        new(n.Id, n.UserId, n.AlertId, n.Title, n.Body, n.Channel, n.IsRead, n.CreatedAt, n.TypeCode);
 
     private static NotificationChannelDto MapChannel(NotificationChannel c) =>
         new(c.Id, c.ChannelCode, c.DisplayName, c.IsEnabled, c.ConfigJson);

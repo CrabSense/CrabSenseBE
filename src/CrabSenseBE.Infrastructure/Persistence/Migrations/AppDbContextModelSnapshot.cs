@@ -2240,6 +2240,10 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                         .IsRequired()
                         .HasColumnType("text");
 
+                    b.Property<string>("TypeCode")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
                     b.Property<DateTime?>("UpdatedAt")
                         .HasColumnType("timestamp with time zone");
 
@@ -2250,7 +2254,7 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
 
                     b.HasIndex("AlertId");
 
-                    b.HasIndex("UserId");
+                    b.HasIndex("UserId", "TypeCode");
 
                     b.ToTable("Notifications", "be");
                 });
@@ -2323,6 +2327,63 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.HasIndex("NotificationId");
 
                     b.ToTable("NotificationDeliveries", "be");
+                });
+
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.NotificationRule", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("BodyTemplate")
+                        .HasColumnType("text");
+
+                    b.Property<string>("ChannelCodes")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("DisplayName")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)");
+
+                    b.Property<bool>("IsEnabled")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("MinSeverity")
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)");
+
+                    b.Property<string>("RecipientRoles")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)");
+
+                    b.Property<bool>("ScopeByArea")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("TitleTemplate")
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)");
+
+                    b.Property<string>("TypeCode")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<DateTime?>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TypeCode")
+                        .IsUnique();
+
+                    b.ToTable("NotificationRules", "be");
                 });
 
             modelBuilder.Entity("CrabSenseBE.Domain.Entities.ObservationEvent", b =>

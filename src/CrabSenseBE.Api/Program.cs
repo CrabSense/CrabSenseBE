@@ -141,6 +141,9 @@ builder.Services.AddHealthChecks();
 var app = builder.Build();
 
 // ─── Middleware pipeline ─────────────────────────────────────────────────────
+// Serilog phải nằm NGOÀI ExceptionMiddleware: exception nghiệp vụ (400/404) được
+// chuyển thành response trước khi Serilog đọc StatusCode, nếu không sẽ log nhầm 500.
+app.UseSerilogRequestLogging();
 app.UseMiddleware<ExceptionMiddleware>();
 
 if (app.Environment.IsDevelopment())
@@ -153,7 +156,6 @@ if (app.Environment.IsDevelopment())
     });
 }
 
-app.UseSerilogRequestLogging();
 app.UseCors("AllowFrontend");
 if (!app.Environment.IsDevelopment())
     app.UseHttpsRedirection();
