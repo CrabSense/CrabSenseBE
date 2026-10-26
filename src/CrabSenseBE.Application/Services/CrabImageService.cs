@@ -22,7 +22,8 @@ public class CrabImageService : ICrabImageService
         Guid? crabId,
         Guid? harvestVoucherId,
         Guid? uploadedBy,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        bool replace = false)
     {
         ImageUploadRules.ValidateBatch(files);
 
@@ -89,7 +90,10 @@ public class CrabImageService : ICrabImageService
         if (voucher is not null)
         {
             voucher.PhotoUrlsJson = JsonStringList.Serialize(
-                JsonStringList.Merge(voucher.PhotoUrlsJson, urls, ImageUploadRules.MaxUrls), ImageUploadRules.MaxUrls);
+                replace
+                    ? urls
+                    : JsonStringList.Merge(voucher.PhotoUrlsJson, urls, ImageUploadRules.MaxUrls),
+                ImageUploadRules.MaxUrls);
             _uow.HarvestVouchers.Update(voucher);
 
             // Ảnh thu hoạch cũng là ảnh con cua -> ghi vào album từng con để hồ sơ cua không trống.

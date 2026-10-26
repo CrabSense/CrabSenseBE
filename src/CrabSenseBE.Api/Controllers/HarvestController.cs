@@ -39,8 +39,10 @@ public class HarvestController : ControllerBase
         Guid id,
         [FromForm] List<IFormFile>? files,
         IFormFile? file,
+        [FromForm] bool replace = false,
         CancellationToken ct = default)
-        => Ok(await _images.UploadAsync(ToImageFiles(files, file), null, id, TryGetUserId(), ct));
+        => Ok(await _images.UploadAsync(
+            ToImageFiles(files, file), null, id, TryGetUserId(), ct, replace));
 
     /// <summary>
     /// [READ] Lấy danh sách phiếu thu hoạch.

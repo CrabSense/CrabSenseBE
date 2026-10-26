@@ -16,12 +16,16 @@ public interface ICrabImageService
     /// append URL vào phiếu và album của các con cua trong phiếu.
     /// Không có cả hai: chỉ trả URL để client gửi kèm lúc tạo bản ghi.
     /// </summary>
+    /// <param name="replace">
+    /// true = thay danh sách URL cũ bằng lần upload này (dùng khi sửa ảnh bị lưu sai chỗ).
+    /// </param>
     Task<ApiResponse<IReadOnlyList<CrabImageDto>>> UploadAsync(
         IReadOnlyList<CrabImageFile> files,
         Guid? crabId,
         Guid? harvestVoucherId,
         Guid? uploadedBy,
-        CancellationToken ct = default);
+        CancellationToken ct = default,
+        bool replace = false);
 
     /// <summary>Stream one stored photo (S3/local) by index. Bucket may be private.</summary>
     Task<CrabImageContent?> GetPhotoAsync(Guid crabId, int index, CancellationToken ct = default);
