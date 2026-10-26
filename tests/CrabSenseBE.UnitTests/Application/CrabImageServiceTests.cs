@@ -17,6 +17,12 @@ public class CrabImageServiceTests
 
     public CrabImageServiceTests()
     {
+        var allocations = new Mock<IRepository<CrabBoxAllocation>>();
+        allocations.Setup(r => r.FindAsync(
+                It.IsAny<System.Linq.Expressions.Expression<Func<CrabBoxAllocation, bool>>>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Array.Empty<CrabBoxAllocation>());
+        _uow.Setup(u => u.CrabBoxAllocations).Returns(allocations.Object);
         _uow.Setup(u => u.Crabs).Returns(_crabs.Object);
         _uow.Setup(u => u.MediaAssets).Returns(_media.Object);
         _uow.Setup(u => u.SaveChangesAsync(It.IsAny<CancellationToken>())).ReturnsAsync(1);

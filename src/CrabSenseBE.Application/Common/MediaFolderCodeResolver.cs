@@ -52,9 +52,22 @@ public static class MediaFolderCodeResolver
             return MediaFolderPath.Join(MediaFolderPath.InboundRoot, MediaFolderPath.PendingSegment);
 
         var leaf = MediaFolderPath.Leaf(crab.Id, crab.Code);
-        if (crab.BoxId is Guid boxId && boxId != Guid.Empty)
+
+        // Cua đã thu hoạch bị xoá BoxId — lấy hộp gần nhất từ lịch sử phân bổ để
+        // đường dẫn ảnh không nhảy từ {khu}/{dãy}/{hộp}/{cua} sang NhapHang/{lô}/{cua}.
+        var boxId = crab.BoxId;
+        if (boxId is null || boxId == Guid.Empty)
         {
-            var branch = await FarmBranchAsync(uow, boxId, null, null, ct);
+            boxId = (await uow.CrabBoxAllocations.FindAsync(a => a.CrabId == crab.Id, ct))
+                .Where(a => a.BoxId != Guid.Empty)
+                .OrderByDescending(a => a.EndTime ?? a.StartTime)
+                .Select(a => (Guid?)a.BoxId)
+                .FirstOrDefault();
+        }
+
+        if (boxId is Guid bid && bid != Guid.Empty)
+        {
+            var branch = await FarmBranchAsync(uow, bid, null, null, ct);
             if (branch.Length > 0)
                 return MediaFolderPath.Join(MediaFolderPath.Join(branch), leaf);
         }
