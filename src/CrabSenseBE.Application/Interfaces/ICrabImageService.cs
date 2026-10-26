@@ -12,11 +12,14 @@ public interface ICrabImageService
 {
     /// <summary>
     /// Upload 1..n images. If <paramref name="crabId"/> is set, append URLs to that crab.
-    /// Without crabId, just returns S3 URLs for the client to send on create.
+    /// If <paramref name="harvestVoucherId"/> is set, lưu vào {khu}/ThuHoach/{mã phiếu},
+    /// append URL vào phiếu và album của các con cua trong phiếu.
+    /// Không có cả hai: chỉ trả URL để client gửi kèm lúc tạo bản ghi.
     /// </summary>
     Task<ApiResponse<IReadOnlyList<CrabImageDto>>> UploadAsync(
         IReadOnlyList<CrabImageFile> files,
         Guid? crabId,
+        Guid? harvestVoucherId,
         Guid? uploadedBy,
         CancellationToken ct = default);
 

@@ -14,6 +14,11 @@
  *
  * POST JSON:
  *   { secret, filename, mimeType, dataBase64, folderPath, shareAnyone }
+ *
+ * Di chuyển / dọn file (service account chỉ có quyền ĐỌC folder nên phải qua đây):
+ *   { secret, action: 'move',   fileId, folderPath }
+ *   { secret, action: 'delete', fileId }
+ *   { secret, action: 'ensureFolder', folderPath }  -> { folderId }
  */
 var FOLDER_ID = '1mgGZM-vmWg_Hqv3EOGtAiNKzS54nb5zR';
 var UPLOAD_SECRET = 'CHANGE_ME_TO_A_LONG_RANDOM_SECRET';
@@ -28,6 +33,26 @@ function doPost(e) {
     if (!body.secret || body.secret !== UPLOAD_SECRET) {
       return _json({ success: false, message: 'Unauthorized' });
     }
+
+    if (body.action === 'move') {
+      if (!body.fileId) return _json({ success: false, message: 'Thiếu fileId' });
+      var dest = _ensurePath(DriveApp.getFolderById(FOLDER_ID), body.folderPath);
+      var moving = DriveApp.getFileById(String(body.fileId));
+      moving.moveTo(dest);
+      return _json({ success: true, fileId: moving.getId(), folderId: dest.getId() });
+    }
+
+    if (body.action === 'delete') {
+      if (!body.fileId) return _json({ success: false, message: 'Thiếu fileId' });
+      DriveApp.getFileById(String(body.fileId)).setTrashed(true);
+      return _json({ success: true, fileId: String(body.fileId) });
+    }
+
+    if (body.action === 'ensureFolder') {
+      var made = _ensurePath(DriveApp.getFolderById(FOLDER_ID), body.folderPath);
+      return _json({ success: true, folderId: made.getId(), name: made.getName() });
+    }
+
     if (!body.dataBase64 || typeof body.dataBase64 !== 'string') {
       return _json({ success: false, message: 'Thiếu dataBase64' });
     }

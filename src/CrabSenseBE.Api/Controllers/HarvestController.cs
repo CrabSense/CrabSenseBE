@@ -3,6 +3,7 @@ using CrabSenseBE.Application.Interfaces;
 using CrabSenseBE.Domain.Enums;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using System.Security.Claims;
 
 namespace CrabSenseBE.Api.Controllers;
 
@@ -17,11 +18,29 @@ namespace CrabSenseBE.Api.Controllers;
 public class HarvestController : ControllerBase
 {
     private readonly IHarvestService _harvestService;
+    private readonly ICrabImageService _images;
 
-    public HarvestController(IHarvestService harvestService)
+    public HarvestController(IHarvestService harvestService, ICrabImageService images)
     {
         _harvestService = harvestService;
+        _images = images;
     }
+
+    /// <summary>
+    /// [CREATE] Upload ảnh cho phiếu thu hoạch vào {khu}/ThuHoach/{mã phiếu}.
+    /// Gọi SAU khi tạo phiếu (cần id để biết thư mục). Form field: files (nhiều file).
+    /// Ảnh được append vào photoUrls của phiếu và album của các con cua trong phiếu.
+    /// </summary>
+    [HttpPost("{id:guid}/images")]
+    [Authorize(Roles = AppRoles.FarmWriteWithPlatform)]
+    [RequestSizeLimit(30_000_000)]
+    [Consumes("multipart/form-data")]
+    public async Task<IActionResult> UploadImages(
+        Guid id,
+        [FromForm] List<IFormFile>? files,
+        IFormFile? file,
+        CancellationToken ct = default)
+        => Ok(await _images.UploadAsync(ToImageFiles(files, file), null, id, TryGetUserId(), ct));
 
     /// <summary>
     /// [READ] Lấy danh sách phiếu thu hoạch.
@@ -234,5 +253,25 @@ public class HarvestController : ControllerBase
         var result = await _harvestService.GetVouchersByBoxAsync(boxId, ct);
 
         return Ok(result);
+    }
+
+    private static IReadOnlyList<CrabImageFile> ToImageFiles(List<IFormFile>? files, IFormFile? file)
+    {
+        var list = new List<IFormFile>();
+        if (files is { Count: > 0 })
+            list.AddRange(files.Where(f => f is { Length: > 0 }));
+        if (file is { Length: > 0 } && list.All(f => f != file))
+            list.Add(file);
+        return list
+            .Select(f => new CrabImageFile(
+                f.OpenReadStream(), f.FileName, f.ContentType ?? "application/octet-stream"))
+            .ToList();
+    }
+
+    private Guid? TryGetUserId()
+    {
+        var raw = User.FindFirstValue(ClaimTypes.NameIdentifier)
+            ?? User.FindFirstValue("sub");
+        return raw is not null && Guid.TryParse(raw, out var id) && id != Guid.Empty ? id : null;
     }
 }
