@@ -31,6 +31,46 @@ public class UsersController : ControllerBase
         _currentUser = currentUser;
     }
 
+
+    /// <summary>
+    /// [UPDATE] Update employee profile information.
+    /// </summary>
+    [HttpPut("{id:guid}")]
+    [ProducesResponseType(typeof(ApiResponse<UserDto>), 200)]
+    public async Task<IActionResult> UpdateUser(
+        Guid id,
+        [FromBody] UpdateAdminUserRequest request,
+        CancellationToken ct)
+    {
+        var result = await _users.UpdateUserAsync(
+            id,
+            request,
+            CallerRole(),
+            ct);
+
+        return Ok(result);
+    }
+
+    /// <summary>
+    /// [UPDATE] Change FarmManager/FarmStaff role.
+    /// </summary>
+    [HttpPatch("{id:guid}/role")]
+    [ProducesResponseType(typeof(ApiResponse<UserDto>), 200)]
+    public async Task<IActionResult> ChangeRole(
+        Guid id,
+        [FromBody] ChangeUserRoleRequest request,
+        CancellationToken ct)
+    {
+        var result = await _users.ChangeRoleAsync(
+            id,
+            request,
+            CallerRole(),
+            ct);
+
+        return Ok(result);
+    }
+
+
     /// <summary>[READ] Danh sách tài khoản trong phạm vi quản lý.</summary>
     [HttpGet]
     public async Task<IActionResult> List(CancellationToken ct)

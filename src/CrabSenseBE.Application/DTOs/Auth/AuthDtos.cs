@@ -48,3 +48,22 @@ public record UserDto(
     string? AvatarUrl = null,
     DateTime? CreatedAt = null
 );
+
+
+/// <summary>
+/// Admin updates employee account information.
+/// </summary>
+public record UpdateAdminUserRequest(
+    string FullName,
+    string Email,
+    string? Phone,
+    string? EmployeeId
+);
+
+/// <summary>
+/// Admin changes employee role.
+/// </summary>
+public record ChangeUserRoleRequest(
+    string Role
+);
+

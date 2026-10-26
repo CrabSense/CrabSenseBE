@@ -21,4 +21,24 @@ public interface IUserAdminService
 
     Task<ApiResponse> ResetPasswordAsync(
         Guid id, string newPassword, UserRole callerRole, CancellationToken ct = default);
+
+
+    /// <summary>
+    /// Update employee profile information.
+    /// </summary>
+    Task<ApiResponse<UserDto>> UpdateUserAsync(
+        Guid id,
+        UpdateAdminUserRequest request,
+        UserRole callerRole,
+        CancellationToken ct = default);
+
+    /// <summary>
+    /// Change employee role.
+    /// </summary>
+    Task<ApiResponse<UserDto>> ChangeRoleAsync(
+        Guid id,
+        ChangeUserRoleRequest request,
+        UserRole callerRole,
+        CancellationToken ct = default);
+
 }
