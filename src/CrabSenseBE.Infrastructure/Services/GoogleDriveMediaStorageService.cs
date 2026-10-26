@@ -467,8 +467,7 @@ public class GoogleDriveMediaStorageService : IMediaStorageService
         {
             return AppException.BadRequest(
                 "Gmail My Drive không cho service account ghi file (quota 0). " +
-                "Deploy tools/google_drive_media_upload.gs (Execute as: Me), " +
-                "điền GOOGLE_DRIVE_WEBHOOK_URL + GOOGLE_DRIVE_WEBHOOK_SECRET rồi restart API.");
+                "Điền GOOGLE_DRIVE_WEBHOOK_URL + GOOGLE_DRIVE_WEBHOOK_SECRET rồi restart API.");
         }
 
         if (ex.HttpStatusCode == System.Net.HttpStatusCode.NotFound
@@ -484,7 +483,7 @@ public class GoogleDriveMediaStorageService : IMediaStorageService
             return AppException.Forbidden(
                 "Google Drive từ chối ghi (403" +
                 (string.IsNullOrWhiteSpace(reason) ? "" : $", {reason}") +
-                "). Với Gmail My Drive hãy deploy Apps Script tools/google_drive_media_upload.gs. Chi tiết: " + raw);
+                "). Với Gmail My Drive cần webhook Apps Script đã deploy (GOOGLE_DRIVE_WEBHOOK_URL). Chi tiết: " + raw);
         }
 
         return AppException.BadRequest($"Google Drive lỗi: {raw}");
