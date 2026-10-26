@@ -117,6 +117,10 @@ public class UnitOfWork : IUnitOfWork
     public IRepository<NotificationChannel> NotificationChannels =>
         _notificationChannels ??= new GenericRepository<NotificationChannel>(_context);
 
+    private IRepository<NotificationRule>? _notificationRules;
+    public IRepository<NotificationRule> NotificationRules =>
+        _notificationRules ??= new GenericRepository<NotificationRule>(_context);
+
     private IRepository<NotificationDelivery>? _notificationDeliveries;
     public IRepository<NotificationDelivery> NotificationDeliveries =>
         _notificationDeliveries ??= new GenericRepository<NotificationDelivery>(_context);
@@ -229,7 +233,12 @@ public class UnitOfWork : IUnitOfWork
     public async Task<List<CrabMortalityRecord>> GetMortalityRecordsWithDetailsAsync(CancellationToken ct = default)
     {
         return await _context.CrabMortalityRecords
+            .AsNoTracking()
             .Include(x => x.Crab)
+            .Include(x => x.Box!)
+                .ThenInclude(b => b.FarmingRow!)
+                    .ThenInclude(r => r.FarmingArea)
+            .OrderByDescending(x => x.MortalityDate)
             .ToListAsync(ct);
     }
 

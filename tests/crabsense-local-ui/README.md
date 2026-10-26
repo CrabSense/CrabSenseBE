@@ -11,7 +11,15 @@ Static UI để test API CrabSense trên máy local.
 .\start.ps1
 ```
 
-Mở `http://localhost:5500` — login `owner` / `Owner@123`.
+Mở `http://localhost:5500` — nhập user/pass thật trên form. Demo account (`owner`, `staff`, ...)
+chỉ tồn tại khi bật `Auth:SeedDemoUsers:Enabled=true` + `Auth:SeedDemoUsers:Password`.
+
+Các script `seed-*` / `verify-*` đọc credential từ env, không hardcode:
+
+```powershell
+$env:CRABSENSE_USER='...'; $env:CRABSENSE_PASSWORD='...'
+$env:CRABSENSE_EDGE_KEY='...'   # bắt buộc cho POST /api/iot/sensor-data*
+```
 
 ## Seed IoT demo (optional)
 

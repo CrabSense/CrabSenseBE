@@ -114,6 +114,63 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.ToTable("AiFeedbacks", "be");
                 });
 
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.AiManagedService", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<int>("BatchSize")
+                        .HasColumnType("integer");
+
+                    b.Property<decimal>("ConfidenceThreshold")
+                        .HasPrecision(5, 2)
+                        .HasColumnType("numeric(5,2)");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("DetectionClassesJson")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("DeviceLabel")
+                        .HasColumnType("text");
+
+                    b.Property<decimal>("FrameSamplingFps")
+                        .HasPrecision(6, 2)
+                        .HasColumnType("numeric(6,2)");
+
+                    b.Property<string>("ModelName")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("PreviousVersion")
+                        .HasColumnType("text");
+
+                    b.Property<DateTime?>("StartedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<DateTime?>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Version")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("AiManagedServices", "be");
+                });
+
             modelBuilder.Entity("CrabSenseBE.Domain.Entities.AiRecommendation", b =>
                 {
                     b.Property<Guid>("Id")
@@ -291,6 +348,12 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.Property<DateTime?>("LastLoginAt")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<string>("LastLoginIp")
+                        .HasColumnType("text");
+
+                    b.Property<string>("LastUserAgent")
+                        .HasColumnType("text");
+
                     b.Property<string>("NotificationPrefsJson")
                         .HasColumnType("text");
 
@@ -321,6 +384,37 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.HasKey("Id");
 
                     b.ToTable("AppUsers", "be");
+                });
+
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.BackupScheduleSetting", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("BackupTime")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<bool>("Enabled")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("Frequency")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<int>("RetentionDays")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTime?>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("BackupScheduleSettings", "be");
                 });
 
             modelBuilder.Entity("CrabSenseBE.Domain.Entities.Box", b =>
@@ -407,6 +501,48 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.HasIndex("ChangedByUserId");
 
                     b.ToTable("BoxStatusHistories", "be");
+                });
+
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.CameraRecordingSetting", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("DeviceId")
+                        .HasColumnType("uuid");
+
+                    b.Property<int?>("Fps")
+                        .HasColumnType("integer");
+
+                    b.Property<int?>("MaxStorageGb")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("Mode")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<int>("RetentionDays")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTime?>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("VideoQuality")
+                        .HasColumnType("text");
+
+                    b.Property<string>("WeeklyScheduleJson")
+                        .HasColumnType("text");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("DeviceId")
+                        .IsUnique();
+
+                    b.ToTable("CameraRecordingSettings", "be");
                 });
 
             modelBuilder.Entity("CrabSenseBE.Domain.Entities.Crab", b =>
@@ -735,6 +871,17 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uuid");
 
+                    b.Property<Guid?>("BoxId")
+                        .HasColumnType("uuid");
+
+                    b.Property<decimal?>("CarapaceLengthMm")
+                        .HasPrecision(10, 2)
+                        .HasColumnType("numeric(10,2)");
+
+                    b.Property<decimal?>("CarapaceWidthMm")
+                        .HasPrecision(10, 2)
+                        .HasColumnType("numeric(10,2)");
+
                     b.Property<int>("Cause")
                         .HasColumnType("integer");
 
@@ -759,7 +906,13 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.Property<DateTime?>("UpdatedAt")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<decimal?>("WeightGram")
+                        .HasPrecision(10, 2)
+                        .HasColumnType("numeric(10,2)");
+
                     b.HasKey("Id");
+
+                    b.HasIndex("BoxId");
 
                     b.HasIndex("CrabId");
 
@@ -964,11 +1117,18 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<string>("CredentialHash")
+                        .HasColumnType("text");
+
                     b.Property<string>("DeviceCode")
                         .IsRequired()
                         .HasColumnType("text");
 
                     b.Property<string>("DeviceType")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("EdgeState")
                         .IsRequired()
                         .HasColumnType("text");
 
@@ -989,6 +1149,9 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                         .HasMaxLength(64)
                         .HasColumnType("character varying(64)");
 
+                    b.Property<Guid?>("KioskId")
+                        .HasColumnType("uuid");
+
                     b.Property<DateTime?>("LastSeenAt")
                         .HasColumnType("timestamp with time zone");
 
@@ -1002,6 +1165,9 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.Property<string>("Notes")
                         .HasMaxLength(500)
                         .HasColumnType("character varying(500)");
+
+                    b.Property<string>("PendingSecret")
+                        .HasColumnType("text");
 
                     b.Property<string>("Resolution")
                         .HasMaxLength(32)
@@ -1076,6 +1242,48 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.HasIndex("DeviceCode", "Status", "CreatedAt");
 
                     b.ToTable("EdgeCommands", "be");
+                });
+
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.FarmKiosk", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Code")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("FarmingAreaId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("LanIp")
+                        .HasColumnType("text");
+
+                    b.Property<DateTime?>("LastSeenAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Name")
+                        .HasColumnType("text");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<DateTime?>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Code")
+                        .IsUnique();
+
+                    b.HasIndex("FarmingAreaId");
+
+                    b.ToTable("FarmKiosks", "be");
                 });
 
             modelBuilder.Entity("CrabSenseBE.Domain.Entities.FarmOperation", b =>
@@ -1797,6 +2005,72 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.ToTable("Invoices", "be");
                 });
 
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.KioskCredential", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("KioskId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime?>("RevokedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("SecretHash")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<DateTime?>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("KioskId");
+
+                    b.ToTable("KioskCredentials", "be");
+                });
+
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.KioskProvisioningCode", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Code")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTime>("ExpiresAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("KioskId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime?>("RevokedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTime?>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTime?>("UsedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Code");
+
+                    b.HasIndex("KioskId");
+
+                    b.ToTable("KioskProvisioningCodes", "be");
+                });
+
             modelBuilder.Entity("CrabSenseBE.Domain.Entities.MediaAsset", b =>
                 {
                     b.Property<Guid>("Id")
@@ -1983,6 +2257,10 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                         .IsRequired()
                         .HasColumnType("text");
 
+                    b.Property<string>("TypeCode")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
                     b.Property<DateTime?>("UpdatedAt")
                         .HasColumnType("timestamp with time zone");
 
@@ -1993,7 +2271,7 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
 
                     b.HasIndex("AlertId");
 
-                    b.HasIndex("UserId");
+                    b.HasIndex("UserId", "TypeCode");
 
                     b.ToTable("Notifications", "be");
                 });
@@ -2066,6 +2344,63 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.HasIndex("NotificationId");
 
                     b.ToTable("NotificationDeliveries", "be");
+                });
+
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.NotificationRule", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("BodyTemplate")
+                        .HasColumnType("text");
+
+                    b.Property<string>("ChannelCodes")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("DisplayName")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)");
+
+                    b.Property<bool>("IsEnabled")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("MinSeverity")
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)");
+
+                    b.Property<string>("RecipientRoles")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)");
+
+                    b.Property<bool>("ScopeByArea")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("TitleTemplate")
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)");
+
+                    b.Property<string>("TypeCode")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<DateTime?>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TypeCode")
+                        .IsUnique();
+
+                    b.ToTable("NotificationRules", "be");
                 });
 
             modelBuilder.Entity("CrabSenseBE.Domain.Entities.ObservationEvent", b =>
@@ -2610,6 +2945,32 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.ToTable("ScheduledFarmTasks", "be");
                 });
 
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.SecurityPolicySetting", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int>("FailedLoginAlertThreshold")
+                        .HasColumnType("integer");
+
+                    b.Property<bool>("RequireConfirmRestore")
+                        .HasColumnType("boolean");
+
+                    b.Property<int>("SessionDays")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTime?>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("SecurityPolicySettings", "be");
+                });
+
             modelBuilder.Entity("CrabSenseBE.Domain.Entities.Sensor", b =>
                 {
                     b.Property<Guid>("Id")
@@ -2670,6 +3031,43 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.ToTable("Sensors", "be");
                 });
 
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.ServiceApiKey", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("KeyHash")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<DateTime?>("LastUsedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("Prefix")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<DateTime?>("RevokedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTime?>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Prefix");
+
+                    b.ToTable("ServiceApiKeys", "be");
+                });
+
             modelBuilder.Entity("CrabSenseBE.Domain.Entities.SyncInboxItem", b =>
                 {
                     b.Property<Guid>("Id")
@@ -2723,6 +3121,48 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.HasIndex("Status", "ReceivedAt");
 
                     b.ToTable("SyncInboxItems", "be");
+                });
+
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.SystemDeployment", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Component")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTime>("DeployedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("DeployedBy")
+                        .HasColumnType("text");
+
+                    b.Property<Guid?>("DeployedByUserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Environment")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<DateTime?>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Version")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("SystemDeployments", "be");
                 });
 
             modelBuilder.Entity("CrabSenseBE.Domain.Entities.TraceabilityLink", b =>
@@ -3145,6 +3585,17 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.Navigation("ChangedByUser");
                 });
 
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.CameraRecordingSetting", b =>
+                {
+                    b.HasOne("CrabSenseBE.Domain.Entities.Device", "Device")
+                        .WithMany()
+                        .HasForeignKey("DeviceId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Device");
+                });
+
             modelBuilder.Entity("CrabSenseBE.Domain.Entities.Crab", b =>
                 {
                     b.HasOne("CrabSenseBE.Domain.Entities.Box", "Box")
@@ -3217,6 +3668,10 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
 
             modelBuilder.Entity("CrabSenseBE.Domain.Entities.CrabMortalityRecord", b =>
                 {
+                    b.HasOne("CrabSenseBE.Domain.Entities.Box", "Box")
+                        .WithMany()
+                        .HasForeignKey("BoxId");
+
                     b.HasOne("CrabSenseBE.Domain.Entities.Crab", "Crab")
                         .WithMany("MortalityRecords")
                         .HasForeignKey("CrabId")
@@ -3226,6 +3681,8 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.HasOne("CrabSenseBE.Domain.Entities.AppUser", "Recorder")
                         .WithMany()
                         .HasForeignKey("RecorderId");
+
+                    b.Navigation("Box");
 
                     b.Navigation("Crab");
 
@@ -3277,6 +3734,17 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                         .WithMany()
                         .HasForeignKey("FarmingAreaId")
                         .OnDelete(DeleteBehavior.SetNull);
+
+                    b.Navigation("FarmingArea");
+                });
+
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.FarmKiosk", b =>
+                {
+                    b.HasOne("CrabSenseBE.Domain.Entities.FarmingArea", "FarmingArea")
+                        .WithMany()
+                        .HasForeignKey("FarmingAreaId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
 
                     b.Navigation("FarmingArea");
                 });
@@ -3395,6 +3863,28 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                         .IsRequired();
 
                     b.Navigation("SalesOrder");
+                });
+
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.KioskCredential", b =>
+                {
+                    b.HasOne("CrabSenseBE.Domain.Entities.FarmKiosk", "Kiosk")
+                        .WithMany()
+                        .HasForeignKey("KioskId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Kiosk");
+                });
+
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.KioskProvisioningCode", b =>
+                {
+                    b.HasOne("CrabSenseBE.Domain.Entities.FarmKiosk", "Kiosk")
+                        .WithMany()
+                        .HasForeignKey("KioskId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Kiosk");
                 });
 
             modelBuilder.Entity("CrabSenseBE.Domain.Entities.MediaAsset", b =>

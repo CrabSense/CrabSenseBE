@@ -49,7 +49,7 @@ public class WaterAnalysisService : IWaterAnalysisService
         "CLEANING_COMPLETED"
     ];
 
-    private static readonly TimeSpan DefaultStepHold = TimeSpan.FromSeconds(3);
+    private static TimeSpan DefaultStepHold = TimeSpan.FromSeconds(3);
 
     private static readonly IReadOnlyList<WaterAnalysisSourceOptionDto> SourceOptions =
     [
@@ -60,7 +60,7 @@ public class WaterAnalysisService : IWaterAnalysisService
         new("INLET", "Nguồn nước cấp")
     ];
 
-    private static readonly IReadOnlyList<WaterAnalysisThresholdDto> Thresholds =
+    private static readonly IReadOnlyList<WaterAnalysisThresholdDto> DefaultThresholds =
     [
         new("ph", "pH", "", 7.5m, 8.5m, 7.0m, 8.8m, "7.5 – 8.5"),
         new("nh3", "NH3", "mg/L", null, 0.05m, null, 0.10m, "≤ 0.05 mg/L"),
@@ -68,7 +68,7 @@ public class WaterAnalysisService : IWaterAnalysisService
         new("no3", "NO3", "mg/L", null, 20m, null, 40m, "< 20 mg/L")
     ];
 
-    private static readonly IReadOnlyList<WaterAnalysisAssayDto> Assays =
+    private static readonly IReadOnlyList<WaterAnalysisAssayDto> DefaultAssays =
     [
         new("NO2", "NO2", true, 5m, 15, "theo cấu hình assay", "theo cấu hình assay", "NO2-V1", 0.75m),
         new("NH3", "NH3", false, null, null, null, null, null, 0.75m),
@@ -76,13 +76,73 @@ public class WaterAnalysisService : IWaterAnalysisService
         new("PH", "pH", false, null, null, null, null, null, 0.75m)
     ];
 
+    // ponytail: cấu hình process-wide, áp 1 lần từ request đầu tiên.
+    // Đổi ngưỡng trong appsettings phải restart API (không hot-reload).
+    private static IReadOnlyList<WaterAnalysisThresholdDto> Thresholds = DefaultThresholds;
+    private static IReadOnlyList<WaterAnalysisAssayDto> Assays = DefaultAssays;
+    private static bool _optionsApplied;
+
     private readonly IUnitOfWork _uow;
     private readonly ICurrentUserService _currentUser;
 
-    public WaterAnalysisService(IUnitOfWork uow, ICurrentUserService currentUser)
+    public WaterAnalysisService(
+        IUnitOfWork uow,
+        ICurrentUserService currentUser,
+        Microsoft.Extensions.Options.IOptions<Options.WaterAnalysisOptions> options)
     {
         _uow = uow;
         _currentUser = currentUser;
+        ApplyOptions(options.Value);
+    }
+
+    private static void ApplyOptions(Options.WaterAnalysisOptions options)
+    {
+        if (_optionsApplied) return;
+        _optionsApplied = true;
+
+        if (options.StepHoldSeconds is > 0 and var hold)
+            DefaultStepHold = TimeSpan.FromSeconds(hold);
+
+        if (options.Thresholds.Count > 0)
+        {
+            Thresholds = DefaultThresholds.Select(t =>
+            {
+                var o = options.Thresholds.FirstOrDefault(x =>
+                    string.Equals(x.Code, t.Code, StringComparison.OrdinalIgnoreCase));
+                return o is null
+                    ? t
+                    : new WaterAnalysisThresholdDto(
+                        t.Code,
+                        o.Label ?? t.Label,
+                        o.Unit ?? t.Unit,
+                        o.Min ?? t.Min,
+                        o.Max ?? t.Max,
+                        o.WarningMin ?? t.WarningMin,
+                        o.WarningMax ?? t.WarningMax,
+                        o.Display ?? t.Display);
+            }).ToArray();
+        }
+
+        if (options.Assays.Count > 0)
+        {
+            Assays = DefaultAssays.Select(a =>
+            {
+                var o = options.Assays.FirstOrDefault(x =>
+                    string.Equals(x.Analyte, a.Analyte, StringComparison.OrdinalIgnoreCase));
+                return o is null
+                    ? a
+                    : new WaterAnalysisAssayDto(
+                        a.Analyte,
+                        o.Label ?? a.Label,
+                        o.Configured ?? a.Configured,
+                        o.SampleVolumeMl ?? a.SampleVolumeMl,
+                        o.ReactionTimeSeconds ?? a.ReactionTimeSeconds,
+                        o.Reagent1Dose ?? a.Reagent1Dose,
+                        o.Reagent2Dose ?? a.Reagent2Dose,
+                        o.AiModelId ?? a.AiModelId,
+                        o.AiConfidenceMin ?? a.AiConfidenceMin);
+            }).ToArray();
+        }
     }
 
     public async Task<ApiResponse<WaterAnalysisSnapshotDto>> GetSnapshotAsync(

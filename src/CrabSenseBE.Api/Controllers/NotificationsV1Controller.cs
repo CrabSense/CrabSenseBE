@@ -35,15 +35,15 @@ public class NotificationsV1Controller : ControllerBase
     public async Task<IActionResult> UnregisterPushToken([FromQuery] string token, CancellationToken ct)
         => Ok(await _service.UnregisterPushTokenAsync(_currentUser.UserId, token, ct));
 
-    /// <summary>[READ] Cấu hình thông báo Telegram / Zalo / Push</summary>
+    /// <summary>[READ] Cấu hình thông báo Telegram / Zalo / Push (admin)</summary>
     [HttpGet("settings")]
-    [Authorize(Roles = AppRoles.FarmWrite)]
+    [Authorize(Roles = AppRoles.Platform)]
     public async Task<IActionResult> GetSettings(CancellationToken ct)
         => Ok(await _service.GetSettingsAsync(ct));
 
-    /// <summary>[UPDATE] Cấu hình thông báo Telegram / Zalo / Push</summary>
+    /// <summary>[UPDATE] Cấu hình thông báo Telegram / Zalo / Push (admin)</summary>
     [HttpPut("settings")]
-    [Authorize(Roles = AppRoles.FarmWrite)]
+    [Authorize(Roles = AppRoles.Platform)]
     public async Task<IActionResult> UpdateSettings(
         [FromBody] UpdateNotificationSettingsRequest req, CancellationToken ct)
         => Ok(await _service.UpdateSettingsAsync(req, ct));

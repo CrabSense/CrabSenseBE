@@ -15,9 +15,11 @@ public class AppUser : BaseEntity
     public string? AvatarUrl { get; set; }
     /// <summary>JSON prefs cho thông báo cá nhân (Account tab).</summary>
     public string? NotificationPrefsJson { get; set; }
-    public UserRole Role { get; set; } = UserRole.Staff;
+    public UserRole Role { get; set; } = UserRole.FarmStaff;
     public bool IsActive { get; set; } = true;
     public DateTime? LastLoginAt { get; set; }
+    public string? LastLoginIp { get; set; }
+    public string? LastUserAgent { get; set; }
     public string? RefreshToken { get; set; }
     public DateTime? RefreshTokenExpiry { get; set; }
 

@@ -1,8 +1,11 @@
 using CrabSenseBE.Application.Common;
 using CrabSenseBE.Application.DTOs.Auth;
 using CrabSenseBE.Application.Interfaces;
+using CrabSenseBE.Domain.Enums;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
+using System.Security.Claims;
 
 namespace CrabSenseBE.Api.Controllers;
 
@@ -23,15 +26,28 @@ public class AuthController : ControllerBase
 
     /// <summary>[AUTH] Login — get JWT accessToken</summary>
     [HttpPost("login")]
+    [EnableRateLimiting("login")]
     [ProducesResponseType(typeof(ApiResponse<LoginResponse>), 200)]
     public async Task<IActionResult> Login([FromBody] LoginRequest request, CancellationToken ct)
-        => Ok(await _authService.LoginAsync(request, ct));
+        => Ok(await _authService.LoginAsync(
+            request,
+            ct,
+            HttpContext.Connection.RemoteIpAddress?.ToString(),
+            Request.Headers.UserAgent.ToString()));
 
-    /// <summary>[CREATE] Register user — Role: SystemAdmin | FarmOwner | Staff</summary>
+    /// <summary>
+    /// [CREATE] Register user — FarmAdministrator tạo FarmManager/FarmStaff,
+    /// SystemAdministrator tạo được cả FarmAdministrator.
+    /// </summary>
     [HttpPost("register")]
-    [AllowAnonymous]
+    [Authorize]
     public async Task<IActionResult> Register([FromBody] RegisterRequest request, CancellationToken ct)
-        => Ok(await _authService.RegisterAsync(request, ct));
+    {
+        var raw = User.FindFirstValue(ClaimTypes.Role);
+        if (!UserRoleParsing.TryParse(raw, out var callerRole))
+            throw AppException.Forbidden("Không xác định được role của người tạo tài khoản.");
+        return Ok(await _authService.RegisterAsync(request, callerRole, ct));
+    }
 
     /// <summary>[AUTH] Refresh token</summary>
     [HttpPost("refresh")]

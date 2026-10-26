@@ -5,17 +5,55 @@ using Microsoft.EntityFrameworkCore;
 using Npgsql;
 
 /// <summary>
-/// Development: migrate schema + seed 3 role user (SystemAdmin / FarmOwner / Staff).
+/// Development: migrate schema + seed tài khoản admin/demo theo config (không có credential trong code).
 /// Không crash app nếu Supabase transient timeout.
 /// </summary>
 public static class DevDbBootstrap
 {
+    /// <summary>
+    /// Fixture demo — CHỈ chạy khi Auth:SeedDemoUsers:Enabled=true và Password được cấu hình.
+    /// Username giữ cố định vì script test/local UI tham chiếu tới; mật khẩu không nằm trong code.
+    /// </summary>
+    private static readonly (string Username, string FullName, UserRole Role)[] DemoUsers =
+    [
+        (DemoOwnerUsername, "Chủ trại", UserRole.FarmAdministrator),
+        ("sysadmin", "Admin hệ thống", UserRole.FarmAdministrator),
+        ("admin", "Admin CrabSense", UserRole.FarmAdministrator),
+        ("manager", "Quản lý trại", UserRole.FarmManager),
+        ("staff", "Nhân viên", UserRole.FarmStaff)
+    ];
+
+    private const string DemoOwnerUsername = "owner";
+
     public static async Task InitializeAsync(WebApplication app)
     {
         using var scope = app.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
         var logger = scope.ServiceProvider.GetRequiredService<ILoggerFactory>()
             .CreateLogger("DevDbBootstrap");
+
+        // Tài khoản platform admin CHỈ đến từ config — không có giá trị mặc định trong code.
+        var adminUsername = app.Configuration["Auth:SeedAdmin:Username"]?.Trim();
+        var adminPassword = app.Configuration["Auth:SeedAdmin:Password"];
+        var adminEmail = app.Configuration["Auth:SeedAdmin:Email"]?.Trim();
+        var seedAdmin = !string.IsNullOrWhiteSpace(adminUsername)
+                        && !string.IsNullOrWhiteSpace(adminPassword)
+                        && !string.IsNullOrWhiteSpace(adminEmail);
+
+        // Tài khoản demo chỉ tạo khi bật rõ ràng; mật khẩu đọc từ config, không nằm trong source.
+        var demoSection = app.Configuration.GetSection("Auth:SeedDemoUsers");
+        var seedDemo = demoSection.GetValue("Enabled", false);
+        var demoPassword = demoSection["Password"];
+        if (seedDemo && string.IsNullOrWhiteSpace(demoPassword))
+        {
+            logger.LogWarning("Auth:SeedDemoUsers:Enabled=true nhưng thiếu Password — bỏ qua seed demo.");
+            seedDemo = false;
+        }
+
+        if (!seedAdmin)
+            logger.LogWarning(
+                "Auth:SeedAdmin:Username/Password/Email chưa cấu hình — bỏ qua seed/đồng bộ tài khoản admin.");
+
 
         for (var attempt = 1; attempt <= 3; attempt++)
         {
@@ -50,23 +88,37 @@ public static class DevDbBootstrap
                 await EnsureScheduledFarmTasksSchemaAsync(db, logger);
                 await EnsureHarvestSalesWorkflowSchemaAsync(db, logger);
                 await EnsureAlertWorkflowColumnsAsync(db, logger);
+                await EnsureNotificationRulesAsync(db, logger);
                 await EnsureOrphanAlertCleanupAsync(db, logger);
                 logger.LogInformation("Schema ready (attempt {A}).", attempt);
 
-                await RemapLegacyRolesAsync(db, logger);
-                await EnsureUserAsync(db, "sysadmin", "admin-sys@crabsense.local", "Admin hệ thống",
-                    "SysAdmin@123", UserRole.SystemAdmin);
-                await EnsureUserAsync(db, "admin", "admin@crabsense.local", "Admin CrabSense",
-                    "Admin@123", UserRole.SystemAdmin);
-                await EnsureUserAsync(db, "owner", "owner@crabsense.local", "Chủ trại",
-                    "Owner@123", UserRole.FarmOwner);
-                await EnsureUserAsync(db, "staff", "staff@crabsense.local", "Nhân viên",
-                    "Staff@123", UserRole.Staff);
+                if (seedAdmin)
+                {
+                    await RemapLegacyRolesAsync(db, logger, adminUsername!);
+                    await EnsureSystemAdministratorExclusiveAsync(db, logger, adminUsername!);
+                }
+
+                if (seedDemo)
+                {
+                    foreach (var (username, fullName, role) in DemoUsers)
+                        await EnsureUserAsync(
+                            db, username, $"{username}@crabsense.local", fullName, demoPassword!, role);
+                }
+
+                if (seedAdmin)
+                    await EnsureUserAsync(db, adminUsername!, adminEmail!, "Khanh TN",
+                        adminPassword!, UserRole.SystemAdministrator);
 
                 await db.SaveChangesAsync();
-                await EnsureScheduledTaskDemoDataAsync(db, logger);
+                if (seedAdmin)
+                    await EnsureSystemAdministratorExclusiveAsync(db, logger, adminUsername!);
+                await db.SaveChangesAsync();
+                if (seedDemo)
+                    await EnsureScheduledTaskDemoDataAsync(db, logger);
                 logger.LogInformation(
-                    "Users sẵn sàng: sysadmin/SysAdmin@123 | owner/Owner@123 | staff/Staff@123 (admin/Admin@123 = SystemAdmin).");
+                    "Users: admin seed={AdminState} | demo users={DemoState}.",
+                    seedAdmin ? "enabled" : "skipped",
+                    seedDemo ? "enabled" : "disabled");
 
                 // DemoDataSeeder đã tắt — không auto-insert khu/dãy/hộp/cua khi start API.
                 await EnsureBoxQrsForAllBoxesAsync(db, logger);
@@ -238,7 +290,10 @@ public static class DevDbBootstrap
                 WITH max_existing AS (
                     SELECT COALESCE(MAX(
                         CASE
-                            WHEN "Code" ~ '^AREA-[A-Za-z][0-9]{2}$' THEN
+                            -- Không viết regex dạng lặp số (ngoặc nhọn) trong câu SQL này:
+                            -- ExecuteSqlRaw chạy string.Format nên sẽ ném FormatException
+                            -- và backfill bị bỏ qua mỗi lần khởi động.
+                            WHEN "Code" ~ '^AREA-[A-Za-z][0-9][0-9]$' THEN
                                 (ASCII(UPPER(SUBSTRING("Code" FROM 6 FOR 1))) - 65) * 99
                                 + CAST(SUBSTRING("Code" FROM 7 FOR 2) AS int)
                             ELSE 0
@@ -297,9 +352,9 @@ public static class DevDbBootstrap
                 WITH max_existing AS (
                     SELECT COALESCE(MAX(
                         CASE
-                            WHEN "Code" ~ '^DAY-[A-Za-z][0-9]{2}$' THEN
-                                (ASCII(UPPER(SUBSTRING("Code" FROM 6 FOR 1))) - 65) * 99
-                                + CAST(SUBSTRING("Code" FROM 7 FOR 2) AS int)
+                            WHEN "Code" ~ '^DAY-[A-Za-z][0-9][0-9]$' THEN
+                                (ASCII(UPPER(SUBSTRING("Code" FROM 5 FOR 1))) - 65) * 99
+                                + CAST(SUBSTRING("Code" FROM 6 FOR 2) AS int)
                             ELSE 0
                         END
                     ), 0) AS n
@@ -420,6 +475,8 @@ public static class DevDbBootstrap
             ADD COLUMN IF NOT EXISTS "PhotoUrlsJson" text NOT NULL DEFAULT '[]';
             """).ConfigureAwait(false);
 
+        // Profile backfill tách riêng khỏi phần sinh Code: một lỗi unique ở Code
+        // không được rollback luôn InitialWeightGram/Condition/Gender.
         try
         {
             await db.Database.ExecuteSqlRawAsync(
@@ -443,15 +500,31 @@ public static class DevDbBootstrap
                             END
                         ELSE "Condition"
                     END;
+                """).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Crab profile backfill skipped (columns already ensured).");
+        }
 
-                WITH numbered AS (
+        try
+        {
+            await db.Database.ExecuteSqlRawAsync(
+                """
+                -- Cộng dồn vào số CRAB-xxxx lớn nhất đang có: ROW_NUMBER() luôn bắt đầu từ 1
+                -- nên nếu không offset sẽ sinh CRAB-0001 trùng code cũ và vi phạm IX_Crabs_Code.
+                WITH max_existing AS (
+                    SELECT COALESCE(MAX(CAST(SUBSTRING("Code" FROM 6) AS int)), 0) AS n
+                    FROM be."Crabs"
+                    WHERE "Code" ~ '^CRAB-[0-9]+$'
+                ), numbered AS (
                     SELECT c."Id", ROW_NUMBER() OVER (ORDER BY c."CreatedAt", c."Id") AS seq
                     FROM be."Crabs" c
                     WHERE c."Code" IS NULL OR btrim(c."Code") = ''
                 )
                 UPDATE be."Crabs" c
-                SET "Code" = 'CRAB-' || LPAD(numbered.seq::text, 4, '0')
-                FROM numbered
+                SET "Code" = 'CRAB-' || LPAD((max_existing.n + numbered.seq)::text, 4, '0')
+                FROM numbered, max_existing
                 WHERE c."Id" = numbered."Id";
 
                 UPDATE be."Crabs"
@@ -463,7 +536,7 @@ public static class DevDbBootstrap
         }
         catch (Exception ex)
         {
-            logger.LogWarning(ex, "Crab code/condition backfill skipped (columns already ensured).");
+            logger.LogWarning(ex, "Crab code/tag backfill skipped (columns already ensured).");
         }
 
         try
@@ -991,6 +1064,42 @@ public static class DevDbBootstrap
         logger.LogInformation("Ensured Alert workflow columns.");
     }
 
+    /// <summary>
+    /// Seed quy tắc thông báo mặc định (idempotent). Chạy lúc start để request đầu tiên
+    /// không phải tranh nhau insert — bảng có unique index trên TypeCode.
+    /// </summary>
+    private static async Task EnsureNotificationRulesAsync(AppDbContext db, ILogger logger)
+    {
+        var existing = await db.NotificationRules.Select(r => r.TypeCode).ToListAsync();
+        if (existing.Count > 0) return;
+
+        static NotificationRule Rule(string code, string name, string title) => new()
+        {
+            TypeCode = code,
+            DisplayName = name,
+            IsEnabled = true,
+            RecipientRoles = "FarmAdministrator,FarmManager,FarmStaff",
+            ScopeByArea = true,
+            ChannelCodes = "in_app,push,telegram,zalo_oa,email",
+            TitleTemplate = title,
+            BodyTemplate = "{message}"
+        };
+
+        db.NotificationRules.AddRange(
+            Rule(NotificationTypeCodes.SensorThreshold, "Cảm biến vượt ngưỡng", "{sensor} vượt ngưỡng"),
+            Rule(NotificationTypeCodes.SensorDisconnect, "Cảm biến mất kết nối", "Mất kết nối cảm biến"),
+            Rule(NotificationTypeCodes.DeviceDisconnect, "Thiết bị mất kết nối", "Mất kết nối thiết bị"),
+            Rule(NotificationTypeCodes.KioskDisconnect, "Kiosk mất kết nối", "Kiosk mất kết nối"),
+            Rule(NotificationTypeCodes.RasRelayOn, "RAS bật thiết bị", "{name} đã bật"),
+            Rule(NotificationTypeCodes.RasRelayOff, "RAS tắt thiết bị", "{name} đã tắt"),
+            Rule(NotificationTypeCodes.TankOverflow, "Bồn tràn", "{name} đang tràn"),
+            Rule(NotificationTypeCodes.TankEmpty, "Bồn cạn", "{name} đang cạn"),
+            Rule(NotificationTypeCodes.System, "Hệ thống", "CrabSense Alert"));
+
+        await db.SaveChangesAsync();
+        logger.LogInformation("Seeded {N} notification rule(s).", db.NotificationRules.Count());
+    }
+
     private static async Task EnsureOrphanAlertCleanupAsync(AppDbContext db, ILogger logger)
     {
         try
@@ -1020,60 +1129,87 @@ public static class DevDbBootstrap
 
     /// <summary>
     /// Role lưu dạng string trong Postgres — remap legacy trước khi EF đọc entity.
-    /// Admin/SystemAdmin → SystemAdmin; Operator/Sales → FarmOwner nếu chưa có owner riêng;
-    /// Viewer/khác → Staff.
+    /// Username admin nhận từ config để không phải sửa code khi đổi tài khoản.
     /// </summary>
-    private static async Task RemapLegacyRolesAsync(AppDbContext db, ILogger logger)
+    private static async Task RemapLegacyRolesAsync(
+        AppDbContext db, ILogger logger, string adminUsername)
     {
+        await db.Database.ExecuteSqlInterpolatedAsync($"""
+            UPDATE be."AppUsers" SET "Role" = 'FarmAdministrator'
+            WHERE "Role" IN ('FarmOwner', 'Admin', 'SystemAdmin')
+              AND lower("Username") <> lower({adminUsername})
+            """);
+
+        await db.Database.ExecuteSqlRawAsync("""
+            UPDATE be."AppUsers" SET "Role" = 'FarmStaff'
+            WHERE "Role" IN ('Staff', 'Viewer', 'Sales', 'Operator')
+            """);
+
         var updated = await db.Database.ExecuteSqlRawAsync("""
             UPDATE be."AppUsers" SET "Role" = CASE "Role"
-                WHEN 'Admin' THEN 'SystemAdmin'
-                WHEN 'SystemAdmin' THEN 'SystemAdmin'
-                WHEN 'Operator' THEN 'Staff'
-                WHEN 'Viewer' THEN 'Staff'
-                WHEN 'Sales' THEN 'Staff'
-                WHEN 'FarmOwner' THEN 'FarmOwner'
-                WHEN 'Staff' THEN 'Staff'
-                ELSE 'Staff'
+                WHEN 'SystemAdministrator' THEN 'SystemAdministrator'
+                WHEN 'FarmAdministrator' THEN 'FarmAdministrator'
+                WHEN 'FarmManager' THEN 'FarmManager'
+                WHEN 'FarmStaff' THEN 'FarmStaff'
+                ELSE 'FarmStaff'
             END
-            WHERE "Role" NOT IN ('SystemAdmin', 'FarmOwner', 'Staff')
+            WHERE "Role" NOT IN (
+                'SystemAdministrator', 'FarmAdministrator', 'FarmManager', 'FarmStaff')
             """);
 
         if (updated > 0)
             logger.LogInformation("Remapped {N} legacy user role string(s).", updated);
     }
 
+    /// <summary>
+    /// Chỉ tài khoản trong config Auth:SeedAdmin:Username được giữ SystemAdministrator.
+    /// Username đọc từ config thay vì viết cứng để đổi admin không phải sửa code.
+    /// </summary>
+    private static async Task EnsureSystemAdministratorExclusiveAsync(
+        AppDbContext db, ILogger logger, string adminUsername)
+    {
+        var demoted = await db.Database.ExecuteSqlInterpolatedAsync($"""
+            UPDATE be."AppUsers" SET "Role" = 'FarmAdministrator'
+            WHERE "Role" = 'SystemAdministrator'
+              AND lower("Username") <> lower({adminUsername})
+            """);
+
+        await db.Database.ExecuteSqlInterpolatedAsync($"""
+            UPDATE be."AppUsers" SET "Role" = 'SystemAdministrator'
+            WHERE lower("Username") = lower({adminUsername})
+            """);
+
+        if (demoted > 0)
+            logger.LogInformation(
+                "Demoted {N} non-admin user(s) from SystemAdministrator to FarmAdministrator.", demoted);
+    }
+
+    /// <summary>
+    /// Seed tài khoản mặc định. Chỉ tạo khi chưa tồn tại — không ghi đè mật khẩu/role mỗi lần
+    /// khởi động, nhờ vậy admin đổi mật khẩu và giữ được sau restart.
+    /// </summary>
     private static async Task EnsureUserAsync(
         AppDbContext db, string username, string email, string fullName, string password, UserRole role)
     {
-        var user = await db.AppUsers.FirstOrDefaultAsync(u => u.Username == username);
-        if (user is null)
-        {
-            db.AppUsers.Add(new AppUser
-            {
-                Username = username,
-                Email = email,
-                FullName = fullName,
-                PasswordHash = BCrypt.Net.BCrypt.HashPassword(password),
-                Role = role,
-                IsActive = true
-            });
-            return;
-        }
+        var exists = await db.AppUsers.AnyAsync(u => u.Username == username);
+        if (exists) return;
 
-        user.Role = role;
-        user.FullName = fullName;
-        user.IsActive = true;
-        user.PasswordHash = BCrypt.Net.BCrypt.HashPassword(password);
-        if (string.IsNullOrWhiteSpace(user.Email))
-            user.Email = email;
+        db.AppUsers.Add(new AppUser
+        {
+            Username = username,
+            Email = email,
+            FullName = fullName,
+            PasswordHash = BCrypt.Net.BCrypt.HashPassword(password),
+            Role = role,
+            IsActive = true
+        });
     }
 
     private static async Task EnsureScheduledTaskDemoDataAsync(
         AppDbContext db, ILogger logger)
     {
         var owner = await db.AppUsers
-            .FirstOrDefaultAsync(user => user.Username == "owner");
+            .FirstOrDefaultAsync(user => user.Username == DemoOwnerUsername);
         if (owner is null)
             return;
 

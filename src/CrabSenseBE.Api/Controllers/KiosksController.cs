@@ -1,5 +1,6 @@
 using CrabSenseBE.Application.DTOs.Kiosk;
 using CrabSenseBE.Application.Interfaces;
+using CrabSenseBE.Domain.Enums;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -16,38 +17,47 @@ public sealed class KiosksController : ControllerBase
     public KiosksController(IKioskProvisioningService kiosks) => _kiosks = kiosks;
 
     [HttpPost]
+    [Authorize(Roles = AppRoles.FarmManageWithPlatform)]
     public Task<IActionResult> Create([FromBody] CreateKioskRequest request, CancellationToken ct)
         => Execute(() => _kiosks.CreateAsync(request, ct));
 
     [HttpGet]
+    [Authorize(Roles = AppRoles.FarmWriteWithPlatform)]
     public Task<IActionResult> List([FromQuery] Guid farmingAreaId, CancellationToken ct)
         => Execute(() => _kiosks.ListAsync(farmingAreaId, ct));
 
     [HttpPost("{id:guid}/provisioning-codes")]
+    [Authorize(Roles = AppRoles.FarmManageWithPlatform)]
     public Task<IActionResult> IssueCode(Guid id, CancellationToken ct)
         => Execute(() => _kiosks.IssueCodeAsync(id, ct));
 
     [HttpPost("{id:guid}/revoke")]
+    [Authorize(Roles = AppRoles.FarmManageWithPlatform)]
     public Task<IActionResult> Revoke(Guid id, CancellationToken ct)
         => Execute(() => _kiosks.RevokeAsync(id, ct));
 
     [HttpDelete("{id:guid}")]
+    [Authorize(Roles = AppRoles.FarmManageWithPlatform)]
     public Task<IActionResult> Delete(Guid id, CancellationToken ct)
         => Execute(() => _kiosks.DeleteAsync(id, ct));
 
     [HttpPost("reset")]
+    [Authorize(Roles = AppRoles.FarmManageWithPlatform)]
     public Task<IActionResult> Reset([FromQuery] Guid farmingAreaId, CancellationToken ct)
         => Execute(() => _kiosks.ResetAreaAsync(farmingAreaId, ct));
 
     [HttpGet("controllers")]
+    [Authorize(Roles = AppRoles.FarmWriteWithPlatform)]
     public Task<IActionResult> Controllers([FromQuery] Guid farmingAreaId, CancellationToken ct)
         => Execute(() => _kiosks.ListControllersAsync(farmingAreaId, ct));
 
     [HttpPost("/api/controllers/{id:guid}/approve")]
+    [Authorize(Roles = AppRoles.FarmManageWithPlatform)]
     public Task<IActionResult> Approve(Guid id, CancellationToken ct)
         => Execute(() => _kiosks.ApproveControllerAsync(id, ct));
 
     [HttpPost("/api/controllers/{id:guid}/reject")]
+    [Authorize(Roles = AppRoles.FarmManageWithPlatform)]
     public Task<IActionResult> Reject(Guid id, CancellationToken ct)
         => Execute(() => _kiosks.RejectControllerAsync(id, ct));
 

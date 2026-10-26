@@ -31,5 +31,12 @@ public record MortalityRecordDto
 
     string? Notes,
 
-    Guid RecordedBy
+    Guid RecordedBy,
+
+    /// <summary>Trọng lượng lúc chết (g) — snapshot, null nếu không xác định được.</summary>
+    decimal? WeightGram = null,
+
+    decimal? CarapaceWidthMm = null,
+
+    decimal? CarapaceLengthMm = null
 );

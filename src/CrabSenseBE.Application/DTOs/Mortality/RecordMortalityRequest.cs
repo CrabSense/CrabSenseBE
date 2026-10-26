@@ -26,5 +26,20 @@ public record RecordMortalityRequest
     /// <summary>
     /// Ghi chú thêm.
     /// </summary>
-    string? Notes
+    string? Notes,
+
+    /// <summary>
+    /// Trọng lượng lúc chết (g). Bỏ trống thì lấy trọng lượng hiện tại của cua.
+    /// </summary>
+    decimal? WeightGram = null,
+
+    /// <summary>
+    /// Bề rộng mai lúc chết (mm). Bỏ trống thì lấy số đo hiện tại của cua.
+    /// </summary>
+    decimal? CarapaceWidthMm = null,
+
+    /// <summary>
+    /// Bề ngang mai lúc chết (mm). Bỏ trống thì lấy số đo hiện tại của cua.
+    /// </summary>
+    decimal? CarapaceLengthMm = null
 );

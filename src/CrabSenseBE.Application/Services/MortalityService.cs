@@ -1,14 +1,16 @@
+using CrabSenseBE.Application.Common;
 using CrabSenseBE.Application.DTOs.Mortality;
 using CrabSenseBE.Application.Interfaces;
 using CrabSenseBE.Domain.Entities;
-using CrabSenseBE.Domain.Interfaces;
-using CrabSenseBE.Application.Common;
 using CrabSenseBE.Domain.Enums;
+using CrabSenseBE.Domain.Interfaces;
 
 namespace CrabSenseBE.Application.Services;
 
 /// <summary>
 /// Service xử lý việc ghi nhận cua chết.
+/// Mỗi bản ghi lưu kèm snapshot lúc chết (cân, kích thước mai, hộp)
+/// vì cua bị gỡ khỏi hộp và có thể bị sửa dữ liệu sau đó.
 /// </summary>
 public class MortalityService : IMortalityService
 {
@@ -27,60 +29,41 @@ public class MortalityService : IMortalityService
         RecordMortalityRequest request,
         CancellationToken cancellationToken = default)
     {
-        // ============================================================
-        // 1. TÌM CÁ THỂ CUA
-        // ============================================================
-
-        var crab = await _uow.GetCrabWithDetailsAsync(
-    request.CrabId,
-    cancellationToken);
+        // 1. Tìm cá thể cua
+        var crab = await _uow.GetCrabWithDetailsAsync(request.CrabId, cancellationToken);
 
         if (crab is null)
-        {
-            throw AppException.NotFoundMessage(
-                "Không tìm thấy cá thể cua.");
-        }
+            throw AppException.NotFoundMessage("Không tìm thấy cá thể cua.");
 
-        // ============================================================
-        // 2. KIỂM TRA CUA ĐÃ CHẾT HAY CHƯA
-        // ============================================================
+        if (crab.Status is CrabStatus.Dead or CrabStatus.Harvested or CrabStatus.Missing)
+            throw AppException.BadRequest("Cá thể cua này đã được ghi nhận là đã chết trước đó.");
 
-        if (crab.Status == CrabStatus.Dead || crab.Status == CrabStatus.Harvested || crab.Status == CrabStatus.Missing)
-        {
-            throw AppException.BadRequest(
-                "Cá thể cua này đã được ghi nhận là đã chết trước đó.");
-        }
+        var boxId = ResolveBoxId(crab);
 
-        // ============================================================
-        // 3. TẠO BẢN GHI MORTALITY
-        // ============================================================
-
+        // 2. Tạo bản ghi mortality kèm snapshot lúc chết.
+        //    Client không gửi thì lấy số đo hiện tại của cua.
         var mortalityRecord = new CrabMortalityRecord
         {
             CrabId = crab.Id,
-
-            MortalityDate =
-                request.MortalityDate
-                ?? DateTime.UtcNow,
-
+            MortalityDate = request.MortalityDate ?? DateTime.UtcNow,
             Cause = request.Cause,
-
             Notes = request.Notes,
-
-            RecordedBy = recordedBy
+            RecordedBy = recordedBy,
+            WeightGram = request.WeightGram ?? crab.WeightGram,
+            CarapaceWidthMm = request.CarapaceWidthMm ?? crab.CarapaceWidthMm,
+            CarapaceLengthMm = request.CarapaceLengthMm ?? crab.CarapaceLengthMm,
+            BoxId = boxId == Guid.Empty ? null : boxId
         };
 
-        // ============================================================
-        // 4. CẬP NHẬT TRẠNG THÁI CUA + GIẢI PHÓNG HỘP
-        // ============================================================
-
+        // 3. Cập nhật trạng thái cua + giải phóng hộp
         var oldStatus = crab.Status;
         var oldCondition = crab.Condition;
-        var boxId = ResolveBoxId(crab);
 
         crab.Status = CrabStatus.Dead;
         crab.Condition = CrabCondition.Dead;
         crab.BoxId = null;
+        if (request.WeightGram is decimal measuredWeight)
+            crab.WeightGram = measuredWeight;
         _uow.Crabs.Update(crab);
 
         await _uow.CrabStatusHistories.AddAsync(new CrabStatusHistory
@@ -98,95 +81,70 @@ public class MortalityService : IMortalityService
 
         await ReleaseBoxAsync(crab.Id, boxId, cancellationToken);
 
-        // ============================================================
-        // 5. LƯU DATABASE
-        // ============================================================
+        // 4. Lưu database
+        await _uow.CrabMortalityRecords.AddAsync(mortalityRecord, cancellationToken);
+        await _uow.SaveChangesAsync(cancellationToken);
 
-        await _uow.CrabMortalityRecords
-            .AddAsync(
-                mortalityRecord,
-                cancellationToken);
-
-        await _uow.SaveChangesAsync(
-            cancellationToken);
-
-        // ============================================================
-        // 6. TRẢ KẾT QUẢ
-        // ============================================================
-var box = boxId != Guid.Empty ? await _uow.Boxes.GetByIdAsync(boxId, cancellationToken) : null;
+        // 5. Trả kết quả
+        var box = boxId != Guid.Empty
+            ? await _uow.Boxes.GetByIdAsync(boxId, cancellationToken)
+            : null;
+        var row = box is not null
+            ? await _uow.FarmingRows.GetByIdAsync(box.FarmingRowId, cancellationToken)
+            : null;
+        var area = row is not null
+            ? await _uow.FarmingAreas.GetByIdAsync(row.FarmingAreaId, cancellationToken)
+            : null;
 
         return new MortalityRecordDto(
             Id: mortalityRecord.Id,
-
             CrabId: crab.Id,
-
             CrabTag: crab.Tag,
-
             BoxId: boxId,
-
-            BoxCode: box?.Code?? string.Empty,
-
-            FarmingRowId: box?.FarmingRowId?? Guid.Empty,
-
-            RowName: box?.FarmingRow?.Name?? string.Empty,
-
-            FarmingAreaId:
-                box?
-                    .FarmingRow?
-                    .FarmingAreaId
-                ?? Guid.Empty,
-
-            AreaName:
-                box?
-                    .FarmingRow?
-                    .FarmingArea?
-                    .Name
-                ?? string.Empty,
-
-            MortalityDate:
-                mortalityRecord.MortalityDate,
-
-            Cause:
-                mortalityRecord.Cause,
-
-            Notes:
-                mortalityRecord.Notes,
-
-            RecordedBy:
-                mortalityRecord.RecordedBy
-        );
+            BoxCode: box?.Code ?? string.Empty,
+            FarmingRowId: box?.FarmingRowId ?? Guid.Empty,
+            RowName: row?.Name ?? string.Empty,
+            FarmingAreaId: row?.FarmingAreaId ?? Guid.Empty,
+            AreaName: area?.Name ?? string.Empty,
+            MortalityDate: mortalityRecord.MortalityDate,
+            Cause: mortalityRecord.Cause,
+            Notes: mortalityRecord.Notes,
+            RecordedBy: mortalityRecord.RecordedBy,
+            WeightGram: mortalityRecord.WeightGram,
+            CarapaceWidthMm: mortalityRecord.CarapaceWidthMm,
+            CarapaceLengthMm: mortalityRecord.CarapaceLengthMm);
     }
 
     /// <summary>
-    /// Lấy toàn bộ lịch sử cua chết.
+    /// Lấy toàn bộ lịch sử cua chết, mới nhất trước.
     /// </summary>
-    public async Task<IReadOnlyList<MortalityRecordDto>>
-        GetMortalityRecordsAsync(
-            CancellationToken cancellationToken = default)
+    public async Task<IReadOnlyList<MortalityRecordDto>> GetMortalityRecordsAsync(
+        CancellationToken cancellationToken = default)
     {
-        var records =await _uow.CrabMortalityRecords.GetAllAsync(cancellationToken);
+        var records = await _uow.GetMortalityRecordsWithDetailsAsync(cancellationToken);
 
-        return records.Select(x => {
-    var crabTask = _uow.Crabs.GetByIdAsync(x.CrabId, cancellationToken).Result;
-    var latestAlloc = crabTask?.BoxAllocations
-        .OrderByDescending(a => a.StartTime).FirstOrDefault();
-    var boxId = latestAlloc?.BoxId ?? Guid.Empty;
-    return new MortalityRecordDto(
-        Id: x.Id,
-        CrabId: x.CrabId,
-        CrabTag: crabTask?.Tag,
-        BoxId: boxId,
-        BoxCode: "",
-        FarmingRowId: Guid.Empty,
-        RowName: "",
-        FarmingAreaId: Guid.Empty,
-        AreaName: "",
-        MortalityDate: x.MortalityDate,
-        Cause: x.Cause,
-        Notes: x.Notes,
-        RecordedBy: x.RecordedBy
-    );
-}).ToList();
+        return records.Select(x =>
+        {
+            var box = x.Box;
+            var row = box?.FarmingRow;
+            return new MortalityRecordDto(
+                Id: x.Id,
+                CrabId: x.CrabId,
+                CrabTag: x.Crab?.Tag,
+                BoxId: x.BoxId ?? Guid.Empty,
+                BoxCode: box?.Code ?? string.Empty,
+                FarmingRowId: box?.FarmingRowId ?? Guid.Empty,
+                RowName: row?.Name ?? string.Empty,
+                FarmingAreaId: row?.FarmingAreaId ?? Guid.Empty,
+                AreaName: row?.FarmingArea?.Name ?? string.Empty,
+                MortalityDate: x.MortalityDate,
+                Cause: x.Cause,
+                Notes: x.Notes,
+                RecordedBy: x.RecordedBy,
+                WeightGram: x.WeightGram,
+                CarapaceWidthMm: x.CarapaceWidthMm,
+                CarapaceLengthMm: x.CarapaceLengthMm);
+        }).ToList();
     }
 
     private static Guid ResolveBoxId(Crab crab)

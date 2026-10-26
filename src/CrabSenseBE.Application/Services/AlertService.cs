@@ -236,10 +236,29 @@ public class AlertService : IAlertService
         await _uow.Alerts.AddAsync(alert, ct);
         await _uow.SaveChangesAsync(ct);
 
-        await NotifyOperatorsAsync(alert.Message, alert.Id, ct);
+        await _notifications.NotifyAsync(
+            NotificationTypeCodes.SensorThreshold,
+            alert.Message,
+            alert.Id,
+            await AreaOfWaterSystemAsync(sensor.WaterSystemId, ct),
+            severity.ToString(),
+            new Dictionary<string, string?>
+            {
+                ["sensor"] = sensor.SensorType,
+                ["code"] = sensor.SensorCode,
+                ["value"] = value.ToString("0.##"),
+                ["unit"] = sensor.Unit,
+                ["min"] = min?.ToString("0.##"),
+                ["max"] = max?.ToString("0.##")
+            }, ct);
     }
 
-    public async Task RaiseOnceAsync(string message, CancellationToken ct = default)
+    public async Task RaiseOnceAsync(
+        string message,
+        string? typeCode = null,
+        Guid? areaId = null,
+        IReadOnlyDictionary<string, string?>? tokens = null,
+        CancellationToken ct = default)
     {
         var existing = (await _uow.Alerts.FindAsync(
             a => a.Status == AlertStatus.Active && a.Message == message, ct)).FirstOrDefault();
@@ -262,7 +281,9 @@ public class AlertService : IAlertService
         };
         await _uow.Alerts.AddAsync(alert, ct);
         await _uow.SaveChangesAsync(ct);
-        await NotifyOperatorsAsync(alert.Message, alert.Id, ct);
+        await _notifications.NotifyAsync(
+            typeCode ?? NotificationTypeCodes.System, alert.Message, alert.Id, areaId,
+            nameof(AlertSeverity.Warning), tokens, ct);
     }
 
     public async Task ClearAsync(string message, CancellationToken ct = default)
@@ -308,7 +329,17 @@ public class AlertService : IAlertService
             };
             await _uow.Alerts.AddAsync(alert, ct);
             created++;
-            await NotifyOperatorsAsync(alert.Message, alert.Id, ct);
+            await _notifications.NotifyAsync(
+                NotificationTypeCodes.SensorDisconnect, alert.Message, alert.Id,
+                await AreaOfWaterSystemAsync(sensor.WaterSystemId, ct),
+                nameof(AlertSeverity.Critical),
+                new Dictionary<string, string?>
+                {
+                    ["sensor"] = sensor.SensorType,
+                    ["code"] = sensor.SensorCode,
+                    ["name"] = sensor.SensorType,
+                    ["minutes"] = timeoutMinutes.ToString()
+                }, ct);
         }
 
         var devices = await _uow.Devices.FindAsync(
@@ -342,11 +373,70 @@ public class AlertService : IAlertService
             };
             await _uow.Alerts.AddAsync(alert, ct);
             created++;
-            await NotifyOperatorsAsync(alert.Message, alert.Id, ct);
+            await _notifications.NotifyAsync(
+                NotificationTypeCodes.DeviceDisconnect, alert.Message, alert.Id,
+                device.FarmingAreaId,
+                nameof(AlertSeverity.Critical),
+                new Dictionary<string, string?>
+                {
+                    ["code"] = device.DeviceCode,
+                    ["name"] = device.Name ?? device.DeviceCode,
+                    ["deviceType"] = kind,
+                    ["minutes"] = timeoutMinutes.ToString()
+                }, ct);
         }
 
-        if (created > 0)
-            await _uow.SaveChangesAsync(ct);
+        var kioskCutoff = DateTime.UtcNow.AddMinutes(-2);
+        var kiosks = await _uow.FarmKiosks.FindAsync(
+            k => k.Status != "Revoked" && k.Status != "Created", ct);
+        foreach (var kiosk in kiosks)
+        {
+            var message = $"Kiosk mất kết nối: {kiosk.Code} (>2 phút)";
+            var active = (await _uow.Alerts.FindAsync(
+                a => a.Status == AlertStatus.Active && a.Message == message, ct))
+                .FirstOrDefault();
+
+            if (kiosk.LastSeenAt is not null && kiosk.LastSeenAt >= kioskCutoff)
+            {
+                if (active is not null)
+                {
+                    active.Status = AlertStatus.Resolved;
+                    active.ResolvedAt = DateTime.UtcNow;
+                    _uow.Alerts.Update(active);
+                }
+                continue;
+            }
+
+            if (kiosk.LastSeenAt is null || kiosk.LastSeenAt < kioskCutoff)
+            {
+                if (active is null)
+                {
+                    var alert = new Alert
+                    {
+                        Message = message,
+                        Severity = AlertSeverity.Critical,
+                        Status = AlertStatus.Active,
+                        OccurrenceCount = 1,
+                        LastOccurredAt = DateTime.UtcNow,
+                        IncidentId = $"INC-{DateTime.UtcNow:yyyyMMdd}-KIOSK-{kiosk.Code}"
+                    };
+                    await _uow.Alerts.AddAsync(alert, ct);
+                    created++;
+                    await _notifications.NotifyAsync(
+                        NotificationTypeCodes.KioskDisconnect, alert.Message, alert.Id,
+                        kiosk.FarmingAreaId,
+                        nameof(AlertSeverity.Critical),
+                        new Dictionary<string, string?>
+                        {
+                            ["code"] = kiosk.Code,
+                            ["name"] = kiosk.Name ?? kiosk.Code,
+                            ["minutes"] = "2"
+                        }, ct);
+                }
+            }
+        }
+
+        await _uow.SaveChangesAsync(ct);
 
         return ApiResponse<int>.Ok(created, $"Created {created} disconnect alert(s).");
     }
@@ -678,13 +768,12 @@ public class AlertService : IAlertService
         return ("Kiểm tra nguồn gốc cảnh báo và cập nhật trạng thái sau khi xử lý.", 65);
     }
 
-    private async Task NotifyOperatorsAsync(string message, Guid alertId, CancellationToken ct)
+    /// <summary>Khu của cảm biến: Sensor → WaterSystem → FarmingArea.</summary>
+    private async Task<Guid?> AreaOfWaterSystemAsync(Guid? waterSystemId, CancellationToken ct)
     {
-        var users = await _uow.Users.FindAsync(
-            u => u.IsActive && (u.Role == UserRole.FarmOwner || u.Role == UserRole.Staff), ct);
-        var ids = users.Select(u => u.Id).ToList();
-        if (ids.Count == 0) return;
-        await _notifications.NotifyUsersAsync(ids, "CrabSense Alert", message, alertId, ct);
+        if (waterSystemId is not Guid id || id == Guid.Empty) return null;
+        var ws = await _uow.WaterSystems.GetByIdAsync(id, ct);
+        return ws?.FarmingAreaId;
     }
 
     private static AlertSeverity ParseSeverity(string? s) =>

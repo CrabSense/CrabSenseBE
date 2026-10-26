@@ -8,7 +8,8 @@ $ErrorActionPreference = 'Stop'
 $base = if ($env:CRABSENSE_API) { $env:CRABSENSE_API.TrimEnd('/') } else { 'http://103.69.96.143:5080' }
 
 function Login {
-  $r = Invoke-RestMethod "$base/api/auth/login" -Method Post -ContentType 'application/json' -Body '{"username":"owner","password":"Owner@123"}'
+  $r = Invoke-RestMethod "$base/api/auth/login" -Method Post -ContentType 'application/json' `
+    -Body (@{ username = $env:CRABSENSE_USER; password = $env:CRABSENSE_PASSWORD } | ConvertTo-Json -Compress)
   return @{ Authorization = "Bearer $($r.data.accessToken)"; 'Content-Type' = 'application/json' }
 }
 
@@ -67,4 +68,4 @@ if ($existing) {
 # IoT + alerts (idempotent-ish — may duplicate if run many times)
 & "$PSScriptRoot\seed-demo-iot.ps1"
 
-Write-Host "Full seed finished. Login UI owner/Owner@123 and open tabs 1-4, 7-10, 15-16."
+Write-Host "Full seed finished. Login UI bằng user trong `$env:CRABSENSE_USER và open tabs 1-4, 7-10, 15-16."

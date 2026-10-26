@@ -2,10 +2,12 @@ namespace CrabSenseBE.Application.DTOs.Auth;
 
 // --- Request DTOs ---
 public record LoginRequest(string Username, string Password);
-/// <param name="Role">SystemAdmin | FarmOwner | Staff</param>
+/// <param name="Role">FarmAdministrator | FarmManager | FarmStaff</param>
 public record RegisterRequest(string Username, string Email, string Password, string FullName, string Role);
 public record RefreshTokenRequest(string RefreshToken);
 public record ChangePasswordRequest(string CurrentPassword, string NewPassword);
+public record SetUserActiveRequest(bool IsActive);
+public record ResetUserPasswordRequest(string NewPassword);
 public record UpdateProfileRequest(
     string? FullName,
     string? Email,
@@ -46,3 +48,22 @@ public record UserDto(
     string? AvatarUrl = null,
     DateTime? CreatedAt = null
 );
+
+
+/// <summary>
+/// Admin updates employee account information.
+/// </summary>
+public record UpdateAdminUserRequest(
+    string FullName,
+    string Email,
+    string? Phone,
+    string? EmployeeId
+);
+
+/// <summary>
+/// Admin changes employee role.
+/// </summary>
+public record ChangeUserRoleRequest(
+    string Role
+);
+

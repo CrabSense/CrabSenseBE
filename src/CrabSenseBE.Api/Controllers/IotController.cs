@@ -1,5 +1,6 @@
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
+using CrabSenseBE.Api.Services;
 using CrabSenseBE.Application.Common;
 using CrabSenseBE.Application.DTOs.IoT;
 using CrabSenseBE.Application.Interfaces;
@@ -16,19 +17,32 @@ namespace CrabSenseBE.Api.Controllers;
 public class IotController : ControllerBase
 {
     private readonly IIotService _service;
-    public IotController(IIotService service) => _service = service;
+    private readonly IConfiguration _configuration;
+    public IotController(IIotService service, IConfiguration configuration)
+    {
+        _service = service;
+        _configuration = configuration;
+    }
 
-    /// <summary>[CREATE] ESP32 / edge: ingest single reading (HTTP)</summary>
+    /// <summary>[CREATE] ESP32 / edge: ingest single reading (HTTP) — yêu cầu X-Edge-Key</summary>
     [HttpPost("sensor-data")]
     [AllowAnonymous]
     public async Task<IActionResult> IngestSingle([FromBody] SensorDataRequest req, CancellationToken ct)
-        => Ok(await _service.IngestSensorDataAsync(req, ct));
+    {
+        var denied = EdgeKeyGuard.Check(Request, _configuration);
+        if (denied is not null) return denied;
+        return Ok(await _service.IngestSensorDataAsync(req, ct));
+    }
 
-    /// <summary>[CREATE] ESP32 / edge: ingest batch</summary>
+    /// <summary>[CREATE] ESP32 / edge: ingest batch — yêu cầu X-Edge-Key</summary>
     [HttpPost("sensor-data/batch")]
     [AllowAnonymous]
     public async Task<IActionResult> IngestBatch([FromBody] SensorDataBatchRequest req, CancellationToken ct)
-        => Ok(await _service.IngestSensorDataBatchAsync(req, ct));
+    {
+        var denied = EdgeKeyGuard.Check(Request, _configuration);
+        if (denied is not null) return denied;
+        return Ok(await _service.IngestSensorDataBatchAsync(req, ct));
+    }
 
     /// <summary>Desktop báo relay vừa bật hoặc tắt để đẩy thông báo mobile.</summary>
     [HttpPost("relay-state")]
@@ -73,11 +87,20 @@ public class IotController : ControllerBase
         [FromQuery] Guid? farmingAreaId = null,
         CancellationToken ct = default)
         => Ok(await _service.GetLiveSnapshotAsync(deviceId, farmingAreaId, ct));
+
+    /// <summary>[READ] Aggregated water-quality history for charts (period=24h|7d|30d)</summary>
+    [HttpGet("history")]
+    [Authorize]
+    public async Task<IActionResult> History(
+        [FromQuery] Guid? farmingAreaId = null,
+        [FromQuery] string period = "24h",
+        CancellationToken ct = default)
+        => Ok(await _service.GetWaterQualityHistoryAsync(farmingAreaId, period, ct));
 }
 
 [ApiController]
 [Route("api/sensors")]
-[Authorize]
+[Authorize(Roles = AppRoles.Platform)]
 [Tags("08. IoT — Sensors")]
 [Produces("application/json")]
 public class SensorsController : ControllerBase
@@ -101,19 +124,16 @@ public class SensorsController : ControllerBase
 
     /// <summary>[CREATE] Register sensor under optional ESP32 device</summary>
     [HttpPost]
-    [Authorize(Roles = AppRoles.FarmWrite)]
     public async Task<IActionResult> Create([FromBody] CreateSensorRequest req, CancellationToken ct)
         => Ok(await _service.CreateSensorAsync(req, ct));
 
     /// <summary>[UPDATE] Update sensor</summary>
     [HttpPut("{id:guid}")]
-    [Authorize(Roles = AppRoles.FarmWrite)]
     public async Task<IActionResult> Update(Guid id, [FromBody] UpdateSensorRequest req, CancellationToken ct)
         => Ok(await _service.UpdateSensorAsync(id, req, ct));
 
     /// <summary>[DELETE] Delete sensor (blocked if has measurements)</summary>
     [HttpDelete("{id:guid}")]
-    [Authorize(Roles = AppRoles.FarmWrite)]
     public async Task<IActionResult> Delete(Guid id, CancellationToken ct)
         => Ok(await _service.DeleteSensorAsync(id, ct));
 }
@@ -121,13 +141,18 @@ public class SensorsController : ControllerBase
 [ApiController]
 [Route("api/devices")]
 [Route("api/controllers")]
-[Authorize]
+[Authorize(Roles = AppRoles.FarmWrite)]
 [Tags("09. IoT — Controllers (ESP32)")]
 [Produces("application/json")]
 public class DevicesController : ControllerBase
 {
     private readonly IIotService _service;
-    public DevicesController(IIotService service) => _service = service;
+    private readonly IConfiguration _configuration;
+    public DevicesController(IIotService service, IConfiguration configuration)
+    {
+        _service = service;
+        _configuration = configuration;
+    }
 
     /// <summary>[READ] List ESP32 / gateways — optional farmingAreaId</summary>
     [HttpGet]
@@ -144,27 +169,37 @@ public class DevicesController : ControllerBase
 
     /// <summary>[CREATE] Register ESP32 gateway</summary>
     [HttpPost]
-    [Authorize(Roles = AppRoles.FarmWrite)]
     public async Task<IActionResult> Create([FromBody] CreateDeviceRequest req, CancellationToken ct)
-        => Ok(await _service.CreateDeviceAsync(req, ct));
+        => Ok(await _service.CreateDeviceAsync(req, ct, UserId(), Ip()));
 
     /// <summary>[UPDATE] Update device metadata</summary>
     [HttpPut("{id:guid}")]
-    [Authorize(Roles = AppRoles.FarmWrite)]
     public async Task<IActionResult> Update(Guid id, [FromBody] UpdateDeviceRequest req, CancellationToken ct)
-        => Ok(await _service.UpdateDeviceAsync(id, req, ct));
+        => Ok(await _service.UpdateDeviceAsync(id, req, ct, UserId(), Ip()));
 
     /// <summary>[DELETE] Delete device (no linked sensors)</summary>
     [HttpDelete("{id:guid}")]
-    [Authorize(Roles = AppRoles.FarmWrite)]
     public async Task<IActionResult> Delete(Guid id, CancellationToken ct)
-        => Ok(await _service.DeleteDeviceAsync(id, ct));
+        => Ok(await _service.DeleteDeviceAsync(id, ct, UserId(), Ip()));
 
-    /// <summary>[UPDATE] Heartbeat / status from edge</summary>
+    /// <summary>[UPDATE] Heartbeat / status from edge — yêu cầu X-Edge-Key</summary>
     [HttpPut("{id:guid}/status")]
     [AllowAnonymous]
     public async Task<IActionResult> UpdateStatus(Guid id, [FromBody] UpdateDeviceStatusRequest req, CancellationToken ct)
-        => Ok(await _service.UpdateDeviceStatusAsync(id, req, ct));
+    {
+        var denied = EdgeKeyGuard.Check(Request, _configuration);
+        if (denied is not null) return denied;
+        return Ok(await _service.UpdateDeviceStatusAsync(id, req, ct));
+    }
+
+    private Guid? UserId()
+    {
+        var raw = User.FindFirstValue(JwtRegisteredClaimNames.Sub)
+            ?? User.FindFirstValue(ClaimTypes.NameIdentifier);
+        return Guid.TryParse(raw, out var id) ? id : null;
+    }
+
+    private string? Ip() => HttpContext.Connection.RemoteIpAddress?.ToString();
 }
 
 [ApiController]
@@ -206,11 +241,17 @@ public class SyncController : ControllerBase
     private readonly IIotService _service;
     public SyncController(IIotService service) => _service = service;
 
-    /// <summary>[CREATE] Kiosk HDF5 upload</summary>
+    /// <summary>[CREATE] Kiosk HDF5 upload — yêu cầu X-Edge-Key</summary>
     [HttpPost("hdf5")]
     [AllowAnonymous]
-    public async Task<IActionResult> UploadHdf5([FromForm] Hdf5UploadRequest req, IFormFile file, CancellationToken ct)
+    public async Task<IActionResult> UploadHdf5(
+        [FromForm] Hdf5UploadRequest req,
+        IFormFile file,
+        CancellationToken ct,
+        [FromServices] IConfiguration configuration)
     {
+        var denied = EdgeKeyGuard.Check(Request, configuration);
+        if (denied is not null) return denied;
         using var stream = file.OpenReadStream();
         return Ok(await _service.ProcessHdf5UploadAsync(req, stream, ct));
     }

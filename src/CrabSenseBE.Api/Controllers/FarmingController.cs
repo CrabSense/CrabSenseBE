@@ -32,7 +32,8 @@ public class FarmingAreasController : ControllerBase
         CancellationToken ct = default)
     {
         // Mobile Home passes ownerId from /auth/me; if missing, FarmOwner still only sees own areas.
-        if (ownerId is null && User.IsInRole(AppRoles.FarmOwner))
+        if (ownerId is null
+            && (User.IsInRole(AppRoles.FarmAdministrator) || User.IsInRole("FarmOwner")))
             ownerId = TryGetUserId();
 
         return Ok(await _service.GetAreasAsync(

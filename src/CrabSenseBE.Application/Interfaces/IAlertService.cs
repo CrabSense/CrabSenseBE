@@ -34,7 +34,12 @@ public interface IAlertService
     Task<ApiResponse<int>> CheckDisconnectsAsync(int timeoutMinutes = 15, CancellationToken ct = default);
 
     /// <summary>Tạo cảnh báo và đẩy thông báo một lần cho đến khi được xóa.</summary>
-    Task RaiseOnceAsync(string message, CancellationToken ct = default);
+    Task RaiseOnceAsync(
+        string message,
+        string? typeCode = null,
+        Guid? areaId = null,
+        IReadOnlyDictionary<string, string?>? tokens = null,
+        CancellationToken ct = default);
 
     /// <summary>Đóng cảnh báo đang mở cùng nội dung, không gửi thêm thông báo.</summary>
     Task ClearAsync(string message, CancellationToken ct = default);

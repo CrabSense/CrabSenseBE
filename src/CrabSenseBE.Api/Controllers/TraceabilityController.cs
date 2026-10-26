@@ -103,6 +103,7 @@ public class TraceabilityController : ControllerBase
     /// [READ] Truy xuất nguồn gốc công khai — quét QR code.
     /// </summary>
     /// <param name="code">Giá trị QR code (tem trên hộp / lô cấp đông / phiếu thu hoạch).</param>
+    /// <param name="ct">Cancellation token.</param>
     /// <remarks>
     /// Endpoint này KHÔNG yêu cầu xác thực — dành cho người tiêu dùng cuối.
     ///

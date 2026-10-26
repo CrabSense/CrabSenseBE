@@ -11,7 +11,10 @@ public static class DependencyInjection
     public static IServiceCollection AddApplication(this IServiceCollection services, IConfiguration configuration)
     {
         services.Configure<FcmOptions>(configuration.GetSection(FcmOptions.SectionName));
+        services.Configure<WaterAnalysisOptions>(configuration.GetSection(WaterAnalysisOptions.SectionName));
+        services.Configure<NotificationOptions>(configuration.GetSection(NotificationOptions.SectionName));
         services.AddScoped<IAuthService, AuthService>();
+        services.AddScoped<IUserAdminService, UserAdminService>();
         services.AddScoped<IFarmingService, FarmingService>();
         services.AddScoped<IFarmLotService, FarmLotService>();
         services.AddScoped<IHarvestService, HarvestService>();
@@ -33,6 +36,7 @@ public static class DependencyInjection
         services.AddScoped<IInventoryReportService, InventoryReportService>();
         services.AddScoped<ISurvivalRateReportService, SurvivalRateReportService>();
         services.AddScoped<IMoltingReportService, MoltingReportService>();
+        services.AddScoped<IOperationalEfficiencyReportService, OperationalEfficiencyReportService>();
         services.AddScoped<IDashboardService, DashboardService>();
         services.AddScoped<IBoxOverviewService, BoxOverviewService>();
         services.AddScoped<IBoxDetailService, BoxDetailService>();
@@ -52,8 +56,6 @@ public static class DependencyInjection
         services.AddHttpClient("zalo");
         services.AddHttpClient("fcm");
         services.AddHostedService<DisconnectCheckHostedService>();
-
-        services.AddAutoMapper(typeof(DependencyInjection).Assembly);
         return services;
     }
 }

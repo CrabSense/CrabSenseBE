@@ -2,9 +2,17 @@
 # Usage: powershell -File .\seed-demo-iot.ps1
 $ErrorActionPreference = 'Continue'
 $base = if ($env:CRABSENSE_API) { $env:CRABSENSE_API.TrimEnd('/') } else { 'http://localhost:5080' }
+if (-not $env:CRABSENSE_USER -or -not $env:CRABSENSE_PASSWORD) {
+  throw 'Set CRABSENSE_USER and CRABSENSE_PASSWORD before seeding (demo accounts are disabled).'
+}
+if (-not $env:CRABSENSE_EDGE_KEY) {
+  throw 'Set CRABSENSE_EDGE_KEY (X-Edge-Key) — /api/iot/sensor-data/batch requires it.'
+}
 
-$login = Invoke-RestMethod "$base/api/auth/login" -Method Post -ContentType application/json -Body '{"username":"owner","password":"Owner@123"}'
+$login = Invoke-RestMethod "$base/api/auth/login" -Method Post -ContentType application/json `
+  -Body (@{ username = $env:CRABSENSE_USER; password = $env:CRABSENSE_PASSWORD } | ConvertTo-Json -Compress)
 $h = @{ Authorization = "Bearer $($login.data.accessToken)"; 'Content-Type' = 'application/json' }
+if ($env:CRABSENSE_EDGE_KEY) { $h['X-Edge-Key'] = $env:CRABSENSE_EDGE_KEY }
 
 function Post($path, $body) {
   try {

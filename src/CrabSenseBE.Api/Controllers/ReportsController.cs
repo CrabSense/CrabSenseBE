@@ -1,4 +1,5 @@
 using CrabSenseBE.Application.Interfaces;
+using CrabSenseBE.Domain.Enums;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using CrabSenseBE.Application.DTOs.Reports;
@@ -7,7 +8,7 @@ namespace CrabSenseBE.Api.Controllers;
 
 [ApiController]
 [Route("api/reports")]
-[Authorize(Roles = "SystemAdmin,FarmOwner")]
+[Authorize(Roles = AppRoles.FarmManage)]
 public class ReportsController : ControllerBase
 {
     private readonly IHarvestReportService _harvestReportService;

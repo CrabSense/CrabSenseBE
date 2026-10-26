@@ -36,6 +36,13 @@ builder.Services.AddScoped< IMortalityService, MortalityService>();
 // ─── JWT Authentication ─────────────────────────────────────────────────────
 var jwtSecret = builder.Configuration["Jwt:Secret"]
     ?? throw new InvalidOperationException("Jwt:Secret is required");
+// Không cho chạy với secret placeholder/ngắn: kẻ tấn công biết secret là tự ký được token admin.
+if (jwtSecret.Length < 32
+    || jwtSecret.Contains("CHANGE_ME", StringComparison.OrdinalIgnoreCase))
+{
+    throw new InvalidOperationException(
+        "Jwt:Secret must be at least 32 characters and must not be a CHANGE_ME placeholder.");
+}
 
 builder.Services
     .AddAuthentication(options =>
@@ -59,6 +66,30 @@ builder.Services
     });
 
 builder.Services.AddAuthorization();
+
+// ─── Rate limiting (chống brute-force đăng nhập) ────────────────────────────
+// ponytail: partition theo IP, 20 lần / 5 phút. Nhiều user sau cùng NAT có thể
+// dùng chung hạn mức; nâng cấp: partition thêm username khi tách được body.
+builder.Services.AddRateLimiter(options =>
+{
+    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+    options.OnRejected = async (context, ct) =>
+    {
+        context.HttpContext.Response.ContentType = "application/json";
+        await context.HttpContext.Response.WriteAsync(
+            "{\"success\":false,\"message\":\"Quá nhiều lần thử đăng nhập. Vui lòng thử lại sau ít phút.\"}",
+            ct);
+    };
+    options.AddPolicy("login", context =>
+        System.Threading.RateLimiting.RateLimitPartition.GetFixedWindowLimiter(
+            context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+            _ => new System.Threading.RateLimiting.FixedWindowRateLimiterOptions
+            {
+                PermitLimit = 20,
+                Window = TimeSpan.FromMinutes(5),
+                QueueLimit = 0
+            }));
+});
 
 // ─── Controllers + JSON ─────────────────────────────────────────────────────
 builder.Services.AddControllers()
@@ -116,6 +147,10 @@ builder.Services.AddSwaggerGen(c =>
 });
 
 // ─── CORS ───────────────────────────────────────────────────────────────────
+// Origin hợp lệ CHỈ đến từ config AllowedOrigins (không hardcode IP/tên miền).
+var allowedOrigins = builder.Configuration.GetSection("AllowedOrigins").Get<string[]>()
+    ?? Array.Empty<string>();
+
 builder.Services.AddCors(options =>
 {
     options.AddPolicy("AllowFrontend", policy =>
@@ -123,11 +158,12 @@ builder.Services.AddCors(options =>
         policy.SetIsOriginAllowed(origin =>
             {
                 if (string.IsNullOrWhiteSpace(origin)) return false;
-                if (!Uri.TryCreate(origin, UriKind.Absolute, out var uri)) return false;
-                if (uri.Host is "localhost" or "127.0.0.1" or "103.69.96.143") return true;
-                var configured = builder.Configuration.GetSection("AllowedOrigins").Get<string[]>()
-                    ?? new[] { "http://localhost:3000", "http://localhost:5173" };
-                return configured.Contains(origin, StringComparer.OrdinalIgnoreCase);
+                if (allowedOrigins.Contains(origin, StringComparer.OrdinalIgnoreCase)) return true;
+
+                // Dev: cho phép mọi cổng loopback để tooling local không phải thêm config.
+                return builder.Environment.IsDevelopment()
+                       && Uri.TryCreate(origin, UriKind.Absolute, out var uri)
+                       && uri.IsLoopback;
             })
             .AllowAnyHeader()
             .AllowAnyMethod()
@@ -141,9 +177,14 @@ builder.Services.AddHealthChecks();
 var app = builder.Build();
 
 // ─── Middleware pipeline ─────────────────────────────────────────────────────
+// Serilog phải nằm NGOÀI ExceptionMiddleware: exception nghiệp vụ (400/404) được
+// chuyển thành response trước khi Serilog đọc StatusCode, nếu không sẽ log nhầm 500.
+app.UseSerilogRequestLogging();
 app.UseMiddleware<ExceptionMiddleware>();
 
-if (app.Environment.IsDevelopment())
+// Swagger và HTTPS redirect đọc từ config, không phụ thuộc tên environment:
+// production có thể bật Swagger (admin UI) mà không phải chạy ASPNETCORE_ENVIRONMENT=Development.
+if (builder.Configuration.GetValue("Swagger:Enabled", app.Environment.IsDevelopment()))
 {
     app.UseSwagger();
     app.UseSwaggerUI(c =>
@@ -153,9 +194,9 @@ if (app.Environment.IsDevelopment())
     });
 }
 
-app.UseSerilogRequestLogging();
 app.UseCors("AllowFrontend");
-if (!app.Environment.IsDevelopment())
+app.UseRateLimiter();
+if (builder.Configuration.GetValue("Https:Redirect", false))
     app.UseHttpsRedirection();
 app.UseAuthentication();
 app.UseAuthorization();

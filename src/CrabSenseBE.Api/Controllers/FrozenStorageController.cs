@@ -1,8 +1,8 @@
 using CrabSenseBE.Application.DTOs.FrozenStorage;
 using CrabSenseBE.Application.Interfaces;
+using CrabSenseBE.Domain.Enums;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-
 namespace CrabSenseBE.Api.Controllers;
 
 [ApiController]
@@ -36,6 +36,7 @@ public class FrozenStorageController : ControllerBase
 
     /// <summary>Tạo một lô cua cấp đông.</summary>
     [HttpPost]
+    [Authorize(Roles = AppRoles.FarmWriteWithPlatform)]
     public async Task<IActionResult> Create(
         [FromBody] CreateFrozenLotRequest request,
         CancellationToken ct)
@@ -50,6 +51,7 @@ public class FrozenStorageController : ControllerBase
 
     /// <summary>Cập nhật một lô cua cấp đông.</summary>
     [HttpPut("{id:guid}")]
+    [Authorize(Roles = AppRoles.FarmWriteWithPlatform)]
     public async Task<IActionResult> Update(
         Guid id,
         [FromBody] UpdateFrozenLotRequest request,
@@ -60,6 +62,7 @@ public class FrozenStorageController : ControllerBase
 
     /// <summary>Xóa một lô cua cấp đông.</summary>
     [HttpDelete("{id:guid}")]
+    [Authorize(Roles = AppRoles.FarmManageWithPlatform)]
     public async Task<IActionResult> Delete(
         Guid id,
         CancellationToken ct)
@@ -102,7 +105,7 @@ public class FrozenStorageController : ControllerBase
     /// Ghi nhận từng cua trong lô và tạo một barcode riêng cho mỗi cua.
     /// </summary>
     [HttpPost("{lotId:guid}/crab-items")]
-    [Authorize(Roles = "SystemAdmin, Staff")]
+    [Authorize(Roles = AppRoles.FarmWrite)]
     public async Task<IActionResult> RegisterCrabItems(
         Guid lotId,
         [FromBody] RegisterFrozenCrabItemsRequest request,

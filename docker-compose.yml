@@ -9,7 +9,7 @@ services:
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-crabsense}
       POSTGRES_USER: ${POSTGRES_USER:-crabsense_user}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}
     ports:
       - "${POSTGRES_PORT:-5432}:5432"
     volumes:
@@ -27,8 +27,8 @@ services:
     restart: unless-stopped
     command: server /data --console-address ":9001"
     environment:
-      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-minioadmin}
-      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-minioadmin}
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:?MINIO_ACCESS_KEY must be set in .env}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:?MINIO_SECRET_KEY must be set in .env}
     ports:
       - "${MINIO_PORT:-9000}:9000"
       - "${MINIO_CONSOLE_PORT:-9001}:9001"
@@ -55,13 +55,13 @@ services:
       ConnectionStrings__DefaultConnection: >
         Host=postgres;Port=5432;Database=${POSTGRES_DB:-crabsense};
         Username=${POSTGRES_USER:-crabsense_user};
-        Password=${POSTGRES_PASSWORD:-changeme}
-      Jwt__Secret: ${JWT_SECRET:-CHANGE_ME_IN_PRODUCTION_AT_LEAST_32_CHARS}
+        Password=${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}
+      Jwt__Secret: ${JWT_SECRET:?JWT_SECRET must be set in .env (>= 32 chars)}
       Jwt__Issuer: CrabSenseBE
       Jwt__Audience: CrabSenseClients
       MinIO__Endpoint: minio:9000
-      MinIO__AccessKey: ${MINIO_ACCESS_KEY:-minioadmin}
-      MinIO__SecretKey: ${MINIO_SECRET_KEY:-minioadmin}
+      MinIO__AccessKey: ${MINIO_ACCESS_KEY:?MINIO_ACCESS_KEY must be set in .env}
+      MinIO__SecretKey: ${MINIO_SECRET_KEY:?MINIO_SECRET_KEY must be set in .env}
       MinIO__UseSSL: "false"
       UPLOAD_STORAGE: ${UPLOAD_STORAGE:-s3}
       S3_BUCKET: ${S3_BUCKET:-}

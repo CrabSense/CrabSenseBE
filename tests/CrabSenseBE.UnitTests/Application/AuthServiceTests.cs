@@ -29,7 +29,7 @@ public class AuthServiceTests
             Email = "test@example.com",
             PasswordHash = passwordHash,
             FullName = "Test User",
-            Role = UserRole.Staff,
+            Role = UserRole.FarmStaff,
             IsActive = true
         };
 
@@ -39,6 +39,7 @@ public class AuthServiceTests
         userRepoMock.Setup(r => r.Update(It.IsAny<AppUser>()));
 
         _uowMock.Setup(u => u.Users).Returns(userRepoMock.Object);
+        _uowMock.Setup(u => u.OperationLogs).Returns(new Mock<IRepository<OperationLog>>().Object);
         _uowMock.Setup(u => u.SaveChangesAsync(It.IsAny<CancellationToken>())).ReturnsAsync(1);
         _jwtMock.Setup(j => j.GenerateAccessToken(It.IsAny<AppUser>())).Returns("access_token");
         _jwtMock.Setup(j => j.GenerateRefreshToken()).Returns("refresh_token");
@@ -70,6 +71,7 @@ public class AuthServiceTests
             .ReturnsAsync(user);
 
         _uowMock.Setup(u => u.Users).Returns(userRepoMock.Object);
+        _uowMock.Setup(u => u.OperationLogs).Returns(new Mock<IRepository<OperationLog>>().Object);
 
         var service = CreateService();
 

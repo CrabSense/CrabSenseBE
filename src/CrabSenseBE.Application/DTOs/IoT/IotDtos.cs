@@ -180,10 +180,23 @@ public record SensorDataRequest(
     decimal Value,
     string? Unit,
     DateTime MeasuredAt,
-    string? IpAddress = null
+    string? IpAddress = null,
+    string? EventId = null
 );
 public record SensorDataBatchRequest(IEnumerable<SensorDataRequest> Measurements);
 public record SensorDataDto(Guid Id, Guid SensorId, decimal Value, string? Unit, DateTime MeasuredAt, string? Source);
+
+/// Aggregated water-quality snapshot for mobile/history charts.
+public record WaterQualitySnapshotDto(
+    string Id,
+    string? SensorId,
+    string? FarmId,
+    decimal Temperature,
+    decimal Ph,
+    decimal DissolvedOxygen,
+    decimal Salinity,
+    DateTime Timestamp,
+    bool IsAlertTriggered);
 
 // --- Water system (optional parent) ---
 public record WaterSystemDto(

@@ -33,6 +33,7 @@ public interface IUnitOfWork : IDisposable
     IRepository<Alert> Alerts { get; }
     IRepository<Notification> Notifications { get; }
     IRepository<NotificationChannel> NotificationChannels { get; }
+    IRepository<NotificationRule> NotificationRules { get; }
     IRepository<NotificationDelivery> NotificationDeliveries { get; }
     IRepository<UserPushToken> UserPushTokens { get; }
     IRepository<MediaAsset> MediaAssets { get; }

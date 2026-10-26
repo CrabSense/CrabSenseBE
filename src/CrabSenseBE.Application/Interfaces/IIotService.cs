@@ -15,6 +15,11 @@ public interface IIotService
         Guid? farmingAreaId = null,
         CancellationToken ct = default);
 
+    /// <summary>Time-series snapshots for charts (period: 24h | 7d | 30d).</summary>
+    Task<ApiResponse<IEnumerable<WaterQualitySnapshotDto>>> GetWaterQualityHistoryAsync(
+        Guid? farmingAreaId = null,
+        string period = "24h",
+        CancellationToken ct = default);
 
     Task<ApiResponse<IEnumerable<SensorDto>>> GetSensorsAsync(
         Guid? deviceId = null,
@@ -31,9 +36,9 @@ public interface IIotService
         Guid? farmingRowId = null,
         CancellationToken ct = default);
     Task<ApiResponse<DeviceDetailDto>> GetDeviceAsync(Guid id, CancellationToken ct = default);
-    Task<ApiResponse<DeviceDto>> CreateDeviceAsync(CreateDeviceRequest request, CancellationToken ct = default);
-    Task<ApiResponse<DeviceDto>> UpdateDeviceAsync(Guid id, UpdateDeviceRequest request, CancellationToken ct = default);
-    Task<ApiResponse> DeleteDeviceAsync(Guid id, CancellationToken ct = default);
+    Task<ApiResponse<DeviceDto>> CreateDeviceAsync(CreateDeviceRequest request, CancellationToken ct = default, Guid? actorId = null, string? ip = null);
+    Task<ApiResponse<DeviceDto>> UpdateDeviceAsync(Guid id, UpdateDeviceRequest request, CancellationToken ct = default, Guid? actorId = null, string? ip = null);
+    Task<ApiResponse> DeleteDeviceAsync(Guid id, CancellationToken ct = default, Guid? actorId = null, string? ip = null);
     Task<ApiResponse<DeviceDto>> UpdateDeviceStatusAsync(Guid deviceId, UpdateDeviceStatusRequest request, CancellationToken ct = default);
 
     Task<ApiResponse<IEnumerable<WaterSystemDto>>> GetWaterSystemsAsync(CancellationToken ct = default);
