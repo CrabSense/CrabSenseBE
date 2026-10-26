@@ -4,6 +4,7 @@ using CrabSenseBE.Application.Interfaces;
 using CrabSenseBE.Domain.Entities;
 using CrabSenseBE.Domain.Enums;
 using CrabSenseBE.Domain.Interfaces;
+using System.ComponentModel.DataAnnotations;
 
 namespace CrabSenseBE.Application.Services;
 
@@ -95,6 +96,140 @@ public class UserAdminService : IUserAdminService
 
         return ApiResponse.Ok("Đã đặt lại mật khẩu.");
     }
+
+
+    public async Task<ApiResponse<UserDto>> UpdateUserAsync(
+        Guid id,
+        UpdateAdminUserRequest request,
+        UserRole callerRole,
+        CancellationToken ct = default)
+    {
+        if (request is null)
+            throw AppException.BadRequest(
+                "Request is required.");
+
+        var user = await _uow.Users.GetByIdAsync(id, ct)
+            ?? throw AppException.NotFound("User");
+
+        // Check permission to manage target account
+        if (!CanManage(callerRole, user.Role))
+            throw AppException.Forbidden(
+                "You cannot manage this account.");
+
+        if (string.IsNullOrWhiteSpace(request.FullName))
+            throw AppException.BadRequest(
+                "Full name is required.");
+
+        if (string.IsNullOrWhiteSpace(request.Email))
+            throw AppException.BadRequest(
+                "Email is required.");
+
+        var fullName = request.FullName.Trim();
+        var email = request.Email.Trim().ToLowerInvariant();
+
+        if (!new EmailAddressAttribute().IsValid(email))
+            throw AppException.BadRequest(
+                "Invalid email format.");
+
+        // Check duplicate email
+        var emailExists = await _uow.Users.AnyAsync(
+            u => u.Id != id &&
+                u.Email.ToLower() == email,
+            ct);
+
+        if (emailExists)
+            throw AppException.Conflict(
+                "Email already registered.");
+
+        // Update employee information
+        user.FullName = fullName;
+        user.Email = email;
+
+        user.Phone = string.IsNullOrWhiteSpace(request.Phone)
+            ? null
+            : request.Phone.Trim();
+
+        user.EmployeeId =
+            string.IsNullOrWhiteSpace(request.EmployeeId)
+                ? null
+                : request.EmployeeId.Trim();
+
+        user.UpdatedAt = DateTime.UtcNow;
+
+        _uow.Users.Update(user);
+        await _uow.SaveChangesAsync(ct);
+
+        return ApiResponse<UserDto>.Ok(
+            AuthService.MapToDto(user),
+            "User updated successfully.");
+    }
+
+
+    public async Task<ApiResponse<UserDto>> ChangeRoleAsync(
+        Guid id,
+        ChangeUserRoleRequest request,
+        UserRole callerRole,
+        CancellationToken ct = default)
+    {
+        if (request is null)
+            throw AppException.BadRequest(
+                "Request is required.");
+
+        var user = await _uow.Users.GetByIdAsync(id, ct)
+            ?? throw AppException.NotFound("User");
+
+        // Verify permission for current target role
+        if (!CanManage(callerRole, user.Role))
+            throw AppException.Forbidden(
+                "You cannot manage this account.");
+
+        if (string.IsNullOrWhiteSpace(request.Role))
+            throw AppException.BadRequest(
+                "Role is required.");
+
+        if (!UserRoleParsing.TryParse(
+                request.Role, out var newRole))
+            throw AppException.BadRequest(
+                "Invalid role.");
+
+        // Only FarmManager and FarmStaff are allowed
+        // when FarmAdministrator changes employee roles.
+        if (callerRole == UserRole.FarmAdministrator &&
+            newRole is not (
+                UserRole.FarmManager or UserRole.FarmStaff))
+        {
+            throw AppException.Forbidden(
+                "FarmAdministrator can only assign " +
+                "FarmManager or FarmStaff.");
+        }
+
+        // Prevent assigning SystemAdministrator
+        // through this endpoint.
+        if (newRole == UserRole.SystemAdministrator)
+            throw AppException.Forbidden(
+                "Cannot assign SystemAdministrator role.");
+
+        if (user.Role == newRole)
+            return ApiResponse<UserDto>.Ok(
+                AuthService.MapToDto(user),
+                "User already has this role.");
+
+        user.Role = newRole;
+        user.UpdatedAt = DateTime.UtcNow;
+
+        // Invalidate the refresh token after role change.
+        user.RefreshToken = null;
+        user.RefreshTokenExpiry = null;
+
+        _uow.Users.Update(user);
+        await _uow.SaveChangesAsync(ct);
+
+        return ApiResponse<UserDto>.Ok(
+            AuthService.MapToDto(user),
+            "User role updated successfully.");
+    }
+
+
 
     /// <summary>SystemAdministrator: mọi role. FarmAdministrator: chỉ Manager/Staff.</summary>
     private static bool CanManage(UserRole caller, UserRole target) => caller switch
