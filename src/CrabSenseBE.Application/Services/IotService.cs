@@ -92,6 +92,10 @@ public class IotService : IIotService
                 device = new Device
                 {
                     DeviceCode = req.DeviceCode.Trim(),
+                    // UPS cắm USB vào kiosk không phải ESP32: gắn đúng loại thiết bị
+                    DeviceType = req.SensorCode.Trim().StartsWith("ups_", StringComparison.Ordinal)
+                        ? "ups"
+                        : "esp32",
                     Status = DeviceStatus.Online,
                     LastSeenAt = DateTime.UtcNow,
                     IpAddress = string.IsNullOrWhiteSpace(req.IpAddress) ? null : req.IpAddress.Trim()
@@ -1042,6 +1046,24 @@ public class IotService : IIotService
         "meter_pf" => ("PowerFactor", "%"),
         "meter_min" => ("Runtime", "min"),
         "meter_c" => ("Temperature", "C"),
+        // UPS (CyberPower USB HID) — thiết bị riêng, không phải ESP32/ACD301.
+        // Cho phép tự đăng ký cảm biến ở lần ingest đầu, giống nhóm meter_*.
+        "ups_input_voltage" => ("Voltage", "V"),
+        "ups_output_voltage" => ("Voltage", "V"),
+        "ups_battery_voltage" => ("Voltage", "V"),
+        "ups_load" => ("PercentLoad", "%"),
+        "ups_battery_charge" => ("BatteryCharge", "%"),
+        "ups_battery_runtime" => ("Runtime", "s"),
+        "ups_status_online" => ("State", "state"),
+        "ups_status_charging" => ("State", "state"),
+        "ups_status_discharging" => ("State", "state"),
+        "ups_status_low_battery" => ("State", "state"),
+        "ups_output_power" => ("Power", "W"),
+        "ups_output_apparent_power" => ("ApparentPower", "VA"),
+        "ups_output_current" => ("Current", "A"),
+        "ups_input_power" => ("Power", "W"),
+        "ups_input_apparent_power" => ("ApparentPower", "VA"),
+        "ups_input_current" => ("Current", "A"),
         _ => null
     };
 

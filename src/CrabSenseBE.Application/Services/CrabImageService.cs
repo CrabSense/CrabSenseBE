@@ -20,10 +20,22 @@ public class CrabImageService : ICrabImageService
     public async Task<ApiResponse<IReadOnlyList<CrabImageDto>>> UploadAsync(
         IReadOnlyList<CrabImageFile> files,
         Guid? crabId,
+        Guid? harvestVoucherId,
         Guid? uploadedBy,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        bool replace = false)
     {
         ImageUploadRules.ValidateBatch(files);
+
+        HarvestVoucher? voucher = null;
+        if (harvestVoucherId is Guid voucherId && voucherId != Guid.Empty)
+        {
+            voucher = await _uow.HarvestVouchers.GetByIdAsync(voucherId, ct)
+                ?? throw AppException.NotFound("HarvestVoucher");
+            var voucherUrls = JsonStringList.Parse(voucher.PhotoUrlsJson);
+            if (voucherUrls.Count + files.Count > ImageUploadRules.MaxUrls)
+                throw AppException.BadRequest($"A harvest voucher can have at most {ImageUploadRules.MaxUrls} images.");
+        }
 
         Crab? crab = null;
         if (crabId is Guid id && id != Guid.Empty)
@@ -34,9 +46,11 @@ public class CrabImageService : ICrabImageService
                 throw AppException.BadRequest($"A crab can have at most {ImageUploadRules.MaxUrls} images.");
         }
 
-        var folder = crab is null
-            ? MediaFolderPath.Join(MediaFolderPath.InboundRoot, MediaFolderPath.PendingSegment)
-            : await MediaFolderCodeResolver.ResolvePathAsync(_uow, "crab", crab.Id, ct);
+        var folder = voucher is not null
+            ? await MediaFolderCodeResolver.ResolvePathAsync(_uow, "harvest-voucher", voucher.Id, ct)
+            : crab is null
+                ? MediaFolderPath.Join(MediaFolderPath.InboundRoot, MediaFolderPath.PendingSegment)
+                : await MediaFolderCodeResolver.ResolvePathAsync(_uow, "crab", crab.Id, ct);
         var results = new List<CrabImageDto>(files.Count);
         var urls = new List<string>(files.Count);
 
@@ -60,15 +74,42 @@ public class CrabImageService : ICrabImageService
                 ShareLink = url,
                 IsShared = true,
                 CrabId = crab?.Id,
-                RelatedEntityType = crab is null ? "crab-pending" : "crab",
-                RelatedEntityId = crab?.Id,
-                Notes = "crab-image",
+                RelatedEntityType = voucher is not null
+                    ? "HarvestVoucher"
+                    : crab is null ? "crab-pending" : "crab",
+                RelatedEntityId = voucher?.Id ?? crab?.Id,
+                Notes = voucher is not null ? "harvest-photo" : "crab-image",
                 UploadedBy = uploadedBy
             };
             await _uow.MediaAssets.AddAsync(asset, ct);
 
             results.Add(new CrabImageDto(url, uploaded.StorageKey, file.FileName, _storage.ProviderName, uploaded.SizeBytes));
             urls.Add(url);
+        }
+
+        if (voucher is not null)
+        {
+            voucher.PhotoUrlsJson = JsonStringList.Serialize(
+                replace
+                    ? urls
+                    : JsonStringList.Merge(voucher.PhotoUrlsJson, urls, ImageUploadRules.MaxUrls),
+                ImageUploadRules.MaxUrls);
+            _uow.HarvestVouchers.Update(voucher);
+
+            // Ảnh thu hoạch cũng là ảnh con cua -> ghi vào album từng con để hồ sơ cua không trống.
+            var lineCrabIds = (await _uow.HarvestLines.FindAsync(
+                    l => l.HarvestVoucherId == voucher.Id && l.CrabId != null, ct))
+                .Select(l => l.CrabId!.Value)
+                .Distinct();
+            foreach (var lineCrabId in lineCrabIds)
+            {
+                if (crab is not null && crab.Id == lineCrabId) continue;
+                var lineCrab = await _uow.Crabs.GetByIdAsync(lineCrabId, ct);
+                if (lineCrab is null) continue;
+                lineCrab.ImageUrlsJson = JsonStringList.Serialize(
+                    JsonStringList.Merge(lineCrab.ImageUrlsJson, urls, ImageUploadRules.MaxUrls), ImageUploadRules.MaxUrls);
+                _uow.Crabs.Update(lineCrab);
+            }
         }
 
         if (crab is not null)

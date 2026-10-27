@@ -400,7 +400,7 @@ public class CrabsController : ControllerBase
         [FromForm] List<IFormFile>? files,
         IFormFile? file,
         CancellationToken ct = default)
-        => Ok(await _images.UploadAsync(ToImageFiles(files, file), crabId: null, TryGetUserId(), ct));
+        => Ok(await _images.UploadAsync(ToImageFiles(files, file), crabId: null, harvestVoucherId: null, TryGetUserId(), ct));
 
     /// <summary>[READ] Get crab by id</summary>
     [HttpGet("{id:guid}")]
@@ -449,7 +449,7 @@ public class CrabsController : ControllerBase
         [FromForm] List<IFormFile>? files,
         IFormFile? file,
         CancellationToken ct = default)
-        => Ok(await _images.UploadAsync(ToImageFiles(files, file), id, TryGetUserId(), ct));
+        => Ok(await _images.UploadAsync(ToImageFiles(files, file), id, harvestVoucherId: null, TryGetUserId(), ct));
 
     /// <summary>[DELETE] Soft-delete crab (IsAlive=false, free box, keep history)</summary>
     [HttpDelete("{id:guid}")]

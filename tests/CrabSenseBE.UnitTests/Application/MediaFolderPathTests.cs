@@ -1,5 +1,9 @@
+using System.Linq.Expressions;
 using CrabSenseBE.Application.Common;
+using CrabSenseBE.Domain.Entities;
+using CrabSenseBE.Domain.Interfaces;
 using FluentAssertions;
+using Moq;
 
 namespace CrabSenseBE.UnitTests.Application;
 
@@ -72,5 +76,48 @@ public class MediaFolderPathTests
         MediaFolderPath.Build("FarmOperation", id).Should().Be($"NhatKy/{id:D}");
         MediaFolderPath.Build("HarvestVouchers", id).Should().Be($"ThuHoach/{id:D}");
         MediaFolderPath.Build("farming-area", id).Should().Be($"FarmingAreas/{id:D}");
+    }
+
+    [Fact]
+    public async Task CrabAfterHarvest_KeepsLastBoxFolder()
+    {
+        var crabId = Guid.NewGuid();
+        var boxId = Guid.NewGuid();
+        var rowId = Guid.NewGuid();
+        var areaId = Guid.NewGuid();
+
+        var uow = new Mock<IUnitOfWork>();
+        var crabs = new Mock<IRepository<Crab>>();
+        var boxes = new Mock<IRepository<Box>>();
+        var rows = new Mock<IRepository<FarmingRow>>();
+        var areas = new Mock<IRepository<FarmingArea>>();
+        var allocs = new Mock<IRepository<CrabBoxAllocation>>();
+
+        // Đã thu hoạch: BoxId bị xoá, chỉ còn lịch sử phân bổ.
+        crabs.Setup(r => r.GetByIdAsync(crabId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new Crab { Id = crabId, Code = "CRAB-0007" });
+        boxes.Setup(r => r.GetByIdAsync(boxId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new Box { Id = boxId, Code = "BOX-0012", FarmingRowId = rowId });
+        rows.Setup(r => r.GetByIdAsync(rowId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new FarmingRow { Id = rowId, Code = "DAY-A04", FarmingAreaId = areaId });
+        areas.Setup(r => r.GetByIdAsync(areaId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new FarmingArea { Id = areaId, Code = "AREA-A09" });
+        allocs.Setup(r => r.FindAsync(
+                It.IsAny<Expression<Func<CrabBoxAllocation, bool>>>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new[]
+            {
+                new CrabBoxAllocation { CrabId = crabId, BoxId = boxId, EndTime = DateTime.UtcNow }
+            });
+
+        uow.Setup(u => u.Crabs).Returns(crabs.Object);
+        uow.Setup(u => u.Boxes).Returns(boxes.Object);
+        uow.Setup(u => u.FarmingRows).Returns(rows.Object);
+        uow.Setup(u => u.FarmingAreas).Returns(areas.Object);
+        uow.Setup(u => u.CrabBoxAllocations).Returns(allocs.Object);
+
+        var path = await MediaFolderCodeResolver.ResolvePathAsync(uow.Object, "crab", crabId);
+
+        path.Should().Be("AREA-A09/DAY-A04/BOX-0012/CRAB-0007");
     }
 }

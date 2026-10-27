@@ -17,6 +17,12 @@ public class CrabImageServiceTests
 
     public CrabImageServiceTests()
     {
+        var allocations = new Mock<IRepository<CrabBoxAllocation>>();
+        allocations.Setup(r => r.FindAsync(
+                It.IsAny<System.Linq.Expressions.Expression<Func<CrabBoxAllocation, bool>>>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Array.Empty<CrabBoxAllocation>());
+        _uow.Setup(u => u.CrabBoxAllocations).Returns(allocations.Object);
         _uow.Setup(u => u.Crabs).Returns(_crabs.Object);
         _uow.Setup(u => u.MediaAssets).Returns(_media.Object);
         _uow.Setup(u => u.SaveChangesAsync(It.IsAny<CancellationToken>())).ReturnsAsync(1);
@@ -40,7 +46,7 @@ public class CrabImageServiceTests
         await using var stream = new MemoryStream(new byte[] { 1, 2, 3 });
         var result = await Create().UploadAsync(
             new[] { new CrabImageFile(stream, "a.jpg", "image/jpeg") },
-            crabId: null, uploadedBy: Guid.NewGuid());
+            crabId: null, harvestVoucherId: null, uploadedBy: Guid.NewGuid());
 
         result.Success.Should().BeTrue();
         result.Data.Should().NotBeNull().And.HaveCount(1);
@@ -65,7 +71,7 @@ public class CrabImageServiceTests
         await using var stream = new MemoryStream(new byte[] { 1 });
         var result = await Create().UploadAsync(
             new[] { new CrabImageFile(stream, "b.png", "image/png") },
-            crabId, Guid.NewGuid());
+            crabId, null, Guid.NewGuid());
 
         result.Success.Should().BeTrue();
         JsonStringList.Parse(crab.ImageUrlsJson).Should().Equal("https://old.jpg", "https://new.png");
@@ -76,7 +82,7 @@ public class CrabImageServiceTests
     public async Task Upload_EmptyFiles_Throws()
     {
         await Assert.ThrowsAsync<AppException>(() =>
-            Create().UploadAsync(Array.Empty<CrabImageFile>(), null, null));
+            Create().UploadAsync(Array.Empty<CrabImageFile>(), null, null, null));
     }
 
     [Fact]
@@ -86,7 +92,42 @@ public class CrabImageServiceTests
         await Assert.ThrowsAsync<AppException>(() =>
             Create().UploadAsync(
                 new[] { new CrabImageFile(stream, "note.pdf", "application/pdf") },
-                null, null));
+                null, null, null));
+    }
+
+    [Fact]
+    public async Task Upload_WithHarvestVoucher_SavesUnderThuHoachAndAppendsUrls()
+    {
+        var voucherId = Guid.NewGuid();
+        var crabId = Guid.NewGuid();
+        var voucher = new HarvestVoucher { Id = voucherId, VoucherCode = "HAR-009" };
+        var crab = new Crab { Id = crabId };
+
+        var vouchers = new Mock<IRepository<HarvestVoucher>>();
+        var lines = new Mock<IRepository<HarvestLine>>();
+        vouchers.Setup(r => r.GetByIdAsync(voucherId, It.IsAny<CancellationToken>())).ReturnsAsync(voucher);
+        lines.Setup(r => r.FindAsync(
+                It.IsAny<System.Linq.Expressions.Expression<Func<HarvestLine, bool>>>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new[] { new HarvestLine { HarvestVoucherId = voucherId, CrabId = crabId } });
+        _crabs.Setup(r => r.GetByIdAsync(crabId, It.IsAny<CancellationToken>())).ReturnsAsync(crab);
+        _uow.Setup(u => u.HarvestVouchers).Returns(vouchers.Object);
+        _uow.Setup(u => u.HarvestLines).Returns(lines.Object);
+
+        _storage.Setup(s => s.UploadAsync(
+                It.IsAny<Stream>(), "h.jpg", "image/jpeg", "ThuHoach/HAR-009", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new MediaUploadResult("k1", "https://v.jpg", "https://v.jpg", "https://v.jpg", 5));
+
+        await using var stream = new MemoryStream(new byte[] { 9 });
+        var result = await Create().UploadAsync(
+            new[] { new CrabImageFile(stream, "h.jpg", "image/jpeg") },
+            crabId: null, harvestVoucherId: voucherId, uploadedBy: null);
+
+        result.Success.Should().BeTrue();
+        JsonStringList.Parse(voucher.PhotoUrlsJson).Should().Equal("https://v.jpg");
+        JsonStringList.Parse(crab.ImageUrlsJson).Should().Equal("https://v.jpg");
+        vouchers.Verify(r => r.Update(voucher), Times.Once);
+        _crabs.Verify(r => r.Update(crab), Times.Once);
     }
 
     [Fact]

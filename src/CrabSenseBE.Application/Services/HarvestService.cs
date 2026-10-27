@@ -1027,6 +1027,18 @@ public class HarvestService : IHarvestService
             crab.Status = CrabStatus.Harvested;
             crab.Condition = CrabCondition.Harvested;
             crab.WeightGram = line.WeightGram;
+
+            // Ảnh phiếu / ảnh dòng thu hoạch cũng là ảnh con cua -> hồ sơ cua không bị trống.
+            var harvestPhotos = JsonStringList.Parse(voucher.PhotoUrlsJson)
+                .Concat(JsonStringList.Parse(line.PhotoUrlsJson))
+                .ToList();
+            if (harvestPhotos.Count > 0)
+            {
+                crab.ImageUrlsJson = JsonStringList.Serialize(
+                    JsonStringList.Merge(crab.ImageUrlsJson, harvestPhotos, ImageUploadRules.MaxUrls),
+                    ImageUploadRules.MaxUrls);
+            }
+
             crab.BoxId = null;
             _uow.Crabs.Update(crab);
 
