@@ -21,23 +21,55 @@ public class UserAdminService : IUserAdminService
     public UserAdminService(IUnitOfWork uow) => _uow = uow;
 
     public async Task<ApiResponse<IEnumerable<UserDto>>> ListAsync(
-        UserRole callerRole, CancellationToken ct = default)
+        UserRole callerRole, Guid callerId, CancellationToken ct = default)
     {
         var users = await _uow.Users.GetAllAsync(ct);
-        var visible = callerRole == UserRole.SystemAdministrator
-            ? users
-            : users.Where(u => CanManage(callerRole, u.Role));
+        IEnumerable<AppUser> visible = users;
+        if (callerRole != UserRole.SystemAdministrator)
+        {
+            var areaIds = await GetManagedAreaIdsAsync(callerId, ct);
+            visible = users.Where(user =>
+                CanManageRole(callerRole, user.Role) &&
+                user.FarmingAreaId.HasValue &&
+                areaIds.Contains(user.FarmingAreaId.Value));
+        }
 
-        return ApiResponse<IEnumerable<UserDto>>.Ok(
-            visible.OrderBy(u => u.Username).Select(AuthService.MapToDto).ToList());
+        var visibleUsers = visible.ToList();
+        // Truy vấn user chung không nạp các khu của Farm Administrator; lấy tập trung
+        // một lần để trả đủ dữ liệu và tránh phát sinh truy vấn N+1.
+        var farmAdministratorIds = visibleUsers
+            .Where(user => user.Role == UserRole.FarmAdministrator)
+            .Select(user => user.Id)
+            .ToArray();
+        var areaAssignments = farmAdministratorIds.Length == 0
+            ? new Dictionary<Guid, IReadOnlyCollection<Guid>>()
+            : await _uow.GetFarmAdministratorAreaAssignmentsAsync(farmAdministratorIds, ct);
+
+        var result = visibleUsers
+            .OrderBy(user => user.Username)
+            .Select(user =>
+            {
+                var dto = AuthService.MapToDto(user);
+                if (user.Role == UserRole.FarmAdministrator)
+                    dto = dto with
+                    {
+                        FarmingAreaIds = areaAssignments.TryGetValue(user.Id, out var managedAreaIds)
+                            ? managedAreaIds
+                            : Array.Empty<Guid>()
+                    };
+                return dto;
+            })
+            .ToList();
+
+        return ApiResponse<IEnumerable<UserDto>>.Ok(result);
     }
 
     public async Task<ApiResponse<UserDto>> GetByIdAsync(
-        Guid id, UserRole callerRole, CancellationToken ct = default)
+        Guid id, UserRole callerRole, Guid callerId, CancellationToken ct = default)
     {
         var user = await _uow.Users.GetByIdAsync(id, ct)
             ?? throw AppException.NotFound("User");
-        if (callerRole != UserRole.SystemAdministrator && !CanManage(callerRole, user.Role))
+        if (!await CanManageAsync(callerRole, user, callerId, ct))
             throw AppException.NotFound("User");
 
         return ApiResponse<UserDto>.Ok(AuthService.MapToDto(user));
@@ -49,7 +81,7 @@ public class UserAdminService : IUserAdminService
         var user = await _uow.Users.GetByIdAsync(id, ct)
             ?? throw AppException.NotFound("User");
 
-        if (!CanManage(callerRole, user.Role))
+        if (!await CanManageAsync(callerRole, user, callerId, ct))
             throw AppException.Forbidden("Bạn không có quyền quản lý tài khoản này.");
 
         // Tự khoá mình = tự đá khỏi hệ thống, không có đường vào lại ngoài DB.
@@ -74,7 +106,7 @@ public class UserAdminService : IUserAdminService
     }
 
     public async Task<ApiResponse> ResetPasswordAsync(
-        Guid id, string newPassword, UserRole callerRole, CancellationToken ct = default)
+        Guid id, string newPassword, UserRole callerRole, Guid callerId, CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(newPassword) || newPassword.Length < MinPasswordLength)
             throw AppException.BadRequest(
@@ -83,7 +115,7 @@ public class UserAdminService : IUserAdminService
         var user = await _uow.Users.GetByIdAsync(id, ct)
             ?? throw AppException.NotFound("User");
 
-        if (!CanManage(callerRole, user.Role))
+        if (!await CanManageAsync(callerRole, user, callerId, ct))
             throw AppException.Forbidden("Bạn không có quyền quản lý tài khoản này.");
 
         user.PasswordHash = BCrypt.Net.BCrypt.HashPassword(newPassword);
@@ -102,6 +134,7 @@ public class UserAdminService : IUserAdminService
         Guid id,
         UpdateAdminUserRequest request,
         UserRole callerRole,
+        Guid callerId,
         CancellationToken ct = default)
     {
         if (request is null)
@@ -112,7 +145,7 @@ public class UserAdminService : IUserAdminService
             ?? throw AppException.NotFound("User");
 
         // Check permission to manage target account
-        if (!CanManage(callerRole, user.Role))
+        if (!await CanManageAsync(callerRole, user, callerId, ct))
             throw AppException.Forbidden(
                 "You cannot manage this account.");
 
@@ -169,6 +202,7 @@ public class UserAdminService : IUserAdminService
         Guid id,
         ChangeUserRoleRequest request,
         UserRole callerRole,
+        Guid callerId,
         CancellationToken ct = default)
     {
         if (request is null)
@@ -179,7 +213,7 @@ public class UserAdminService : IUserAdminService
             ?? throw AppException.NotFound("User");
 
         // Verify permission for current target role
-        if (!CanManage(callerRole, user.Role))
+        if (!await CanManageAsync(callerRole, user, callerId, ct))
             throw AppException.Forbidden(
                 "You cannot manage this account.");
 
@@ -232,11 +266,29 @@ public class UserAdminService : IUserAdminService
 
 
     /// <summary>SystemAdministrator: mọi role. FarmAdministrator: chỉ Manager/Staff.</summary>
-    private static bool CanManage(UserRole caller, UserRole target) => caller switch
+    private async Task<bool> CanManageAsync(
+        UserRole callerRole,
+        AppUser target,
+        Guid callerId,
+        CancellationToken ct)
     {
-        UserRole.SystemAdministrator => true,
-        UserRole.FarmAdministrator =>
-            target is UserRole.FarmManager or UserRole.FarmStaff,
-        _ => false
-    };
+        if (callerRole == UserRole.SystemAdministrator)
+            return true;
+        if (!CanManageRole(callerRole, target.Role) || !target.FarmingAreaId.HasValue)
+            return false;
+
+        return (await _uow.FarmingAreas.FindAsync(
+            area => area.Id == target.FarmingAreaId.Value &&
+                    area.Administrators.Any(admin => admin.Id == callerId),
+            ct)).Any();
+    }
+
+    private async Task<HashSet<Guid>> GetManagedAreaIdsAsync(Guid callerId, CancellationToken ct) =>
+        (await _uow.FarmingAreas.FindAsync(
+            area => area.Administrators.Any(admin => admin.Id == callerId),
+            ct)).Select(area => area.Id).ToHashSet();
+
+    private static bool CanManageRole(UserRole caller, UserRole target) =>
+        caller == UserRole.FarmAdministrator &&
+        target is UserRole.FarmManager or UserRole.FarmStaff;
 }

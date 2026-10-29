@@ -46,6 +46,7 @@ public class UsersController : ControllerBase
             id,
             request,
             CallerRole(),
+            _currentUser.UserId,
             ct);
 
         return Ok(result);
@@ -65,6 +66,7 @@ public class UsersController : ControllerBase
             id,
             request,
             CallerRole(),
+            _currentUser.UserId,
             ct);
 
         return Ok(result);
@@ -74,18 +76,18 @@ public class UsersController : ControllerBase
     /// <summary>[READ] Danh sách tài khoản trong phạm vi quản lý.</summary>
     [HttpGet]
     public async Task<IActionResult> List(CancellationToken ct)
-        => Ok(await _users.ListAsync(CallerRole(), ct));
+        => Ok(await _users.ListAsync(CallerRole(), _currentUser.UserId, ct));
 
     /// <summary>[READ] Chi tiết một tài khoản.</summary>
     [HttpGet("{id:guid}")]
     public async Task<IActionResult> GetById(Guid id, CancellationToken ct)
-        => Ok(await _users.GetByIdAsync(id, CallerRole(), ct));
+        => Ok(await _users.GetByIdAsync(id, CallerRole(), _currentUser.UserId, ct));
 
-    /// <summary>[CREATE] Tạo tài khoản — cùng ma trận quyền với /api/auth/register.</summary>
+    /// <summary>[CREATE] Tạo tài khoản — giữ ma trận quyền chung và gán khu qua AuthService.</summary>
     [HttpPost]
     public async Task<IActionResult> Create(
         [FromBody] RegisterRequest request, CancellationToken ct)
-        => Ok(await _auth.RegisterAsync(request, CallerRole(), ct));
+        => Ok(await _auth.RegisterAsync(request, CallerRole(), _currentUser.UserId, ct));
 
     /// <summary>[UPDATE] Bật / tắt tài khoản. Tắt sẽ thu hồi refresh token.</summary>
     [HttpPatch("{id:guid}/status")]
@@ -97,7 +99,7 @@ public class UsersController : ControllerBase
     [HttpPost("{id:guid}/reset-password")]
     public async Task<IActionResult> ResetPassword(
         Guid id, [FromBody] ResetUserPasswordRequest request, CancellationToken ct)
-        => Ok(await _users.ResetPasswordAsync(id, request.NewPassword, CallerRole(), ct));
+        => Ok(await _users.ResetPasswordAsync(id, request.NewPassword, CallerRole(), _currentUser.UserId, ct));
 
     private UserRole CallerRole()
     {

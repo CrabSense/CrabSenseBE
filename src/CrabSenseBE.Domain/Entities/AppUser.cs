@@ -16,6 +16,11 @@ public class AppUser : BaseEntity
     /// <summary>JSON prefs cho thông báo cá nhân (Account tab).</summary>
     public string? NotificationPrefsJson { get; set; }
     public UserRole Role { get; set; } = UserRole.FarmStaff;
+    /// <summary>Khu/trang trại duy nhất được gán cho FarmManager hoặc FarmStaff.</summary>
+    public Guid? FarmingAreaId { get; set; }
+    public FarmingArea? FarmingArea { get; set; }
+    /// <summary>Các khu/trang trại được gán cho FarmAdministrator; quan hệ nhiều-nhiều.</summary>
+    public ICollection<FarmingArea> ManagedAreas { get; set; } = new List<FarmingArea>();
     public bool IsActive { get; set; } = true;
     public DateTime? LastLoginAt { get; set; }
     public string? LastLoginIp { get; set; }

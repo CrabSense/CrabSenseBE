@@ -68,6 +68,11 @@ public interface IUnitOfWork : IDisposable
 
     Task<int> SaveChangesAsync(CancellationToken ct = default);
 
+    /// <summary>Lấy các ID khu được gán cho từng Farm Administrator trong danh sách đầu vào.</summary>
+    Task<IReadOnlyDictionary<Guid, IReadOnlyCollection<Guid>>> GetFarmAdministratorAreaAssignmentsAsync(
+        IReadOnlyCollection<Guid> userIds,
+        CancellationToken ct = default);
     Task<List<CrabMortalityRecord>> GetMortalityRecordsWithDetailsAsync(CancellationToken ct = default);
     Task<Crab?> GetCrabWithDetailsAsync(Guid crabId,CancellationToken cancellationToken = default);
+    Task<long> GetNextEmployeeNumberAsync(CancellationToken ct = default);
 }

@@ -108,7 +108,9 @@ public record FarmingAreaFilter(
     string? Status = null,
     int Page = 1,
     int? PageSize = null,
-    Guid? OwnerId = null);
+    Guid? OwnerId = null,
+    /// <summary>Giới hạn danh sách vào các khu mà Farm Administrator được giao quản lý.</summary>
+    IReadOnlyCollection<Guid>? AreaIds = null);
 
 // --- FarmingRow (Dãy) ---
 public record FarmingRowDto(

@@ -55,6 +55,9 @@ public class FarmingService : IFarmingService
 
         if (filter.OwnerId.HasValue && filter.OwnerId.Value != Guid.Empty)
             q = q.Where(a => a.OwnerId == filter.OwnerId.Value);
+        // Nếu có danh sách khu được phép, chỉ trả về các khu nằm trong phạm vi đó.
+        if (filter.AreaIds is not null)
+            q = q.Where(area => filter.AreaIds.Contains(area.Id));
         if (!string.IsNullOrWhiteSpace(filter.Status))
         {
             var status = ParseFarmStatus(filter.Status);

@@ -2,8 +2,17 @@ namespace CrabSenseBE.Application.DTOs.Auth;
 
 // --- Request DTOs ---
 public record LoginRequest(string Username, string Password);
-/// <param name="Role">FarmAdministrator | FarmManager | FarmStaff</param>
-public record RegisterRequest(string Username, string Email, string Password, string FullName, string Role);
+/// <param name="Role">FarmAdministrator, FarmManager hoặc FarmStaff; không tạo SystemAdministrator qua request này.</param>
+/// <param name="FarmingAreaId">Bắt buộc với FarmManager/FarmStaff; người tạo chọn một khu/trang trại đã có.</param>
+/// <param name="FarmingAreaIds">Bắt buộc với FarmAdministrator; danh sách khu/trang trại được giao quản lý.</param>
+public record RegisterRequest(
+    string Username,
+    string Email,
+    string Password,
+    string FullName,
+    string Role,
+    Guid? FarmingAreaId = null,
+    IReadOnlyCollection<Guid>? FarmingAreaIds = null);
 public record RefreshTokenRequest(string RefreshToken);
 public record ChangePasswordRequest(string CurrentPassword, string NewPassword);
 public record SetUserActiveRequest(bool IsActive);
@@ -46,7 +55,11 @@ public record UserDto(
     string? Phone = null,
     string? EmployeeId = null,
     string? AvatarUrl = null,
-    DateTime? CreatedAt = null
+    DateTime? CreatedAt = null,
+    /// <summary>ID khu của Manager/Staff; null với role không gắn một khu trực tiếp.</summary>
+    Guid? FarmingAreaId = null,
+    /// <summary>Các khu Farm Administrator được giao quản lý.</summary>
+    IReadOnlyCollection<Guid>? FarmingAreaIds = null
 );
 
 
@@ -66,4 +79,3 @@ public record UpdateAdminUserRequest(
 public record ChangeUserRoleRequest(
     string Role
 );
-
