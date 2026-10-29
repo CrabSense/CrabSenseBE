@@ -46,7 +46,8 @@ public class AuthController : ControllerBase
         var raw = User.FindFirstValue(ClaimTypes.Role);
         if (!UserRoleParsing.TryParse(raw, out var callerRole))
             throw AppException.Forbidden("Không xác định được role của người tạo tài khoản.");
-        return Ok(await _authService.RegisterAsync(request, callerRole, ct));
+        // Truyền cả role và ID người gọi để service kiểm tra quyền cùng phạm vi khu được quản lý.
+        return Ok(await _authService.RegisterAsync(request, callerRole, _currentUser.UserId, ct));
     }
 
     /// <summary>[AUTH] Refresh token</summary>

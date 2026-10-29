@@ -42,6 +42,10 @@ public class FarmingArea : BaseEntity
 
     // Navigation
     public AppUser? Owner { get; set; }
+    /// <summary>Các Farm Administrator được gán quản lý khu này.</summary>
+    public ICollection<AppUser> Administrators { get; set; } = new List<AppUser>();
+    /// <summary>Các Manager/Staff được gán trực tiếp vào khu này.</summary>
+    public ICollection<AppUser> Users { get; set; } = new List<AppUser>();
     public ICollection<FarmingRow> Rows { get; set; } = new List<FarmingRow>();
     public ICollection<WaterSystem> WaterSystems { get; set; } = new List<WaterSystem>();
 }

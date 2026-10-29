@@ -1,9 +1,11 @@
 using CrabSenseBE.Application.Common;
 using CrabSenseBE.Application.DTOs.Farm;
 using CrabSenseBE.Application.Interfaces;
+using CrabSenseBE.Domain.Interfaces;
 using CrabSenseBE.Domain.Enums;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 
@@ -18,9 +20,15 @@ namespace CrabSenseBE.Api.Controllers;
 public class FarmingAreasController : ControllerBase
 {
     private readonly IFarmingService _service;
-    public FarmingAreasController(IFarmingService service) => _service = service;
+    private readonly IUnitOfWork _uow;
 
-    /// <summary>[READ] List / filter areas. FarmOwner is auto-scoped to JWT user when ownerId omitted.</summary>
+    public FarmingAreasController(IFarmingService service, IUnitOfWork uow)
+    {
+        _service = service;
+        _uow = uow;
+    }
+
+    /// <summary>[READ] Liệt kê khu; Farm Administrator chỉ thấy khu được gán, các role cũ vẫn lọc theo OwnerId.</summary>
     [HttpGet]
     public async Task<IActionResult> GetAll(
         [FromQuery] Guid? ownerId = null,
@@ -31,13 +39,22 @@ public class FarmingAreasController : ControllerBase
         [FromQuery] int? pageSize = null,
         CancellationToken ct = default)
     {
-        // Mobile Home passes ownerId from /auth/me; if missing, FarmOwner still only sees own areas.
-        if (ownerId is null
-            && (User.IsInRole(AppRoles.FarmAdministrator) || User.IsInRole("FarmOwner")))
-            ownerId = TryGetUserId();
+        IReadOnlyCollection<Guid>? managedAreaIds = null;
+        if (User.IsInRole(AppRoles.FarmAdministrator) || User.IsInRole("FarmOwner"))
+        {
+            // Lấy danh sách khu được gán trực tiếp cho Admin để không phụ thuộc OwnerId đơn chủ cũ.
+            var userId = TryGetUserId();
+            managedAreaIds = userId.HasValue
+                ? await _uow.FarmingAreas.Query()
+                    .Where(area => area.Administrators.Any(admin => admin.Id == userId.Value))
+                    .Select(area => area.Id)
+                    .ToListAsync(ct)
+                : Array.Empty<Guid>();
+            ownerId = null;
+        }
 
         return Ok(await _service.GetAreasAsync(
-            new FarmingAreaFilter(search, isActive, status, page, pageSize, ownerId), ct));
+            new FarmingAreaFilter(search, isActive, status, page, pageSize, ownerId, managedAreaIds), ct));
     }
 
     /// <summary>[READ] Next khu code (AREA-A01…) from all areas in DB — not sent on create</summary>

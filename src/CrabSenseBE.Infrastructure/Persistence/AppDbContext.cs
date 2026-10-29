@@ -11,7 +11,7 @@ public class AppDbContext : DbContext
     // Auth
     public DbSet<AppUser> AppUsers => Set<AppUser>();
 
-    // Farm
+    // Farm hierarchy (each FarmingArea represents one farm)
     public DbSet<FarmingArea> FarmingAreas => Set<FarmingArea>();
     public DbSet<FarmingRow> FarmingRows => Set<FarmingRow>();
     public DbSet<Box> Boxes => Set<Box>();
@@ -119,6 +119,38 @@ public class AppDbContext : DbContext
             .HasConversion(
                 v => v.ToString(),
                 v => UserRoleParsing.FromStorage(v));
+        modelBuilder.Entity<FarmingArea>()
+            .HasOne(area => area.Owner)
+            .WithMany(user => user.OwnedAreas)
+            .HasForeignKey(area => area.OwnerId)
+            .OnDelete(DeleteBehavior.Cascade);
+        // Mỗi Manager/Staff chỉ thuộc một khu; không cho xóa khu khi còn tài khoản được gán.
+        modelBuilder.Entity<AppUser>()
+            .HasOne(u => u.FarmingArea)
+            .WithMany(area => area.Users)
+            .HasForeignKey(u => u.FarmingAreaId)
+            .OnDelete(DeleteBehavior.Restrict);
+        // FarmingArea là ranh giới trang trại; mỗi khu có thể có nhiều Admin và mỗi Admin quản lý nhiều khu.
+        modelBuilder.Entity<AppUser>()
+            .HasMany(u => u.ManagedAreas)
+            .WithMany(area => area.Administrators)
+            .UsingEntity<Dictionary<string, object>>(
+                "FarmingAreaAdministrators",
+                right => right
+                    .HasOne<FarmingArea>()
+                    .WithMany()
+                    .HasForeignKey("FarmingAreaId")
+                    .OnDelete(DeleteBehavior.Cascade),
+                left => left
+                    .HasOne<AppUser>()
+                    .WithMany()
+                    .HasForeignKey("UserId")
+                    .OnDelete(DeleteBehavior.Cascade),
+                join =>
+                {
+                    join.ToTable("FarmingAreaAdministrators", "be");
+                    join.HasKey("UserId", "FarmingAreaId");
+                });
 
         modelBuilder.Entity<Alert>()
             .Property(a => a.Severity)
@@ -530,6 +562,15 @@ public class AppDbContext : DbContext
             .HasPrecision(6, 2);
         modelBuilder.Entity<ServiceApiKey>()
             .HasIndex(x => x.Prefix);
+
+        modelBuilder.HasSequence<long>("employee_id_sequence", "be")
+            .StartsAt(1)
+            .IncrementsBy(1);
+
+        modelBuilder.Entity<AppUser>()
+            .HasIndex(user => user.EmployeeId)
+            .IsUnique()
+            .HasFilter("\"EmployeeId\" IS NOT NULL");
     }
 
     public override Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)

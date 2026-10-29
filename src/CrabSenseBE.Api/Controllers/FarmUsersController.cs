@@ -21,10 +21,12 @@ namespace CrabSenseBE.Api.Controllers;
 public class FarmUsersController : ControllerBase
 {
     private readonly IAuthService _authService;
+    private readonly ICurrentUserService _currentUser;
 
-    public FarmUsersController(IAuthService authService)
+    public FarmUsersController(IAuthService authService, ICurrentUserService currentUser)
     {
         _authService = authService;
+        _currentUser = currentUser;
     }
 
     /// <summary>
@@ -63,19 +65,20 @@ public class FarmUsersController : ControllerBase
             });
         }
 
-        // Convert DTO to existing RegisterRequest.
+        // Chuyển DTO chuyên biệt sang request dùng chung; FarmingAreaId là khu được gán cho nhân viên.
         var registerRequest = new RegisterRequest(
             request.Username,
             request.Email,
             request.Password,
             request.FullName,
-            request.Role
+            request.Role,
+            request.FarmingAreaId
         );
 
-        // Always pass the actual authorized role.
         var result = await _authService.RegisterAsync(
             registerRequest,
             UserRole.FarmAdministrator,
+            _currentUser.UserId,
             ct
         );
 

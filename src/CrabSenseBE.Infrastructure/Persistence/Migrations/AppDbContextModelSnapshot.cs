@@ -23,6 +23,8 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
 
             NpgsqlModelBuilderExtensions.UseIdentityByDefaultColumns(modelBuilder);
 
+            modelBuilder.HasSequence("employee_id_sequence", "be");
+
             modelBuilder.Entity("CrabSenseBE.Domain.Entities.AiDetection", b =>
                 {
                     b.Property<Guid>("Id")
@@ -338,6 +340,9 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.Property<string>("EmployeeId")
                         .HasColumnType("text");
 
+                    b.Property<Guid?>("FarmingAreaId")
+                        .HasColumnType("uuid");
+
                     b.Property<string>("FullName")
                         .IsRequired()
                         .HasColumnType("text");
@@ -382,6 +387,12 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                         .HasColumnType("text");
 
                     b.HasKey("Id");
+
+                    b.HasIndex("EmployeeId")
+                        .IsUnique()
+                        .HasFilter("\"EmployeeId\" IS NOT NULL");
+
+                    b.HasIndex("FarmingAreaId");
 
                     b.ToTable("AppUsers", "be");
                 });
@@ -3516,6 +3527,21 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.ToTable("WaterSystems", "be");
                 });
 
+            modelBuilder.Entity("FarmingAreaAdministrators", b =>
+                {
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("FarmingAreaId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("UserId", "FarmingAreaId");
+
+                    b.HasIndex("FarmingAreaId");
+
+                    b.ToTable("FarmingAreaAdministrators", "be");
+                });
+
             modelBuilder.Entity("CrabSenseBE.Domain.Entities.AiDetection", b =>
                 {
                     b.HasOne("CrabSenseBE.Domain.Entities.Crab", "Crab")
@@ -3555,6 +3581,16 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.Navigation("AlertThreshold");
 
                     b.Navigation("Sensor");
+                });
+
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.AppUser", b =>
+                {
+                    b.HasOne("CrabSenseBE.Domain.Entities.FarmingArea", "FarmingArea")
+                        .WithMany("Users")
+                        .HasForeignKey("FarmingAreaId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.Navigation("FarmingArea");
                 });
 
             modelBuilder.Entity("CrabSenseBE.Domain.Entities.Box", b =>
@@ -4156,6 +4192,21 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.Navigation("FarmingArea");
                 });
 
+            modelBuilder.Entity("FarmingAreaAdministrators", b =>
+                {
+                    b.HasOne("CrabSenseBE.Domain.Entities.FarmingArea", null)
+                        .WithMany()
+                        .HasForeignKey("FarmingAreaId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("CrabSenseBE.Domain.Entities.AppUser", null)
+                        .WithMany()
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
             modelBuilder.Entity("CrabSenseBE.Domain.Entities.AiDetection", b =>
                 {
                     b.Navigation("Feedbacks");
@@ -4215,6 +4266,8 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
             modelBuilder.Entity("CrabSenseBE.Domain.Entities.FarmingArea", b =>
                 {
                     b.Navigation("Rows");
+
+                    b.Navigation("Users");
 
                     b.Navigation("WaterSystems");
                 });

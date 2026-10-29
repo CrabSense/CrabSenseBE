@@ -113,8 +113,10 @@ public class AuthService : IAuthService
     }
 
     public async Task<ApiResponse<UserDto>> RegisterAsync(
-        RegisterRequest request, UserRole callerRole, CancellationToken ct = default)
+        RegisterRequest request, UserRole callerRole, Guid callerId, CancellationToken ct = default)
     {
+        if (request is null)
+            throw AppException.BadRequest("Request is required.");
         if (await _uow.Users.AnyAsync(u => u.Username == request.Username, ct))
             throw AppException.Conflict("Username already taken.");
         if (await _uow.Users.AnyAsync(u => u.Email == request.Email, ct))
@@ -140,13 +142,65 @@ public class AuthService : IAuthService
             throw AppException.Forbidden(
                 "Role của bạn không được phép tạo tài khoản với role này.");
 
+        // Giữ nguyên ma trận quyền tạo tài khoản, đồng thời bắt buộc gán khu phù hợp với role.
+        FarmingArea? area = null;
+        List<FarmingArea> managedAreas = [];
+        if (role == UserRole.FarmAdministrator)
+        {
+            var areaIds = request.FarmingAreaIds?.Distinct().ToList() ?? [];
+            if (request.FarmingAreaId.HasValue || areaIds.Count == 0 || areaIds.Any(id => id == Guid.Empty))
+                throw AppException.BadRequest(
+                    "Phải chọn ít nhất một khu/trang trại cho FarmAdministrator.");
+
+            managedAreas = (await _uow.FarmingAreas.FindAsync(item => areaIds.Contains(item.Id), ct)).ToList();
+            if (managedAreas.Count != areaIds.Count)
+                throw AppException.BadRequest("Một hoặc nhiều khu/trang trại không tồn tại.");
+        }
+        else
+        {
+            if (!request.FarmingAreaId.HasValue || request.FarmingAreaId == Guid.Empty)
+                throw AppException.BadRequest("FarmingAreaId là bắt buộc cho FarmManager/FarmStaff.");
+            if (request.FarmingAreaIds is { Count: > 0 })
+                throw AppException.BadRequest("FarmManager/FarmStaff chỉ được gắn với một khu/trang trại.");
+
+            area = await _uow.FarmingAreas.GetByIdAsync(request.FarmingAreaId.Value, ct)
+                ?? throw AppException.NotFound("FarmingArea");
+            // Farm Administrator chỉ được gán nhân viên vào khu mình đang quản lý.
+            if (callerRole == UserRole.FarmAdministrator)
+            {
+                var managesArea = await _uow.FarmingAreas.AnyAsync(
+                    item => item.Id == area.Id &&
+                            item.Administrators.Any(admin => admin.Id == callerId),
+                    ct);
+                if (!managesArea)
+                    throw AppException.Forbidden(
+                        "Bạn chỉ được tạo tài khoản trong khu/trang trại mình quản lý.");
+            }
+        }
+
+        //thêm EmployeeID
+        var employeeNumber = await _uow.GetNextEmployeeNumberAsync(ct);
+        var employeeId = $"EMP-{employeeNumber:D6}";
+
+        while (await _uow.Users.AnyAsync(
+                   user => user.EmployeeId == employeeId,
+                   ct))
+        {
+            employeeNumber = await _uow.GetNextEmployeeNumberAsync(ct);
+            employeeId = $"EMP-{employeeNumber:D6}";
+        }
+
         var user = new AppUser
         {
             Username = request.Username,
             Email = request.Email,
             FullName = request.FullName,
             PasswordHash = BCrypt.Net.BCrypt.HashPassword(request.Password),
-            Role = role
+            Role = role,
+            EmployeeId = employeeId,
+            FarmingAreaId = area?.Id,
+            FarmingArea = area,
+            ManagedAreas = managedAreas
         };
 
         await _uow.Users.AddAsync(user, ct);
@@ -263,6 +317,8 @@ public class AuthService : IAuthService
         u.Phone,
         u.EmployeeId,
         u.AvatarUrl,
-        u.CreatedAt
+        u.CreatedAt,
+        u.FarmingAreaId,
+        u.ManagedAreas.Select(area => area.Id).ToList()
     );
 }

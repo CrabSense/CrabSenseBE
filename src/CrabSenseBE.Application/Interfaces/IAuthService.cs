@@ -9,8 +9,9 @@ public interface IAuthService
     Task<ApiResponse<LoginResponse>> LoginAsync(LoginRequest request, CancellationToken ct = default, string? ipAddress = null, string? userAgent = null);
     Task<ApiResponse<LoginResponse>> RefreshTokenAsync(RefreshTokenRequest request, CancellationToken ct = default);
     Task<ApiResponse> LogoutAsync(Guid userId, CancellationToken ct = default);
+    /// <summary>Tạo tài khoản theo ma trận quyền và khu/trang trại được chỉ định.</summary>
     Task<ApiResponse<UserDto>> RegisterAsync(
-        RegisterRequest request, UserRole callerRole, CancellationToken ct = default);
+        RegisterRequest request, UserRole callerRole, Guid callerId, CancellationToken ct = default);
     Task<ApiResponse> ChangePasswordAsync(Guid userId, ChangePasswordRequest request, CancellationToken ct = default);
     Task<ApiResponse<UserDto>> GetMeAsync(Guid userId, CancellationToken ct = default);
     Task<ApiResponse<UserDto>> UpdateProfileAsync(Guid userId, UpdateProfileRequest request, CancellationToken ct = default);

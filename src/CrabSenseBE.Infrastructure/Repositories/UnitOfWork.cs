@@ -17,7 +17,6 @@ public class UnitOfWork : IUnitOfWork
     private IRepository<AppUser>? _users;
     public IRepository<AppUser> Users => _users ??= new GenericRepository<AppUser>(_context);
 
-    // Farm
     private IRepository<FarmingArea>? _farmingAreas;
     public IRepository<FarmingArea> FarmingAreas => _farmingAreas ??= new GenericRepository<FarmingArea>(_context);
 
@@ -229,6 +228,33 @@ public class UnitOfWork : IUnitOfWork
 
     public Task<int> SaveChangesAsync(CancellationToken ct = default)
         => _context.SaveChangesAsync(ct);
+
+    /// <summary>Đọc các liên kết Admin–khu trong một truy vấn rồi nhóm theo tài khoản.</summary>
+    public async Task<IReadOnlyDictionary<Guid, IReadOnlyCollection<Guid>>> GetFarmAdministratorAreaAssignmentsAsync(
+        IReadOnlyCollection<Guid> userIds,
+        CancellationToken ct = default)
+    {
+        if (userIds.Count == 0)
+            return new Dictionary<Guid, IReadOnlyCollection<Guid>>();
+
+        var rows = await _context.FarmingAreas
+            .SelectMany(
+                area => area.Administrators.Where(admin => userIds.Contains(admin.Id)),
+                (area, admin) => new { UserId = admin.Id, FarmingAreaId = area.Id })
+            .ToListAsync(ct);
+
+        return rows
+            .GroupBy(row => row.UserId)
+            .ToDictionary(
+                group => group.Key,
+                group => (IReadOnlyCollection<Guid>)group.Select(row => row.FarmingAreaId).ToList());
+    }
+
+    public Task<long> GetNextEmployeeNumberAsync(CancellationToken ct = default)
+    => _context.Database
+        .SqlQueryRaw<long>(
+            "SELECT nextval('be.employee_id_sequence') AS \"Value\"")
+        .SingleAsync(ct);
 
     public async Task<List<CrabMortalityRecord>> GetMortalityRecordsWithDetailsAsync(CancellationToken ct = default)
     {
