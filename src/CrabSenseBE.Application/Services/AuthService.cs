@@ -319,6 +319,7 @@ public class AuthService : IAuthService
         u.AvatarUrl,
         u.CreatedAt,
         u.FarmingAreaId,
-        u.ManagedAreas.Select(area => area.Id).ToList()
+        // EF không Include thì collection có thể null — không được ném 500 lúc login.
+        u.ManagedAreas?.Select(area => area.Id).ToList()
     );
 }

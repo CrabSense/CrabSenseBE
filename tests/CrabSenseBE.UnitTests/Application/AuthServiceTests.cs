@@ -79,4 +79,35 @@ public class AuthServiceTests
         await Assert.ThrowsAsync<AppException>(() =>
             service.LoginAsync(new LoginRequest("testuser", "wrongpassword")));
     }
+
+    [Fact]
+    public async Task Login_WhenManagedAreasNotLoaded_DoesNotThrow500()
+    {
+        var user = new AppUser
+        {
+            Id = Guid.NewGuid(),
+            Username = "owner",
+            Email = "owner@crabsense.local",
+            PasswordHash = BCrypt.Net.BCrypt.HashPassword("Owner@123"),
+            FullName = "Chủ trại",
+            Role = UserRole.FarmAdministrator,
+            IsActive = true,
+            ManagedAreas = null!
+        };
+
+        var userRepoMock = new Mock<IRepository<AppUser>>();
+        userRepoMock.Setup(r => r.FirstOrDefaultAsync(It.IsAny<System.Linq.Expressions.Expression<Func<AppUser, bool>>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(user);
+        userRepoMock.Setup(r => r.Update(It.IsAny<AppUser>()));
+        _uowMock.Setup(u => u.Users).Returns(userRepoMock.Object);
+        _uowMock.Setup(u => u.OperationLogs).Returns(new Mock<IRepository<OperationLog>>().Object);
+        _uowMock.Setup(u => u.SaveChangesAsync(It.IsAny<CancellationToken>())).ReturnsAsync(1);
+        _jwtMock.Setup(j => j.GenerateAccessToken(It.IsAny<AppUser>())).Returns("access_token");
+        _jwtMock.Setup(j => j.GenerateRefreshToken()).Returns("refresh_token");
+
+        var result = await CreateService().LoginAsync(new LoginRequest("owner", "Owner@123"));
+
+        result.Success.Should().BeTrue();
+        result.Data!.User.Username.Should().Be("owner");
+    }
 }
