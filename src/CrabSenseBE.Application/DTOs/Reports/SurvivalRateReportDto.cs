@@ -43,7 +43,8 @@ public record SurvivalRateFilterDto
 (
     Guid? AreaId,
     DateTime? FromDate,
-    DateTime? ToDate
+    DateTime? ToDate,
+    Guid? CrabLotId = null
 );
 
 /// <summary>Dữ liệu xu hướng tỷ lệ sống theo ngày.</summary>

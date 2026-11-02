@@ -51,7 +51,7 @@ public class ReportsServiceTests
         _uow.Setup(u => u.HarvestLines).Returns(lineRepo.Object);
 
         var service = new HarvestReportService(_uow.Object);
-        var result = await service.GetHarvestReportAsync();
+        var result = await service.GetHarvestReportAsync(new HarvestReportFilterDto());
 
         result.TotalVouchers.Should().Be(2);
         result.TotalQuantity.Should().Be(8);
@@ -75,7 +75,7 @@ public class ReportsServiceTests
         _uow.Setup(u => u.HarvestLines).Returns(lineRepo.Object);
 
         var service = new HarvestReportService(_uow.Object);
-        var result = await service.GetHarvestReportAsync();
+        var result = await service.GetHarvestReportAsync(new HarvestReportFilterDto());
 
         result.TotalVouchers.Should().Be(0);
         result.TotalQuantity.Should().Be(0);
@@ -127,4 +127,120 @@ public class ReportsServiceTests
         result.AvailableLots.Should().Be(0);
         result.ShippedLots.Should().Be(0);
     }
+    [Fact]
+public async Task HarvestReport_WithCrabLotFilter_OnlyCountsLinesFromSelectedLot()
+{
+    var selectedLotId = Guid.NewGuid();
+    var otherLotId = Guid.NewGuid();
+    var voucherId = Guid.NewGuid();
+
+    var selectedCrab1 = new Crab
+    {
+        Id = Guid.NewGuid(),
+        CrabLotId = selectedLotId,
+        Code = "CRAB-001"
+    };
+
+    var selectedCrab2 = new Crab
+    {
+        Id = Guid.NewGuid(),
+        CrabLotId = selectedLotId,
+        Code = "CRAB-002"
+    };
+
+    var otherLotCrab = new Crab
+    {
+        Id = Guid.NewGuid(),
+        CrabLotId = otherLotId,
+        Code = "CRAB-003"
+    };
+
+    var harvestDate = new DateTime(2026, 10, 15);
+
+    var vouchers = new List<HarvestVoucher>
+    {
+        new()
+        {
+            Id = voucherId,
+            VoucherCode = "HV-MIXED",
+            Status = HarvestStatus.Completed,
+            HarvestDate = harvestDate,
+            TotalQuantity = 3,
+            TotalWeightKg = 6,
+            CreatedBy = Guid.NewGuid()
+        }
+    };
+
+    var lines = new List<HarvestLine>
+    {
+        new()
+        {
+            HarvestVoucherId = voucherId,
+            CrabId = selectedCrab1.Id,
+            WeightGram = 1800,
+            Grade = "M",
+            IsSoftshell = true
+        },
+        new()
+        {
+            HarvestVoucherId = voucherId,
+            CrabId = selectedCrab2.Id,
+            WeightGram = 2200,
+            Grade = "L",
+            IsSoftshell = false
+        },
+        new()
+        {
+            HarvestVoucherId = voucherId,
+            CrabId = otherLotCrab.Id,
+            WeightGram = 2000,
+            Grade = "S",
+            IsSoftshell = true
+        }
+    };
+
+    var voucherRepo = new Mock<IRepository<HarvestVoucher>>();
+    voucherRepo
+        .Setup(r => r.FindAsync(
+            It.IsAny<System.Linq.Expressions.Expression<Func<HarvestVoucher, bool>>>(),
+            It.IsAny<CancellationToken>()))
+        .ReturnsAsync(vouchers);
+
+    var lineRepo = new Mock<IRepository<HarvestLine>>();
+    lineRepo
+        .Setup(r => r.GetAllAsync(It.IsAny<CancellationToken>()))
+        .ReturnsAsync(lines);
+
+    var crabRepo = new Mock<IRepository<Crab>>();
+    crabRepo
+        .Setup(r => r.FindAsync(
+            It.IsAny<System.Linq.Expressions.Expression<Func<Crab, bool>>>(),
+            It.IsAny<CancellationToken>()))
+        .ReturnsAsync(new List<Crab> { selectedCrab1, selectedCrab2 });
+
+    _uow.Setup(u => u.HarvestVouchers).Returns(voucherRepo.Object);
+    _uow.Setup(u => u.HarvestLines).Returns(lineRepo.Object);
+    _uow.Setup(u => u.Crabs).Returns(crabRepo.Object);
+
+    var service = new HarvestReportService(_uow.Object);
+
+    var result = await service.GetHarvestReportAsync(
+        new HarvestReportFilterDto
+        {
+            CrabLotId = selectedLotId
+        });
+
+    result.TotalVouchers.Should().Be(1);
+    result.TotalQuantity.Should().Be(2);
+    result.TotalWeightKg.Should().Be(4m);
+
+    result.ByDate.Should().ContainSingle();
+    result.ByDate[0].Quantity.Should().Be(2);
+    result.ByDate[0].WeightKg.Should().Be(4m);
+
+    result.ByGrade.Should().HaveCount(2);
+    result.ByGrade.Should().NotContain(grade => grade.Grade == "S");
+
+    result.Softshell.WeightKg.Should().Be(1.8m);
+}
 }

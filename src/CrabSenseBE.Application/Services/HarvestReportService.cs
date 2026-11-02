@@ -2,6 +2,8 @@ using CrabSenseBE.Application.DTOs.Reports;
 using CrabSenseBE.Application.Interfaces;
 using CrabSenseBE.Domain.Enums;
 using CrabSenseBE.Domain.Interfaces;
+using CrabSenseBE.Application.Common;
+
 
 namespace CrabSenseBE.Application.Services;
 
@@ -15,6 +17,7 @@ public class HarvestReportService : IHarvestReportService
     }
 
     public async Task<HarvestReportDto> GetHarvestReportAsync(
+        HarvestReportFilterDto filter,
         CancellationToken cancellationToken = default)
     {
         // 1. Lấy các phiếu thu hoạch đã hoàn thành
@@ -38,30 +41,78 @@ public class HarvestReportService : IHarvestReportService
             .Where(line => voucherIds.Contains(line.HarvestVoucherId))
             .ToList();
 
+        // Lọc theo lô cua nhập nếu client truyền CrabLotId.
+        if (filter.CrabLotId.HasValue)
+        {
+            var crabIdsInLot = (await _unitOfWork.Crabs.FindAsync(
+                    crab => crab.CrabLotId == filter.CrabLotId.Value,
+                    cancellationToken))
+                .Select(crab => crab.Id)
+                .ToHashSet();
+
+            // Chỉ giữ các dòng xác định được cua và cua thuộc lô đã chọn.
+            lines = lines
+                .Where(line => line.CrabId.HasValue
+                            && crabIdsInLot.Contains(line.CrabId.Value))
+                .ToList();
+
+            // Chỉ giữ phiếu có ít nhất một dòng thuộc lô.
+            var matchingVoucherIds = lines
+                .Select(line => line.HarvestVoucherId)
+                .ToHashSet();
+
+            vouchers = vouchers
+                .Where(voucher => matchingVoucherIds.Contains(voucher.Id))
+                .ToList();
+        }
+
         // 3. Thống kê tổng quan
+        //Khi không chọn lô, báo cáo giữ nguyên tổng cũ. Khi chọn lô, tổng được tính từ các dòng đã lọc.
         var totalVouchers = vouchers.Count;
+        var totalQuantity = filter.CrabLotId.HasValue
+            ? lines.Count
+            : vouchers.Sum(voucher => voucher.TotalQuantity);
 
-        var totalQuantity = vouchers.Sum(
-            voucher => voucher.TotalQuantity);
-
-        var totalWeightKg = vouchers.Sum(
-            voucher => voucher.TotalWeightKg);
+        var totalWeightKg = filter.CrabLotId.HasValue
+            ? lines.Sum(line => line.WeightGram) / 1000m
+            : vouchers.Sum(voucher => voucher.TotalWeightKg);
 
         // 4. Thống kê theo ngày
-        var byDate = vouchers
-            .GroupBy(voucher => voucher.HarvestDate.Date)
-            .OrderBy(group => group.Key)
-            .Select(group => new HarvestByDateDto
-            {
-                Date = group.Key,
+        var voucherDateById = vouchers.ToDictionary(
+        voucher => voucher.Id,
+        voucher => voucher.HarvestDate.Date);
 
-                Quantity = group.Sum(
-                    voucher => voucher.TotalQuantity),
+        List<HarvestByDateDto> byDate;
 
-                WeightKg = group.Sum(
-                    voucher => voucher.TotalWeightKg)
-            })
-            .ToList();
+        if (filter.CrabLotId.HasValue)
+        {
+            byDate = lines
+                .GroupBy(line => voucherDateById[line.HarvestVoucherId])
+                .OrderBy(group => group.Key)
+                .Select(group => new HarvestByDateDto
+                {
+                    Date = group.Key,
+                    Quantity = group.Count(),
+                    WeightKg = group.Sum(line => line.WeightGram) / 1000m
+                })
+                .ToList();
+        }
+        else
+        {
+            byDate = vouchers.GroupBy(voucher => voucher.HarvestDate.Date)
+                    .OrderBy(group => group.Key)
+                    .Select(group => new HarvestByDateDto
+                    {
+                        Date = group.Key,
+
+                        Quantity = group.Sum(
+                            voucher => voucher.TotalQuantity),
+
+                        WeightKg = group.Sum(
+                            voucher => voucher.TotalWeightKg)
+                    })
+                    .ToList();
+        }
 
         // 5. Thống kê theo Grade
         var byGrade = lines
@@ -102,6 +153,7 @@ public class HarvestReportService : IHarvestReportService
         };
     }
 
+
     /// <summary>
     /// Báo cáo sản lượng theo ngày, tuần hoặc tháng.
     ///
@@ -122,7 +174,7 @@ public class HarvestReportService : IHarvestReportService
 
         IEnumerable<Domain.Entities.HarvestVoucher> vouchers =
             completedVouchers;
-
+        
         // Lọc theo khu nuôi nếu client truyền farmingAreaId.
         if (filter.FarmingAreaId.HasValue)
         {
@@ -158,35 +210,70 @@ public class HarvestReportService : IHarvestReportService
             .ToHashSet();
 
         var lines = (await _unitOfWork.HarvestLines.FindAsync(
-    line => voucherIds.Contains(line.HarvestVoucherId),
-    cancellationToken)).ToList();
+            line => voucherIds.Contains(line.HarvestVoucherId),
+            cancellationToken)).ToList();
+
+        // Lọc theo lô cua nhập nếu client truyền CrabLotId.
+        if (filter.CrabLotId.HasValue)
+        {
+            var crabIdsInLot = (await _unitOfWork.Crabs.FindAsync(
+                    crab => crab.CrabLotId == filter.CrabLotId.Value,
+                    cancellationToken))
+                .Select(crab => crab.Id)
+                .ToHashSet();
+
+            // Chỉ giữ dòng thu hoạch có cua thuộc lô đang chọn.
+            lines = lines
+                .Where(line => line.CrabId.HasValue
+                            && crabIdsInLot.Contains(line.CrabId.Value))
+                .ToList();
+
+            // Chỉ giữ phiếu có ít nhất một dòng thuộc lô.
+            var matchingVoucherIds = lines
+                .Select(line => line.HarvestVoucherId)
+                .ToHashSet();
+
+            voucherList = voucherList
+                .Where(voucher => matchingVoucherIds.Contains(voucher.Id))
+                .ToList();
+        }
 
         // Gom phiếu theo ngày, tuần hoặc tháng.
+        // Gom sản lượng theo ngày, tuần hoặc tháng.
         var byPeriod = voucherList
             .GroupBy(voucher =>
-                GetPeriodStart(
-                    voucher.HarvestDate,
-                    filter.Period))
+                GetPeriodStart(voucher.HarvestDate, filter.Period))
             .OrderBy(group => group.Key)
             .Select(group =>
             {
                 var periodStart = group.Key;
 
+                // Tìm các dòng thuộc những phiếu trong kỳ hiện tại.
+                var periodVoucherIds = group
+                    .Select(voucher => voucher.Id)
+                    .ToHashSet();
+
+                var periodLines = lines
+                    .Where(line => periodVoucherIds.Contains(line.HarvestVoucherId))
+                    .ToList();
+
                 return new HarvestPeriodItemDto
                 {
                     PeriodStart = periodStart,
+                    PeriodEnd = GetPeriodEnd(periodStart, filter.Period),
 
-                    PeriodEnd = GetPeriodEnd(
-                        periodStart,
-                        filter.Period),
-
+                    // VoucherCount vẫn đếm phiếu có ít nhất một dòng thuộc lô.
                     VoucherCount = group.Count(),
 
-                    Quantity = group.Sum(
-                        voucher => voucher.TotalQuantity),
+                    // Khi lọc lô, chỉ tính các dòng cua thuộc lô đã chọn.
+                    // Không lọc lô thì giữ tổng số liệu gốc của cả phiếu.
+                    Quantity = filter.CrabLotId.HasValue
+                        ? periodLines.Count
+                        : group.Sum(voucher => voucher.TotalQuantity),
 
-                    WeightKg = group.Sum(
-                        voucher => voucher.TotalWeightKg)
+                    WeightKg = filter.CrabLotId.HasValue
+                        ? periodLines.Sum(line => line.WeightGram) / 1000m
+                        : group.Sum(voucher => voucher.TotalWeightKg)
                 };
             })
             .ToList();
@@ -213,11 +300,13 @@ public class HarvestReportService : IHarvestReportService
         {
             TotalVouchers = voucherList.Count,
 
-            TotalQuantity = voucherList.Sum(
-                voucher => voucher.TotalQuantity),
+            TotalQuantity = filter.CrabLotId.HasValue
+                ? lines.Count
+                : voucherList.Sum(voucher => voucher.TotalQuantity),
 
-            TotalWeightKg = voucherList.Sum(
-                voucher => voucher.TotalWeightKg),
+            TotalWeightKg = filter.CrabLotId.HasValue
+                ? lines.Sum(line => line.WeightGram) / 1000m
+                : voucherList.Sum(voucher => voucher.TotalWeightKg),
 
             SoftshellWeightKg = softshellWeightKg,
 
@@ -247,13 +336,13 @@ public class HarvestReportService : IHarvestReportService
             filter.FromDate.Value.Date >
             filter.ToDate.Value.Date)
         {
-            throw new ArgumentException(
+            throw AppException.BadRequest(
                 "FromDate cannot be greater than ToDate.");
         }
 
         if (!Enum.IsDefined(filter.Period))
         {
-            throw new ArgumentException(
+            throw AppException.BadRequest(
                 "Period must be Day, Week or Month.");
         }
 
@@ -265,7 +354,7 @@ public class HarvestReportService : IHarvestReportService
 
             if (!areaExists)
             {
-                throw new ArgumentException(
+                throw AppException.BadRequest(
                     "FarmingAreaId does not exist.");
             }
         }
@@ -277,10 +366,22 @@ public class HarvestReportService : IHarvestReportService
 
             if (rangeDays > 365)
             {
-                throw new ArgumentException(
+                throw AppException.BadRequest(
                     "Date range cannot exceed 365 days.");
             }
         }
+
+        // Kiểm tra lô cua (nếu có) trước khi dùng làm bộ lọc.
+        if (filter.CrabLotId.HasValue)
+        {
+            var lotExists = await _unitOfWork.CrabLots.AnyAsync(
+                lot => lot.Id == filter.CrabLotId.Value,
+                cancellationToken);
+
+            if (!lotExists)
+                throw AppException.BadRequest("CrabLotId does not exist.");
+        }
+
     }
 
     /// <summary>

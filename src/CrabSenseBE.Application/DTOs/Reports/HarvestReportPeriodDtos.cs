@@ -41,6 +41,11 @@ public sealed record HarvestReportFilterDto
     /// Null nghĩa là lấy toàn bộ khu.
     /// </summary>
     public Guid? FarmingAreaId { get; init; }
+
+    /// <summary>
+    /// Lọc theo lô cua nhập. Null nghĩa là lấy tất cả lô.
+    /// </summary>
+    public Guid? CrabLotId { get; init; }
 }
 
 /// <summary>

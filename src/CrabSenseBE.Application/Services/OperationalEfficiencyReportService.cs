@@ -52,6 +52,18 @@ public class OperationalEfficiencyReportService
             throw AppException.BadRequest(
                 "FromDate cannot be greater than ToDate.");
         }
+
+        if (filter.CrabLotId.HasValue)
+        {
+            var lotExists = await _uow.CrabLots.AnyAsync(
+                lot => lot.Id == filter.CrabLotId.Value,
+                cancellationToken);
+
+            if (!lotExists)
+            {
+                throw AppException.BadRequest("Crab lot does not exist.");
+            }
+        }
         // ============================================================
         // 1. XÁC ĐỊNH KHOẢNG THỜI GIAN
         // ============================================================
@@ -85,6 +97,8 @@ public class OperationalEfficiencyReportService
         var crabs = allCrabs
             .Where(c => c.StockedAt >= fromDate
                      && c.StockedAt < toDate)
+            .Where(c => !filter.CrabLotId.HasValue
+             || c.CrabLotId == filter.CrabLotId.Value)
             .ToList();
 
         // ============================================================

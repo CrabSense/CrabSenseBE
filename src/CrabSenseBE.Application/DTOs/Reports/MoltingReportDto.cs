@@ -32,5 +32,6 @@ public record MoltingReportFilterDto
 (
     Guid? AreaId,
     DateTime? FromDate,
-    DateTime? ToDate
+    DateTime? ToDate,
+    Guid? CrabLotId = null
 );
