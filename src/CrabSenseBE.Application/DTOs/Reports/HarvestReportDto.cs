@@ -33,7 +33,3 @@ public class HarvestSoftshellDto
 {
     public decimal WeightKg { get; set; }
 }
-/// <summary>
-/// Bộ lọc báo cáo thu hoạch theo lô cua nhập.
-/// </summary>
-public record HarvestReportFilterDto(Guid? CrabLotId);

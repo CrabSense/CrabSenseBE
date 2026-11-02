@@ -68,5 +68,6 @@ public record InventoryTrendDto
 public record InventoryReportFilterDto
 (
     DateTime? AsOfDate,         // Xem tồn kho tại thời điểm
-    int? ExpiryWarningDays = 30 // Cảnh báo hết hạn trong X ngày
+    int? ExpiryWarningDays = 30, // Cảnh báo hết hạn trong X ngày
+    Guid? CrabLotId = null
 );
