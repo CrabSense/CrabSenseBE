@@ -15,6 +15,7 @@ public class HarvestReportService : IHarvestReportService
     }
 
     public async Task<HarvestReportDto> GetHarvestReportAsync(
+        HarvestReportFilterDto filter,
         CancellationToken cancellationToken = default)
     {
         // 1. Lấy các phiếu thu hoạch đã hoàn thành

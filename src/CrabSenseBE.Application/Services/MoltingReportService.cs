@@ -21,7 +21,7 @@ public class MoltingReportService : IMoltingReportService
     }
 
     /// <summary>
-    /// Báo cáo molting với filter thời gian + trend.
+    /// Báo cáo molting với filter thời gian + trend + lô cua.
     /// </summary>
     public async Task<MoltingReportDto> GetMoltingReportAsync(
         MoltingReportFilterDto filter,
@@ -50,7 +50,20 @@ public class MoltingReportService : IMoltingReportService
 
             if (!areaExists)
             {
-                throw AppException.NotFound("Farming area");
+                throw AppException.BadRequest("Farming area does not exist.");
+            }
+        }
+
+        if (filter.CrabLotId.HasValue)
+        {
+            var lotExists = await _uow.CrabLots.AnyAsync(
+                lot => lot.Id == filter.CrabLotId.Value,
+                ct);
+
+            if (!lotExists)
+            {
+                throw AppException.BadRequest(
+                    "Crab lot does not exist.");
             }
         }
         // 1. Lấy tất cả cua kèm allocations
@@ -61,6 +74,14 @@ public class MoltingReportService : IMoltingReportService
                     .ThenInclude(b => b!.FarmingRow)
                         .ThenInclude(r => r!.FarmingArea)
             .ToListAsync(ct);
+
+        // Kiểm tra lô nếu người gọi có truyền bộ lọc.
+        if (filter.CrabLotId.HasValue)
+        {
+            crabs = crabs
+                .Where(crab => crab.CrabLotId == filter.CrabLotId.Value)
+                .ToList();
+        }
 
         // 2. Lấy MoltingRecords
         var moltingRecords = await _uow.MoltingRecords.GetAllAsync(ct);

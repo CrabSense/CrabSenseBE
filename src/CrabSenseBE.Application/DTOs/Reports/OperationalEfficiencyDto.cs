@@ -2,11 +2,13 @@ namespace CrabSenseBE.Application.DTOs.Reports;
 
 /// <summary>
 /// Bộ lọc cho báo cáo hiệu quả vận hành.
+/// Lọc theo thời điểm thả cua và lô cua nhập.
 /// </summary>
 public record OperationalEfficiencyFilterDto
 (
     DateTime? FromDate,
-    DateTime? ToDate
+    DateTime? ToDate,
+    Guid? CrabLotId = null
 );
 
 /// <summary>

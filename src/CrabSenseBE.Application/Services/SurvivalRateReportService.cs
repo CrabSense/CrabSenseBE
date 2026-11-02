@@ -94,6 +94,17 @@ public class SurvivalRateReportService
             }
         }
 
+        // Kiểm tra lô cua (nếu có) trước khi dùng làm bộ lọc.
+        if (filter.CrabLotId.HasValue)
+        {
+            var lotExists = await _uow.CrabLots.AnyAsync(
+                lot => lot.Id == filter.CrabLotId.Value,
+                cancellationToken);
+
+            if (!lotExists)
+                throw AppException.BadRequest("Crab lot does not exist.");
+        }
+
         // ============================================================
         // 2. XÂY DỰNG QUERY LẤY DỮ LIỆU CUA
         // ============================================================
@@ -168,6 +179,12 @@ public class SurvivalRateReportService
                 c.StockedAt < toDateExclusive);
         }
 
+        // Lọc cua thuộc lô được chọn; các điều kiện ngày vẫn kết hợp bằng AND.
+        if (filter.CrabLotId.HasValue)
+        {
+            query = query.Where(crab =>
+                crab.CrabLotId == filter.CrabLotId.Value);
+        }
         // ============================================================
         // 4. LẤY DỮ LIỆU TỪ DATABASE
         // ============================================================

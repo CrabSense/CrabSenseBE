@@ -36,10 +36,11 @@ public class ReportsController : ControllerBase
     /// </summary>
     [HttpGet("harvest")]
     public async Task<IActionResult> GetHarvestReport(
+        [FromQuery] HarvestReportFilterDto filter,
         CancellationToken cancellationToken)
     {
         var result =
-            await _harvestReportService.GetHarvestReportAsync(
+            await _harvestReportService.GetHarvestReportAsync(filter,
                 cancellationToken);
 
         return Ok(result);
@@ -129,10 +130,11 @@ public class ReportsController : ControllerBase
     /// </summary>
     [HttpGet("molting")]
     public async Task<IActionResult> GetMoltingReport(
+        [FromQuery] MoltingReportFilterDto filter,
         CancellationToken cancellationToken)
     {
         var result = await _moltingReportService
-            .GetMoltingReportAsync(cancellationToken);
+            .GetMoltingReportAsync(filter, cancellationToken);
 
         return Ok(new
         {
