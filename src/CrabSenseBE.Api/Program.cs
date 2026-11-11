@@ -1,11 +1,9 @@
 using CrabSenseBE.Api.Middleware;
+using CrabSenseBE.Api.Authentication;
 using CrabSenseBE.Application;
 using CrabSenseBE.Infrastructure;
-using Microsoft.AspNetCore.Authentication.JwtBearer;
-using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
 using Serilog;
-using System.Text;
 using CrabSenseBE.Api.Services;
 using CrabSenseBE.Application.Interfaces;
 
@@ -32,36 +30,7 @@ builder.Services.AddScoped<ICurrentUserService, CurrentUserService>();
 builder.Services.AddApplication(builder.Configuration);
 
 // ─── JWT Authentication ─────────────────────────────────────────────────────
-var jwtSecret = builder.Configuration["Jwt:Secret"]
-    ?? throw new InvalidOperationException("Jwt:Secret is required");
-// Không cho chạy với secret placeholder/ngắn: kẻ tấn công biết secret là tự ký được token admin.
-if (jwtSecret.Length < 32
-    || jwtSecret.Contains("CHANGE_ME", StringComparison.OrdinalIgnoreCase))
-{
-    throw new InvalidOperationException(
-        "Jwt:Secret must be at least 32 characters and must not be a CHANGE_ME placeholder.");
-}
-
-builder.Services
-    .AddAuthentication(options =>
-    {
-        options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
-        options.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
-    })
-    .AddJwtBearer(options =>
-    {
-        options.TokenValidationParameters = new TokenValidationParameters
-        {
-            ValidateIssuerSigningKey = true,
-            IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtSecret)),
-            ValidateIssuer = true,
-            ValidIssuer = builder.Configuration["Jwt:Issuer"],
-            ValidateAudience = true,
-            ValidAudience = builder.Configuration["Jwt:Audience"],
-            ValidateLifetime = true,
-            ClockSkew = TimeSpan.Zero
-        };
-    });
+builder.Services.AddCrabSenseJwtAuthentication(builder.Configuration);
 
 builder.Services.AddAuthorization();
 

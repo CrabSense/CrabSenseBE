@@ -228,6 +228,7 @@ public class UserAdminServiceTests
         target.IsActive.Should().BeFalse();
         target.RefreshToken.Should().BeNull();
         target.RefreshTokenExpiry.Should().BeNull();
+        target.TokenVersion.Should().Be(1);
     }
 
     [Fact]
@@ -266,6 +267,27 @@ public class UserAdminServiceTests
         target.PasswordHash.Should().NotBe("hash");
         BCrypt.Net.BCrypt.Verify("NewSecret!123", target.PasswordHash).Should().BeTrue();
         target.RefreshToken.Should().BeNull();
+        target.TokenVersion.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task ChangingRole_revokes_existing_access_and_refresh_tokens()
+    {
+        var admin = AddFarmAdministrator();
+        var staff = Add(UserRole.FarmStaff);
+
+        var result = await Create().ChangeRoleAsync(
+            staff.Id,
+            new CrabSenseBE.Application.DTOs.Auth.ChangeUserRoleRequest(
+                nameof(UserRole.FarmManager), null),
+            UserRole.FarmAdministrator,
+            admin.Id);
+
+        result.Success.Should().BeTrue();
+        staff.Role.Should().Be(UserRole.FarmManager);
+        staff.TokenVersion.Should().Be(1);
+        staff.RefreshToken.Should().BeNull();
+        staff.RefreshTokenExpiry.Should().BeNull();
     }
 
     [Fact]

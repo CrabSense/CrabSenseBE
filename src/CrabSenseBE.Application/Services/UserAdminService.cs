@@ -122,6 +122,8 @@ public class UserAdminService : IUserAdminService
         if (user.Id == callerId && !isActive)
             throw AppException.BadRequest("Không thể tự vô hiệu hoá tài khoản đang đăng nhập.");
 
+        if (user.IsActive != isActive)
+            user.TokenVersion++;
         user.IsActive = isActive;
         user.UpdatedAt = DateTime.UtcNow;
         if (!isActive)
@@ -158,6 +160,7 @@ public class UserAdminService : IUserAdminService
         user.PasswordHash = BCrypt.Net.BCrypt.HashPassword(newPassword);
         user.RefreshToken = null;
         user.RefreshTokenExpiry = null;
+        user.TokenVersion++;
         user.UpdatedAt = DateTime.UtcNow;
 
         _uow.Users.Update(user);
@@ -298,6 +301,7 @@ public class UserAdminService : IUserAdminService
         // Invalidate the refresh token after role change.
         user.RefreshToken = null;
         user.RefreshTokenExpiry = null;
+        user.TokenVersion++;
 
         _uow.Users.Update(user);
         await ConfigAudit.WriteAsync(

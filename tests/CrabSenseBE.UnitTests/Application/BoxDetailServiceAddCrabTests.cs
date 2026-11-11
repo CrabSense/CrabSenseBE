@@ -40,7 +40,9 @@ public class BoxDetailServiceAddCrabTests
         bool lotAllowsArea = true,
         Guid? boxAreaId = null,
         ICurrentUserService? currentUser = null,
-        Guid? assignedAreaId = null)
+        Guid? assignedAreaId = null,
+        IReadOnlyCollection<CrabLot>? configuredLots = null,
+        IReadOnlyCollection<Guid>? lotIdsAllowedInArea = null)
     {
         var rowId = Guid.NewGuid();
         var areaId = boxAreaId ?? Guid.NewGuid();
@@ -86,10 +88,19 @@ public class BoxDetailServiceAddCrabTests
             ClosedAt = closedAt,
             Status = status
         };
-        lots.Setup(r => r.GetByIdAsync(LotId, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(lot);
+        var lotTable = configuredLots?.ToList() ?? [lot];
+        lots.Setup(r => r.GetByIdAsync(
+                It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((Guid id, CancellationToken _) =>
+                lotTable.FirstOrDefault(item => item.Id == id));
         lots.Setup(r => r.GetAllAsync(It.IsAny<CancellationToken>()))
-            .ReturnsAsync([lot]);
+            .ReturnsAsync(() => lotTable.ToList());
+        lots.Setup(r => r.FindAsync(
+                It.IsAny<Expression<Func<CrabLot, bool>>>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync((
+                Expression<Func<CrabLot, bool>> predicate,
+                CancellationToken _) => lotTable.Where(predicate.Compile()).ToList());
 
         var allocations = new Mock<IRepository<CrabBoxAllocation>>();
         allocations.Setup(r => r.AddAsync(
@@ -115,15 +126,31 @@ public class BoxDetailServiceAddCrabTests
             .ReturnsAsync(area);
         areas.Setup(r => r.Query()).Returns(Array.Empty<FarmingArea>().AsQueryable());
         var lotAreas = new Mock<IRepository<CrabLotArea>>();
+        var allowedLotIds = lotAllowsArea
+            ? (lotIdsAllowedInArea ?? lotTable.Select(item => item.Id)).ToHashSet()
+            : new HashSet<Guid>();
         lotAreas.Setup(r => r.AnyAsync(
                 It.IsAny<Expression<Func<CrabLotArea, bool>>>(),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync((Expression<Func<CrabLotArea, bool>> predicate, CancellationToken _) =>
-                lotAllowsArea && predicate.Compile()(new CrabLotArea
-                {
-                    CrabLotId = LotId,
-                    FarmingAreaId = areaId
-                }));
+                allowedLotIds.Any(lotId => predicate.Compile()(new CrabLotArea
+                    {
+                        CrabLotId = lotId,
+                        FarmingAreaId = areaId
+                    })));
+        lotAreas.Setup(r => r.FindAsync(
+                It.IsAny<Expression<Func<CrabLotArea, bool>>>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync((
+                Expression<Func<CrabLotArea, bool>> predicate,
+                CancellationToken _) => allowedLotIds
+                    .Select(lotId => new CrabLotArea
+                    {
+                        CrabLotId = lotId,
+                        FarmingAreaId = areaId
+                    })
+                    .Where(predicate.Compile())
+                    .ToList());
         _uow.Setup(u => u.Boxes).Returns(boxes.Object);
         _uow.Setup(u => u.Crabs).Returns(crabs.Object);
         _uow.Setup(u => u.CrabLots).Returns(lots.Object);
@@ -167,6 +194,25 @@ public class BoxDetailServiceAddCrabTests
     private static MobileAddCrabRequest Minimal(string? condition = null, string? molt = null) =>
         new(CrabLotId: LotId, WeightGram: 200m, Condition: condition, MoltingStage: molt);
 
+    private static MobileAddCrabRequest AutoSelect() =>
+        new(CrabLotId: null, WeightGram: 200m);
+
+    private static CrabLot Lot(
+        Guid id,
+        int quantity = 20,
+        DateTime? closedAt = null,
+        string status = "Pending",
+        DateTime? createdAt = null) =>
+        new()
+        {
+            Id = id,
+            LotCode = $"LOT-{id:N}",
+            Quantity = quantity,
+            ClosedAt = closedAt,
+            Status = status,
+            CreatedAt = createdAt ?? DateTime.UtcNow
+        };
+
     [Fact]
     public async Task AddCrab_OpenLot_Succeeds()
     {
@@ -176,6 +222,119 @@ public class BoxDetailServiceAddCrabTests
         result.Success.Should().BeTrue();
         _saved.Should().NotBeNull();
         _saveCalls.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task AddCrab_WithoutLot_AutoSelectsTheOnlyValidLotInBoxArea()
+    {
+        var selectedLot = Lot(Guid.NewGuid());
+        var boxId = Guid.NewGuid();
+
+        var result = await Create(
+            boxId,
+            configuredLots: [selectedLot],
+            lotIdsAllowedInArea: [selectedLot.Id])
+            .AddCrabAsync(boxId, AutoSelect());
+
+        result.Success.Should().BeTrue();
+        _saved!.CrabLotId.Should().Be(selectedLot.Id);
+    }
+
+    [Fact]
+    public async Task AddCrab_WithoutLot_RequiresSelectionWhenMultipleLotsAreValid()
+    {
+        var first = Lot(Guid.NewGuid());
+        var second = Lot(Guid.NewGuid());
+        var boxId = Guid.NewGuid();
+        var service = Create(
+            boxId,
+            configuredLots: [first, second],
+            lotIdsAllowedInArea: [first.Id, second.Id]);
+
+        var act = () => service.AddCrabAsync(boxId, AutoSelect());
+
+        var error = await act.Should().ThrowAsync<CrabSenseBE.Application.Common.AppException>();
+        error.Which.StatusCode.Should().Be(400);
+        error.Which.Message.Should().Contain("chọn CrabLotId");
+        _saved.Should().BeNull();
+        _saveCalls.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task AddCrab_WithoutLot_RejectsWhenAreaHasNoValidLot()
+    {
+        var boxId = Guid.NewGuid();
+        var service = Create(
+            boxId,
+            configuredLots: Array.Empty<CrabLot>(),
+            lotIdsAllowedInArea: Array.Empty<Guid>());
+
+        var act = () => service.AddCrabAsync(boxId, AutoSelect());
+
+        var error = await act.Should().ThrowAsync<CrabSenseBE.Application.Common.AppException>();
+        error.Which.StatusCode.Should().Be(400);
+        error.Which.Message.Should().Contain("Không có Crab Lot");
+        _saved.Should().BeNull();
+        _saveCalls.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task AddCrab_WithoutLot_DoesNotSelectOlderLotFromAnotherArea()
+    {
+        var foreignOldest = Lot(
+            Guid.NewGuid(), createdAt: DateTime.UtcNow.AddYears(-1));
+        var local = Lot(Guid.NewGuid(), createdAt: DateTime.UtcNow);
+        var boxId = Guid.NewGuid();
+
+        await Create(
+            boxId,
+            configuredLots: [foreignOldest, local],
+            lotIdsAllowedInArea: [local.Id])
+            .AddCrabAsync(boxId, AutoSelect());
+
+        _saved!.CrabLotId.Should().Be(local.Id);
+    }
+
+    [Fact]
+    public async Task AddCrab_WithoutLot_IgnoresClosedLot()
+    {
+        var closed = Lot(Guid.NewGuid(), closedAt: DateTime.UtcNow);
+        var boxId = Guid.NewGuid();
+        var service = Create(
+            boxId,
+            configuredLots: [closed],
+            lotIdsAllowedInArea: [closed.Id]);
+
+        var act = () => service.AddCrabAsync(boxId, AutoSelect());
+
+        await act.Should().ThrowAsync<CrabSenseBE.Application.Common.AppException>();
+        _saved.Should().BeNull();
+        _saveCalls.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task AddCrab_WithoutLot_IgnoresLotWithoutRemainingCapacity()
+    {
+        var full = Lot(Guid.NewGuid(), quantity: 1);
+        _table.Add(new Crab
+        {
+            Id = Guid.NewGuid(),
+            CrabLotId = full.Id,
+            Code = "CRAB-EXISTING",
+            Status = CrabStatus.Dead
+        });
+        var boxId = Guid.NewGuid();
+        var service = Create(
+            boxId,
+            configuredLots: [full],
+            lotIdsAllowedInArea: [full.Id]);
+
+        var act = () => service.AddCrabAsync(boxId, AutoSelect());
+
+        await act.Should().ThrowAsync<CrabSenseBE.Application.Common.AppException>();
+        _saved.Should().BeNull();
+        _table.Should().ContainSingle();
+        _saveCalls.Should().Be(0);
     }
 
     [Fact]

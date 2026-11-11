@@ -136,7 +136,8 @@ public record SubmitManualInspectionRequest(
     bool? AiAgreement = null);
 
 /// <summary>
-/// Mobile-friendly add crab under a box (auto-picks CrabLot when omitted).
+/// Mobile-friendly add crab under a box.
+/// Khi bỏ CrabLotId, hệ thống chỉ tự chọn nếu khu của hộp có đúng một lô hợp lệ.
 /// Owner fields (gender/type/condition/notes/carapace) mirror desktop CreateCrabRequest —
 /// they were previously absent, so mobile input was silently dropped by the binder.
 /// </summary>

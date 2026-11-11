@@ -14,12 +14,17 @@ public class JwtService : IJwtService
     private readonly string _secret;
     private readonly string _issuer;
     private readonly string _audience;
+    private readonly int _expiryMinutes;
 
     public JwtService(IConfiguration config)
     {
         _secret = config["Jwt:Secret"] ?? throw new InvalidOperationException("Jwt:Secret not configured");
         _issuer = config["Jwt:Issuer"] ?? "CrabSenseBE";
         _audience = config["Jwt:Audience"] ?? "CrabSenseClients";
+        _expiryMinutes = config.GetValue<int?>("Jwt:ExpiryMinutes") ?? 30;
+        if (_expiryMinutes is < 1 or > 1440)
+            throw new InvalidOperationException(
+                "Jwt:ExpiryMinutes must be between 1 and 1440 minutes.");
     }
 
     public string GenerateAccessToken(AppUser user)
@@ -33,6 +38,7 @@ public class JwtService : IJwtService
             new Claim(JwtRegisteredClaimNames.Email, user.Email),
             new Claim(ClaimTypes.Name, user.Username),
             new Claim(ClaimTypes.Role, user.Role.ToString()),
+            new Claim("token_version", user.TokenVersion.ToString(), ClaimValueTypes.Integer32),
             new Claim(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString()),
             new Claim(JwtRegisteredClaimNames.Iat,
                 DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString(),
@@ -43,7 +49,7 @@ public class JwtService : IJwtService
             issuer: _issuer,
             audience: _audience,
             claims: claims,
-            expires: DateTime.UtcNow.AddDays(30),
+            expires: DateTime.UtcNow.AddMinutes(_expiryMinutes),
             signingCredentials: creds
         );
 

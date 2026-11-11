@@ -107,6 +107,7 @@ public class AuthService : IAuthService
             ?? throw AppException.NotFound("User");
         user.RefreshToken = null;
         user.RefreshTokenExpiry = null;
+        user.TokenVersion++;
         _uow.Users.Update(user);
         await _uow.SaveChangesAsync(ct);
         return ApiResponse.Ok("Logged out successfully.");
@@ -309,6 +310,9 @@ public class AuthService : IAuthService
             throw AppException.BadRequest("Current password is incorrect.");
 
         user.PasswordHash = BCrypt.Net.BCrypt.HashPassword(request.NewPassword);
+        user.RefreshToken = null;
+        user.RefreshTokenExpiry = null;
+        user.TokenVersion++;
         user.UpdatedAt = DateTime.UtcNow;
         _uow.Users.Update(user);
         await _uow.SaveChangesAsync(ct);

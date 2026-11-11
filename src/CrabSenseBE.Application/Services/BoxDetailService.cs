@@ -380,6 +380,9 @@ public class BoxDetailService : IBoxDetailService
     {
         await _areas.EnsureBoxAsync(boxId, manage: false, ct);
         var box = await _uow.Boxes.GetByIdAsync(boxId, ct) ?? throw AppException.NotFound("Box");
+        var row = await _uow.FarmingRows.GetByIdAsync(box.FarmingRowId, ct)
+            ?? throw AppException.NotFound("FarmingRow");
+        var boxAreaId = row.FarmingAreaId;
 
         var liveInBox = (await LiveCrabsInBoxAsync(boxId, ct)).Count > 0;
         if (liveInBox)
@@ -390,17 +393,48 @@ public class BoxDetailService : IBoxDetailService
         if (req.CrabLotId is Guid lotId && lotId != Guid.Empty)
         {
             lot = await _uow.CrabLots.GetByIdAsync(lotId, ct) ?? throw AppException.NotFound("CrabLot");
+            await CrabLotRegistrationGuard.EnsureLotAllowsAreaAsync(
+                _uow, lotId, boxAreaId, ct);
+            _ = await CrabLotRegistrationGuard.EnsureCanRegisterAsync(
+                _uow, lotId, adding: 1, ct);
             crabLotId = lotId;
         }
         else
         {
-            lot = (await _uow.CrabLots.GetAllAsync(ct))
-                .Where(item => item.ClosedAt is null
-                    && !string.Equals(item.Status, "Cancelled", StringComparison.OrdinalIgnoreCase))
-                .OrderBy(item => item.CreatedAt)
-                .FirstOrDefault()
-                ?? throw AppException.BadRequest(
-                    "Không có Crab Lot đang mở để đăng ký cua mới.");
+            var linkedLotIds = (await _uow.CrabLotAreas.FindAsync(
+                    link => link.FarmingAreaId == boxAreaId, ct))
+                .Select(link => link.CrabLotId)
+                .Distinct()
+                .ToHashSet();
+            var areaLots = linkedLotIds.Count == 0
+                ? new List<CrabLot>()
+                : (await _uow.CrabLots.FindAsync(
+                        item => linkedLotIds.Contains(item.Id), ct))
+                    .ToList();
+            var candidates = new List<CrabLot>();
+            foreach (var candidate in areaLots)
+            {
+                if (!CrabLotRegistrationGuard.IsOpen(candidate))
+                    continue;
+                if (await CrabLotRegistrationGuard.RemainingCapacityAsync(
+                        _uow, candidate, ct) > 0)
+                {
+                    candidates.Add(candidate);
+                }
+            }
+
+            if (candidates.Count == 0)
+            {
+                throw AppException.BadRequest(
+                    "Không có Crab Lot đang hoạt động, còn sức chứa trong khu của hộp.");
+            }
+            if (candidates.Count > 1)
+            {
+                throw AppException.BadRequest(
+                    "Có nhiều Crab Lot hợp lệ trong khu. Vui lòng chọn CrabLotId.");
+            }
+
+            lot = candidates[0];
             crabLotId = lot.Id;
         }
         _ = await CrabLotRegistrationGuard.EnsureCanRegisterAsync(
@@ -467,10 +501,7 @@ public class BoxDetailService : IBoxDetailService
             box.Status = "active";
         _uow.Boxes.Update(box);
 
-        var row = await _uow.FarmingRows.GetByIdAsync(box.FarmingRowId, ct);
-        var area = row is null
-            ? null
-            : await _uow.FarmingAreas.GetByIdAsync(row.FarmingAreaId, ct);
+        var area = await _uow.FarmingAreas.GetByIdAsync(row.FarmingAreaId, ct);
         var administratorId = area is null
             ? Guid.Empty
             : await AreaAdministratorQuery.IdAsync(_uow.FarmingAreas.Query(), area.Id, ct);

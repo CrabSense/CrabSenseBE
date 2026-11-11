@@ -19,12 +19,26 @@ public static class CrabLotRegistrationGuard
         if (string.Equals(lot.Status, "Cancelled", StringComparison.OrdinalIgnoreCase))
             throw AppException.BadRequest("Lô nhập đã hủy.");
 
-        var placed = await uow.Crabs.CountAsync(c => c.CrabLotId == lotId, ct);
-        var remaining = lot.Quantity - placed - lot.DeadOnArrival;
+        var remaining = await RemainingCapacityAsync(uow, lot, ct);
         if (remaining < adding)
             throw AppException.BadRequest(
                 $"Lô này chỉ còn {Math.Max(0, remaining)} cá thể chưa được tạo.");
         return lot;
+    }
+
+    public static bool IsOpen(CrabLot lot) =>
+        lot.ClosedAt is null
+        && !string.Equals(
+            lot.Status, "Cancelled", StringComparison.OrdinalIgnoreCase);
+
+    public static async Task<int> RemainingCapacityAsync(
+        IUnitOfWork uow,
+        CrabLot lot,
+        CancellationToken ct)
+    {
+        var placed = await uow.Crabs.CountAsync(
+            crab => crab.CrabLotId == lot.Id, ct);
+        return lot.Quantity - placed - lot.DeadOnArrival;
     }
 
     public static async Task<Guid> EnsureLotAllowsBoxAsync(

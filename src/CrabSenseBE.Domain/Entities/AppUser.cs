@@ -25,6 +25,8 @@ public class AppUser : BaseEntity
     public string? LastUserAgent { get; set; }
     public string? RefreshToken { get; set; }
     public DateTime? RefreshTokenExpiry { get; set; }
+    /// <summary>Tăng để thu hồi ngay mọi access token đã phát hành trước đó.</summary>
+    public int TokenVersion { get; set; }
 
     // Navigation
     public ICollection<OperationLog> OperationLogs { get; set; } = new List<OperationLog>();
