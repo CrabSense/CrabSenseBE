@@ -46,11 +46,16 @@ public interface ITraceabilityService
 
     Task<ApiResponse<QrCodeDto>> ApproveQrAsync(
         Guid qrId,
+        ApproveQrAssignmentRequest request,
         CancellationToken ct = default);
 
     Task<ApiResponse<QrCodeDto>> RejectQrAsync(
         Guid qrId,
         RejectQrAssignmentRequest request,
+        CancellationToken ct = default);
+
+    /// <summary>Danh sách QR sản phẩm đang chờ Farm Manager rà soát trong các khu được phân công.</summary>
+    Task<ApiResponse<IReadOnlyList<QrCodeDto>>> GetPendingReviewAsync(
         CancellationToken ct = default);
 
     // ── Traceability (public) ─────────────────────────────────────────────

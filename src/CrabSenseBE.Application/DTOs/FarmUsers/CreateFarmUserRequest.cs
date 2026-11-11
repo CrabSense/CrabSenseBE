@@ -8,6 +8,7 @@ public record CreateFarmUserRequest(
     string Password,
     string FullName,
     string Role,
-    Guid FarmingAreaId,
+    Guid? FarmingAreaId = null,
+    IReadOnlyCollection<Guid>? FarmingAreaIds = null,
     Guid? ManagerUserId = null
 );

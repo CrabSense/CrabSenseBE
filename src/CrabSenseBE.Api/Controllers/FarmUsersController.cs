@@ -73,6 +73,7 @@ public class FarmUsersController : ControllerBase
             request.FullName,
             request.Role,
             request.FarmingAreaId,
+            request.FarmingAreaIds,
             ManagerUserId: request.ManagerUserId
         );
 

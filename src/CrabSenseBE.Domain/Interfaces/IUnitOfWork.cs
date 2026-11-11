@@ -46,6 +46,7 @@ public interface IUnitOfWork : IDisposable
     IRepository<FrozenLot> FrozenLots { get; }
     IRepository<FrozenStorageTransaction> FrozenStorageTransactions { get; }
     IRepository<FrozenInventoryAdjustment> FrozenInventoryAdjustments { get; }
+    IRepository<FrozenInventoryOpeningBalance> FrozenInventoryOpeningBalances { get; }
     IRepository<QrCode> QrCodes { get; }
     IRepository<TraceabilityLink> TraceabilityLinks { get; }
     IRepository<Customer> Customers { get; }

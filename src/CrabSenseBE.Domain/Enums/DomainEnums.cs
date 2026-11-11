@@ -86,6 +86,13 @@ public enum FrozenStorageTransactionStatus
     Cancelled
 }
 
+public enum FrozenOpeningBalanceVerificationStatus
+{
+    PendingReview,
+    NeedsReview,
+    Verified
+}
+
 public enum QrApprovalStatus
 {
     Pending,

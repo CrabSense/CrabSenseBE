@@ -199,3 +199,28 @@ public record FrozenInventoryAdjustmentDto(
     Guid PerformedByUserId,
     string? Reason,
     DateTime CreatedAt);
+
+public record VerifyFrozenOpeningBalanceRequest(
+    int OpeningQuantity,
+    decimal OpeningWeightKg,
+    string Reason);
+
+public record FrozenInventoryOpeningBalanceDto(
+    Guid Id,
+    Guid FrozenLotId,
+    Guid? FarmingAreaId,
+    int OpeningQuantity,
+    decimal OpeningWeightKg,
+    DateTime OpeningDate,
+    string Source,
+    string VerificationStatus,
+    Guid? VerifiedByUserId,
+    DateTime? VerifiedAt,
+    string? VerificationNote,
+    int RecordedQuantityDelta,
+    decimal RecordedWeightDeltaKg,
+    int ExpectedCurrentQuantity,
+    decimal ExpectedCurrentWeightKg,
+    int ActualCurrentQuantity,
+    decimal ActualCurrentWeightKg,
+    bool IsReconciled);

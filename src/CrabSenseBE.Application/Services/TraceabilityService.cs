@@ -52,6 +52,7 @@ public class TraceabilityService : ITraceabilityService
             existing.ProposedByUserId = CurrentUserId();
             existing.ApprovedByUserId = null;
             existing.ApprovedAt = null;
+            existing.DecisionReason = null;
             existing.RejectionReason = null;
             _uow.QrCodes.Update(existing);
             await _uow.SaveChangesAsync(ct);
@@ -149,6 +150,7 @@ public class TraceabilityService : ITraceabilityService
             existing.ProposedByUserId = CurrentUserId();
             existing.ApprovedByUserId = null;
             existing.ApprovedAt = null;
+            existing.DecisionReason = null;
             existing.RejectionReason = null;
             _uow.QrCodes.Update(existing);
             await _uow.SaveChangesAsync(ct);
@@ -218,8 +220,13 @@ public class TraceabilityService : ITraceabilityService
 
     public async Task<ApiResponse<QrCodeDto>> ApproveQrAsync(
         Guid qrId,
+        ApproveQrAssignmentRequest request,
         CancellationToken ct = default)
     {
+        var reason = string.IsNullOrWhiteSpace(request.Reason) ? null : request.Reason.Trim();
+        if (reason is null)
+            throw AppException.BadRequest("Cần ghi lý do phê duyệt gán QR.");
+        await EnsureManagerDecisionActorAsync(ct);
         var qr = await GetProductQrWithAreaCheckAsync(qrId, ct);
         if (qr.ApprovalStatus != QrApprovalStatus.Pending)
             throw AppException.Conflict("Chỉ mã QR đang chờ duyệt mới được phê duyệt.");
@@ -229,8 +236,17 @@ public class TraceabilityService : ITraceabilityService
         qr.ApprovalStatus = QrApprovalStatus.Approved;
         qr.ApprovedByUserId = currentUserId;
         qr.ApprovedAt = DateTime.UtcNow;
+        qr.DecisionReason = reason;
         qr.RejectionReason = null;
         _uow.QrCodes.Update(qr);
+        await ConfigAudit.WriteAsync(
+            _uow,
+            currentUserId,
+            "ApproveProductQr",
+            nameof(QrCode),
+            qr.Id,
+            $"Code={qr.Code}; EntityType={qr.EntityType}; PreviousStatus=Pending; NewStatus=Approved; Reason={reason}",
+            ct);
         await _uow.SaveChangesAsync(ct);
         return ApiResponse<QrCodeDto>.Ok(MapQrCodeDto(qr), "QR assignment approved.");
     }
@@ -243,6 +259,7 @@ public class TraceabilityService : ITraceabilityService
         var reason = string.IsNullOrWhiteSpace(request.Reason) ? null : request.Reason.Trim();
         if (reason is null)
             throw AppException.BadRequest("Cần ghi lý do từ chối gán QR.");
+        await EnsureManagerDecisionActorAsync(ct);
         var qr = await GetProductQrWithAreaCheckAsync(qrId, ct);
         if (qr.ApprovalStatus != QrApprovalStatus.Pending)
             throw AppException.Conflict("Chỉ mã QR đang chờ duyệt mới được từ chối.");
@@ -252,10 +269,45 @@ public class TraceabilityService : ITraceabilityService
         qr.ApprovalStatus = QrApprovalStatus.Rejected;
         qr.ApprovedByUserId = currentUserId;
         qr.ApprovedAt = DateTime.UtcNow;
+        qr.DecisionReason = reason;
         qr.RejectionReason = reason;
         _uow.QrCodes.Update(qr);
+        await ConfigAudit.WriteAsync(
+            _uow,
+            currentUserId,
+            "RejectProductQr",
+            nameof(QrCode),
+            qr.Id,
+            $"Code={qr.Code}; EntityType={qr.EntityType}; PreviousStatus=Pending; NewStatus=Rejected; Reason={reason}",
+            ct);
         await _uow.SaveChangesAsync(ct);
         return ApiResponse<QrCodeDto>.Ok(MapQrCodeDto(qr), "QR assignment rejected.");
+    }
+
+    public async Task<ApiResponse<IReadOnlyList<QrCodeDto>>> GetPendingReviewAsync(
+        CancellationToken ct = default)
+    {
+        await EnsureManagerDecisionActorAsync(ct);
+        var allowedAreaIds = await _areas.AreaIdsAsync(ct);
+        var pending = await _uow.QrCodes.FindAsync(
+            qr => qr.IsActive
+                && qr.ApprovalStatus == QrApprovalStatus.Pending
+                && (qr.EntityType == "frozen_lot"
+                    || qr.EntityType == "harvest_voucher"),
+            ct);
+
+        var visible = new List<QrCodeDto>();
+        foreach (var qr in pending)
+        {
+            var areaId = await ProductQrAreaIdAsync(qr, ct);
+            if (areaId.HasValue
+                && (allowedAreaIds is null || allowedAreaIds.Contains(areaId.Value)))
+            {
+                visible.Add(MapQrCodeDto(qr));
+            }
+        }
+
+        return ApiResponse<IReadOnlyList<QrCodeDto>>.Ok(visible);
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -423,7 +475,8 @@ public class TraceabilityService : ITraceabilityService
             q.ProposedByUserId,
             q.ApprovedByUserId,
             q.ApprovedAt,
-            q.RejectionReason);
+            q.RejectionReason,
+            q.DecisionReason);
 
     private Guid? CurrentUserId() =>
         _currentUser is { IsAuthenticated: true } ? _currentUser.UserId : null;
@@ -478,6 +531,31 @@ public class TraceabilityService : ITraceabilityService
             return qr;
         }
         throw AppException.BadRequest("Chỉ QR sản phẩm hoặc lô đông mới cần phê duyệt.");
+    }
+
+    private async Task<Guid?> ProductQrAreaIdAsync(QrCode qr, CancellationToken ct)
+    {
+        if (qr.EntityType == "frozen_lot" && qr.FrozenLotId is Guid lotId)
+        {
+            var lot = await _uow.FrozenLots.GetByIdAsync(lotId, ct);
+            if (lot?.FarmingAreaId is Guid areaId)
+                return areaId;
+            if (lot?.HarvestVoucherId is Guid voucherId)
+                return (await _uow.HarvestVouchers.GetByIdAsync(voucherId, ct))?.FarmingAreaId;
+            return null;
+        }
+
+        if (qr.EntityType == "harvest_voucher" && qr.HarvestVoucherId is Guid harvestVoucherId)
+            return (await _uow.HarvestVouchers.GetByIdAsync(harvestVoucherId, ct))?.FarmingAreaId;
+
+        return null;
+    }
+
+    private async Task EnsureManagerDecisionActorAsync(CancellationToken ct)
+    {
+        var user = await _areas.CurrentUserAsync(ct);
+        if (user is not null && user.Role != UserRole.FarmManager)
+            throw AppException.Forbidden("Chỉ Farm Manager được rà soát QR sản phẩm.");
     }
 
     private static byte[] GeneratePng(string code, int pixelsPerModule)

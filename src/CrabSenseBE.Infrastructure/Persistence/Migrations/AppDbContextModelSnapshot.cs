@@ -1485,7 +1485,7 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
 
                     b.HasIndex("FarmingAreaId");
 
-                    b.HasIndex("ManagerUserId")
+                    b.HasIndex("ManagerUserId", "FarmingAreaId")
                         .IsUnique();
 
                     b.ToTable("FarmManagerAssignments", "be");
@@ -1977,6 +1977,63 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.HasIndex("FarmingAreaId", "CreatedAt");
 
                     b.ToTable("FrozenInventoryAdjustments", "be");
+                });
+
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.FrozenInventoryOpeningBalance", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("FarmingAreaId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("FrozenLotId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("OpeningDate")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int>("OpeningQuantity")
+                        .HasColumnType("integer");
+
+                    b.Property<decimal>("OpeningWeightKg")
+                        .HasPrecision(12, 3)
+                        .HasColumnType("numeric(12,3)");
+
+                    b.Property<string>("Source")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)");
+
+                    b.Property<DateTime?>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("VerificationNote")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)");
+
+                    b.Property<string>("VerificationStatus")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<DateTime?>("VerifiedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("VerifiedByUserId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("FrozenLotId")
+                        .IsUnique();
+
+                    b.HasIndex("FarmingAreaId", "VerificationStatus");
+
+                    b.ToTable("FrozenInventoryOpeningBalances", "be");
                 });
 
             modelBuilder.Entity("CrabSenseBE.Domain.Entities.FrozenLot", b =>
@@ -3123,6 +3180,10 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
 
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("DecisionReason")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)");
 
                     b.Property<string>("EntityType")
                         .IsRequired()
@@ -4483,6 +4544,24 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.Navigation("FrozenLot");
 
                     b.Navigation("FrozenStorageTransaction");
+                });
+
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.FrozenInventoryOpeningBalance", b =>
+                {
+                    b.HasOne("CrabSenseBE.Domain.Entities.FarmingArea", "FarmingArea")
+                        .WithMany()
+                        .HasForeignKey("FarmingAreaId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("CrabSenseBE.Domain.Entities.FrozenLot", "FrozenLot")
+                        .WithMany()
+                        .HasForeignKey("FrozenLotId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("FarmingArea");
+
+                    b.Navigation("FrozenLot");
                 });
 
             modelBuilder.Entity("CrabSenseBE.Domain.Entities.FrozenLot", b =>

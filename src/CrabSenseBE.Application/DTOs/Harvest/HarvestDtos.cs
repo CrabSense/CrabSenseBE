@@ -191,9 +191,11 @@ public record QrCodeDto(
     Guid? ProposedByUserId = null,
     Guid? ApprovedByUserId = null,
     DateTime? ApprovedAt = null,
-    string? RejectionReason = null
+    string? RejectionReason = null,
+    string? DecisionReason = null
 );
 
+public record ApproveQrAssignmentRequest(string Reason);
 public record RejectQrAssignmentRequest(string Reason);
 
 public record GenerateQrRequest(

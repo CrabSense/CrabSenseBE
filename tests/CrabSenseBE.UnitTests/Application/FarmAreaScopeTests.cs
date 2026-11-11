@@ -72,6 +72,33 @@ public sealed class FarmAreaScopeTests
     }
 
     [Fact]
+    public async Task Manager_scope_contains_every_assigned_area()
+    {
+        var userId = Guid.NewGuid();
+        var areaA = Guid.NewGuid();
+        var areaB = Guid.NewGuid();
+        var current = new Mock<ICurrentUserService>();
+        current.SetupGet(service => service.IsAuthenticated).Returns(true);
+        current.SetupGet(service => service.UserId).Returns(userId);
+        var uow = new Mock<IUnitOfWork>();
+        uow.Setup(unit => unit.Users).Returns(RepositoryWithAll(new AppUser
+        {
+            Id = userId,
+            Username = "manager-ab",
+            Role = UserRole.FarmManager,
+            IsActive = true
+        }).Object);
+        uow.Setup(unit => unit.FarmManagerAssignments).Returns(RepositoryWithAll(
+            new FarmManagerAssignment { ManagerUserId = userId, FarmingAreaId = areaA },
+            new FarmManagerAssignment { ManagerUserId = userId, FarmingAreaId = areaB }).Object);
+
+        var result = await new FarmAreaScope(uow.Object, current.Object)
+            .AreaIdsAsync(CancellationToken.None);
+
+        result.Should().BeEquivalentTo([areaA, areaB]);
+    }
+
+    [Fact]
     public void AddApplication_rejects_missing_current_user_registration()
     {
         var services = new ServiceCollection();
@@ -153,13 +180,16 @@ public sealed class FarmAreaScopeTests
             IsActive = true
         }).Object);
         var assignments = new Mock<IRepository<FarmManagerAssignment>>();
-        assignments.Setup(repo => repo.FirstOrDefaultAsync(
+        assignments.Setup(repo => repo.FindAsync(
                 It.IsAny<System.Linq.Expressions.Expression<Func<FarmManagerAssignment, bool>>>(),
                 It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new FarmManagerAssignment
+            .ReturnsAsync(new[]
             {
+                new FarmManagerAssignment
+                {
                 ManagerUserId = userId,
                 FarmingAreaId = areaA
+                }
             });
         uow.Setup(unit => unit.FarmManagerAssignments).Returns(assignments.Object);
         var lot = new CrabLot
@@ -367,6 +397,12 @@ public sealed class FarmAreaScopeTests
             .ReturnsAsync(items);
         repository.Setup(repo => repo.GetByIdAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((Guid id, CancellationToken _) => items.FirstOrDefault(item => item.Id == id));
+        repository.Setup(repo => repo.FindAsync(
+                It.IsAny<System.Linq.Expressions.Expression<Func<T, bool>>>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync((
+                System.Linq.Expressions.Expression<Func<T, bool>> predicate,
+                CancellationToken _) => items.Where(predicate.Compile()).ToArray());
         return repository;
     }
 }

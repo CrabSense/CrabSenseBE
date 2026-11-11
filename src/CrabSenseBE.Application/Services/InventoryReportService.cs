@@ -410,7 +410,49 @@ public class InventoryReportService : IInventoryReportService
         }
 
         // ============================================================
-        // 7. TRẢ KẾT QUẢ BÁO CÁO
+        // 7. TÌNH TRẠNG ĐỐI SOÁT SỐ DƯ ĐẦU KỲ
+        // ============================================================
+
+        var openingBalancesPendingReview = 0;
+        var openingBalanceMismatchCount = 0;
+        var openingRepository = _uow.FrozenInventoryOpeningBalances;
+        if (openingRepository is not null)
+        {
+            var reportLots = matchingScopedLots.ToDictionary(lot => lot.Id);
+            var balances = (await openingRepository.GetAllAsync(cancellationToken))
+                .Where(balance => reportLots.ContainsKey(balance.FrozenLotId))
+                .ToList();
+            openingBalancesPendingReview = balances.Count(balance =>
+                balance.VerificationStatus
+                    != FrozenOpeningBalanceVerificationStatus.Verified);
+
+            var adjustments = (await _uow.FrozenInventoryAdjustments.GetAllAsync(
+                    cancellationToken))
+                .Where(adjustment => reportLots.ContainsKey(adjustment.FrozenLotId))
+                .GroupBy(adjustment => adjustment.FrozenLotId)
+                .ToDictionary(
+                    group => group.Key,
+                    group => new
+                    {
+                        Quantity = group.Sum(item => item.QuantityDelta),
+                        Weight = decimal.Round(
+                            group.Sum(item => item.WeightDeltaKg), 3)
+                    });
+            openingBalanceMismatchCount = balances.Count(balance =>
+            {
+                adjustments.TryGetValue(balance.FrozenLotId, out var movement);
+                var expectedQuantity = balance.OpeningQuantity
+                    + (movement?.Quantity ?? 0);
+                var expectedWeight = decimal.Round(
+                    balance.OpeningWeightKg + (movement?.Weight ?? 0), 3);
+                var lot = reportLots[balance.FrozenLotId];
+                return expectedQuantity != lot.Quantity
+                    || expectedWeight != lot.WeightKg;
+            });
+        }
+
+        // ============================================================
+        // 8. TRẢ KẾT QUẢ BÁO CÁO
         // ============================================================
 
         return new InventoryReportDto(
@@ -423,7 +465,9 @@ public class InventoryReportService : IInventoryReportService
             ExpiredLots: expiredLots,
             ByGrade: byGrade,
             ExpiryAlerts: expiryAlerts,
-            Trend: trend);
+            Trend: trend,
+            OpeningBalancesPendingReview: openingBalancesPendingReview,
+            OpeningBalanceMismatchCount: openingBalanceMismatchCount);
     }
 
     private async Task<IEnumerable<Domain.Entities.FrozenLot>> LimitLotsAsync(

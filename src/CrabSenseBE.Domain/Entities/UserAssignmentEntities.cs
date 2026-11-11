@@ -2,7 +2,10 @@ using CrabSenseBE.Domain.Common;
 
 namespace CrabSenseBE.Domain.Entities;
 
-/// <summary>Một Farm Manager quản lý đúng một khu do admin gán.</summary>
+/// <summary>
+/// Một dòng phân công một Farm Manager vào một khu.
+/// Manager có thể có nhiều dòng cho nhiều khu khác nhau.
+/// </summary>
 public class FarmManagerAssignment : BaseEntity
 {
     public Guid ManagerUserId { get; set; }

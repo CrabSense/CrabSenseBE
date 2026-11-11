@@ -72,6 +72,20 @@ public class UsersController : ControllerBase
         return Ok(result);
     }
 
+    /// <summary>[UPDATE] Thay đổi các khu được phân công cho Farm Manager.</summary>
+    [HttpPut("{id:guid}/farming-areas")]
+    [Authorize(Roles = AppRoles.FarmAdministrator)]
+    [ProducesResponseType(typeof(ApiResponse<UserDto>), 200)]
+    public async Task<IActionResult> UpdateManagerFarmingAreas(
+        Guid id,
+        [FromBody] UpdateManagerFarmingAreasRequest request,
+        CancellationToken ct)
+        => Ok(await _users.UpdateManagerFarmingAreasAsync(
+            id,
+            request,
+            CallerRole(),
+            _currentUser.UserId,
+            ct));
 
     /// <summary>[READ] Danh sách tài khoản trong phạm vi quản lý.</summary>
     [HttpGet]

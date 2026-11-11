@@ -60,6 +60,8 @@ public class AppDbContext : DbContext
     public DbSet<FrozenLot> FrozenLots => Set<FrozenLot>();
     public DbSet<FrozenStorageTransaction> FrozenStorageTransactions => Set<FrozenStorageTransaction>();
     public DbSet<FrozenInventoryAdjustment> FrozenInventoryAdjustments => Set<FrozenInventoryAdjustment>();
+    public DbSet<FrozenInventoryOpeningBalance> FrozenInventoryOpeningBalances =>
+        Set<FrozenInventoryOpeningBalance>();
     public DbSet<QrCode> QrCodes => Set<QrCode>();
     public DbSet<TraceabilityLink> TraceabilityLinks => Set<TraceabilityLink>();
 
@@ -251,6 +253,9 @@ public class AppDbContext : DbContext
             .Property(q => q.RejectionReason)
             .HasMaxLength(500);
         modelBuilder.Entity<QrCode>()
+            .Property(q => q.DecisionReason)
+            .HasMaxLength(500);
+        modelBuilder.Entity<QrCode>()
             .HasIndex(q => new { q.ApprovalStatus, q.IsActive });
         modelBuilder.Entity<CrabEventCorrection>(entity =>
         {
@@ -309,6 +314,24 @@ public class AppDbContext : DbContext
             entity.HasOne(x => x.FrozenStorageTransaction)
                 .WithMany(x => x.Adjustments)
                 .HasForeignKey(x => x.FrozenStorageTransactionId)
+                .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        modelBuilder.Entity<FrozenInventoryOpeningBalance>(entity =>
+        {
+            entity.Property(x => x.OpeningWeightKg).HasPrecision(12, 3);
+            entity.Property(x => x.Source).HasMaxLength(128);
+            entity.Property(x => x.VerificationNote).HasMaxLength(500);
+            entity.Property(x => x.VerificationStatus).HasConversion<string>();
+            entity.HasIndex(x => x.FrozenLotId).IsUnique();
+            entity.HasIndex(x => new { x.FarmingAreaId, x.VerificationStatus });
+            entity.HasOne(x => x.FrozenLot)
+                .WithMany()
+                .HasForeignKey(x => x.FrozenLotId)
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne(x => x.FarmingArea)
+                .WithMany()
+                .HasForeignKey(x => x.FarmingAreaId)
                 .OnDelete(DeleteBehavior.Restrict);
         });
 
@@ -714,8 +737,10 @@ public class AppDbContext : DbContext
             .HasFilter("\"UserCode\" IS NOT NULL");
 
         modelBuilder.Entity<FarmManagerAssignment>()
-            .HasIndex(a => a.ManagerUserId)
+            .HasIndex(a => new { a.ManagerUserId, a.FarmingAreaId })
             .IsUnique();
+        modelBuilder.Entity<FarmManagerAssignment>()
+            .HasIndex(a => a.FarmingAreaId);
         modelBuilder.Entity<FarmManagerAssignment>()
             .HasOne(a => a.Manager)
             .WithMany()

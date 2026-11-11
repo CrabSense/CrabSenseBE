@@ -1,0 +1,26 @@
+namespace CrabSenseBE.Application.DTOs.Reports;
+
+public sealed record CrabLotCompareRowDto(
+    Guid CrabLotId,
+    string LotCode,
+    string Name,
+    DateTime? StartedAt,
+    DateTime? EndedAt,
+    IReadOnlyList<Guid> FarmingAreaIds,
+    bool IsPartialAreaView,
+    int? DeclaredQuantity,
+    int CrabCount,
+    int AliveCount,
+    int UnmoltedCount,
+    int MoltedEventCount,
+    int CurrentHarvestedStatusCount,
+    int HarvestedCount,
+    decimal HarvestedWeightKg,
+    int? UnresolvedAreaCount,
+    int? RegisteredCountAtClose,
+    int? AliveCountAtClose,
+    int? UnmoltedCountAtClose,
+    int? MoltedCountAtClose,
+    int? HarvestedCountAtClose,
+    int? DeadCountAtClose,
+    int? UnstockedCountAtClose);

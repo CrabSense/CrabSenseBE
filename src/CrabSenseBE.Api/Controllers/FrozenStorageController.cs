@@ -184,4 +184,19 @@ public async Task<IActionResult> GetCrabItemBarcodePng(
         CancellationToken ct)
         => Ok(await _service.GetAdjustmentsAsync(frozenLotId, ct));
 
+    /// <summary>FM xem số dư đầu kỳ và trạng thái đối soát trong các khu được phân công.</summary>
+    [HttpGet("~/api/frozen-opening-balances")]
+    [Authorize(Roles = AppRoles.FarmManager)]
+    public async Task<IActionResult> GetOpeningBalances(CancellationToken ct)
+        => Ok(await _service.GetOpeningBalancesAsync(ct));
+
+    /// <summary>FM xác nhận số dư đầu kỳ; không làm thay đổi tồn hiện tại.</summary>
+    [HttpPost("~/api/frozen-opening-balances/{id:guid}/verify")]
+    [Authorize(Roles = AppRoles.FarmManager)]
+    public async Task<IActionResult> VerifyOpeningBalance(
+        Guid id,
+        [FromBody] VerifyFrozenOpeningBalanceRequest request,
+        CancellationToken ct)
+        => Ok(await _service.VerifyOpeningBalanceAsync(id, request, ct));
+
 }

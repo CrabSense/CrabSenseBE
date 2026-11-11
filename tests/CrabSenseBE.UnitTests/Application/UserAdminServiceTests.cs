@@ -40,6 +40,25 @@ public class UserAdminServiceTests
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync((System.Linq.Expressions.Expression<Func<FarmManagerAssignment, bool>> predicate, CancellationToken _) =>
                 _managerAssignments.AsQueryable().FirstOrDefault(predicate));
+        managers.Setup(r => r.FindAsync(
+                It.IsAny<System.Linq.Expressions.Expression<Func<FarmManagerAssignment, bool>>>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync((
+                System.Linq.Expressions.Expression<Func<FarmManagerAssignment, bool>> predicate,
+                CancellationToken _) => _managerAssignments.Where(predicate.Compile()).ToList());
+        managers.Setup(r => r.AnyAsync(
+                It.IsAny<System.Linq.Expressions.Expression<Func<FarmManagerAssignment, bool>>>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync((
+                System.Linq.Expressions.Expression<Func<FarmManagerAssignment, bool>> predicate,
+                CancellationToken _) => _managerAssignments.Any(predicate.Compile()));
+        managers.Setup(r => r.AddAsync(
+                It.IsAny<FarmManagerAssignment>(), It.IsAny<CancellationToken>()))
+            .Callback<FarmManagerAssignment, CancellationToken>((item, _) =>
+                _managerAssignments.Add(item))
+            .Returns(Task.CompletedTask);
+        managers.Setup(r => r.Remove(It.IsAny<FarmManagerAssignment>()))
+            .Callback<FarmManagerAssignment>(item => _managerAssignments.Remove(item));
         var staff = new Mock<IRepository<FarmStaffAssignment>>();
         staff.Setup(r => r.GetAllAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(() => _staffAssignments.ToList());
@@ -48,10 +67,19 @@ public class UserAdminServiceTests
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync((System.Linq.Expressions.Expression<Func<FarmStaffAssignment, bool>> predicate, CancellationToken _) =>
                 _staffAssignments.AsQueryable().FirstOrDefault(predicate));
+        staff.Setup(r => r.AnyAsync(
+                It.IsAny<System.Linq.Expressions.Expression<Func<FarmStaffAssignment, bool>>>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync((
+                System.Linq.Expressions.Expression<Func<FarmStaffAssignment, bool>> predicate,
+                CancellationToken _) => _staffAssignments.Any(predicate.Compile()));
         _uow.Setup(u => u.Users).Returns(_users.Object);
         _uow.Setup(u => u.FarmingAreas).Returns(_areas.Object);
         _uow.Setup(u => u.FarmManagerAssignments).Returns(managers.Object);
         _uow.Setup(u => u.FarmStaffAssignments).Returns(staff.Object);
+        _uow.Setup(u => u.CrabLots).Returns(EmptyRepo<CrabLot>().Object);
+        _uow.Setup(u => u.CrabLotAreas).Returns(EmptyRepo<CrabLotArea>().Object);
+        _uow.Setup(u => u.OperationLogs).Returns(EmptyRepo<OperationLog>().Object);
         _uow.Setup(u => u.GetFarmAdministratorAreaAssignmentsAsync(
                 It.IsAny<IReadOnlyCollection<Guid>>(),
                 It.IsAny<CancellationToken>()))
@@ -238,5 +266,220 @@ public class UserAdminServiceTests
         target.PasswordHash.Should().NotBe("hash");
         BCrypt.Net.BCrypt.Verify("NewSecret!123", target.PasswordHash).Should().BeTrue();
         target.RefreshToken.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task Administrator_updates_manager_to_two_areas_without_duplicates()
+    {
+        var admin = AddFarmAdministrator();
+        var areaB = AddArea("AREA-2", admin);
+        var manager = Add(UserRole.FarmManager);
+
+        var result = await Create().UpdateManagerFarmingAreasAsync(
+            manager.Id,
+            new CrabSenseBE.Application.DTOs.Auth.UpdateManagerFarmingAreasRequest(
+                [AreaOne.Id, areaB.Id, areaB.Id]),
+            UserRole.FarmAdministrator,
+            admin.Id);
+
+        result.Data!.FarmingAreaId.Should().BeNull();
+        result.Data.FarmingAreaIds.Should().BeEquivalentTo([AreaOne.Id, areaB.Id]);
+        _managerAssignments
+            .Where(item => item.ManagerUserId == manager.Id)
+            .Select(item => item.FarmingAreaId)
+            .Should().BeEquivalentTo([AreaOne.Id, areaB.Id]);
+    }
+
+    [Fact]
+    public async Task Administrator_cannot_manage_whole_manager_account_with_foreign_area()
+    {
+        var adminA = AddFarmAdministrator();
+        var adminB = Add(UserRole.FarmAdministrator);
+        var areaB = AddArea("AREA-B", adminB);
+        var manager = Add(UserRole.FarmManager);
+        _managerAssignments.Add(new FarmManagerAssignment
+        {
+            ManagerUserId = manager.Id,
+            FarmingAreaId = areaB.Id,
+            AssignedByUserId = adminB.Id
+        });
+
+        var act = () => Create().SetActiveAsync(
+            manager.Id, false, UserRole.FarmAdministrator, adminA.Id);
+
+        (await act.Should().ThrowAsync<AppException>())
+            .Which.StatusCode.Should().Be(403);
+        manager.IsActive.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task Administrator_can_add_own_area_without_changing_foreign_assignment()
+    {
+        var adminA = AddFarmAdministrator();
+        var adminB = Add(UserRole.FarmAdministrator);
+        var areaB = AddArea("AREA-B", adminB);
+        var manager = Add(UserRole.FarmManager);
+        _managerAssignments.RemoveAll(item => item.ManagerUserId == manager.Id);
+        _managerAssignments.Add(new FarmManagerAssignment
+        {
+            ManagerUserId = manager.Id,
+            FarmingAreaId = areaB.Id,
+            AssignedByUserId = adminB.Id
+        });
+
+        var result = await Create().UpdateManagerFarmingAreasAsync(
+            manager.Id,
+            new CrabSenseBE.Application.DTOs.Auth.UpdateManagerFarmingAreasRequest(
+                [areaB.Id, AreaOne.Id]),
+            UserRole.FarmAdministrator,
+            adminA.Id);
+
+        result.Data!.FarmingAreaIds.Should().BeEquivalentTo(
+            [areaB.Id, AreaOne.Id]);
+        _managerAssignments.Should().Contain(item =>
+            item.ManagerUserId == manager.Id
+            && item.FarmingAreaId == areaB.Id
+            && item.AssignedByUserId == adminB.Id);
+    }
+
+    [Fact]
+    public async Task Cannot_remove_manager_area_while_staff_is_still_assigned()
+    {
+        var admin = AddFarmAdministrator();
+        var areaB = AddArea("AREA-2", admin);
+        var manager = Add(UserRole.FarmManager);
+        _managerAssignments.Add(new FarmManagerAssignment
+        {
+            ManagerUserId = manager.Id,
+            FarmingAreaId = areaB.Id,
+            AssignedByUserId = admin.Id
+        });
+        _staffAssignments.Add(new FarmStaffAssignment
+        {
+            StaffUserId = Guid.NewGuid(),
+            ManagerUserId = manager.Id,
+            FarmingAreaId = areaB.Id,
+            AssignedByUserId = admin.Id
+        });
+
+        var act = () => Create().UpdateManagerFarmingAreasAsync(
+            manager.Id,
+            new CrabSenseBE.Application.DTOs.Auth.UpdateManagerFarmingAreasRequest(
+                [AreaOne.Id]),
+            UserRole.FarmAdministrator,
+            admin.Id);
+
+        (await act.Should().ThrowAsync<AppException>())
+            .Which.StatusCode.Should().Be(409);
+        _managerAssignments.Should().Contain(item =>
+            item.ManagerUserId == manager.Id && item.FarmingAreaId == areaB.Id);
+    }
+
+    [Fact]
+    public async Task Cannot_remove_area_when_active_multi_area_lot_loses_full_manager_coverage()
+    {
+        var admin = AddFarmAdministrator();
+        var areaB = AddArea("AREA-2", admin);
+        var manager = Add(UserRole.FarmManager);
+        _managerAssignments.Add(new FarmManagerAssignment
+        {
+            ManagerUserId = manager.Id,
+            FarmingAreaId = areaB.Id,
+            AssignedByUserId = admin.Id
+        });
+        var lotId = Guid.NewGuid();
+        var lots = new Mock<IRepository<CrabLot>>();
+        lots.Setup(item => item.GetAllAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new[]
+            {
+                new CrabLot
+                {
+                    Id = lotId,
+                    LotCode = "LOT-AB",
+                    Status = "Allocating",
+                    ClosedAt = null
+                }
+            });
+        var links = new Mock<IRepository<CrabLotArea>>();
+        links.Setup(item => item.GetAllAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new[]
+            {
+                new CrabLotArea { CrabLotId = lotId, FarmingAreaId = AreaOne.Id },
+                new CrabLotArea { CrabLotId = lotId, FarmingAreaId = areaB.Id }
+            });
+        _uow.Setup(unit => unit.CrabLots).Returns(lots.Object);
+        _uow.Setup(unit => unit.CrabLotAreas).Returns(links.Object);
+
+        var act = () => Create().UpdateManagerFarmingAreasAsync(
+            manager.Id,
+            new CrabSenseBE.Application.DTOs.Auth.UpdateManagerFarmingAreasRequest(
+                [AreaOne.Id]),
+            UserRole.FarmAdministrator,
+            admin.Id);
+
+        (await act.Should().ThrowAsync<AppException>())
+            .Which.StatusCode.Should().Be(409);
+    }
+
+    [Fact]
+    public async Task Multi_area_manager_cannot_change_to_staff_and_leave_assignments()
+    {
+        var admin = AddFarmAdministrator();
+        var areaB = AddArea("AREA-2", admin);
+        var manager = Add(UserRole.FarmManager);
+        _managerAssignments.Add(new FarmManagerAssignment
+        {
+            ManagerUserId = manager.Id,
+            FarmingAreaId = areaB.Id,
+            AssignedByUserId = admin.Id
+        });
+
+        var act = () => Create().ChangeRoleAsync(
+            manager.Id,
+            new CrabSenseBE.Application.DTOs.Auth.ChangeUserRoleRequest(
+                nameof(UserRole.FarmStaff), Guid.NewGuid()),
+            UserRole.FarmAdministrator,
+            admin.Id);
+
+        await act.Should().ThrowAsync<AppException>();
+        manager.Role.Should().Be(UserRole.FarmManager);
+        _managerAssignments.Count(item => item.ManagerUserId == manager.Id)
+            .Should().Be(2);
+    }
+
+    [Fact]
+    public async Task Legacy_single_area_manager_keeps_singular_compatibility_field()
+    {
+        var manager = Add(UserRole.FarmManager);
+
+        var result = await Create().GetByIdAsync(
+            manager.Id, UserRole.SystemAdministrator, Guid.NewGuid());
+
+        result.Data!.FarmingAreaId.Should().Be(AreaOne.Id);
+        result.Data.FarmingAreaIds.Should().Equal(AreaOne.Id);
+    }
+
+    private FarmingArea AddArea(string code, AppUser administrator)
+    {
+        var area = new FarmingArea
+        {
+            Id = Guid.NewGuid(),
+            Code = code,
+            Name = code
+        };
+        area.Administrators.Add(administrator);
+        _areaStore.Add(area);
+        return area;
+    }
+
+    private static Mock<IRepository<T>> EmptyRepo<T>() where T : class
+    {
+        var repo = new Mock<IRepository<T>>();
+        repo.Setup(item => item.GetAllAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Array.Empty<T>());
+        repo.Setup(item => item.AddAsync(
+                It.IsAny<T>(), It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+        return repo;
     }
 }

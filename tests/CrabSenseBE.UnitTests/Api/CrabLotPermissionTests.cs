@@ -20,6 +20,7 @@ public sealed class CrabLotPermissionTests : IAsyncLifetime
     private static readonly Guid LotB = Guid.Parse("bbbbbbb7-0000-0000-0000-0000000000b1");
     private static readonly Guid AdminA = Guid.Parse("aaaaaaa7-0000-0000-0000-0000000000f1");
     private static readonly Guid ManagerA = Guid.Parse("ccccccc7-0000-0000-0000-0000000000f3");
+    private static readonly Guid ManagerAB = Guid.Parse("ccccccc7-0000-0000-0000-0000000000f4");
     private static readonly Guid StaffA = Guid.Parse("ddddddd7-0000-0000-0000-0000000000f4");
     private static readonly Guid SystemId = Guid.Parse("eeeeeee7-0000-0000-0000-0000000000f5");
 
@@ -35,10 +36,11 @@ public sealed class CrabLotPermissionTests : IAsyncLifetime
     {
         var admin = new AppUser { Id = AdminA, Role = UserRole.FarmAdministrator, IsActive = true, Username = "fa-a" };
         var manager = new AppUser { Id = ManagerA, Role = UserRole.FarmManager, IsActive = true, Username = "fm-a" };
+        var managerAb = new AppUser { Id = ManagerAB, Role = UserRole.FarmManager, IsActive = true, Username = "fm-ab" };
         var staff = new AppUser { Id = StaffA, Role = UserRole.FarmStaff, IsActive = true, Username = "fs-a" };
         var users = new Dictionary<Guid, AppUser>
         {
-            [AdminA] = admin, [ManagerA] = manager, [StaffA] = staff
+            [AdminA] = admin, [ManagerA] = manager, [ManagerAB] = managerAb, [StaffA] = staff
         };
         var areaA = new FarmingArea
         {
@@ -76,10 +78,18 @@ public sealed class CrabLotPermissionTests : IAsyncLifetime
         userRepo.Setup(r => r.GetByIdAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((Guid id, CancellationToken _) => users.GetValueOrDefault(id));
         var managers = new Mock<IRepository<FarmManagerAssignment>>();
-        managers.Setup(r => r.FirstOrDefaultAsync(
+        var managerAssignments = new[]
+        {
+            new FarmManagerAssignment { ManagerUserId = ManagerA, FarmingAreaId = AreaA },
+            new FarmManagerAssignment { ManagerUserId = ManagerAB, FarmingAreaId = AreaA },
+            new FarmManagerAssignment { ManagerUserId = ManagerAB, FarmingAreaId = AreaB }
+        };
+        managers.Setup(r => r.FindAsync(
                 It.IsAny<System.Linq.Expressions.Expression<Func<FarmManagerAssignment, bool>>>(),
                 It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new FarmManagerAssignment { ManagerUserId = ManagerA, FarmingAreaId = AreaA });
+            .ReturnsAsync((
+                System.Linq.Expressions.Expression<Func<FarmManagerAssignment, bool>> predicate,
+                CancellationToken _) => managerAssignments.Where(predicate.Compile()).ToList());
         var staffRepo = new Mock<IRepository<FarmStaffAssignment>>();
         staffRepo.Setup(r => r.FirstOrDefaultAsync(
                 It.IsAny<System.Linq.Expressions.Expression<Func<FarmStaffAssignment, bool>>>(),
@@ -145,6 +155,8 @@ public sealed class CrabLotPermissionTests : IAsyncLifetime
         var failures = new List<string>();
         var createA = $"{{\"name\":\"Lô A\",\"quantity\":10,\"farmingAreaId\":\"{AreaA}\"}}";
         var createB = $"{{\"name\":\"Lô B mới\",\"quantity\":4,\"farmingAreaId\":\"{AreaB}\"}}";
+        var createAB =
+            $"{{\"name\":\"Lô A+B\",\"quantity\":6,\"farmingAreaIds\":[\"{AreaA}\",\"{AreaB}\"]}}";
         var rename = "{\"name\":\"Sửa trái khu\"}";
 
         var created = await Send(AppRoles.FarmManager, ManagerA, HttpMethod.Post, "/api/crab-lots", createA);
@@ -153,6 +165,9 @@ public sealed class CrabLotPermissionTests : IAsyncLifetime
             failures.Add($"FM tạo lô đúng khu: mong đợi 200, nhận {(int)created.StatusCode}. {createdBody}");
         if (!createdBody.Contains("stockedAt", StringComparison.OrdinalIgnoreCase))
             failures.Add("Lô mới không lưu ngày bắt đầu thả cua.");
+        await Expect(failures, "FM đủ quyền A+B tạo lô nhiều khu", 200,
+            AppRoles.FarmManager, ManagerAB, HttpMethod.Post,
+            "/api/crab-lots", createAB);
 
         var lotA = _lots.SingleOrDefault(lot => lot.Name == "Lô A");
         if (lotA is null || !_links.Any(link => link.CrabLotId == lotA.Id && link.FarmingAreaId == AreaA))

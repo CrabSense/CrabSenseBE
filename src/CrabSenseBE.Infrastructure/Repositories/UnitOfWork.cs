@@ -164,6 +164,11 @@ public class UnitOfWork : IUnitOfWork
     public IRepository<FrozenInventoryAdjustment> FrozenInventoryAdjustments =>
         _frozenInventoryAdjustments ??= new GenericRepository<FrozenInventoryAdjustment>(_context);
 
+    private IRepository<FrozenInventoryOpeningBalance>? _frozenInventoryOpeningBalances;
+    public IRepository<FrozenInventoryOpeningBalance> FrozenInventoryOpeningBalances =>
+        _frozenInventoryOpeningBalances ??=
+            new GenericRepository<FrozenInventoryOpeningBalance>(_context);
+
     private IRepository<QrCode>? _qrCodes;
     public IRepository<QrCode> QrCodes => _qrCodes ??= new GenericRepository<QrCode>(_context);
 

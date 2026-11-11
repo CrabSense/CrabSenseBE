@@ -24,6 +24,7 @@ public sealed class FrozenStoragePermissionTests : IAsyncLifetime
 
     private readonly List<FrozenStorageTransaction> _transactions = new();
     private readonly List<FrozenInventoryAdjustment> _adjustments = new();
+    private readonly List<FrozenInventoryOpeningBalance> _openingBalances = new();
     private FrozenLot _lotA = null!;
     private int _saves;
     private Exception? _saveFailure;
@@ -67,10 +68,13 @@ public sealed class FrozenStoragePermissionTests : IAsyncLifetime
         userRepo.Setup(r => r.GetByIdAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((Guid id, CancellationToken _) => users.GetValueOrDefault(id));
         var managers = new Mock<IRepository<FarmManagerAssignment>>();
-        managers.Setup(r => r.FirstOrDefaultAsync(
+        managers.Setup(r => r.FindAsync(
                 It.IsAny<System.Linq.Expressions.Expression<Func<FarmManagerAssignment, bool>>>(),
                 It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new FarmManagerAssignment { ManagerUserId = ManagerA, FarmingAreaId = AreaA });
+            .ReturnsAsync(new[]
+            {
+                new FarmManagerAssignment { ManagerUserId = ManagerA, FarmingAreaId = AreaA }
+            });
         var staffAssignments = new Mock<IRepository<FarmStaffAssignment>>();
         staffAssignments.Setup(r => r.FirstOrDefaultAsync(
                 It.IsAny<System.Linq.Expressions.Expression<Func<FarmStaffAssignment, bool>>>(),
@@ -98,6 +102,25 @@ public sealed class FrozenStoragePermissionTests : IAsyncLifetime
             .ReturnsAsync((
                 System.Linq.Expressions.Expression<Func<FrozenInventoryAdjustment, bool>> predicate,
                 CancellationToken _) => _adjustments.Any(predicate.Compile()));
+        adjustmentRepo.Setup(r => r.FindAsync(
+                It.IsAny<System.Linq.Expressions.Expression<Func<FrozenInventoryAdjustment, bool>>>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync((
+                System.Linq.Expressions.Expression<Func<FrozenInventoryAdjustment, bool>> predicate,
+                CancellationToken _) => _adjustments.Where(predicate.Compile()).ToList());
+        var openingRepo = Repo(_openingBalances, item => item.Id);
+        openingRepo.Setup(r => r.Update(It.IsAny<FrozenInventoryOpeningBalance>()));
+        _openingBalances.Add(new FrozenInventoryOpeningBalance
+        {
+            Id = Guid.NewGuid(),
+            FrozenLotId = LotA,
+            FarmingAreaId = AreaA,
+            OpeningQuantity = 0,
+            OpeningWeightKg = 0,
+            OpeningDate = DateTime.UtcNow,
+            Source = "LegacyFrozenLotReconciliation",
+            VerificationStatus = FrozenOpeningBalanceVerificationStatus.PendingReview
+        });
 
         var uow = new Mock<IUnitOfWork>();
         uow.Setup(x => x.Users).Returns(userRepo.Object);
@@ -110,6 +133,7 @@ public sealed class FrozenStoragePermissionTests : IAsyncLifetime
         uow.Setup(x => x.FrozenLots).Returns(Repo(new List<FrozenLot> { _lotA, lotB }, item => item.Id).Object);
         uow.Setup(x => x.FrozenStorageTransactions).Returns(transactionRepo.Object);
         uow.Setup(x => x.FrozenInventoryAdjustments).Returns(adjustmentRepo.Object);
+        uow.Setup(x => x.FrozenInventoryOpeningBalances).Returns(openingRepo.Object);
         uow.Setup(x => x.SaveChangesAsync(It.IsAny<CancellationToken>()))
             .Returns((CancellationToken _) =>
             {
@@ -337,6 +361,40 @@ public sealed class FrozenStoragePermissionTests : IAsyncLifetime
             AppRoles.FarmStaff, StaffA, HttpMethod.Post,
             $"/api/frozen-storage-transactions/{transaction.Id}/execute",
             "{\"actualQuantity\":1,\"actualWeightKg\":0.1}");
+
+        Assert.True(failures.Count == 0, string.Join(Environment.NewLine, failures));
+    }
+
+    [Fact]
+    public async Task Only_manager_can_verify_opening_balance_without_changing_inventory()
+    {
+        var balance = _openingBalances.Single();
+        var failures = new List<string>();
+        const string payload =
+            "{\"openingQuantity\":0,\"openingWeightKg\":0,\"reason\":\"Đã đối chiếu sổ kho\"}";
+
+        await Expect(failures, "FS xác nhận số dư đầu kỳ", 403,
+            AppRoles.FarmStaff, StaffA, HttpMethod.Post,
+            $"/api/frozen-opening-balances/{balance.Id}/verify", payload);
+        await Expect(failures, "SA xác nhận số dư đầu kỳ", 403,
+            AppRoles.SystemAdministrator, SystemId, HttpMethod.Post,
+            $"/api/frozen-opening-balances/{balance.Id}/verify", payload);
+        await Expect(failures, "FM xác nhận số dư đầu kỳ", 200,
+            AppRoles.FarmManager, ManagerA, HttpMethod.Post,
+            $"/api/frozen-opening-balances/{balance.Id}/verify", payload);
+
+        if (balance.VerificationStatus != FrozenOpeningBalanceVerificationStatus.Verified
+            || balance.VerifiedByUserId != ManagerA
+            || balance.VerifiedAt is null
+            || _lotA.Quantity != 0
+            || _lotA.WeightKg != 0)
+        {
+            failures.Add("Xác nhận số dư đầu kỳ sai quyền hoặc làm thay đổi tồn hiện tại.");
+        }
+
+        await Expect(failures, "FM xác nhận số dư lần hai", 409,
+            AppRoles.FarmManager, ManagerA, HttpMethod.Post,
+            $"/api/frozen-opening-balances/{balance.Id}/verify", payload);
 
         Assert.True(failures.Count == 0, string.Join(Environment.NewLine, failures));
     }

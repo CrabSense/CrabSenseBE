@@ -41,4 +41,10 @@ public interface IUserAdminService
         Guid callerId,
         CancellationToken ct = default);
 
+    Task<ApiResponse<UserDto>> UpdateManagerFarmingAreasAsync(
+        Guid id,
+        UpdateManagerFarmingAreasRequest request,
+        UserRole callerRole,
+        Guid callerId,
+        CancellationToken ct = default);
 }

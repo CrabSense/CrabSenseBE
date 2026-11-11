@@ -73,4 +73,12 @@ public interface IFrozenStorageService
     Task<ApiResponse<IEnumerable<FrozenInventoryAdjustmentDto>>> GetAdjustmentsAsync(
         Guid? frozenLotId = null,
         CancellationToken ct = default);
+
+    Task<ApiResponse<IEnumerable<FrozenInventoryOpeningBalanceDto>>> GetOpeningBalancesAsync(
+        CancellationToken ct = default);
+
+    Task<ApiResponse<FrozenInventoryOpeningBalanceDto>> VerifyOpeningBalanceAsync(
+        Guid id,
+        VerifyFrozenOpeningBalanceRequest request,
+        CancellationToken ct = default);
 }

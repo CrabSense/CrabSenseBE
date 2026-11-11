@@ -57,12 +57,14 @@ public sealed class FarmReportPermissionTests : IAsyncLifetime
             new Box { Id = BoxB, FarmingRowId = RowB, Code = "BOX-B", Status = "active", IsOccupied = true }
         };
         var ended = new DateTime(2026, 11, 1, 0, 0, 0, DateTimeKind.Utc);
+        var closedAt = new DateTime(2026, 10, 25, 0, 0, 0, DateTimeKind.Utc);
         var lots = new[]
         {
             new CrabLot
             {
                 Id = LotA, LotCode = "LOT-A", Name = "Lô A", ImportDate = new DateTime(2026, 9, 1, 0, 0, 0, DateTimeKind.Utc),
-                Quantity = 2, Status = "Completed", UpdatedAt = ended
+                Quantity = 2, Status = "Completed", StockedAt = new DateTime(2026, 9, 2, 0, 0, 0, DateTimeKind.Utc),
+                ClosedAt = closedAt, UpdatedAt = ended
             },
             new CrabLot
             {
@@ -96,10 +98,13 @@ public sealed class FarmReportPermissionTests : IAsyncLifetime
         userRepo.Setup(r => r.GetByIdAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((Guid id, CancellationToken _) => users.GetValueOrDefault(id));
         var managers = new Mock<IRepository<FarmManagerAssignment>>();
-        managers.Setup(r => r.FirstOrDefaultAsync(
+        managers.Setup(r => r.FindAsync(
                 It.IsAny<System.Linq.Expressions.Expression<Func<FarmManagerAssignment, bool>>>(),
                 It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new FarmManagerAssignment { ManagerUserId = ManagerA, FarmingAreaId = AreaA });
+            .ReturnsAsync(new[]
+            {
+                new FarmManagerAssignment { ManagerUserId = ManagerA, FarmingAreaId = AreaA }
+            });
         var staffRepo = new Mock<IRepository<FarmStaffAssignment>>();
         staffRepo.Setup(r => r.FirstOrDefaultAsync(
                 It.IsAny<System.Linq.Expressions.Expression<Func<FarmStaffAssignment, bool>>>(),
@@ -114,9 +119,18 @@ public sealed class FarmReportPermissionTests : IAsyncLifetime
         uow.Setup(u => u.FarmingRows).Returns(ListRepo(rows));
         uow.Setup(u => u.Boxes).Returns(ListRepo(boxes));
         uow.Setup(u => u.CrabLots).Returns(ListRepo(lots));
+        uow.Setup(u => u.CrabLotAreas).Returns(ListRepo(new[]
+        {
+            new CrabLotArea { CrabLotId = LotA, FarmingAreaId = AreaA },
+            new CrabLotArea { CrabLotId = LotB, FarmingAreaId = AreaB }
+        }));
         uow.Setup(u => u.Crabs).Returns(ListRepo(crabs));
+        uow.Setup(u => u.CrabBoxAllocations).Returns(ListRepo(Array.Empty<CrabBoxAllocation>()));
+        uow.Setup(u => u.CrabHarvestHistories).Returns(ListRepo(Array.Empty<CrabHarvestHistory>()));
         uow.Setup(u => u.HarvestVouchers).Returns(ListRepo(vouchers));
         uow.Setup(u => u.HarvestLines).Returns(ListRepo(Array.Empty<HarvestLine>()));
+        uow.Setup(u => u.HarvestApprovedLines).Returns(ListRepo(Array.Empty<HarvestApprovedLine>()));
+        uow.Setup(u => u.MoltingRecords).Returns(ListRepo(Array.Empty<MoltingRecord>()));
         uow.Setup(u => u.WaterSystems).Returns(ListRepo(Array.Empty<WaterSystem>()));
         uow.Setup(u => u.Sensors).Returns(ListRepo(Array.Empty<Sensor>()));
         uow.Setup(u => u.Devices).Returns(ListRepo(Array.Empty<Device>()));
@@ -139,6 +153,7 @@ public sealed class FarmReportPermissionTests : IAsyncLifetime
         {
             services.AddSingleton(uow.Object);
             services.AddScoped<IDashboardService, DashboardService>();
+            services.AddScoped<ICrabLotComparisonReportService, CrabLotComparisonReportService>();
             services.AddScoped<IHarvestReportService, HarvestReportService>();
             services.AddScoped<IInventoryReportService, InventoryReportService>();
             services.AddScoped<ISurvivalRateReportService, SurvivalRateReportService>();
@@ -184,7 +199,9 @@ public sealed class FarmReportPermissionTests : IAsyncLifetime
             failures.Add($"Báo cáo thu hoạch phải chỉ tính khu A. {harvestBody}");
         if (!lotBody.Contains("LOT-A", StringComparison.Ordinal)
             || lotBody.Contains("LOT-B", StringComparison.Ordinal)
-            || !lotBody.Contains("unmoltedCount", StringComparison.OrdinalIgnoreCase))
+            || !lotBody.Contains("unmoltedCount", StringComparison.OrdinalIgnoreCase)
+            || !lotBody.Contains("2026-10-25", StringComparison.Ordinal)
+            || lotBody.Contains("\"endedAt\":\"2026-11-01", StringComparison.Ordinal))
             failures.Add($"Báo cáo lô phải có lô A, ngày kết thúc và cua chưa lột, không có lô B. {lotBody}");
         if (!overviewBody.Contains("\"totalBoxes\":1", StringComparison.Ordinal))
             failures.Add($"Dashboard phải chỉ đếm hộp khu A. {overviewBody}");
@@ -200,7 +217,9 @@ public sealed class FarmReportPermissionTests : IAsyncLifetime
         repo.Setup(r => r.FindAsync(
                 It.IsAny<System.Linq.Expressions.Expression<Func<T, bool>>>(),
                 It.IsAny<CancellationToken>()))
-            .ReturnsAsync(list);
+            .ReturnsAsync((
+                System.Linq.Expressions.Expression<Func<T, bool>> predicate,
+                CancellationToken _) => list.Where(predicate.Compile()).ToList());
         return repo.Object;
     }
 

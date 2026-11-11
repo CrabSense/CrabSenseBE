@@ -126,13 +126,16 @@ public class HarvestServiceTests
                 Username = "manager"
             });
         var assignments = new Mock<IRepository<FarmManagerAssignment>>();
-        assignments.Setup(r => r.FirstOrDefaultAsync(
+        assignments.Setup(r => r.FindAsync(
                 It.IsAny<System.Linq.Expressions.Expression<Func<FarmManagerAssignment, bool>>>(),
                 It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new FarmManagerAssignment
+            .ReturnsAsync(new[]
             {
-                ManagerUserId = currentUser,
-                FarmingAreaId = areaId
+                new FarmManagerAssignment
+                {
+                    ManagerUserId = currentUser,
+                    FarmingAreaId = areaId
+                }
             });
         var boxes = new Mock<IRepository<Box>>();
         boxes.Setup(r => r.GetByIdAsync(boxId, It.IsAny<CancellationToken>()))
@@ -245,10 +248,13 @@ public class HarvestServiceTests
         userRepo.Setup(repo => repo.GetByIdAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((Guid id, CancellationToken _) => users.GetValueOrDefault(id));
         var managerAssignments = new Mock<IRepository<FarmManagerAssignment>>();
-        managerAssignments.Setup(repo => repo.FirstOrDefaultAsync(
+        managerAssignments.Setup(repo => repo.FindAsync(
                 It.IsAny<System.Linq.Expressions.Expression<Func<FarmManagerAssignment, bool>>>(),
                 It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new FarmManagerAssignment { ManagerUserId = managerA, FarmingAreaId = areaA });
+            .ReturnsAsync(new[]
+            {
+                new FarmManagerAssignment { ManagerUserId = managerA, FarmingAreaId = areaA }
+            });
         var staffAssignments = new Mock<IRepository<FarmStaffAssignment>>();
         staffAssignments.Setup(repo => repo.FirstOrDefaultAsync(
                 It.IsAny<System.Linq.Expressions.Expression<Func<FarmStaffAssignment, bool>>>(),

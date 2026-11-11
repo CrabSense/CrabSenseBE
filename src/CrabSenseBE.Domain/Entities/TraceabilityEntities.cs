@@ -42,6 +42,7 @@ public class QrCode : BaseEntity
     public Guid? ProposedByUserId { get; set; }
     public Guid? ApprovedByUserId { get; set; }
     public DateTime? ApprovedAt { get; set; }
+    public string? DecisionReason { get; set; }
     public string? RejectionReason { get; set; }
 
     // Navigation

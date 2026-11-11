@@ -263,13 +263,16 @@ public sealed class HarvestApprovalSnapshotTests
                 FarmingAreaId = areaId
             });
         var managerAssignments = new Mock<IRepository<FarmManagerAssignment>>();
-        managerAssignments.Setup(repo => repo.FirstOrDefaultAsync(
+        managerAssignments.Setup(repo => repo.FindAsync(
                 It.IsAny<Expression<Func<FarmManagerAssignment, bool>>>(),
                 It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new FarmManagerAssignment
+            .ReturnsAsync(new[]
             {
-                ManagerUserId = managerId,
-                FarmingAreaId = areaId
+                new FarmManagerAssignment
+                {
+                    ManagerUserId = managerId,
+                    FarmingAreaId = areaId
+                }
             });
         uow.Setup(unit => unit.FarmStaffAssignments).Returns(staffAssignments.Object);
         uow.Setup(unit => unit.FarmManagerAssignments).Returns(managerAssignments.Object);

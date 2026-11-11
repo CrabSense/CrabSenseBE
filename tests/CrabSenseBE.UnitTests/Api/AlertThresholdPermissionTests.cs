@@ -101,10 +101,13 @@ public sealed class AlertThresholdPermissionTests : IAsyncLifetime
             .ReturnsAsync((Guid id, CancellationToken _) => users.GetValueOrDefault(id));
 
         var managers = new Mock<IRepository<FarmManagerAssignment>>();
-        managers.Setup(r => r.FirstOrDefaultAsync(
+        managers.Setup(r => r.FindAsync(
                 It.IsAny<System.Linq.Expressions.Expression<Func<FarmManagerAssignment, bool>>>(),
                 It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new FarmManagerAssignment { ManagerUserId = ManagerA, FarmingAreaId = AreaA });
+            .ReturnsAsync(new[]
+            {
+                new FarmManagerAssignment { ManagerUserId = ManagerA, FarmingAreaId = AreaA }
+            });
         var staffRepo = new Mock<IRepository<FarmStaffAssignment>>();
         staffRepo.Setup(r => r.FirstOrDefaultAsync(
                 It.IsAny<System.Linq.Expressions.Expression<Func<FarmStaffAssignment, bool>>>(),

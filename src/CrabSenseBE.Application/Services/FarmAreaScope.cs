@@ -142,9 +142,12 @@ public sealed class FarmAreaScope
 
         if (user.Role == UserRole.FarmManager)
         {
-            var assignment = await _uow.FarmManagerAssignments.FirstOrDefaultAsync(
+            var assignments = await _uow.FarmManagerAssignments.FindAsync(
                 item => item.ManagerUserId == user.Id, ct);
-            return assignment is null ? new HashSet<Guid>() : new HashSet<Guid> { assignment.FarmingAreaId };
+            return assignments
+                .Select(item => item.FarmingAreaId)
+                .Where(id => id != Guid.Empty)
+                .ToHashSet();
         }
 
         if (user.Role == UserRole.FarmStaff)

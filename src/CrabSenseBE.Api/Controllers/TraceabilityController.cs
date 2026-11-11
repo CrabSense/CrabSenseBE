@@ -98,8 +98,11 @@ public class TraceabilityController : ControllerBase
     /// <summary>[DECISION] FM phê duyệt gán QR sản phẩm/lô đông.</summary>
     [HttpPost("api/traceability-qrs/{qrId:guid}/approve")]
     [Authorize(Roles = AppRoles.FarmManager)]
-    public async Task<IActionResult> ApproveQr(Guid qrId, CancellationToken ct)
-        => Ok(await _service.ApproveQrAsync(qrId, ct));
+    public async Task<IActionResult> ApproveQr(
+        Guid qrId,
+        [FromBody] ApproveQrAssignmentRequest request,
+        CancellationToken ct)
+        => Ok(await _service.ApproveQrAsync(qrId, request, ct));
 
     /// <summary>[DECISION] FM từ chối gán QR sản phẩm/lô đông.</summary>
     [HttpPost("api/traceability-qrs/{qrId:guid}/reject")]
@@ -109,6 +112,12 @@ public class TraceabilityController : ControllerBase
         [FromBody] RejectQrAssignmentRequest request,
         CancellationToken ct)
         => Ok(await _service.RejectQrAsync(qrId, request, ct));
+
+    /// <summary>[READ] FM xem QR sản phẩm cũ/mới đang chờ rà soát trong khu được phân công.</summary>
+    [HttpGet("api/traceability-qrs/pending-review")]
+    [Authorize(Roles = AppRoles.FarmManager)]
+    public async Task<IActionResult> GetPendingReview(CancellationToken ct)
+        => Ok(await _service.GetPendingReviewAsync(ct));
 
     // ─────────────────────────────────────────────────────────────────────────
     // Traceability (public)

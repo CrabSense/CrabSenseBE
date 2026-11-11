@@ -5,6 +5,7 @@ using CrabSenseBE.Domain.Entities;
 using CrabSenseBE.Domain.Enums;
 using CrabSenseBE.Domain.Interfaces;
 using System.ComponentModel.DataAnnotations;
+using System.Text.Json;
 
 namespace CrabSenseBE.Application.Services;
 
@@ -31,9 +32,14 @@ public class UserAdminService : IUserAdminService
         {
             var areaIds = await GetManagedAreaIdsAsync(callerId, ct);
             visible = users.Where(user =>
-                CanManageRole(callerRole, user.Role) &&
-                AreaIdOf(user, managerAssignments, staffAssignments) is Guid areaId &&
-                areaIds.Contains(areaId));
+            {
+                if (!CanManageRole(callerRole, user.Role))
+                    return false;
+                var assignedAreaIds = AreaIdsOf(
+                    user, managerAssignments, staffAssignments);
+                return assignedAreaIds.Count > 0
+                    && assignedAreaIds.All(areaIds.Contains);
+            });
         }
 
         var visibleUsers = visible.ToList();
@@ -61,9 +67,19 @@ public class UserAdminService : IUserAdminService
                     };
                 else if (user.Role == UserRole.FarmManager)
                 {
-                    var assignment = managerAssignments.FirstOrDefault(item => item.ManagerUserId == user.Id);
-                    if (assignment is not null)
-                        dto = dto with { FarmingAreaId = assignment.FarmingAreaId };
+                    var managerAreaIds = managerAssignments
+                        .Where(item => item.ManagerUserId == user.Id)
+                        .Select(item => item.FarmingAreaId)
+                        .Distinct()
+                        .OrderBy(id => id)
+                        .ToArray();
+                    dto = dto with
+                    {
+                        FarmingAreaId = managerAreaIds.Length == 1
+                            ? managerAreaIds[0]
+                            : null,
+                        FarmingAreaIds = managerAreaIds
+                    };
                 }
                 else if (user.Role == UserRole.FarmStaff)
                 {
@@ -116,6 +132,9 @@ public class UserAdminService : IUserAdminService
         }
 
         _uow.Users.Update(user);
+        await ConfigAudit.WriteAsync(
+            _uow, callerId, isActive ? "ActivateUser" : "DeactivateUser",
+            "AppUser", user.Id, $"IsActive={isActive}", ct);
         await _uow.SaveChangesAsync(ct);
 
         return ApiResponse<UserDto>.Ok(
@@ -142,6 +161,9 @@ public class UserAdminService : IUserAdminService
         user.UpdatedAt = DateTime.UtcNow;
 
         _uow.Users.Update(user);
+        await ConfigAudit.WriteAsync(
+            _uow, callerId, "ResetUserPassword",
+            "AppUser", user.Id, "Refresh token revoked", ct);
         await _uow.SaveChangesAsync(ct);
 
         return ApiResponse.Ok("Đã đặt lại mật khẩu.");
@@ -203,6 +225,11 @@ public class UserAdminService : IUserAdminService
         user.UpdatedAt = DateTime.UtcNow;
 
         _uow.Users.Update(user);
+        await ConfigAudit.WriteAsync(
+            _uow, callerId, "UpdateUser",
+            "AppUser", user.Id,
+            JsonSerializer.Serialize(new { user.FullName, user.Email, user.Phone }),
+            ct);
         await _uow.SaveChangesAsync(ct);
 
         return ApiResponse<UserDto>.Ok(
@@ -261,6 +288,7 @@ public class UserAdminService : IUserAdminService
                 await ToDtoAsync(user, ct),
                 "User already has this role.");
 
+        var previousRole = user.Role;
         await MoveAssignmentForRoleChangeAsync(user, newRole, request.ManagerUserId, callerId, ct);
 
         user.Role = newRole;
@@ -272,11 +300,127 @@ public class UserAdminService : IUserAdminService
         user.RefreshTokenExpiry = null;
 
         _uow.Users.Update(user);
+        await ConfigAudit.WriteAsync(
+            _uow, callerId, "ChangeUserRole",
+            "AppUser", user.Id,
+            JsonSerializer.Serialize(new { Before = previousRole, After = newRole }),
+            ct);
         await _uow.SaveChangesAsync(ct);
 
         return ApiResponse<UserDto>.Ok(
             await ToDtoAsync(user, ct),
             "User role updated successfully.");
+    }
+
+    public async Task<ApiResponse<UserDto>> UpdateManagerFarmingAreasAsync(
+        Guid id,
+        UpdateManagerFarmingAreasRequest request,
+        UserRole callerRole,
+        Guid callerId,
+        CancellationToken ct = default)
+    {
+        if (callerRole != UserRole.FarmAdministrator)
+            throw AppException.Forbidden(
+                "Chỉ Farm Administrator được thay đổi phân công khu của Manager.");
+        if (request is null)
+            throw AppException.BadRequest("Request is required.");
+
+        var manager = await _uow.Users.GetByIdAsync(id, ct)
+            ?? throw AppException.NotFound("User");
+        if (manager.Role != UserRole.FarmManager)
+            throw AppException.BadRequest("Tài khoản không phải FarmManager.");
+
+        var requestedAreaIds = (request.FarmingAreaIds ?? Array.Empty<Guid>())
+            .Where(areaId => areaId != Guid.Empty)
+            .Distinct()
+            .ToHashSet();
+        if (requestedAreaIds.Count == 0)
+            throw AppException.BadRequest("FarmManager phải được phân công ít nhất một khu.");
+
+        var existing = (await _uow.FarmManagerAssignments.FindAsync(
+                item => item.ManagerUserId == manager.Id, ct))
+            .ToList();
+        var existingAreaIds = existing
+            .Select(item => item.FarmingAreaId)
+            .ToHashSet();
+        var managedAreaIds = await GetManagedAreaIdsAsync(callerId, ct);
+        var foreignExistingAreaIds = existingAreaIds
+            .Where(areaId => !managedAreaIds.Contains(areaId))
+            .ToHashSet();
+        if (!foreignExistingAreaIds.IsSubsetOf(requestedAreaIds))
+            throw AppException.Forbidden(
+                "Không được thu hồi phân công thuộc Farm Administrator khác.");
+
+        var addedAreaIds = requestedAreaIds.Except(existingAreaIds).ToHashSet();
+        var removedAreaIds = existingAreaIds.Except(requestedAreaIds).ToHashSet();
+        if (addedAreaIds.Concat(removedAreaIds)
+            .Any(areaId => !managedAreaIds.Contains(areaId)))
+            throw AppException.Forbidden(
+                "Bạn chỉ được thay đổi các khu mình đang quản lý.");
+
+        var existingAreas = await _uow.FarmingAreas.FindAsync(
+            area => requestedAreaIds.Contains(area.Id), ct);
+        if (existingAreas.Select(area => area.Id).Distinct().Count()
+            != requestedAreaIds.Count)
+            throw AppException.BadRequest("Một hoặc nhiều khu/trang trại không tồn tại.");
+
+        if (removedAreaIds.Count > 0
+            && await _uow.FarmStaffAssignments.AnyAsync(
+                item => item.ManagerUserId == manager.Id
+                    && removedAreaIds.Contains(item.FarmingAreaId), ct))
+            throw AppException.Conflict(
+                "Hãy chuyển Farm Staff trong khu bị thu hồi sang Manager khác trước.");
+
+        await EnsureActiveLotsRemainManageableAsync(
+            manager.Id, requestedAreaIds, removedAreaIds, ct);
+
+        foreach (var assignment in existing
+                     .Where(item => removedAreaIds.Contains(item.FarmingAreaId)))
+            _uow.FarmManagerAssignments.Remove(assignment);
+        foreach (var areaId in addedAreaIds)
+        {
+            if (await _uow.FarmManagerAssignments.AnyAsync(
+                    item => item.ManagerUserId == manager.Id
+                        && item.FarmingAreaId == areaId, ct))
+                throw AppException.Conflict(
+                    "FarmManager đã được phân công khu này.");
+            await _uow.FarmManagerAssignments.AddAsync(
+                new FarmManagerAssignment
+                {
+                    ManagerUserId = manager.Id,
+                    FarmingAreaId = areaId,
+                    AssignedByUserId = callerId
+                },
+                ct);
+        }
+
+        await ConfigAudit.WriteAsync(
+            _uow,
+            callerId,
+            "UpdateManagerFarmingAreas",
+            "AppUser",
+            manager.Id,
+            JsonSerializer.Serialize(new
+            {
+                Before = existingAreaIds.OrderBy(areaId => areaId),
+                After = requestedAreaIds.OrderBy(areaId => areaId),
+                Added = addedAreaIds.OrderBy(areaId => areaId)
+                    .Select(areaId => new { FarmingAreaId = areaId, AssignedByUserId = callerId }),
+                Removed = existing
+                    .Where(item => removedAreaIds.Contains(item.FarmingAreaId))
+                    .Select(item => new
+                    {
+                        item.FarmingAreaId,
+                        PreviousAssignedByUserId = item.AssignedByUserId,
+                        RevokedByUserId = callerId
+                    }),
+                ChangedAt = DateTime.UtcNow
+            }),
+            ct);
+        await _uow.SaveChangesAsync(ct);
+        return ApiResponse<UserDto>.Ok(
+            await ToDtoAsync(manager, ct),
+            "Đã cập nhật các khu được phân công cho FarmManager.");
     }
 
 
@@ -290,14 +434,14 @@ public class UserAdminService : IUserAdminService
     {
         if (callerRole == UserRole.SystemAdministrator)
             return true;
-        var areaId = await AssignedAreaIdAsync(target, ct);
-        if (!CanManageRole(callerRole, target.Role) || areaId is null)
+        if (!CanManageRole(callerRole, target.Role))
             return false;
 
-        return (await _uow.FarmingAreas.FindAsync(
-            area => area.Id == areaId.Value &&
-                    area.Administrators.Any(admin => admin.Id == callerId),
-            ct)).Any();
+        var targetAreaIds = await AssignedAreaIdsAsync(target, ct);
+        if (targetAreaIds.Count == 0)
+            return false;
+        var managedAreaIds = await GetManagedAreaIdsAsync(callerId, ct);
+        return targetAreaIds.All(managedAreaIds.Contains);
     }
 
     private async Task MoveAssignmentForRoleChangeAsync(
@@ -307,24 +451,31 @@ public class UserAdminService : IUserAdminService
         Guid callerId,
         CancellationToken ct)
     {
-        var currentAreaId = await AssignedAreaIdAsync(user, ct)
-            ?? throw AppException.BadRequest("Tài khoản chưa được gán khu.");
-
         if (user.Role == UserRole.FarmManager && newRole == UserRole.FarmStaff)
         {
+            var ownAssignments = (await _uow.FarmManagerAssignments.FindAsync(
+                    item => item.ManagerUserId == user.Id, ct))
+                .ToList();
+            if (ownAssignments.Count != 1)
+                throw AppException.BadRequest(
+                    "FarmManager phải chỉ còn đúng một khu trước khi đổi sang FarmStaff.");
+            var currentAreaId = ownAssignments[0].FarmingAreaId;
             if (await _uow.FarmStaffAssignments.AnyAsync(item => item.ManagerUserId == user.Id, ct))
                 throw AppException.BadRequest("Hãy chuyển nhân viên sang manager khác trước khi đổi role manager này.");
             if (!managerUserId.HasValue || managerUserId == Guid.Empty || managerUserId == user.Id)
                 throw AppException.BadRequest("FarmStaff phải được gán dưới một FarmManager của cùng khu.");
-            var managerAssignment = await _uow.FarmManagerAssignments.FirstOrDefaultAsync(
-                item => item.ManagerUserId == managerUserId.Value, ct)
-                ?? throw AppException.BadRequest("FarmManager chưa được gán khu.");
-            if (managerAssignment.FarmingAreaId != currentAreaId)
+            var replacementManagesArea = await _uow.FarmManagerAssignments.AnyAsync(
+                item => item.ManagerUserId == managerUserId.Value
+                    && item.FarmingAreaId == currentAreaId, ct);
+            if (!replacementManagesArea)
                 throw AppException.BadRequest("FarmManager không quản lý khu của tài khoản này.");
+            await EnsureActiveLotsRemainManageableAsync(
+                user.Id,
+                new HashSet<Guid>(),
+                new HashSet<Guid> { currentAreaId },
+                ct);
 
-            var own = await _uow.FarmManagerAssignments.FirstOrDefaultAsync(
-                item => item.ManagerUserId == user.Id, ct);
-            if (own is not null)
+            foreach (var own in ownAssignments)
                 _uow.FarmManagerAssignments.Remove(own);
             await _uow.FarmStaffAssignments.AddAsync(new FarmStaffAssignment
             {
@@ -338,6 +489,9 @@ public class UserAdminService : IUserAdminService
 
         if (user.Role == UserRole.FarmStaff && newRole == UserRole.FarmManager)
         {
+            var currentAreaId = (await _uow.FarmStaffAssignments.FirstOrDefaultAsync(
+                    item => item.StaffUserId == user.Id, ct))?.FarmingAreaId
+                ?? throw AppException.BadRequest("Tài khoản chưa được gán khu.");
             var own = await _uow.FarmStaffAssignments.FirstOrDefaultAsync(
                 item => item.StaffUserId == user.Id, ct);
             if (own is not null)
@@ -351,27 +505,44 @@ public class UserAdminService : IUserAdminService
         }
     }
 
-    private async Task<Guid?> AssignedAreaIdAsync(AppUser user, CancellationToken ct)
+    private async Task<HashSet<Guid>> AssignedAreaIdsAsync(
+        AppUser user,
+        CancellationToken ct)
     {
         if (user.Role == UserRole.FarmManager)
-            return (await _uow.FarmManagerAssignments.FirstOrDefaultAsync(
-                item => item.ManagerUserId == user.Id, ct))?.FarmingAreaId;
+            return (await _uow.FarmManagerAssignments.FindAsync(
+                    item => item.ManagerUserId == user.Id, ct))
+                .Select(item => item.FarmingAreaId)
+                .ToHashSet();
         if (user.Role == UserRole.FarmStaff)
-            return (await _uow.FarmStaffAssignments.FirstOrDefaultAsync(
-                item => item.StaffUserId == user.Id, ct))?.FarmingAreaId;
-        return null;
+        {
+            var assignment = await _uow.FarmStaffAssignments.FirstOrDefaultAsync(
+                item => item.StaffUserId == user.Id, ct);
+            return assignment is null
+                ? new HashSet<Guid>()
+                : new HashSet<Guid> { assignment.FarmingAreaId };
+        }
+        return new HashSet<Guid>();
     }
 
-    private static Guid? AreaIdOf(
+    private static HashSet<Guid> AreaIdsOf(
         AppUser user,
         IReadOnlyCollection<FarmManagerAssignment> managers,
         IReadOnlyCollection<FarmStaffAssignment> staff)
     {
         if (user.Role == UserRole.FarmManager)
-            return managers.FirstOrDefault(item => item.ManagerUserId == user.Id)?.FarmingAreaId;
+            return managers
+                .Where(item => item.ManagerUserId == user.Id)
+                .Select(item => item.FarmingAreaId)
+                .ToHashSet();
         if (user.Role == UserRole.FarmStaff)
-            return staff.FirstOrDefault(item => item.StaffUserId == user.Id)?.FarmingAreaId;
-        return null;
+        {
+            var assignment = staff.FirstOrDefault(item => item.StaffUserId == user.Id);
+            return assignment is null
+                ? new HashSet<Guid>()
+                : new HashSet<Guid> { assignment.FarmingAreaId };
+        }
+        return new HashSet<Guid>();
     }
 
     private async Task<UserDto> ToDtoAsync(AppUser user, CancellationToken ct)
@@ -379,10 +550,17 @@ public class UserAdminService : IUserAdminService
         var dto = AuthService.MapToDto(user);
         if (user.Role == UserRole.FarmManager)
         {
-            var assignment = await _uow.FarmManagerAssignments.FirstOrDefaultAsync(
-                item => item.ManagerUserId == user.Id, ct);
-            if (assignment is not null)
-                dto = dto with { FarmingAreaId = assignment.FarmingAreaId };
+            var areaIds = (await _uow.FarmManagerAssignments.FindAsync(
+                    item => item.ManagerUserId == user.Id, ct))
+                .Select(item => item.FarmingAreaId)
+                .Distinct()
+                .OrderBy(id => id)
+                .ToArray();
+            dto = dto with
+            {
+                FarmingAreaId = areaIds.Length == 1 ? areaIds[0] : null,
+                FarmingAreaIds = areaIds
+            };
         }
         else if (user.Role == UserRole.FarmStaff)
         {
@@ -410,6 +588,56 @@ public class UserAdminService : IUserAdminService
         }
 
         return userCode;
+    }
+
+    private async Task EnsureActiveLotsRemainManageableAsync(
+        Guid managerId,
+        HashSet<Guid> replacementAreaIds,
+        HashSet<Guid> removedAreaIds,
+        CancellationToken ct)
+    {
+        if (removedAreaIds.Count == 0)
+            return;
+
+        var lotLinks = (await _uow.CrabLotAreas.GetAllAsync(ct))
+            .GroupBy(link => link.CrabLotId)
+            .ToDictionary(
+                group => group.Key,
+                group => group.Select(link => link.FarmingAreaId)
+                    .Where(areaId => areaId != Guid.Empty)
+                    .Distinct()
+                    .ToHashSet());
+        var impactedLots = (await _uow.CrabLots.GetAllAsync(ct))
+            .Where(lot => lot.ClosedAt is null
+                && !string.Equals(
+                    lot.Status, "Cancelled", StringComparison.OrdinalIgnoreCase)
+                && lotLinks.TryGetValue(lot.Id, out var areas)
+                && areas.Overlaps(removedAreaIds))
+            .ToList();
+        if (impactedLots.Count == 0)
+            return;
+
+        var activeManagerIds = (await _uow.Users.GetAllAsync(ct))
+            .Where(user => user.Role == UserRole.FarmManager && user.IsActive)
+            .Select(user => user.Id)
+            .ToHashSet();
+        var assignmentsByManager = (await _uow.FarmManagerAssignments.GetAllAsync(ct))
+            .Where(item => activeManagerIds.Contains(item.ManagerUserId))
+            .GroupBy(item => item.ManagerUserId)
+            .ToDictionary(
+                group => group.Key,
+                group => group.Select(item => item.FarmingAreaId).ToHashSet());
+        if (activeManagerIds.Contains(managerId))
+            assignmentsByManager[managerId] = replacementAreaIds;
+
+        foreach (var lot in impactedLots)
+        {
+            var requiredAreaIds = lotLinks[lot.Id];
+            if (!assignmentsByManager.Values.Any(requiredAreaIds.IsSubsetOf))
+                throw AppException.Conflict(
+                    $"Không thể thu hồi khu vì Crab Lot '{lot.LotCode}' đang hoạt động "
+                    + "sẽ không còn FarmManager có đủ quyền trên toàn bộ lô.");
+        }
     }
 
     private async Task<HashSet<Guid>> GetManagedAreaIdsAsync(Guid callerId, CancellationToken ct) =>

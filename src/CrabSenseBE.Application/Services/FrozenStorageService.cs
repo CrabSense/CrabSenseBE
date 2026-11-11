@@ -635,6 +635,92 @@ public class FrozenStorageService : IFrozenStorageService
         return ApiResponse<IEnumerable<FrozenInventoryAdjustmentDto>>.Ok(rows);
     }
 
+    public async Task<ApiResponse<IEnumerable<FrozenInventoryOpeningBalanceDto>>>
+        GetOpeningBalancesAsync(CancellationToken ct = default)
+    {
+        await EnsureOpeningBalanceManagerAsync(ct);
+        var allowed = await _areas.AreaIdsAsync(ct);
+        var balances = (await _uow.FrozenInventoryOpeningBalances.GetAllAsync(ct))
+            .Where(item => item.FarmingAreaId is Guid areaId
+                && (allowed is null || allowed.Contains(areaId)))
+            .OrderBy(item => item.VerificationStatus)
+            .ThenBy(item => item.OpeningDate)
+            .ToList();
+
+        var result = new List<FrozenInventoryOpeningBalanceDto>(balances.Count);
+        foreach (var balance in balances)
+            result.Add(await MapOpeningBalanceAsync(balance, ct));
+
+        return ApiResponse<IEnumerable<FrozenInventoryOpeningBalanceDto>>.Ok(result);
+    }
+
+    public async Task<ApiResponse<FrozenInventoryOpeningBalanceDto>>
+        VerifyOpeningBalanceAsync(
+            Guid id,
+            VerifyFrozenOpeningBalanceRequest request,
+            CancellationToken ct = default)
+    {
+        await EnsureOpeningBalanceManagerAsync(ct);
+        var balance = await _uow.FrozenInventoryOpeningBalances.GetByIdAsync(id, ct)
+            ?? throw AppException.NotFound("Frozen inventory opening balance");
+        if (balance.VerificationStatus == FrozenOpeningBalanceVerificationStatus.Verified)
+            throw AppException.Conflict("Số dư đầu kỳ đã được xác nhận và không thể sửa.");
+        if (balance.FarmingAreaId is not Guid areaId || areaId == Guid.Empty)
+            throw AppException.Conflict(
+                "Số dư đầu kỳ chưa xác định khu và cần được quản trị dữ liệu rà soát.");
+        await _areas.EnsureAsync(areaId, manage: false, ct);
+
+        var reason = NormalizeOptionalText(request.Reason);
+        if (reason is null)
+            throw AppException.BadRequest("Cần ghi lý do xác nhận số dư đầu kỳ.");
+        var openingWeight = decimal.Round(request.OpeningWeightKg, 3);
+        if (request.OpeningQuantity < 0 || openingWeight < 0)
+            throw AppException.BadRequest("Số dư đầu kỳ không được âm.");
+        if ((request.OpeningQuantity == 0) != (openingWeight == 0))
+            throw AppException.BadRequest(
+                "Số lượng và trọng lượng đầu kỳ phải cùng bằng 0 hoặc cùng lớn hơn 0.");
+
+        var lot = await _uow.FrozenLots.GetByIdAsync(balance.FrozenLotId, ct)
+            ?? throw AppException.NotFound("Frozen lot");
+        if (lot.FarmingAreaId != areaId)
+            throw AppException.Conflict("Khu của số dư đầu kỳ không khớp lô đông.");
+
+        var adjustments = await _uow.FrozenInventoryAdjustments.FindAsync(
+            item => item.FrozenLotId == balance.FrozenLotId, ct);
+        var quantityDelta = adjustments.Sum(item => item.QuantityDelta);
+        var weightDelta = decimal.Round(
+            adjustments.Sum(item => item.WeightDeltaKg), 3);
+        var expectedQuantity = request.OpeningQuantity + quantityDelta;
+        var expectedWeight = decimal.Round(openingWeight + weightDelta, 3);
+        if (expectedQuantity != lot.Quantity || expectedWeight != lot.WeightKg)
+            throw AppException.Conflict(
+                "Số dư đề nghị không đối soát được với tồn hiện tại và các biến động đã ghi.");
+
+        var previous = $"{balance.OpeningQuantity}/{balance.OpeningWeightKg:0.###}/"
+            + balance.VerificationStatus;
+        balance.OpeningQuantity = request.OpeningQuantity;
+        balance.OpeningWeightKg = openingWeight;
+        balance.VerificationStatus = FrozenOpeningBalanceVerificationStatus.Verified;
+        balance.VerifiedByUserId = _currentUser.UserId;
+        balance.VerifiedAt = DateTime.UtcNow;
+        balance.VerificationNote = reason;
+        _uow.FrozenInventoryOpeningBalances.Update(balance);
+        await ConfigAudit.WriteAsync(
+            _uow,
+            _currentUser.UserId,
+            "VerifyFrozenOpeningBalance",
+            nameof(FrozenInventoryOpeningBalance),
+            balance.Id,
+            $"Before={previous}; After={balance.OpeningQuantity}/"
+            + $"{balance.OpeningWeightKg:0.###}/Verified; Reason={reason}",
+            ct);
+        await SaveInventoryChangesAsync(ct);
+
+        return ApiResponse<FrozenInventoryOpeningBalanceDto>.Ok(
+            await MapOpeningBalanceAsync(balance, ct),
+            "Đã xác nhận số dư đầu kỳ; tồn hiện tại không bị thay đổi.");
+    }
+
 
     public async Task<ApiResponse<IEnumerable<FrozenCrabItemDto>>> RegisterCrabItemsAsync(
     Guid lotId,
@@ -1088,6 +1174,49 @@ public class FrozenStorageService : IFrozenStorageService
         adjustment.PerformedByUserId,
         adjustment.Reason,
         adjustment.CreatedAt);
+
+    private async Task<FrozenInventoryOpeningBalanceDto> MapOpeningBalanceAsync(
+        FrozenInventoryOpeningBalance balance,
+        CancellationToken ct)
+    {
+        var lot = await _uow.FrozenLots.GetByIdAsync(balance.FrozenLotId, ct)
+            ?? throw AppException.NotFound("Frozen lot");
+        var adjustments = await _uow.FrozenInventoryAdjustments.FindAsync(
+            item => item.FrozenLotId == balance.FrozenLotId, ct);
+        var quantityDelta = adjustments.Sum(item => item.QuantityDelta);
+        var weightDelta = decimal.Round(
+            adjustments.Sum(item => item.WeightDeltaKg), 3);
+        var expectedQuantity = balance.OpeningQuantity + quantityDelta;
+        var expectedWeight = decimal.Round(balance.OpeningWeightKg + weightDelta, 3);
+
+        return new FrozenInventoryOpeningBalanceDto(
+            balance.Id,
+            balance.FrozenLotId,
+            balance.FarmingAreaId,
+            balance.OpeningQuantity,
+            balance.OpeningWeightKg,
+            balance.OpeningDate,
+            balance.Source,
+            balance.VerificationStatus.ToString(),
+            balance.VerifiedByUserId,
+            balance.VerifiedAt,
+            balance.VerificationNote,
+            quantityDelta,
+            weightDelta,
+            expectedQuantity,
+            expectedWeight,
+            lot.Quantity,
+            lot.WeightKg,
+            expectedQuantity == lot.Quantity && expectedWeight == lot.WeightKg);
+    }
+
+    private async Task EnsureOpeningBalanceManagerAsync(CancellationToken ct)
+    {
+        var user = await _areas.CurrentUserAsync(ct);
+        if (user is not null && user.Role != UserRole.FarmManager)
+            throw AppException.Forbidden(
+                "Chỉ Farm Manager được rà soát và xác nhận số dư đầu kỳ.");
+    }
 
 
     private static FrozenLotStatus GetEffectiveStatus(

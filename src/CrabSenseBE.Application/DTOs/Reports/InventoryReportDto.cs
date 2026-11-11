@@ -24,7 +24,9 @@ public record InventoryReportDto
     IEnumerable<InventoryByGradeDto> ByGrade,
     // Thống kê theo thời gian
     IEnumerable<InventoryExpiryAlertDto> ExpiryAlerts,
-    IEnumerable<InventoryTrendDto> Trend
+    IEnumerable<InventoryTrendDto> Trend,
+    int OpeningBalancesPendingReview = 0,
+    int OpeningBalanceMismatchCount = 0
 );
 
 /// <summary>

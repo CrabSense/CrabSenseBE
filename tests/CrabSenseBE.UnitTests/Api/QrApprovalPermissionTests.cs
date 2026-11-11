@@ -1,3 +1,4 @@
+using System.Net.Http.Json;
 using CrabSenseBE.Application.Common;
 using CrabSenseBE.Application.DTOs.Farm;
 using CrabSenseBE.Application.DTOs.Harvest;
@@ -40,9 +41,13 @@ public sealed class QrApprovalPermissionTests : IAsyncLifetime
             .ReturnsAsync(ApiResponse<QrCodeDto>.Ok(
                 new QrCodeDto(QrId, "FL-1", LotId, 0, null, "Pending")));
         traceability.Setup(service => service.ApproveQrAsync(
-                QrId, It.IsAny<CancellationToken>()))
+                QrId, It.IsAny<ApproveQrAssignmentRequest>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(ApiResponse<QrCodeDto>.Ok(
                 new QrCodeDto(QrId, "FL-1", LotId, 0, null, "Approved")));
+        traceability.Setup(service => service.GetPendingReviewAsync(
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(ApiResponse<IReadOnlyList<QrCodeDto>>.Ok(
+                new[] { new QrCodeDto(QrId, "FL-1", LotId, 0, null, "Pending") }));
 
         _api = PermissionApiFactory.Create(services =>
         {
@@ -78,6 +83,12 @@ public sealed class QrApprovalPermissionTests : IAsyncLifetime
             HttpMethod.Post, $"/api/traceability-qrs/{QrId}/approve");
         await Expect(failures, "FS tự duyệt QR sản phẩm", 403, AppRoles.FarmStaff, StaffId,
             HttpMethod.Post, $"/api/traceability-qrs/{QrId}/approve");
+        await Expect(failures, "SA duyệt QR sản phẩm", 403, AppRoles.SystemAdministrator, SystemId,
+            HttpMethod.Post, $"/api/traceability-qrs/{QrId}/approve");
+        await Expect(failures, "FM xem QR chờ rà soát", 200, AppRoles.FarmManager, ManagerId,
+            HttpMethod.Get, "/api/traceability-qrs/pending-review");
+        await Expect(failures, "FS xem QR chờ rà soát", 403, AppRoles.FarmStaff, StaffId,
+            HttpMethod.Get, "/api/traceability-qrs/pending-review");
         await Expect(failures, "SA xem QR nội bộ", 403, AppRoles.SystemAdministrator, SystemId,
             HttpMethod.Get, $"/api/frozen-lots/{LotId}/qr");
 
@@ -93,7 +104,10 @@ public sealed class QrApprovalPermissionTests : IAsyncLifetime
         HttpMethod method,
         string path)
     {
-        using var response = await _api.SendAsync(role, userId, method, path);
+        using var content = path.EndsWith("/approve", StringComparison.Ordinal)
+            ? JsonContent.Create(new ApproveQrAssignmentRequest("Đã đối chiếu hồ sơ"))
+            : null;
+        using var response = await _api.SendAsync(role, userId, method, path, content);
         var actual = (int)response.StatusCode;
         var success = expected == 200 ? actual is 200 or 201 or 204 : actual == expected;
         if (!success)

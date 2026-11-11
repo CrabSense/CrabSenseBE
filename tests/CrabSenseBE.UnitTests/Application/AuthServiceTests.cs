@@ -18,10 +18,10 @@ public class AuthServiceTests
     public AuthServiceTests()
     {
         var managers = new Mock<IRepository<FarmManagerAssignment>>();
-        managers.Setup(r => r.FirstOrDefaultAsync(
+        managers.Setup(r => r.FindAsync(
                 It.IsAny<System.Linq.Expressions.Expression<Func<FarmManagerAssignment, bool>>>(),
                 It.IsAny<CancellationToken>()))
-            .ReturnsAsync((FarmManagerAssignment?)null);
+            .ReturnsAsync(Array.Empty<FarmManagerAssignment>());
         var staff = new Mock<IRepository<FarmStaffAssignment>>();
         staff.Setup(r => r.FirstOrDefaultAsync(
                 It.IsAny<System.Linq.Expressions.Expression<Func<FarmStaffAssignment, bool>>>(),

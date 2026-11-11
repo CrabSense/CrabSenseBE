@@ -89,6 +89,28 @@ public class FrozenInventoryAdjustment : BaseEntity
 }
 
 /// <summary>
+/// Số dư đầu kỳ của lô đông tại thời điểm chuyển sang sổ giao dịch.
+/// Mỗi lô chỉ có một bản ghi; các số liệu trở thành bất biến sau khi FM xác nhận.
+/// </summary>
+public class FrozenInventoryOpeningBalance : BaseEntity
+{
+    public Guid FrozenLotId { get; set; }
+    public Guid? FarmingAreaId { get; set; }
+    public int OpeningQuantity { get; set; }
+    public decimal OpeningWeightKg { get; set; }
+    public DateTime OpeningDate { get; set; }
+    public string Source { get; set; } = string.Empty;
+    public FrozenOpeningBalanceVerificationStatus VerificationStatus { get; set; }
+        = FrozenOpeningBalanceVerificationStatus.PendingReview;
+    public Guid? VerifiedByUserId { get; set; }
+    public DateTime? VerifiedAt { get; set; }
+    public string? VerificationNote { get; set; }
+
+    public FrozenLot? FrozenLot { get; set; }
+    public FarmingArea? FarmingArea { get; set; }
+}
+
+/// <summary>
 /// Một sản phẩm cua riêng lẻ trong lô cấp đông.
 /// Mỗi sản phẩm có barcode riêng và snapshot dữ liệu tại thời điểm cấp đông.
 /// </summary>
