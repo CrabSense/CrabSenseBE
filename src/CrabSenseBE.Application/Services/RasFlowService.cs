@@ -4,6 +4,7 @@ using CrabSenseBE.Application.DTOs.IoT;
 using CrabSenseBE.Application.Interfaces;
 using CrabSenseBE.Domain;
 using CrabSenseBE.Domain.Entities;
+using CrabSenseBE.Domain.Enums;
 using CrabSenseBE.Domain.Interfaces;
 
 namespace CrabSenseBE.Application.Services;
@@ -12,18 +13,22 @@ public class RasFlowService : IRasFlowService
 {
     private readonly IUnitOfWork _uow;
     private readonly IEdgeCommandService _edgeCommands;
+    private readonly FarmAreaScope _areas;
 
-    public RasFlowService(IUnitOfWork uow, IEdgeCommandService edgeCommands)
+    public RasFlowService(IUnitOfWork uow, IEdgeCommandService edgeCommands, ICurrentUserService? currentUser = null)
     {
         _uow = uow;
         _edgeCommands = edgeCommands;
+        _areas = new FarmAreaScope(uow, currentUser);
     }
 
     public async Task<ApiResponse<RasFlowDiagramDto>> GetDiagramByAreaAsync(Guid areaId, CancellationToken ct = default)
     {
+        await _areas.EnsureReadAsync(areaId, ct);
         var area = await RequireAreaAsync(areaId, ct);
-        var ws = await EnsureSystemAsync(area, ct);
-        await EnsureDefaultPipelineAsync(ws, ct);
+        var ws = await FindSystemAsync(area, ct);
+        if (ws is null)
+            return ApiResponse<RasFlowDiagramDto>.Ok(EmptyDiagram(area));
         return ApiResponse<RasFlowDiagramDto>.Ok(await BuildDiagramAsync(area, ws, ct));
     }
 
@@ -35,6 +40,7 @@ public class RasFlowService : IRasFlowService
         if (string.IsNullOrWhiteSpace(req.DisplayLabel))
             throw AppException.BadRequest("displayLabel is required.");
 
+        await _areas.EnsureAsync(areaId, manage: true, ct);
         var area = await RequireAreaAsync(areaId, ct);
         var ws = await EnsureSystemAsync(area, ct);
         await EnsureDefaultPipelineAsync(ws, ct);
@@ -77,8 +83,12 @@ public class RasFlowService : IRasFlowService
     public async Task<ApiResponse<RasFlowDiagramDto>> UpdateNodeRelayAsync(
         Guid areaId, Guid nodeId, UpdateRasFlowNodeRelayRequest req, CancellationToken ct = default)
     {
+        var actor = await _areas.CurrentUserAsync(ct);
+        if (actor is not null && actor.Role != UserRole.SystemAdministrator)
+            throw AppException.Forbidden("Cấu hình relay phần cứng thuộc System Administrator.");
+
         var area = await RequireAreaAsync(areaId, ct);
-        var ws = await EnsureSystemAsync(area, ct);
+        var ws = await FindSystemAsync(area, ct) ?? throw AppException.NotFound("WaterSystem");
         var node = await _uow.RasComponents.GetByIdAsync(nodeId, ct)
             ?? throw AppException.NotFound("RasComponent");
         if (node.WaterSystemId != ws.Id)
@@ -104,6 +114,7 @@ public class RasFlowService : IRasFlowService
         {
             var device = await _uow.Devices.GetByIdAsync(relayDeviceId.Value, ct)
                 ?? throw AppException.NotFound("Controller");
+            EnsureDeviceArea(device, area.Id);
             if (!int.TryParse(req.RelayChannel.Trim(), out var channelNo) || channelNo < 1)
                 throw AppException.BadRequest("SSR channel must be a positive number.");
             node.RelayDeviceId = device.Id;
@@ -127,6 +138,7 @@ public class RasFlowService : IRasFlowService
         if (req.NodeIds is null || req.NodeIds.Count == 0)
             throw AppException.BadRequest("nodeIds is required.");
 
+        await _areas.EnsureAsync(areaId, manage: true, ct);
         var area = await RequireAreaAsync(areaId, ct);
         var ws = await EnsureSystemAsync(area, ct);
         var comps = (await _uow.RasComponents.FindAsync(c => c.WaterSystemId == ws.Id, ct)).ToList();
@@ -151,6 +163,7 @@ public class RasFlowService : IRasFlowService
         if (req.FromComponentId == req.ToComponentId)
             throw AppException.BadRequest("A node cannot connect to itself.");
 
+        await _areas.EnsureAsync(areaId, manage: true, ct);
         var area = await RequireAreaAsync(areaId, ct);
         var ws = await EnsureSystemAsync(area, ct);
         var from = await _uow.RasComponents.GetByIdAsync(req.FromComponentId, ct)
@@ -183,6 +196,7 @@ public class RasFlowService : IRasFlowService
     public async Task<ApiResponse<RasFlowDiagramDto>> DeleteFlowAsync(
         Guid areaId, Guid flowId, CancellationToken ct = default)
     {
+        await _areas.EnsureAsync(areaId, manage: true, ct);
         var area = await RequireAreaAsync(areaId, ct);
         var ws = await EnsureSystemAsync(area, ct);
         var flow = await _uow.WaterFlows.GetByIdAsync(flowId, ct)
@@ -196,6 +210,7 @@ public class RasFlowService : IRasFlowService
 
     public async Task<ApiResponse> DeleteNodeAsync(Guid areaId, Guid nodeId, CancellationToken ct = default)
     {
+        await _areas.EnsureAsync(areaId, manage: true, ct);
         var area = await RequireAreaAsync(areaId, ct);
         var ws = await EnsureSystemAsync(area, ct);
         var node = await _uow.RasComponents.GetByIdAsync(nodeId, ct)
@@ -222,12 +237,23 @@ public class RasFlowService : IRasFlowService
     public async Task<ApiResponse<RasFlowDiagramDto>> CommandAsync(
         Guid areaId, Guid nodeId, RasFlowCommandRequest req, Guid? actorId = null, CancellationToken ct = default)
     {
+        var actor = await _areas.CurrentUserAsync(ct);
+        if (actor is not null && actor.Role is not (UserRole.FarmManager or UserRole.FarmStaff))
+            throw AppException.Forbidden("Chỉ Farm Manager và Farm Staff được điều khiển vận hành RAS.");
+        await _areas.EnsureAsync(areaId, manage: false, ct);
+
         var area = await RequireAreaAsync(areaId, ct);
-        var ws = await EnsureSystemAsync(area, ct);
+        var ws = await FindSystemAsync(area, ct) ?? throw AppException.NotFound("WaterSystem");
         var node = await _uow.RasComponents.GetByIdAsync(nodeId, ct)
             ?? throw AppException.NotFound("RasComponent");
         if (node.WaterSystemId != ws.Id)
             throw AppException.BadRequest("Node does not belong to this area RAS.");
+        if (node.RelayDeviceId is Guid linkedDeviceId)
+        {
+            var linked = await _uow.Devices.GetByIdAsync(linkedDeviceId, ct)
+                ?? throw AppException.NotFound("Controller");
+            EnsureDeviceArea(linked, area.Id);
+        }
         if (!node.HasRelay)
             throw AppException.BadRequest("Node has no relay.");
 
@@ -293,7 +319,9 @@ public class RasFlowService : IRasFlowService
     public async Task<ApiResponse<IReadOnlyList<RasComponentDto>>> ListComponentsAsync(
         Guid waterSystemId, CancellationToken ct = default)
     {
-        _ = await _uow.WaterSystems.GetByIdAsync(waterSystemId, ct) ?? throw AppException.NotFound("WaterSystem");
+        var system = await _uow.WaterSystems.GetByIdAsync(waterSystemId, ct) ?? throw AppException.NotFound("WaterSystem");
+        if (system.FarmingAreaId is Guid componentAreaId)
+            await _areas.EnsureReadAsync(componentAreaId, ct);
         var list = (await _uow.RasComponents.FindAsync(c => c.WaterSystemId == waterSystemId, ct))
             .OrderBy(c => c.Position)
             .Select(MapComponent)
@@ -304,7 +332,9 @@ public class RasFlowService : IRasFlowService
     public async Task<ApiResponse<IReadOnlyList<WaterFlowDto>>> ListFlowsAsync(
         Guid waterSystemId, CancellationToken ct = default)
     {
-        _ = await _uow.WaterSystems.GetByIdAsync(waterSystemId, ct) ?? throw AppException.NotFound("WaterSystem");
+        var system = await _uow.WaterSystems.GetByIdAsync(waterSystemId, ct) ?? throw AppException.NotFound("WaterSystem");
+        if (system.FarmingAreaId is Guid flowAreaId)
+            await _areas.EnsureReadAsync(flowAreaId, ct);
         var list = (await _uow.WaterFlows.FindAsync(f => f.WaterSystemId == waterSystemId, ct))
             .OrderBy(f => f.SortOrder)
             .Select(MapFlow)
@@ -315,14 +345,39 @@ public class RasFlowService : IRasFlowService
     private async Task<FarmingArea> RequireAreaAsync(Guid areaId, CancellationToken ct)
         => await _uow.FarmingAreas.GetByIdAsync(areaId, ct) ?? throw AppException.NotFound("FarmingArea");
 
-    private async Task<WaterSystem> EnsureSystemAsync(FarmingArea area, CancellationToken ct)
+    private async Task<WaterSystem?> FindSystemAsync(FarmingArea area, CancellationToken ct)
     {
         var list = (await _uow.WaterSystems.FindAsync(w => w.FarmingAreaId == area.Id, ct)).ToList();
-        var ws = list.FirstOrDefault(w => string.Equals(w.Type, "RAS", StringComparison.OrdinalIgnoreCase))
-                 ?? list.FirstOrDefault();
-        if (ws is not null) return ws;
+        return list.FirstOrDefault(w => string.Equals(w.Type, "RAS", StringComparison.OrdinalIgnoreCase))
+               ?? list.FirstOrDefault();
+    }
 
-        ws = new WaterSystem
+    private static RasFlowDiagramDto EmptyDiagram(FarmingArea area) => new(
+        area.Id,
+        area.Code,
+        area.Name,
+        Guid.Empty,
+        "",
+        null,
+        Array.Empty<RasFlowNodeDto>(),
+        Array.Empty<WaterFlowDto>(),
+        0,
+        0,
+        0,
+        0);
+
+    private static void EnsureDeviceArea(Device device, Guid areaId)
+    {
+        if (device.FarmingAreaId != areaId)
+            throw AppException.Forbidden("Thiết bị relay không thuộc khu này.");
+    }
+
+    private async Task<WaterSystem> EnsureSystemAsync(FarmingArea area, CancellationToken ct)
+    {
+        var existing = await FindSystemAsync(area, ct);
+        if (existing is not null) return existing;
+
+        var ws = new WaterSystem
         {
             FarmingAreaId = area.Id,
             Name = string.IsNullOrWhiteSpace(area.Name) ? "RAS" : $"RAS {area.Name}",

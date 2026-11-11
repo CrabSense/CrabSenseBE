@@ -45,10 +45,12 @@ public class SurvivalRateReportService
     : ISurvivalRateReportService
 {
     private readonly IUnitOfWork _uow;
+    private readonly ReportAreaGate _areas;
 
-    public SurvivalRateReportService(IUnitOfWork uow)
+    public SurvivalRateReportService(IUnitOfWork uow, ICurrentUserService? currentUser = null)
     {
         _uow = uow;
+        _areas = new ReportAreaGate(uow, currentUser);
     }
 
     /// <summary>
@@ -76,6 +78,8 @@ public class SurvivalRateReportService
             throw AppException.BadRequest(
                 "FromDate cannot be greater than ToDate.");
         }
+
+        var allowedAreas = await _areas.AreasAsync(filter.AreaId, cancellationToken);
         // ============================================================
         // 1. KIỂM TRA KHU VỰC NẾU CÓ FILTER
         // ============================================================
@@ -191,6 +195,16 @@ public class SurvivalRateReportService
 
         var crabs = await query
             .ToListAsync(cancellationToken);
+        if (allowedAreas is not null)
+        {
+            crabs = crabs.Where(crab =>
+            {
+                var areaId = crab.BoxAllocations
+                    .OrderByDescending(allocation => allocation.StartTime)
+                    .FirstOrDefault()?.Box?.FarmingRow?.FarmingAreaId;
+                return areaId is Guid id && allowedAreas.Contains(id);
+            }).ToList();
+        }
 
         // ============================================================
         // 5. LỌC THEO KHU VỰC

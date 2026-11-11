@@ -9,8 +9,13 @@ namespace CrabSenseBE.Application.Services;
 public class DashboardService : IDashboardService
 {
     private readonly IUnitOfWork _uow;
+    private readonly FarmAreaScope _areas;
 
-    public DashboardService(IUnitOfWork uow) => _uow = uow;
+    public DashboardService(IUnitOfWork uow, ICurrentUserService? currentUser = null)
+    {
+        _uow = uow;
+        _areas = new FarmAreaScope(uow, currentUser);
+    }
 
     public async Task<ApiResponse<DashboardOverviewDto>> GetOverviewAsync(
         Guid? farmingAreaId = null, CancellationToken ct = default)
@@ -35,7 +40,7 @@ public class DashboardService : IDashboardService
         // ============================================================
         // MỚI: TÍNH KPI SUMMARY
         // ============================================================
-        var kpiSummary = await CalculateKpiSummaryAsync(scope, farmingAreaId, ct);
+        var kpiSummary = await CalculateKpiSummaryAsync(scope, ct);
 
         return ApiResponse<DashboardOverviewDto>.Ok(new DashboardOverviewDto(
             totalBoxes,
@@ -182,7 +187,8 @@ public class DashboardService : IDashboardService
 
     private async Task<AreaScope> ResolveScopeAsync(Guid? farmingAreaId, CancellationToken ct)
     {
-        if (farmingAreaId is null || farmingAreaId == Guid.Empty)
+        var allowed = await _areas.SelectionAsync(farmingAreaId, ct);
+        if (allowed is null)
         {
             var allBoxes = (await _uow.Boxes.GetAllAsync(ct)).ToList();
             var allSensors = (await _uow.Sensors.GetAllAsync(ct)).ToList();
@@ -190,26 +196,30 @@ public class DashboardService : IDashboardService
             return AreaScope.Unfiltered(allBoxes, allSensors, allDevices);
         }
 
-        var rowIds = (await _uow.FarmingRows.FindAsync(r => r.FarmingAreaId == farmingAreaId.Value, ct))
-            .Select(r => r.Id)
+        var rowIds = (await _uow.FarmingRows.GetAllAsync(ct))
+            .Where(row => allowed.Contains(row.FarmingAreaId))
+            .Select(row => row.Id)
             .ToHashSet();
-        var boxes = (await _uow.Boxes.FindAsync(b => rowIds.Contains(b.FarmingRowId), ct)).ToList();
-        var boxIds = boxes.Select(b => b.Id).ToHashSet();
-
-        var waterSystemIds = (await _uow.WaterSystems.FindAsync(
-                w => w.FarmingAreaId == farmingAreaId.Value, ct))
-            .Select(w => w.Id)
-            .ToHashSet();
-        var sensors = (await _uow.Sensors.FindAsync(
-                s => s.WaterSystemId != null && waterSystemIds.Contains(s.WaterSystemId.Value), ct))
+        var boxes = (await _uow.Boxes.GetAllAsync(ct))
+            .Where(box => rowIds.Contains(box.FarmingRowId))
             .ToList();
-        var sensorIds = sensors.Select(s => s.Id).ToHashSet();
-        var deviceIds = sensors.Where(s => s.DeviceId != null).Select(s => s.DeviceId!.Value).ToHashSet();
+        var boxIds = boxes.Select(box => box.Id).ToHashSet();
+
+        var waterSystemIds = (await _uow.WaterSystems.GetAllAsync(ct))
+            .Where(system => system.FarmingAreaId is Guid areaId && allowed.Contains(areaId))
+            .Select(system => system.Id)
+            .ToHashSet();
+        var sensors = (await _uow.Sensors.GetAllAsync(ct))
+            .Where(sensor => sensor.WaterSystemId is Guid systemId && waterSystemIds.Contains(systemId))
+            .ToList();
+        var sensorIds = sensors.Select(sensor => sensor.Id).ToHashSet();
+        var deviceIds = sensors.Where(sensor => sensor.DeviceId is Guid).Select(sensor => sensor.DeviceId!.Value).ToHashSet();
         var devices = (await _uow.Devices.GetAllAsync(ct))
-            .Where(d => deviceIds.Contains(d.Id))
+            .Where(device => deviceIds.Contains(device.Id)
+                || (device.FarmingAreaId is Guid areaId && allowed.Contains(areaId)))
             .ToList();
 
-        return new AreaScope(true, boxes, boxIds, sensors, sensorIds, devices);
+        return new AreaScope(true, boxes, boxIds, sensors, sensorIds, devices, allowed);
     }
 
     private sealed class AreaScope
@@ -220,6 +230,7 @@ public class DashboardService : IDashboardService
         public List<Domain.Entities.Sensor> Sensors { get; }
         public HashSet<Guid> SensorIds { get; }
         public List<Domain.Entities.Device> Devices { get; }
+        public HashSet<Guid>? AreaIds { get; }
 
         public AreaScope(
             bool isFiltered,
@@ -227,7 +238,8 @@ public class DashboardService : IDashboardService
             HashSet<Guid> boxIds,
             List<Domain.Entities.Sensor> sensors,
             HashSet<Guid> sensorIds,
-            List<Domain.Entities.Device> devices)
+            List<Domain.Entities.Device> devices,
+            HashSet<Guid>? areaIds = null)
         {
             IsFiltered = isFiltered;
             Boxes = boxes;
@@ -235,6 +247,7 @@ public class DashboardService : IDashboardService
             Sensors = sensors;
             SensorIds = sensorIds;
             Devices = devices;
+            AreaIds = areaIds;
         }
 
         public static AreaScope Unfiltered(
@@ -248,7 +261,7 @@ public class DashboardService : IDashboardService
     // MỚI: TÍNH KPI SUMMARY CHO DASHBOARD
     // ============================================================
     private async Task<DashboardKpiSummaryDto?> CalculateKpiSummaryAsync(
-        AreaScope scope, Guid? farmingAreaId, CancellationToken ct)
+        AreaScope scope, CancellationToken ct)
     {
         var crabs = (await _uow.Crabs.GetAllAsync(ct))
             .Where(c => c.BoxId is Guid bid && scope.BoxIds.Contains(bid))
@@ -277,22 +290,19 @@ public class DashboardService : IDashboardService
             ? decimal.Round((decimal)dead / total * 100, 2) : 0;
 
         // Tổng sản lượng thu hoạch (từ HarvestVouchers)
-        var harvestVouchers = await _uow.HarvestVouchers.FindAsync(
-    v =>
-        v.Status == HarvestStatus.Completed &&
-        (!farmingAreaId.HasValue ||
-         v.FarmingAreaId == farmingAreaId.Value),
-    ct);
+        var harvestVouchers = (await _uow.HarvestVouchers.FindAsync(
+                v => v.Status == HarvestStatus.Completed, ct))
+            .Where(voucher => scope.AreaIds is null
+                || (voucher.FarmingAreaId is Guid areaId && scope.AreaIds.Contains(areaId)));
         var totalHarvestWeightKg = harvestVouchers.Sum(v => v.TotalWeightKg);
 
         // Tồn kho cấp đông
         HashSet<Guid>? areaVoucherIds = null;
 
-        if (farmingAreaId.HasValue)
+        if (scope.AreaIds is not null)
         {
-            var areaVouchers = await _uow.HarvestVouchers.FindAsync(
-                v => v.FarmingAreaId == farmingAreaId.Value,
-                ct);
+            var areaVouchers = (await _uow.HarvestVouchers.GetAllAsync(ct))
+                .Where(voucher => voucher.FarmingAreaId is Guid areaId && scope.AreaIds.Contains(areaId));
 
             areaVoucherIds = areaVouchers
                 .Select(v => v.Id)

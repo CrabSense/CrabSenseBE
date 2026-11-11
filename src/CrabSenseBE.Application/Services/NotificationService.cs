@@ -25,19 +25,22 @@ public class NotificationService : INotificationService
     private readonly ILogger<NotificationService> _logger;
     private readonly FcmOptions _fcm;
     private readonly NotificationOptions _fallback;
+    private readonly ICurrentUserService? _currentUser;
 
     public NotificationService(
         IUnitOfWork uow,
         IHttpClientFactory httpClientFactory,
         ILogger<NotificationService> logger,
         IOptions<FcmOptions> fcm,
-        IOptions<NotificationOptions> fallback)
+        IOptions<NotificationOptions> fallback,
+        ICurrentUserService? currentUser = null)
     {
         _uow = uow;
         _httpClientFactory = httpClientFactory;
         _logger = logger;
         _fcm = fcm.Value;
         _fallback = fallback.Value;
+        _currentUser = currentUser;
     }
 
     public async Task<ApiResponse<IEnumerable<NotificationDto>>> GetByUserAsync(
@@ -277,6 +280,11 @@ public class NotificationService : INotificationService
         var rule = (await _uow.NotificationRules.FindAsync(r => r.TypeCode == code, ct)).FirstOrDefault()
             ?? throw AppException.NotFound("NotificationRule");
 
+        if (NotificationTypeCodes.IsWarningType(code)
+            && (req.ChannelCodes is not null || req.TitleTemplate is not null || req.BodyTemplate is not null))
+            throw AppException.Forbidden(
+                "Kênh, mẫu và hạ tầng gửi thông báo thuộc System Administrator.");
+
         if (req.MinSeverity is not null && !string.IsNullOrWhiteSpace(req.MinSeverity)
             && !Enum.TryParse<AlertSeverity>(req.MinSeverity.Trim(), true, out _))
             throw AppException.BadRequest("minSeverity must be Info, Warning or Critical.");
@@ -311,6 +319,8 @@ public class NotificationService : INotificationService
             rule.BodyTemplate = string.IsNullOrWhiteSpace(req.BodyTemplate) ? null : req.BodyTemplate.Trim();
 
         _uow.NotificationRules.Update(rule);
+        var actorId = _currentUser is { IsAuthenticated: true } ? _currentUser.UserId : (Guid?)null;
+        await ConfigAudit.WriteAsync(_uow, actorId, "UpdateNotificationRule", "NotificationRule", rule.Id, rule.TypeCode, ct);
         await _uow.SaveChangesAsync(ct);
         return ApiResponse<NotificationRuleDto>.Ok(MapRule(rule), "Rule updated.");
     }

@@ -10,8 +10,13 @@ namespace CrabSenseBE.Application.Services;
 public class MoltingReportService : IMoltingReportService
 {
     private readonly IUnitOfWork _uow;
+    private readonly ReportAreaGate _areas;
 
-    public MoltingReportService(IUnitOfWork uow) => _uow = uow;
+    public MoltingReportService(IUnitOfWork uow, ICurrentUserService? currentUser = null)
+    {
+        _uow = uow;
+        _areas = new ReportAreaGate(uow, currentUser);
+    }
 
     public async Task<MoltingReportDto> GetMoltingReportAsync(
         CancellationToken ct = default)
@@ -42,6 +47,8 @@ public class MoltingReportService : IMoltingReportService
             throw AppException.BadRequest(
                 "FromDate cannot be greater than ToDate.");
         }
+
+        var allowedAreas = await _areas.AreasAsync(filter.AreaId, ct);
         if (filter.AreaId.HasValue)
         {
             var areaExists = await _uow.FarmingAreas.AnyAsync(
@@ -81,6 +88,17 @@ public class MoltingReportService : IMoltingReportService
             crabs = crabs
                 .Where(crab => crab.CrabLotId == filter.CrabLotId.Value)
                 .ToList();
+        }
+
+        if (allowedAreas is not null)
+        {
+            crabs = crabs.Where(crab =>
+            {
+                var areaId = crab.BoxAllocations
+                    .OrderByDescending(allocation => allocation.StartTime)
+                    .FirstOrDefault()?.Box?.FarmingRow?.FarmingAreaId;
+                return areaId is Guid id && allowedAreas.Contains(id);
+            }).ToList();
         }
 
         // 2. Lấy MoltingRecords

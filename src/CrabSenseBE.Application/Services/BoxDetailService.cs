@@ -13,15 +13,18 @@ public class BoxDetailService : IBoxDetailService
 {
     private readonly IUnitOfWork _uow;
     private readonly IBoxQrService _boxQr;
+    private readonly FarmAreaScope _areas;
 
-    public BoxDetailService(IUnitOfWork uow, IBoxQrService boxQr)
+    public BoxDetailService(IUnitOfWork uow, IBoxQrService boxQr, ICurrentUserService? currentUser = null)
     {
         _uow = uow;
         _boxQr = boxQr;
+        _areas = new FarmAreaScope(uow, currentUser);
     }
 
     public async Task<ApiResponse<BoxDetailDto>> GetDetailAsync(Guid boxId, CancellationToken ct = default)
     {
+        await _areas.EnsureBoxAsync(boxId, manage: false, ct);
         var box = await _uow.Boxes.GetByIdAsync(boxId, ct)
             ?? throw AppException.NotFound("Box");
         var row = _uow.FarmingRows is null
@@ -79,6 +82,7 @@ public class BoxDetailService : IBoxDetailService
     public async Task<ApiResponse<IEnumerable<BoxCrabItemDto>>> GetCrabsAsync(
         Guid boxId, CancellationToken ct = default)
     {
+        await _areas.EnsureBoxAsync(boxId, manage: false, ct);
         _ = await _uow.Boxes.GetByIdAsync(boxId, ct) ?? throw AppException.NotFound("Box");
         var crabs = await LiveCrabsInBoxAsync(boxId, ct);
         var lotIds = crabs.Select(c => c.CrabLotId).Where(id => id != Guid.Empty).Distinct().ToList();
@@ -129,6 +133,7 @@ public class BoxDetailService : IBoxDetailService
     public async Task<ApiResponse<IEnumerable<BoxVideoItemDto>>> GetVideosAsync(
         Guid boxId, CancellationToken ct = default)
     {
+        await _areas.EnsureBoxAsync(boxId, manage: false, ct);
         _ = await _uow.Boxes.GetByIdAsync(boxId, ct) ?? throw AppException.NotFound("Box");
         var media = (await _uow.MediaAssets.FindAsync(
                 m => m.BoxId == boxId && m.Category == "video", ct))
@@ -159,6 +164,7 @@ public class BoxDetailService : IBoxDetailService
         if (!scan.Success || scan.Data?.Box is null)
             throw AppException.NotFound("Box for QR code");
 
+        await _areas.EnsureBoxAsync(scan.Data.Box.Id, manage: false, ct);
         return ApiResponse<object>.Ok(new { boxId = scan.Data.Box.Id.ToString() });
     }
 
@@ -180,6 +186,7 @@ public class BoxDetailService : IBoxDetailService
 
         var scanned = scan.Data;
         var boxId = scanned.Box.Id;
+        await _areas.EnsureBoxAsync(boxId, manage: false, ct);
         var box = await _uow.Boxes.GetByIdAsync(boxId, ct)
             ?? throw AppException.NotFound("Box");
 
@@ -371,6 +378,7 @@ public class BoxDetailService : IBoxDetailService
     public async Task<ApiResponse<BoxCrabItemDto>> AddCrabAsync(
         Guid boxId, MobileAddCrabRequest req, CancellationToken ct = default)
     {
+        await _areas.EnsureBoxAsync(boxId, manage: false, ct);
         var box = await _uow.Boxes.GetByIdAsync(boxId, ct) ?? throw AppException.NotFound("Box");
 
         var liveInBox = (await LiveCrabsInBoxAsync(boxId, ct)).Count > 0;

@@ -303,6 +303,9 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<Guid?>("FarmingAreaId")
+                        .HasColumnType("uuid");
+
                     b.Property<bool>("IsActive")
                         .HasColumnType("boolean");
 
@@ -322,7 +325,14 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.Property<DateTime?>("UpdatedAt")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<Guid?>("WaterSystemId")
+                        .HasColumnType("uuid");
+
                     b.HasKey("Id");
+
+                    b.HasIndex("FarmingAreaId");
+
+                    b.HasIndex("WaterSystemId");
 
                     b.ToTable("AlertThresholds", "be");
                 });
@@ -3649,6 +3659,19 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.Navigation("AlertThreshold");
 
                     b.Navigation("Sensor");
+                });
+
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.AlertThreshold", b =>
+                {
+                    b.HasOne("CrabSenseBE.Domain.Entities.FarmingArea", null)
+                        .WithMany()
+                        .HasForeignKey("FarmingAreaId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("CrabSenseBE.Domain.Entities.WaterSystem", null)
+                        .WithMany()
+                        .HasForeignKey("WaterSystemId")
+                        .OnDelete(DeleteBehavior.Restrict);
                 });
 
             modelBuilder.Entity("CrabSenseBE.Domain.Entities.Box", b =>

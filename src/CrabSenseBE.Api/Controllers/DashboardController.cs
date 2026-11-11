@@ -9,7 +9,7 @@ namespace CrabSenseBE.Api.Controllers;
 
 [ApiController]
 [Route("api/dashboard")]
-[Authorize]
+[Authorize(Roles = AppRoles.FarmPortal)]
 [Tags("31. Dashboard")]
 [Produces("application/json")]
 public class DashboardController : ControllerBase

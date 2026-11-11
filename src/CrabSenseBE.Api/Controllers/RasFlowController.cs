@@ -18,50 +18,50 @@ public class AreaRasFlowController : ControllerBase
     private readonly IRasFlowService _service;
     public AreaRasFlowController(IRasFlowService service) => _service = service;
 
-    /// <summary>[READ] Sơ đồ tuần hoàn theo khu. Tự tạo WaterSystem + pipeline mặc định nếu chưa có.</summary>
+    /// <summary>[READ] Sơ đồ tuần hoàn theo khu. Không tạo WaterSystem hay pipeline mặc định.</summary>
     [HttpGet("{areaId:guid}/ras-flow")]
     public async Task<IActionResult> Get(Guid areaId, CancellationToken ct)
         => Ok(await _service.GetDiagramByAreaAsync(areaId, ct));
 
     /// <summary>[UPDATE] Đổi thứ tự hiển thị. Không dùng để dựng ống nước.</summary>
     [HttpPost("{areaId:guid}/ras-flow/reorder")]
-    [Authorize(Roles = AppRoles.FarmWrite)]
+    [Authorize(Roles = AppRoles.FarmManage)]
     public async Task<IActionResult> Reorder(Guid areaId, [FromBody] ReorderRasFlowRequest req, CancellationToken ct)
         => Ok(await _service.ReorderAsync(areaId, req, ct));
 
     /// <summary>[CREATE] Ống nước từ node này sang node khác. Không xếp lại thành một hàng.</summary>
     [HttpPost("{areaId:guid}/ras-flow/flows")]
-    [Authorize(Roles = AppRoles.FarmWrite)]
+    [Authorize(Roles = AppRoles.FarmManage)]
     public async Task<IActionResult> AddFlow(Guid areaId, [FromBody] CreateWaterFlowRequest req, CancellationToken ct)
         => Ok(await _service.AddFlowAsync(areaId, req, ct));
 
     /// <summary>[DELETE] Gỡ một ống nước. Các ống khác giữ nguyên.</summary>
     [HttpDelete("{areaId:guid}/ras-flow/flows/{flowId:guid}")]
-    [Authorize(Roles = AppRoles.FarmWrite)]
+    [Authorize(Roles = AppRoles.FarmManage)]
     public async Task<IActionResult> DeleteFlow(Guid areaId, Guid flowId, CancellationToken ct)
         => Ok(await _service.DeleteFlowAsync(areaId, flowId, ct));
 
     /// <summary>[CREATE] Thêm RASComponent (Type suy ra từ nodeCode).</summary>
     [HttpPost("{areaId:guid}/ras-flow/nodes")]
-    [Authorize(Roles = AppRoles.FarmWrite)]
+    [Authorize(Roles = AppRoles.FarmManage)]
     public async Task<IActionResult> AddNode(Guid areaId, [FromBody] CreateRasFlowNodeRequest req, CancellationToken ct)
         => Ok(await _service.AddNodeAsync(areaId, req, ct));
 
     [HttpPut("{areaId:guid}/ras-flow/nodes/{nodeId:guid}/relay")]
-    [Authorize(Roles = AppRoles.FarmWrite)]
+    [Authorize(Roles = AppRoles.Platform)]
     public async Task<IActionResult> UpdateRelay(
         Guid areaId, Guid nodeId, [FromBody] UpdateRasFlowNodeRelayRequest req, CancellationToken ct)
         => Ok(await _service.UpdateNodeRelayAsync(areaId, nodeId, req, ct));
 
     /// <summary>[DELETE] Xóa node + các WaterFlow liên quan.</summary>
     [HttpDelete("{areaId:guid}/ras-flow/nodes/{nodeId:guid}")]
-    [Authorize(Roles = AppRoles.FarmWrite)]
+    [Authorize(Roles = AppRoles.FarmManage)]
     public async Task<IActionResult> DeleteNode(Guid areaId, Guid nodeId, CancellationToken ct)
         => Ok(await _service.DeleteNodeAsync(areaId, nodeId, ct));
 
     /// <summary>[UPDATE] Bật/tắt relay trên node (on/off/toggle).</summary>
     [HttpPost("{areaId:guid}/ras-flow/nodes/{nodeId:guid}/command")]
-    [Authorize(Roles = AppRoles.FarmWrite)]
+    [Authorize(Roles = AppRoles.FarmManager + "," + AppRoles.FarmStaff + ",Staff")]
     public async Task<IActionResult> Command(
         Guid areaId, Guid nodeId, [FromBody] RasFlowCommandRequest req, CancellationToken ct)
         => Ok(await _service.CommandAsync(areaId, nodeId, req, TryGetUserId(), ct));

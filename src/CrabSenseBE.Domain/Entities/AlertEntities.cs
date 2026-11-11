@@ -11,6 +11,12 @@ public class AlertThreshold : BaseEntity
     public decimal MaxValue { get; set; }
     public AlertSeverity Severity { get; set; } = AlertSeverity.Warning;
     public bool IsActive { get; set; } = true;
+
+    /// <summary>Khu áp dụng ngưỡng. Null = dữ liệu cũ, chưa gắn khu.</summary>
+    public Guid? FarmingAreaId { get; set; }
+
+    /// <summary>Hệ thống nước trong khu, nếu ngưỡng chỉ áp dụng cho một vòng nước.</summary>
+    public Guid? WaterSystemId { get; set; }
 }
 
 /// <summary>Cảnh báo phát sinh — MOD-SYS</summary>

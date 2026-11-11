@@ -28,10 +28,12 @@ public class OperationalEfficiencyReportService
     : IOperationalEfficiencyReportService
 {
     private readonly IUnitOfWork _uow;
+    private readonly ReportAreaGate _areas;
 
-    public OperationalEfficiencyReportService(IUnitOfWork uow)
+    public OperationalEfficiencyReportService(IUnitOfWork uow, ICurrentUserService? currentUser = null)
     {
         _uow = uow;
+        _areas = new ReportAreaGate(uow, currentUser);
     }
 
     public async Task<OperationalEfficiencyDto>
@@ -94,11 +96,13 @@ public class OperationalEfficiencyReportService
             .Query()
             .ToListAsync(cancellationToken);
 
+        var boxIds = await _areas.BoxIdsAsync(null, cancellationToken);
         var crabs = allCrabs
             .Where(c => c.StockedAt >= fromDate
                      && c.StockedAt < toDate)
             .Where(c => !filter.CrabLotId.HasValue
              || c.CrabLotId == filter.CrabLotId.Value)
+            .Where(c => boxIds is null || (c.BoxId is Guid boxId && boxIds.Contains(boxId)))
             .ToList();
 
         // ============================================================

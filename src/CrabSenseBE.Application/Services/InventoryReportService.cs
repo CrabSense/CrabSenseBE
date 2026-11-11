@@ -12,10 +12,12 @@ namespace CrabSenseBE.Application.Services;
 public class InventoryReportService : IInventoryReportService
 {
     private readonly IUnitOfWork _uow;
+    private readonly ReportAreaGate _areas;
 
-    public InventoryReportService(IUnitOfWork uow)
+    public InventoryReportService(IUnitOfWork uow, ICurrentUserService? currentUser = null)
     {
         _uow = uow;
+        _areas = new ReportAreaGate(uow, currentUser);
     }
 
     /// <summary>
@@ -62,8 +64,10 @@ public class InventoryReportService : IInventoryReportService
             }
         }
 
-        // Lấy danh sách các lô cấp đông.
-        var lots = await _uow.FrozenLots.GetAllAsync(cancellationToken);
+        // Lấy danh sách các lô cấp đông trong khu được phân công.
+        var lots = await LimitLotsAsync(
+            await _uow.FrozenLots.GetAllAsync(cancellationToken),
+            cancellationToken);
 
         // ============================================================
         // 1. GIỚI HẠN DỮ LIỆU THEO THỜI ĐIỂM
@@ -420,5 +424,20 @@ public class InventoryReportService : IInventoryReportService
             ByGrade: byGrade,
             ExpiryAlerts: expiryAlerts,
             Trend: trend);
+    }
+
+    private async Task<IEnumerable<Domain.Entities.FrozenLot>> LimitLotsAsync(
+        IEnumerable<Domain.Entities.FrozenLot> lots,
+        CancellationToken cancellationToken)
+    {
+        var allowed = await _areas.AreasAsync(null, cancellationToken);
+        if (allowed is null) return lots;
+        var voucherAreas = (await _uow.HarvestVouchers.GetAllAsync(cancellationToken))
+            .Where(voucher => voucher.FarmingAreaId is Guid)
+            .ToDictionary(voucher => voucher.Id, voucher => voucher.FarmingAreaId!.Value);
+        return lots.Where(lot =>
+            lot.HarvestVoucherId is Guid voucherId
+            && voucherAreas.TryGetValue(voucherId, out var areaId)
+            && allowed.Contains(areaId));
     }
 }

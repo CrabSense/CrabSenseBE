@@ -37,12 +37,33 @@ public class FarmingService : IFarmingService
     private readonly IUnitOfWork _uow;
     private readonly IBoxQrService _boxQr;
     private readonly IPublicImageStorage _images;
+    private readonly FarmAreaScope _areas;
 
-    public FarmingService(IUnitOfWork uow, IBoxQrService boxQr, IPublicImageStorage images)
+    public FarmingService(
+        IUnitOfWork uow,
+        IBoxQrService boxQr,
+        IPublicImageStorage images,
+        ICurrentUserService? currentUser = null)
     {
         _uow = uow;
         _boxQr = boxQr;
         _images = images;
+        _areas = new FarmAreaScope(uow, currentUser);
+    }
+
+    private Task<HashSet<Guid>?> ScopeAreaIdsAsync(CancellationToken ct) => _areas.AreaIdsAsync(ct);
+
+    private Task EnsureAreaAsync(Guid areaId, bool manage, CancellationToken ct) =>
+        _areas.EnsureAsync(areaId, manage, ct);
+
+    private Task<Guid> AreaIdOfBoxAsync(Box box, CancellationToken ct) =>
+        _areas.AreaIdOfBoxAsync(box, ct);
+
+    private async Task AuditConfigAsync(
+        string action, string entityType, Guid entityId, string? details, CancellationToken ct)
+    {
+        var user = await _areas.CurrentUserAsync(ct);
+        await ConfigAudit.WriteAsync(_uow, user?.Id, action, entityType, entityId, details, ct);
     }
 
     // ─── FarmingArea ────────────────────────────────────────────────────────
@@ -51,6 +72,9 @@ public class FarmingService : IFarmingService
         FarmingAreaFilter filter, CancellationToken ct = default)
     {
         var all = await _uow.FarmingAreas.GetAllAsync(ct);
+        var scope = await ScopeAreaIdsAsync(ct);
+        if (scope is not null)
+            all = all.Where(area => scope.Contains(area.Id)).ToList();
         var administrators = await AreaAdministratorQuery.ByAreaAsync(
             _uow.FarmingAreas.Query(), all.Select(area => area.Id), ct);
         var q = all.AsEnumerable();
@@ -90,6 +114,7 @@ public class FarmingService : IFarmingService
     public async Task<ApiResponse<FarmingAreaDto>> GetAreaByIdAsync(Guid id, CancellationToken ct = default)
     {
         var area = await RequireAreaAsync(id, requireActive: false, ct);
+        await EnsureAreaAsync(area.Id, manage: false, ct);
         var administrators = await AreaAdministratorQuery.ByAreaAsync(
             _uow.FarmingAreas.Query(), new[] { area.Id }, ct);
         var stats = await BuildAreaStatsAsync(new[] { area.Id }, ct);
@@ -135,6 +160,7 @@ public class FarmingService : IFarmingService
         ApplyStatus(area, status);
         area.Administrators.Add(administrator);
         await _uow.FarmingAreas.AddAsync(area, ct);
+        await AuditConfigAsync("CreateFarmingArea", "FarmingArea", area.Id, area.Code, ct);
         await _uow.SaveChangesAsync(ct);
         return ApiResponse<FarmingAreaDto>.Ok(
             MapArea(area, new AreaAdministratorQuery.Person(administrator.Id, administrator.FullName)), "Created.");
@@ -143,6 +169,7 @@ public class FarmingService : IFarmingService
     public async Task<ApiResponse<FarmingAreaDto>> UpdateAreaAsync(Guid id, UpdateFarmingAreaRequest req, CancellationToken ct = default)
     {
         var area = await RequireAreaAsync(id, requireActive: false, ct);
+        await EnsureAreaAsync(area.Id, manage: true, ct);
         if (string.IsNullOrWhiteSpace(req.Name))
             throw AppException.BadRequest("Name is required.");
         if (req.AreaSquareMeters is < 0)
@@ -174,6 +201,7 @@ public class FarmingService : IFarmingService
             ApplyStatus(area, active ? FarmStatus.Active : FarmStatus.Closed);
 
         _uow.FarmingAreas.Update(area);
+        await AuditConfigAsync("UpdateFarmingArea", "FarmingArea", area.Id, area.Code, ct);
         await _uow.SaveChangesAsync(ct);
         var administrators = await AreaAdministratorQuery.ByAreaAsync(
             _uow.FarmingAreas.Query(), new[] { area.Id }, ct);
@@ -186,6 +214,7 @@ public class FarmingService : IFarmingService
         Guid id, UpdateAreaMapRequest req, CancellationToken ct = default)
     {
         var area = await RequireAreaAsync(id, requireActive: false, ct);
+        await EnsureAreaAsync(area.Id, manage: true, ct);
 
         var coords = new[] { req.MapX1, req.MapY1, req.MapX2, req.MapY2 };
         var provided = coords.Count(c => c is not null);
@@ -250,7 +279,16 @@ public class FarmingService : IFarmingService
 
         FarmingArea? area = null;
         if (areaId is Guid id && id != Guid.Empty)
+        {
             area = await RequireAreaAsync(id, requireActive: false, ct);
+            await EnsureAreaAsync(area.Id, manage: true, ct);
+        }
+        else
+        {
+            var user = await _areas.CurrentUserAsync(ct);
+            if (user is not null && user.Role != UserRole.FarmAdministrator)
+                throw AppException.Forbidden("Chỉ Farm Administrator được tải ảnh khu.");
+        }
 
         var folder = area is null
             ? MediaFolderPath.Join(MediaFolderPath.PendingSegment, MediaFolderPath.AreasLeaf)
@@ -300,6 +338,7 @@ public class FarmingService : IFarmingService
         Guid id, bool cascade = false, CancellationToken ct = default)
     {
         var area = await RequireAreaAsync(id, requireActive: false, ct);
+        await EnsureAreaAsync(area.Id, manage: true, ct);
 
         if (!cascade)
         {
@@ -308,6 +347,7 @@ public class FarmingService : IFarmingService
                 throw AppException.Conflict("Cannot delete area that still has rows. Delete rows first.");
 
         _uow.FarmingAreas.Remove(area);
+        await AuditConfigAsync("DeleteFarmingArea", "FarmingArea", area.Id, area.Code, ct);
         await _uow.SaveChangesAsync(ct);
         return ApiResponse.Ok("Deleted.");
         }
@@ -349,9 +389,15 @@ public class FarmingService : IFarmingService
     public async Task<ApiResponse<PagedResult<FarmingRowDto>>> GetRowsAsync(
         FarmingRowFilter filter, CancellationToken ct = default)
     {
+        if (filter.FarmingAreaId is Guid requestedArea && requestedArea != Guid.Empty)
+            await EnsureAreaAsync(requestedArea, manage: false, ct);
+
         var all = await _uow.FarmingRows.GetAllAsync(ct);
         var areas = (await _uow.FarmingAreas.GetAllAsync(ct)).ToDictionary(a => a.Id);
+        var scope = await ScopeAreaIdsAsync(ct);
         var q = all.AsEnumerable();
+        if (scope is not null)
+            q = q.Where(row => scope.Contains(row.FarmingAreaId));
 
         if (filter.FarmingAreaId.HasValue)
             q = q.Where(r => r.FarmingAreaId == filter.FarmingAreaId.Value);
@@ -385,6 +431,7 @@ public class FarmingService : IFarmingService
     public async Task<ApiResponse<FarmingRowDto>> GetRowByIdAsync(Guid id, CancellationToken ct = default)
     {
         var row = await RequireRowAsync(id, requireActive: false, ct);
+        await EnsureAreaAsync(row.FarmingAreaId, manage: false, ct);
         var area = await _uow.FarmingAreas.GetByIdAsync(row.FarmingAreaId, ct);
         var stats = await BuildRowStatsAsync(new[] { row.Id }, ct);
         return ApiResponse<FarmingRowDto>.Ok(MapRow(row, area, stats.GetValueOrDefault(row.Id)));
@@ -407,6 +454,7 @@ public class FarmingService : IFarmingService
             throw AppException.BadRequest("SortOrder must be >= 0.");
 
         var area = await RequireAreaAsync(req.FarmingAreaId, requireActive: true, ct);
+        await EnsureAreaAsync(area.Id, manage: true, ct);
         var status = ParseFarmStatus(req.Status, FarmStatus.Active);
         var name = req.Name.Trim();
         var sameArea = await _uow.FarmingRows.FindAsync(r => r.FarmingAreaId == area.Id, ct);
@@ -425,6 +473,7 @@ public class FarmingService : IFarmingService
         };
         ApplyStatus(row, status);
         await _uow.FarmingRows.AddAsync(row, ct);
+        await AuditConfigAsync("CreateFarmingRow", "FarmingRow", row.Id, row.Code, ct);
         await _uow.SaveChangesAsync(ct);
         return ApiResponse<FarmingRowDto>.Ok(MapRow(row, area), "Created.");
     }
@@ -432,6 +481,7 @@ public class FarmingService : IFarmingService
     public async Task<ApiResponse<FarmingRowDto>> UpdateRowAsync(Guid id, UpdateFarmingRowRequest req, CancellationToken ct = default)
     {
         var row = await RequireRowAsync(id, requireActive: false, ct);
+        await EnsureAreaAsync(row.FarmingAreaId, manage: true, ct);
         if (string.IsNullOrWhiteSpace(req.Name))
             throw AppException.BadRequest("Name is required.");
         if (req.Capacity is < 0)
@@ -467,6 +517,7 @@ public class FarmingService : IFarmingService
             ApplyStatus(row, active ? FarmStatus.Active : FarmStatus.Closed);
 
         _uow.FarmingRows.Update(row);
+        await AuditConfigAsync("UpdateFarmingRow", "FarmingRow", row.Id, row.Code, ct);
         await _uow.SaveChangesAsync(ct);
 
         var area = await _uow.FarmingAreas.GetByIdAsync(row.FarmingAreaId, ct);
@@ -478,6 +529,7 @@ public class FarmingService : IFarmingService
         Guid id, UpdateMapPointRequest req, CancellationToken ct = default)
     {
         var row = await RequireRowAsync(id, requireActive: false, ct);
+        await EnsureAreaAsync(row.FarmingAreaId, manage: true, ct);
         ValidateMapPoint(req);
 
         row.MapX = req.MapX;
@@ -494,12 +546,14 @@ public class FarmingService : IFarmingService
     public async Task<ApiResponse> DeleteRowAsync(Guid id, CancellationToken ct = default)
     {
         var row = await RequireRowAsync(id, requireActive: false, ct);
+        await EnsureAreaAsync(row.FarmingAreaId, manage: true, ct);
 
         var hasBoxes = await _uow.Boxes.AnyAsync(b => b.FarmingRowId == id, ct);
         if (hasBoxes)
             throw AppException.Conflict("Cannot delete row that still has boxes. Delete boxes first.");
 
         _uow.FarmingRows.Remove(row);
+        await AuditConfigAsync("DeleteFarmingRow", "FarmingRow", row.Id, row.Code, ct);
         await _uow.SaveChangesAsync(ct);
         return ApiResponse.Ok("Deleted.");
     }
@@ -508,8 +562,22 @@ public class FarmingService : IFarmingService
 
     public async Task<ApiResponse<PagedResult<BoxDto>>> GetBoxesAsync(BoxFilter filter, CancellationToken ct = default)
     {
+        if (filter.FarmingAreaId is Guid requestedArea && requestedArea != Guid.Empty)
+            await EnsureAreaAsync(requestedArea, manage: false, ct);
+        if (filter.FarmingRowId is Guid requestedRow && requestedRow != Guid.Empty)
+            await _areas.EnsureRowAsync(requestedRow, manage: false, ct);
+
         var ctx = await LoadBoxContextAsync(ct);
+        var scope = await ScopeAreaIdsAsync(ct);
         var q = ctx.Boxes.AsEnumerable();
+        if (scope is not null)
+        {
+            var allowedRows = ctx.Rows.Values
+                .Where(row => scope.Contains(row.FarmingAreaId))
+                .Select(row => row.Id)
+                .ToHashSet();
+            q = q.Where(box => allowedRows.Contains(box.FarmingRowId));
+        }
 
         if (filter.FarmingRowId.HasValue)
             q = q.Where(b => b.FarmingRowId == filter.FarmingRowId.Value);
@@ -539,6 +607,7 @@ public class FarmingService : IFarmingService
     public async Task<ApiResponse<BoxDto>> GetBoxByIdAsync(Guid id, CancellationToken ct = default)
     {
         var box = await RequireBoxAsync(id, ct);
+        await EnsureAreaAsync(await AreaIdOfBoxAsync(box, ct), manage: false, ct);
         var ctx = await LoadBoxContextAsync(ct);
         return ApiResponse<BoxDto>.Ok(MapBox(box, ctx));
     }
@@ -546,7 +615,24 @@ public class FarmingService : IFarmingService
     public async Task<ApiResponse<FarmAvailabilityDto>> GetAvailabilityAsync(
         Guid? farmingAreaId, Guid? farmingRowId, CancellationToken ct = default)
     {
+        if (farmingAreaId is Guid areaId && areaId != Guid.Empty)
+            await EnsureAreaAsync(areaId, manage: false, ct);
+        if (farmingRowId is Guid rowId && rowId != Guid.Empty)
+        {
+            var row = await RequireRowAsync(rowId, requireActive: false, ct);
+            await EnsureAreaAsync(row.FarmingAreaId, manage: false, ct);
+        }
+
         var snapshot = await BuildAvailabilityAsync(farmingAreaId, farmingRowId, ct);
+        var scope = await ScopeAreaIdsAsync(ct);
+        if (scope is not null && (farmingAreaId is null || farmingAreaId == Guid.Empty))
+        {
+            var rows = snapshot.Rows.Where(row => scope.Contains(row.FarmingAreaId)).ToList();
+            var emptyBoxes = snapshot.EmptyBoxes.Where(box => scope.Contains(box.FarmingAreaId)).ToList();
+            var occupied = rows.Sum(row => Math.Max(0, row.BoxCount - row.EmptyBoxCount));
+            snapshot = new FarmAvailabilityDto(
+                emptyBoxes.Count, occupied, emptyBoxes.FirstOrDefault(), emptyBoxes, rows);
+        }
         return ApiResponse<FarmAvailabilityDto>.Ok(snapshot);
     }
 
@@ -563,6 +649,7 @@ public class FarmingService : IFarmingService
                 $"FarmingAreaId does not match row '{row.Name}'. Omit farmingAreaId to auto-fill.");
 
         var area = await RequireAreaAsync(row.FarmingAreaId, requireActive: true, ct);
+        await EnsureAreaAsync(area.Id, manage: true, ct);
 
         if (row.Capacity > 0)
         {
@@ -586,6 +673,7 @@ public class FarmingService : IFarmingService
 
         var box = new Box { FarmingRowId = row.Id, Code = code, Status = "empty" };
         await _uow.Boxes.AddAsync(box, ct);
+        await AuditConfigAsync("CreateBox", "Box", box.Id, box.Code, ct);
         await _uow.SaveChangesAsync(ct);
         await _boxQr.EnsureBoxQrAsync(box.Id, ct);
 
@@ -603,6 +691,7 @@ public class FarmingService : IFarmingService
 
         var row = await RequireRowAsync(rowId, requireActive: true, ct);
         await RequireAreaAsync(row.FarmingAreaId, requireActive: true, ct);
+        await EnsureAreaAsync(row.FarmingAreaId, manage: true, ct);
 
         var boxCount = (await _uow.Boxes.FindAsync(b => b.FarmingRowId == row.Id, ct)).Count();
         if (row.Capacity > 0)
@@ -713,6 +802,7 @@ public class FarmingService : IFarmingService
     public async Task<ApiResponse<BoxDto>> UpdateBoxAsync(Guid id, UpdateBoxRequest req, CancellationToken ct = default)
     {
         var box = await RequireBoxAsync(id, ct);
+        await EnsureAreaAsync(await AreaIdOfBoxAsync(box, ct), manage: true, ct);
         if (string.IsNullOrWhiteSpace(req.Code))
             throw AppException.BadRequest("Code is required.");
 
@@ -724,6 +814,7 @@ public class FarmingService : IFarmingService
         box.Status = req.Status;
         box.IsOccupied = req.IsOccupied;
         _uow.Boxes.Update(box);
+        await AuditConfigAsync("UpdateBox", "Box", box.Id, box.Code, ct);
         await _uow.SaveChangesAsync(ct);
 
         var ctx = await LoadBoxContextAsync(ct);
@@ -734,6 +825,10 @@ public class FarmingService : IFarmingService
         Guid boxId, UpdateBoxStatusRequest req, CancellationToken ct = default)
     {
         var box = await RequireBoxAsync(boxId, ct);
+        await EnsureAreaAsync(await AreaIdOfBoxAsync(box, ct), manage: false, ct);
+        var actor = await _areas.CurrentUserAsync(ct);
+        if (actor is not null && actor.Role != UserRole.FarmStaff)
+            throw AppException.Forbidden("Chỉ Farm Staff được cập nhật trạng thái vận hành hộp.");
         if (string.IsNullOrWhiteSpace(req.Status))
             throw AppException.BadRequest("Status is required.");
         if (!BoxStatuses.IsValid(req.Status))
@@ -772,6 +867,7 @@ public class FarmingService : IFarmingService
         Guid boxId, UpdateMapPointRequest req, CancellationToken ct = default)
     {
         var box = await RequireBoxAsync(boxId, ct);
+        await EnsureAreaAsync(await AreaIdOfBoxAsync(box, ct), manage: true, ct);
         ValidateMapPoint(req);
 
         box.MapX = req.MapX;
@@ -786,6 +882,7 @@ public class FarmingService : IFarmingService
     public async Task<ApiResponse> DeleteBoxAsync(Guid id, CancellationToken ct = default)
     {
         var box = await RequireBoxAsync(id, ct);
+        await EnsureAreaAsync(await AreaIdOfBoxAsync(box, ct), manage: true, ct);
         var crabsInBox = await _uow.Crabs.Query()
             .Include(c => c.BoxAllocations)
             .Where(c => c.BoxAllocations.Any(a => a.BoxId == id && a.EndTime == null))
@@ -802,6 +899,7 @@ public class FarmingService : IFarmingService
             _uow.QrCodes.Remove(qr);
 
         _uow.Boxes.Remove(box);
+        await AuditConfigAsync("DeleteBox", "Box", box.Id, box.Code, ct);
         await _uow.SaveChangesAsync(ct);
         return ApiResponse.Ok("Deleted.");
     }
@@ -944,6 +1042,7 @@ public class FarmingService : IFarmingService
                     "With autoAssignEmptyBox=true provide farmingRowId and/or farmingAreaId.");
 
             _ = await RequireAreaAsync(areaId.Value, requireActive: true, ct);
+            await EnsureAreaAsync(areaId.Value, manage: false, ct);
 
             var empty = await ListEmptyBoxesAsync(areaId.Value, rowId, ct);
             box = empty.FirstOrDefault(b => !IsBoxUnusable(b.Status))
@@ -964,6 +1063,7 @@ public class FarmingService : IFarmingService
                 throw AppException.BadRequest($"Hộp '{box.Code}' không thể sử dụng.");
             var row = await RequireRowAsync(box.FarmingRowId, requireActive: true, ct);
             _ = await RequireAreaAsync(row.FarmingAreaId, requireActive: true, ct);
+            await EnsureAreaAsync(row.FarmingAreaId, manage: false, ct);
 
             if (req.FarmingRowId is Guid fr && fr != Guid.Empty && fr != row.Id)
                 throw AppException.BadRequest("FarmingRowId does not match box. Omit farmingRowId to auto-fill.");
@@ -1101,7 +1201,10 @@ public class FarmingService : IFarmingService
             areaId = scopedRow.FarmingAreaId;
         }
         if (areaId.HasValue)
+        {
             _ = await RequireAreaAsync(areaId.Value, requireActive: true, ct);
+            await EnsureAreaAsync(areaId.Value, manage: false, ct);
+        }
 
         var reserved = new HashSet<Guid>();
         var assigned = new List<(CreateCrabBulkItem item, Box box)>(items.Count);
@@ -1118,6 +1221,7 @@ public class FarmingService : IFarmingService
                 box = await RequireBoxAsync(tid, ct);
                 var boxRow = await RequireRowAsync(box.FarmingRowId, requireActive: true, ct);
                 _ = await RequireAreaAsync(boxRow.FarmingAreaId, requireActive: true, ct);
+                await EnsureAreaAsync(boxRow.FarmingAreaId, manage: false, ct);
                 if (rowId.HasValue && box.FarmingRowId != rowId.Value)
                     throw AppException.BadRequest($"Hộp '{box.Code}' không thuộc dãy đã chọn.");
                 if (areaId.HasValue && boxRow.FarmingAreaId != areaId.Value)

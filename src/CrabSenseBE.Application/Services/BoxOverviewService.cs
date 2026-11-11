@@ -14,8 +14,13 @@ namespace CrabSenseBE.Application.Services;
 public class BoxOverviewService : IBoxOverviewService
 {
     private readonly IUnitOfWork _uow;
+    private readonly FarmAreaScope _areas;
 
-    public BoxOverviewService(IUnitOfWork uow) => _uow = uow;
+    public BoxOverviewService(IUnitOfWork uow, ICurrentUserService? currentUser = null)
+    {
+        _uow = uow;
+        _areas = new FarmAreaScope(uow, currentUser);
+    }
 
     public async Task<ApiResponse<BoxesOverviewResponseDto>> GetOverviewAsync(
         Guid? farmingAreaId = null,
@@ -23,11 +28,22 @@ public class BoxOverviewService : IBoxOverviewService
         string? status = null,
         CancellationToken ct = default)
     {
+        if (farmingAreaId is Guid requestedAreaId && requestedAreaId != Guid.Empty)
+            await _areas.EnsureAsync(requestedAreaId, manage: false, ct);
+        if (farmingRowId is Guid requestedRowId && requestedRowId != Guid.Empty)
+            await _areas.EnsureRowAsync(requestedRowId, manage: false, ct);
+
         var rows = (await _uow.FarmingRows.GetAllAsync(ct)).ToList();
         var rowMap = rows.ToDictionary(r => r.Id);
         var areas = (await _uow.FarmingAreas.GetAllAsync(ct)).ToDictionary(a => a.Id);
 
         var boxes = (await _uow.Boxes.GetAllAsync(ct)).AsEnumerable();
+        var scope = await _areas.AreaIdsAsync(ct);
+        if (scope is not null)
+        {
+            var allowedRows = rows.Where(row => scope.Contains(row.FarmingAreaId)).Select(row => row.Id).ToHashSet();
+            boxes = boxes.Where(box => allowedRows.Contains(box.FarmingRowId));
+        }
         if (farmingRowId.HasValue)
             boxes = boxes.Where(b => b.FarmingRowId == farmingRowId.Value);
         if (farmingAreaId.HasValue && farmingAreaId != Guid.Empty)

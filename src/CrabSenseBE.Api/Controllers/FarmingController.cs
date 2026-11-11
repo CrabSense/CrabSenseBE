@@ -1,11 +1,9 @@
 using CrabSenseBE.Application.Common;
 using CrabSenseBE.Application.DTOs.Farm;
 using CrabSenseBE.Application.Interfaces;
-using CrabSenseBE.Domain.Interfaces;
 using CrabSenseBE.Domain.Enums;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.EntityFrameworkCore;
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 
@@ -14,19 +12,14 @@ namespace CrabSenseBE.Api.Controllers;
 /// <summary>CRUD Farming Areas — Owner (chủ) comes from JWT on create</summary>
 [ApiController]
 [Route("api/farming-areas")]
-[Authorize]
+[Authorize(Roles = AppRoles.FarmPortal)]
 [Tags("01. CRUD — Farming Areas")]
 [Produces("application/json")]
 public class FarmingAreasController : ControllerBase
 {
     private readonly IFarmingService _service;
-    private readonly IUnitOfWork _uow;
 
-    public FarmingAreasController(IFarmingService service, IUnitOfWork uow)
-    {
-        _service = service;
-        _uow = uow;
-    }
+    public FarmingAreasController(IFarmingService service) => _service = service;
 
     /// <summary>[READ] Liệt kê khu; Farm Administrator chỉ thấy khu được gán.</summary>
     [HttpGet]
@@ -39,22 +32,8 @@ public class FarmingAreasController : ControllerBase
         [FromQuery] int? pageSize = null,
         CancellationToken ct = default)
     {
-        IReadOnlyCollection<Guid>? managedAreaIds = null;
-        if (User.IsInRole(AppRoles.FarmAdministrator) || User.IsInRole("FarmOwner"))
-        {
-            // Lấy danh sách khu được gán trực tiếp cho Admin.
-            var userId = TryGetUserId();
-            managedAreaIds = userId.HasValue
-                ? await _uow.FarmingAreas.Query()
-                    .Where(area => area.Administrators.Any(admin => admin.Id == userId.Value))
-                    .Select(area => area.Id)
-                    .ToListAsync(ct)
-                : Array.Empty<Guid>();
-            ownerId = null;
-        }
-
         return Ok(await _service.GetAreasAsync(
-            new FarmingAreaFilter(search, isActive, status, page, pageSize, ownerId, managedAreaIds), ct));
+            new FarmingAreaFilter(search, isActive, status, page, pageSize, ownerId), ct));
     }
 
     /// <summary>[READ] Next khu code (AREA-A01…) from all areas in DB — not sent on create</summary>
@@ -69,13 +48,13 @@ public class FarmingAreasController : ControllerBase
 
     /// <summary>[CREATE] Create khu — body: name; code auto AREA-xxx; Farm Administrator từ JWT</summary>
     [HttpPost]
-    [Authorize(Roles = AppRoles.FarmWrite)]
+    [Authorize(Roles = AppRoles.FarmManage)]
     public async Task<IActionResult> Create([FromBody] CreateFarmingAreaRequest req, CancellationToken ct)
         => Ok(await _service.CreateAreaAsync(req, RequireUserId(), ct));
 
     /// <summary>[CREATE] Upload ảnh đại diện (chưa gắn khu). Gắn URL vào POST create (avatarUrl).</summary>
     [HttpPost("avatar")]
-    [Authorize(Roles = AppRoles.FarmWrite)]
+    [Authorize(Roles = AppRoles.FarmManage)]
     [RequestSizeLimit(8_000_000)]
     [Consumes("multipart/form-data")]
     public async Task<IActionResult> UploadAvatar(IFormFile? file, CancellationToken ct)
@@ -84,7 +63,7 @@ public class FarmingAreasController : ControllerBase
 
     /// <summary>[CREATE] Upload và gắn ảnh đại diện cho khu đã có.</summary>
     [HttpPost("{id:guid}/avatar")]
-    [Authorize(Roles = AppRoles.FarmWrite)]
+    [Authorize(Roles = AppRoles.FarmManage)]
     [RequestSizeLimit(8_000_000)]
     [Consumes("multipart/form-data")]
     public async Task<IActionResult> UploadAvatarForArea(Guid id, IFormFile? file, CancellationToken ct)
@@ -93,7 +72,7 @@ public class FarmingAreasController : ControllerBase
 
     /// <summary>[UPDATE] Update farming area</summary>
     [HttpPut("{id:guid}")]
-    [Authorize(Roles = AppRoles.FarmWrite)]
+    [Authorize(Roles = AppRoles.FarmManage)]
     public async Task<IActionResult> Update(Guid id, [FromBody] UpdateFarmingAreaRequest req, CancellationToken ct)
         => Ok(await _service.UpdateAreaAsync(id, req, ct));
 
@@ -102,7 +81,7 @@ public class FarmingAreasController : ControllerBase
     /// Gửi 4 toạ độ cùng lúc; bỏ trống cả 4 để xoá khung.
     /// </summary>
     [HttpPatch("{id:guid}/map")]
-    [Authorize(Roles = AppRoles.FarmWrite)]
+    [Authorize(Roles = AppRoles.FarmManage)]
     public async Task<IActionResult> UpdateMap(Guid id, [FromBody] UpdateAreaMapRequest req, CancellationToken ct)
         => Ok(await _service.UpdateAreaMapAsync(id, req, ct));
 
@@ -130,7 +109,7 @@ public class FarmingAreasController : ControllerBase
 
     /// <summary>[CREATE] Create row in area (path areaId = FarmingAreaId)</summary>
     [HttpPost("{areaId:guid}/rows")]
-    [Authorize(Roles = AppRoles.FarmWrite)]
+    [Authorize(Roles = AppRoles.FarmManage)]
     public async Task<IActionResult> CreateRow(Guid areaId, [FromBody] CreateFarmingRowRequest req, CancellationToken ct)
         => Ok(await _service.CreateRowAsync(req with { FarmingAreaId = areaId }, ct));
 
@@ -163,7 +142,7 @@ public class FarmingAreasController : ControllerBase
 /// <summary>CRUD Farming Rows</summary>
 [ApiController]
 [Route("api/farming-rows")]
-[Authorize]
+[Authorize(Roles = AppRoles.FarmPortal)]
 [Tags("02. CRUD — Farming Rows")]
 [Produces("application/json")]
 public class FarmingRowsController : ControllerBase
@@ -196,19 +175,19 @@ public class FarmingRowsController : ControllerBase
 
     /// <summary>[CREATE] Create dãy — body: farmingAreaId + name; code auto DAY-xxx</summary>
     [HttpPost]
-    [Authorize(Roles = AppRoles.FarmWrite)]
+    [Authorize(Roles = AppRoles.FarmManage)]
     public async Task<IActionResult> Create([FromBody] CreateFarmingRowRequest req, CancellationToken ct)
         => Ok(await _service.CreateRowAsync(req, ct));
 
     /// <summary>[UPDATE] Update farming row</summary>
     [HttpPut("{id:guid}")]
-    [Authorize(Roles = AppRoles.FarmWrite)]
+    [Authorize(Roles = AppRoles.FarmManage)]
     public async Task<IActionResult> Update(Guid id, [FromBody] UpdateFarmingRowRequest req, CancellationToken ct)
         => Ok(await _service.UpdateRowAsync(id, req, ct));
 
     /// <summary>[UPDATE] Bản đồ trại: tâm dãy trên ảnh (mapX, mapY tỉ lệ 0–1). Cả 2 null = xoá vị trí.</summary>
     [HttpPatch("{id:guid}/map")]
-    [Authorize(Roles = AppRoles.FarmWrite)]
+    [Authorize(Roles = AppRoles.FarmManage)]
     public async Task<IActionResult> UpdateMap(Guid id, [FromBody] UpdateMapPointRequest req, CancellationToken ct)
         => Ok(await _service.UpdateRowMapAsync(id, req, ct));
 
@@ -232,14 +211,14 @@ public class FarmingRowsController : ControllerBase
 
     /// <summary>[CREATE] Create box in row — path rowId only; Area auto-filled from row</summary>
     [HttpPost("{rowId:guid}/boxes")]
-    [Authorize(Roles = AppRoles.FarmWrite)]
+    [Authorize(Roles = AppRoles.FarmManage)]
     public async Task<IActionResult> CreateBox(Guid rowId, [FromBody] CreateBoxRequest? req, CancellationToken ct)
         => Ok(await _service.CreateBoxAsync(
             (req ?? new CreateBoxRequest(rowId)) with { FarmingRowId = rowId }, ct));
 
     /// <summary>[CREATE] Create N empty boxes in row. Codes auto BOX-####. Body: { quantity }.</summary>
     [HttpPost("{rowId:guid}/boxes/bulk")]
-    [Authorize(Roles = AppRoles.FarmWrite)]
+    [Authorize(Roles = AppRoles.FarmManage)]
     public async Task<IActionResult> CreateBoxesBulk(
         Guid rowId, [FromBody] CreateBoxesBulkRequest? req, CancellationToken ct)
         => Ok(await _service.CreateBoxesBulkAsync(rowId, req?.Quantity ?? 0, ct));
@@ -248,7 +227,7 @@ public class FarmingRowsController : ControllerBase
 /// <summary>CRUD Crab Farm Boxes</summary>
 [ApiController]
 [Route("api/boxes")]
-[Authorize]
+[Authorize(Roles = AppRoles.FarmPortal)]
 [Tags("03. CRUD — Crab Farm Boxes")]
 [Produces("application/json")]
 public class BoxesController : ControllerBase
@@ -345,25 +324,28 @@ public class BoxesController : ControllerBase
 
     /// <summary>[CREATE] Create box — body: farmingRowId (dãy); khu auto from row; code optional</summary>
     [HttpPost]
-    [Authorize(Roles = AppRoles.FarmWrite)]
+    [Authorize(Roles = AppRoles.FarmManage)]
     public async Task<IActionResult> Create([FromBody] CreateBoxRequest req, CancellationToken ct)
         => Ok(await _service.CreateBoxAsync(req, ct));
 
     /// <summary>[UPDATE] Update code / status / occupied</summary>
     [HttpPut("{id:guid}")]
-    [Authorize(Roles = AppRoles.FarmWrite)]
+    [Authorize(Roles = AppRoles.FarmManage)]
     public async Task<IActionResult> Update(Guid id, [FromBody] UpdateBoxRequest req, CancellationToken ct)
         => Ok(await _service.UpdateBoxAsync(id, req, ct));
 
-    /// <summary>[UPDATE] Update box farming status only</summary>
+    /// <summary>
+    /// Trạng thái vận hành (status, isOccupied). Không đổi mã hộp hay vị trí bản đồ — những trường đó thuộc PUT và PATCH map.
+    /// Farm Staff thực hiện. Farm Administrator và Farm Manager chỉ xem.
+    /// </summary>
     [HttpPatch("{boxId:guid}/status")]
-    [Authorize(Roles = AppRoles.FarmWrite)]
+    [Authorize(Roles = AppRoles.FarmStaff + ",Staff")]
     public async Task<IActionResult> UpdateStatus(Guid boxId, [FromBody] UpdateBoxStatusRequest req, CancellationToken ct)
         => Ok(await _service.UpdateBoxStatusAsync(boxId, req, ct));
 
     /// <summary>[UPDATE] Bản đồ trại: tâm hộp trên ảnh (mapX, mapY tỉ lệ 0–1). Cả 2 null = xoá vị trí.</summary>
     [HttpPatch("{boxId:guid}/map")]
-    [Authorize(Roles = AppRoles.FarmWrite)]
+    [Authorize(Roles = AppRoles.FarmManage)]
     public async Task<IActionResult> UpdateMap(Guid boxId, [FromBody] UpdateMapPointRequest req, CancellationToken ct)
         => Ok(await _service.UpdateBoxMapAsync(boxId, req, ct));
 

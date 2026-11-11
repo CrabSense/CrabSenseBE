@@ -1,3 +1,4 @@
+using CrabSenseBE.Application.Common;
 using CrabSenseBE.Application.DTOs.Alert;
 using CrabSenseBE.Application.Interfaces;
 using CrabSenseBE.Domain.Enums;
@@ -17,76 +18,106 @@ public class AlertsController : ControllerBase
     private readonly IAlertService _service;
     public AlertsController(IAlertService service) => _service = service;
 
-    /// <summary>[READ] List alerts</summary>
+    /// <summary>[READ] Cảnh báo vận hành của khu được phân công. Farm Administrator, Manager, Staff.</summary>
     [HttpGet]
+    [Authorize(Roles = AppRoles.FarmPortal)]
     public async Task<IActionResult> GetAll(
         [FromQuery] bool? activeOnly = true,
         [FromQuery] Guid? farmingAreaId = null,
         [FromQuery] Guid? boxId = null,
         CancellationToken ct = default)
-        => Ok(await _service.GetAlertsAsync(activeOnly, farmingAreaId, boxId, ct));
+        => ScopeForCaller(await _service.GetAlertsAsync(activeOnly, farmingAreaId, boxId, ct));
 
     /// <summary>[READ] Unread / active alert count (Mobile)</summary>
     [HttpGet("unread/count")]
     public async Task<IActionResult> UnreadCount(CancellationToken ct)
         => Ok(await _service.GetUnreadCountAsync(ct));
 
-    /// <summary>[READ] Resolved / acknowledged alert history (Mobile)</summary>
+    /// <summary>[READ] Lịch sử cảnh báo vận hành của khu được phân công.</summary>
     [HttpGet("history")]
+    [Authorize(Roles = AppRoles.FarmPortal)]
     public async Task<IActionResult> History(
         [FromQuery] int days = 30,
         [FromQuery] Guid? farmingAreaId = null,
         CancellationToken ct = default)
-        => Ok(await _service.GetHistoryAsync(days, farmingAreaId, ct));
+        => ScopeForCaller(await _service.GetHistoryAsync(days, farmingAreaId, ct));
 
     /// <summary>[READ] Alert by id</summary>
     [HttpGet("{id:guid}")]
     public async Task<IActionResult> GetById(Guid id, CancellationToken ct)
-        => Ok(await _service.GetByIdAsync(id, ct));
+    {
+        var alert = await _service.GetByIdAsync(id, ct);
+        if (IsSystemAdmin && alert.Data is not null && !IsTechnicalAlert(alert.Data))
+            return Forbid();
+        return Ok(alert);
+    }
 
     /// <summary>[UPDATE] Acknowledge alert</summary>
     [HttpPatch("{id:guid}/acknowledge")]
     [Authorize(Roles = AppRoles.FarmWrite)]
-    public async Task<IActionResult> Acknowledge(Guid id, [FromBody] AcknowledgeAlertRequest? req, CancellationToken ct = default)
-        => Ok(await _service.AcknowledgeAsync(id, req ?? new AcknowledgeAlertRequest(null), ct));
+    public Task<IActionResult> Acknowledge(Guid id, [FromBody] AcknowledgeAlertRequest? req, CancellationToken ct = default)
+        => AcknowledgeCore(id, req, ct);
 
     /// <summary>[UPDATE] Acknowledge alias for Mobile clients using POST</summary>
     [HttpPost("{id:guid}/acknowledge")]
     [Authorize(Roles = AppRoles.FarmWrite)]
-    public async Task<IActionResult> AcknowledgePost(Guid id, [FromBody] AcknowledgeAlertRequest? req, CancellationToken ct = default)
-        => Ok(await _service.AcknowledgeAsync(id, req ?? new AcknowledgeAlertRequest(null), ct));
+    public Task<IActionResult> AcknowledgePost(Guid id, [FromBody] AcknowledgeAlertRequest? req, CancellationToken ct = default)
+        => AcknowledgeCore(id, req, ct);
 
-    /// <summary>[UPDATE] Bắt đầu xử lý cảnh báo.</summary>
+    /// <summary>[UPDATE] Bắt đầu xử lý cảnh báo vận hành. Manager giám sát, Staff thực hiện.</summary>
     [HttpPost("{id:guid}/process")]
-    [Authorize(Roles = AppRoles.FarmWrite)]
+    [Authorize(Roles = AppRoles.FarmManager + "," + AppRoles.FarmStaff + ",Staff")]
     public async Task<IActionResult> StartProcessing(
         Guid id, [FromBody] StartProcessingRequest? req, CancellationToken ct)
         => Ok(await _service.StartProcessingAsync(id, req, ct));
 
-    /// <summary>[UPDATE] Resolve alert</summary>
+    /// <summary>[UPDATE] Resolve alert vận hành. Manager giám sát, Staff thực hiện.</summary>
     [HttpPatch("{id:guid}/resolve")]
-    [Authorize(Roles = AppRoles.FarmWrite)]
+    [Authorize(Roles = AppRoles.FarmManager + "," + AppRoles.FarmStaff + ",Staff")]
     public async Task<IActionResult> Resolve(
         Guid id, [FromBody] ResolveAlertRequest? req, CancellationToken ct)
         => Ok(await _service.ResolveAsync(id, req, ct));
 
     /// <summary>[UPDATE] Resolve / dismiss alias (POST)</summary>
     [HttpPost("{id:guid}/resolve")]
-    [Authorize(Roles = AppRoles.FarmWrite)]
+    [Authorize(Roles = AppRoles.FarmManager + "," + AppRoles.FarmStaff + ",Staff")]
     public async Task<IActionResult> ResolvePost(
         Guid id, [FromBody] ResolveAlertRequest? req, CancellationToken ct)
         => Ok(await _service.ResolveAsync(id, req, ct));
 
-    /// <summary>[ACTION] Scan disconnected devices/sensors</summary>
+    /// <summary>[ACTION] Quét thiết bị mất kết nối — cấu hình kỹ thuật, System Administrator.</summary>
     [HttpPost("check-disconnects")]
-    [Authorize(Roles = AppRoles.FarmWrite)]
+    [Authorize(Roles = AppRoles.Platform)]
     public async Task<IActionResult> CheckDisconnects([FromQuery] int timeoutMinutes = 15, CancellationToken ct = default)
         => Ok(await _service.CheckDisconnectsAsync(timeoutMinutes, ct));
+
+    private async Task<IActionResult> AcknowledgeCore(
+        Guid id, AcknowledgeAlertRequest? req, CancellationToken ct)
+    {
+        var existing = await _service.GetByIdAsync(id, ct);
+        if (IsSystemAdmin && (existing.Data is null || !IsTechnicalAlert(existing.Data)))
+            return Forbid();
+        return Ok(await _service.AcknowledgeAsync(id, req ?? new AcknowledgeAlertRequest(null), ct));
+    }
+
+    private IActionResult ScopeForCaller(ApiResponse<IEnumerable<AlertDto>> response)
+    {
+        if (!IsSystemAdmin || response.Data is null)
+            return Ok(response);
+        return Ok(ApiResponse<IEnumerable<AlertDto>>.Ok(
+            response.Data.Where(IsTechnicalAlert), response.Message));
+    }
+
+    private bool IsSystemAdmin =>
+        User.IsInRole(AppRoles.SystemAdministrator) || User.IsInRole("SystemAdmin");
+
+    private static bool IsTechnicalAlert(AlertDto alert) =>
+        alert.Category is "Device" or "System" or "AI";
 }
 
 [ApiController]
 [Route("api/alert-thresholds")]
-[Authorize]
+[Authorize(Roles = AppRoles.FarmPortal)]
 [Tags("10. Alerts")]
 [Produces("application/json")]
 public class AlertThresholdsController : ControllerBase
@@ -94,26 +125,26 @@ public class AlertThresholdsController : ControllerBase
     private readonly IAlertService _service;
     public AlertThresholdsController(IAlertService service) => _service = service;
 
-    /// <summary>[READ] List all thresholds</summary>
+    /// <summary>[READ] Ngưỡng môi trường — role trại. System Administrator không xem.</summary>
     [HttpGet]
     public async Task<IActionResult> GetAll(CancellationToken ct)
         => Ok(await _service.GetThresholdsAsync(ct));
 
-    /// <summary>[CREATE] Create alert threshold</summary>
+    /// <summary>[CREATE] Create alert threshold — Farm Administrator.</summary>
     [HttpPost]
-    [Authorize(Roles = AppRoles.FarmWrite)]
+    [Authorize(Roles = AppRoles.FarmManage)]
     public async Task<IActionResult> Create([FromBody] CreateAlertThresholdRequest req, CancellationToken ct)
         => Ok(await _service.CreateThresholdAsync(req, ct));
 
-    /// <summary>[UPDATE] Update alert threshold</summary>
+    /// <summary>[UPDATE] Update alert threshold — Farm Administrator.</summary>
     [HttpPut("{id:guid}")]
-    [Authorize(Roles = AppRoles.FarmWrite)]
+    [Authorize(Roles = AppRoles.FarmManage)]
     public async Task<IActionResult> Update(Guid id, [FromBody] UpdateAlertThresholdRequest req, CancellationToken ct)
         => Ok(await _service.UpdateThresholdAsync(id, req, ct));
 
-    /// <summary>[DELETE] Delete alert threshold</summary>
+    /// <summary>[DELETE] Delete alert threshold — Farm Administrator.</summary>
     [HttpDelete("{id:guid}")]
-    [Authorize(Roles = AppRoles.FarmWrite)]
+    [Authorize(Roles = AppRoles.FarmManage)]
     public async Task<IActionResult> Delete(Guid id, CancellationToken ct)
         => Ok(await _service.DeleteThresholdAsync(id, ct));
 }

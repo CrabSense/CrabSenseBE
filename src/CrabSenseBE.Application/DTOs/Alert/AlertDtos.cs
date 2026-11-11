@@ -2,10 +2,12 @@ namespace CrabSenseBE.Application.DTOs.Alert;
 
 // --- Ngưỡng cảnh báo ---
 public record AlertThresholdDto(
-    Guid Id, string SensorType, decimal MinValue, decimal MaxValue, string Severity, bool IsActive);
+    Guid Id, string SensorType, decimal MinValue, decimal MaxValue, string Severity, bool IsActive,
+    Guid? FarmingAreaId = null, Guid? WaterSystemId = null);
 
 public record CreateAlertThresholdRequest(
-    string SensorType, decimal MinValue, decimal MaxValue, string Severity = "Warning");
+    string SensorType, decimal MinValue, decimal MaxValue, string Severity = "Warning",
+    Guid? FarmingAreaId = null, Guid? WaterSystemId = null);
 
 public record UpdateAlertThresholdRequest(
     decimal MinValue, decimal MaxValue, string Severity, bool IsActive);

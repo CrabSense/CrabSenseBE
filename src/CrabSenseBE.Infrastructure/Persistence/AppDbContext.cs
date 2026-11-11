@@ -429,6 +429,17 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<Notification>()
             .HasIndex(n => new { n.UserId, n.TypeCode });
 
+        modelBuilder.Entity<AlertThreshold>()
+            .HasOne<FarmingArea>()
+            .WithMany()
+            .HasForeignKey(threshold => threshold.FarmingAreaId)
+            .OnDelete(DeleteBehavior.Restrict);
+        modelBuilder.Entity<AlertThreshold>()
+            .HasOne<WaterSystem>()
+            .WithMany()
+            .HasForeignKey(threshold => threshold.WaterSystemId)
+            .OnDelete(DeleteBehavior.Restrict);
+
         modelBuilder.Entity<WaterSystem>()
             .Property(w => w.Status)
             .HasMaxLength(32);

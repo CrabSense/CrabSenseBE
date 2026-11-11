@@ -10,10 +10,12 @@ namespace CrabSenseBE.Application.Services;
 public class HarvestReportService : IHarvestReportService
 {
     private readonly IUnitOfWork _unitOfWork;
+    private readonly ReportAreaGate _areas;
 
-    public HarvestReportService(IUnitOfWork unitOfWork)
+    public HarvestReportService(IUnitOfWork unitOfWork, ICurrentUserService? currentUser = null)
     {
         _unitOfWork = unitOfWork;
+        _areas = new ReportAreaGate(unitOfWork, currentUser);
     }
 
     public async Task<HarvestReportDto> GetHarvestReportAsync(
@@ -27,6 +29,7 @@ public class HarvestReportService : IHarvestReportService
                 cancellationToken);
 
         var vouchers = completedVouchers.ToList();
+        vouchers = await LimitVouchersAsync(vouchers, filter.FarmingAreaId, cancellationToken);
 
         // 2. Lấy tất cả dòng thu hoạch thuộc các voucher đã hoàn thành
         var voucherIds = vouchers
@@ -172,15 +175,8 @@ public class HarvestReportService : IHarvestReportService
                 voucher => voucher.Status == HarvestStatus.Completed,
                 cancellationToken);
 
-        IEnumerable<Domain.Entities.HarvestVoucher> vouchers =
-            completedVouchers;
-        
-        // Lọc theo khu nuôi nếu client truyền farmingAreaId.
-        if (filter.FarmingAreaId.HasValue)
-        {
-            vouchers = vouchers.Where(voucher =>
-                voucher.FarmingAreaId == filter.FarmingAreaId.Value);
-        }
+        IEnumerable<Domain.Entities.HarvestVoucher> vouchers = await LimitVouchersAsync(
+            completedVouchers.ToList(), filter.FarmingAreaId, cancellationToken);
 
         // Lọc từ ngày bắt đầu.
         if (filter.FromDate.HasValue)
@@ -327,6 +323,18 @@ public class HarvestReportService : IHarvestReportService
     /// <summary>
     /// Kiểm tra tính hợp lệ của bộ lọc.
     /// </summary>
+    private async Task<List<Domain.Entities.HarvestVoucher>> LimitVouchersAsync(
+        List<Domain.Entities.HarvestVoucher> vouchers,
+        Guid? farmingAreaId,
+        CancellationToken cancellationToken)
+    {
+        var allowed = await _areas.AreasAsync(farmingAreaId, cancellationToken);
+        if (allowed is null) return vouchers;
+        return vouchers
+            .Where(voucher => voucher.FarmingAreaId is Guid areaId && allowed.Contains(areaId))
+            .ToList();
+    }
+
     private async Task ValidateFilter(
         HarvestReportFilterDto filter,
         CancellationToken cancellationToken)

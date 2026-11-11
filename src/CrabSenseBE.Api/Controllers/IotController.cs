@@ -141,7 +141,7 @@ public class SensorsController : ControllerBase
 [ApiController]
 [Route("api/devices")]
 [Route("api/controllers")]
-[Authorize(Roles = AppRoles.FarmWrite)]
+[Authorize(Roles = AppRoles.FarmPortal + "," + AppRoles.Platform)]
 [Tags("09. IoT — Controllers (ESP32)")]
 [Produces("application/json")]
 public class DevicesController : ControllerBase
@@ -167,18 +167,21 @@ public class DevicesController : ControllerBase
     public async Task<IActionResult> GetById(Guid id, CancellationToken ct)
         => Ok(await _service.GetDeviceAsync(id, ct));
 
-    /// <summary>[CREATE] Register ESP32 gateway</summary>
+    /// <summary>[CREATE] Register ESP32 gateway — System Administrator.</summary>
     [HttpPost]
+    [Authorize(Roles = AppRoles.Platform)]
     public async Task<IActionResult> Create([FromBody] CreateDeviceRequest req, CancellationToken ct)
         => Ok(await _service.CreateDeviceAsync(req, ct, UserId(), Ip()));
 
-    /// <summary>[UPDATE] Update device metadata</summary>
+    /// <summary>[UPDATE] Update device metadata — System Administrator.</summary>
     [HttpPut("{id:guid}")]
+    [Authorize(Roles = AppRoles.Platform)]
     public async Task<IActionResult> Update(Guid id, [FromBody] UpdateDeviceRequest req, CancellationToken ct)
         => Ok(await _service.UpdateDeviceAsync(id, req, ct, UserId(), Ip()));
 
-    /// <summary>[DELETE] Delete device (no linked sensors)</summary>
+    /// <summary>[DELETE] Delete device (no linked sensors) — System Administrator.</summary>
     [HttpDelete("{id:guid}")]
+    [Authorize(Roles = AppRoles.Platform)]
     public async Task<IActionResult> Delete(Guid id, CancellationToken ct)
         => Ok(await _service.DeleteDeviceAsync(id, ct, UserId(), Ip()));
 
@@ -204,7 +207,7 @@ public class DevicesController : ControllerBase
 
 [ApiController]
 [Route("api/water-systems")]
-[Authorize]
+[Authorize(Roles = AppRoles.FarmPortal + "," + AppRoles.Platform)]
 [Tags("08. IoT — Water systems")]
 [Produces("application/json")]
 public class WaterSystemsController : ControllerBase
@@ -217,17 +220,17 @@ public class WaterSystemsController : ControllerBase
         => Ok(await _service.GetWaterSystemsAsync(ct));
 
     [HttpPost]
-    [Authorize(Roles = AppRoles.FarmWrite)]
+    [Authorize(Roles = AppRoles.FarmManage)]
     public async Task<IActionResult> Create([FromBody] CreateWaterSystemRequest req, CancellationToken ct)
         => Ok(await _service.CreateWaterSystemAsync(req, ct));
 
     [HttpPut("{id:guid}")]
-    [Authorize(Roles = AppRoles.FarmWrite)]
+    [Authorize(Roles = AppRoles.FarmManage)]
     public async Task<IActionResult> Update(Guid id, [FromBody] UpdateWaterSystemRequest req, CancellationToken ct)
         => Ok(await _service.UpdateWaterSystemAsync(id, req, ct));
 
     [HttpDelete("{id:guid}")]
-    [Authorize(Roles = AppRoles.FarmWrite)]
+    [Authorize(Roles = AppRoles.FarmManage)]
     public async Task<IActionResult> Delete(Guid id, CancellationToken ct)
         => Ok(await _service.DeleteWaterSystemAsync(id, ct));
 }

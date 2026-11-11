@@ -121,11 +121,17 @@ public class SalesService : ISalesService
 public class BoxCameraService : IBoxCameraService
 {
     private readonly IUnitOfWork _uow;
+    private readonly FarmAreaScope _areas;
 
-    public BoxCameraService(IUnitOfWork uow) => _uow = uow;
+    public BoxCameraService(IUnitOfWork uow, ICurrentUserService? currentUser = null)
+    {
+        _uow = uow;
+        _areas = new FarmAreaScope(uow, currentUser);
+    }
 
     public async Task<ApiResponse<BoxCameraDto>> GetCameraForBoxAsync(Guid boxId, CancellationToken ct = default)
     {
+        await _areas.EnsureBoxAsync(boxId, manage: false, ct);
         var box = await _uow.Boxes.GetByIdAsync(boxId, ct) ?? throw AppException.NotFound("Box");
         var row = await _uow.FarmingRows.GetByIdAsync(box.FarmingRowId, ct);
 
@@ -135,8 +141,7 @@ public class BoxCameraService : IBoxCameraService
             .OrderByDescending(d => d.LastSeenAt ?? d.CreatedAt)
             .ToList();
         var camera = cameras.FirstOrDefault(d => d.FarmingRowId == box.FarmingRowId)
-            ?? (row is null ? null : cameras.FirstOrDefault(d => d.FarmingAreaId == row.FarmingAreaId))
-            ?? cameras.FirstOrDefault();
+            ?? (row is null ? null : cameras.FirstOrDefault(d => d.FarmingAreaId == row.FarmingAreaId));
 
         // Latest box media as real preview (Drive/web link) when camera stream is unavailable.
         var latestMedia = (await _uow.MediaAssets.FindAsync(

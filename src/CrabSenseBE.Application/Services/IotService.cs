@@ -19,19 +19,22 @@ public class IotService : IIotService
     private readonly IAlertService _alerts;
     private readonly IRasFlowService _rasFlow;
     private readonly ILogger<IotService> _logger;
+    private readonly FarmAreaScope _areas;
 
     public IotService(
         IUnitOfWork uow,
         IStorageService storage,
         IAlertService alerts,
         IRasFlowService rasFlow,
-        ILogger<IotService> logger)
+        ILogger<IotService> logger,
+        ICurrentUserService? currentUser = null)
     {
         _uow = uow;
         _storage = storage;
         _alerts = alerts;
         _rasFlow = rasFlow;
         _logger = logger;
+        _areas = new FarmAreaScope(uow, currentUser);
     }
 
     // ─── Ingest (ESP32 HTTP) ────────────────────────────────────────────────
@@ -945,7 +948,13 @@ public class IotService : IIotService
 
     public async Task<ApiResponse<IEnumerable<WaterSystemDto>>> GetWaterSystemsAsync(CancellationToken ct = default)
     {
-        var list = await _uow.WaterSystems.GetAllAsync(ct);
+        var list = (await _uow.WaterSystems.GetAllAsync(ct) ?? Enumerable.Empty<WaterSystem>()).AsEnumerable();
+        var user = await _areas.CurrentUserAsync(ct);
+        if (user is not null && user.Role != UserRole.SystemAdministrator)
+        {
+            var scope = await _areas.AreaIdsAsync(ct) ?? new HashSet<Guid>();
+            list = list.Where(ws => ws.FarmingAreaId is Guid areaId && scope.Contains(areaId));
+        }
         return ApiResponse<IEnumerable<WaterSystemDto>>.Ok(list.Select(MapWs));
     }
 
@@ -954,6 +963,16 @@ public class IotService : IIotService
     {
         if (string.IsNullOrWhiteSpace(req.Name))
             throw AppException.BadRequest("Name is required.");
+        if (req.FarmingAreaId is not Guid areaId || areaId == Guid.Empty)
+        {
+            if (await _areas.CurrentUserAsync(ct) is not null)
+                throw AppException.BadRequest("FarmingAreaId is required.");
+        }
+        else
+        {
+            _ = await _uow.FarmingAreas.GetByIdAsync(areaId, ct) ?? throw AppException.NotFound("FarmingArea");
+            await _areas.EnsureAsync(areaId, manage: true, ct);
+        }
         var ws = new WaterSystem
         {
             Name = req.Name.Trim(),
@@ -973,6 +992,13 @@ public class IotService : IIotService
         Guid id, UpdateWaterSystemRequest req, CancellationToken ct = default)
     {
         var ws = await _uow.WaterSystems.GetByIdAsync(id, ct) ?? throw AppException.NotFound("WaterSystem");
+        if (ws.FarmingAreaId is Guid currentArea)
+            await _areas.EnsureAsync(currentArea, manage: true, ct);
+        if (req.FarmingAreaId is Guid nextArea && nextArea != Guid.Empty && nextArea != ws.FarmingAreaId)
+        {
+            _ = await _uow.FarmingAreas.GetByIdAsync(nextArea, ct) ?? throw AppException.NotFound("FarmingArea");
+            await _areas.EnsureAsync(nextArea, manage: true, ct);
+        }
         if (req.Name is not null) ws.Name = req.Name.Trim();
         if (req.FarmingAreaId.HasValue) ws.FarmingAreaId = req.FarmingAreaId;
         if (req.Type is not null) ws.Type = req.Type;
@@ -988,6 +1014,8 @@ public class IotService : IIotService
     public async Task<ApiResponse> DeleteWaterSystemAsync(Guid id, CancellationToken ct = default)
     {
         var ws = await _uow.WaterSystems.GetByIdAsync(id, ct) ?? throw AppException.NotFound("WaterSystem");
+        if (ws.FarmingAreaId is Guid deleteArea)
+            await _areas.EnsureAsync(deleteArea, manage: true, ct);
         if (await _uow.Sensors.AnyAsync(s => s.WaterSystemId == id, ct))
             throw AppException.Conflict("Water system still has sensors.");
         var flows = (await _uow.WaterFlows.FindAsync(f => f.WaterSystemId == id, ct)).ToList();

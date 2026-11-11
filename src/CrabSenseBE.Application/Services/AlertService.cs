@@ -18,18 +18,23 @@ public class AlertService : IAlertService
 {
     private readonly IUnitOfWork _uow;
     private readonly INotificationService _notifications;
+    private readonly FarmAreaScope _areas;
 
-    public AlertService(IUnitOfWork uow, INotificationService notifications)
+    public AlertService(IUnitOfWork uow, INotificationService notifications, ICurrentUserService? currentUser = null)
     {
         _uow = uow;
         _notifications = notifications;
+        _areas = new FarmAreaScope(uow, currentUser);
     }
 
     // ─── Thresholds ─────────────────────────────────────────────────────────
 
     public async Task<ApiResponse<IEnumerable<AlertThresholdDto>>> GetThresholdsAsync(CancellationToken ct = default)
     {
-        var items = await _uow.AlertThresholds.GetAllAsync(ct);
+        var items = (await _uow.AlertThresholds.GetAllAsync(ct) ?? Enumerable.Empty<AlertThreshold>()).AsEnumerable();
+        var scope = await _areas.AreaIdsAsync(ct);
+        if (scope is not null)
+            items = items.Where(item => item.FarmingAreaId is Guid areaId && scope.Contains(areaId));
         return ApiResponse<IEnumerable<AlertThresholdDto>>.Ok(items.Select(MapThreshold));
     }
 
@@ -38,6 +43,8 @@ public class AlertService : IAlertService
     {
         if (req.MinValue >= req.MaxValue)
             throw AppException.BadRequest("MinValue must be less than MaxValue.");
+        var areaId = await RequireThresholdAreaAsync(req.FarmingAreaId, ct);
+        var waterSystemId = await RequireWaterSystemAsync(req.WaterSystemId, areaId, ct);
 
         var severity = ParseSeverity(req.Severity);
         var entity = new AlertThreshold
@@ -46,9 +53,14 @@ public class AlertService : IAlertService
             MinValue = req.MinValue,
             MaxValue = req.MaxValue,
             Severity = severity,
-            IsActive = true
+            IsActive = true,
+            FarmingAreaId = areaId,
+            WaterSystemId = waterSystemId
         };
         await _uow.AlertThresholds.AddAsync(entity, ct);
+        await ConfigAudit.WriteAsync(
+            _uow, (await _areas.CurrentUserAsync(ct))?.Id,
+            "CreateAlertThreshold", "AlertThreshold", entity.Id, entity.SensorType, ct);
         await _uow.SaveChangesAsync(ct);
         return ApiResponse<AlertThresholdDto>.Ok(MapThreshold(entity), "Created.");
     }
@@ -58,11 +70,15 @@ public class AlertService : IAlertService
     {
         var entity = await _uow.AlertThresholds.GetByIdAsync(id, ct)
             ?? throw AppException.NotFound("AlertThreshold");
+        await EnsureThresholdAreaAsync(entity, ct);
         entity.MinValue = req.MinValue;
         entity.MaxValue = req.MaxValue;
         entity.Severity = ParseSeverity(req.Severity);
         entity.IsActive = req.IsActive;
         _uow.AlertThresholds.Update(entity);
+        await ConfigAudit.WriteAsync(
+            _uow, (await _areas.CurrentUserAsync(ct))?.Id,
+            "UpdateAlertThreshold", "AlertThreshold", entity.Id, entity.SensorType, ct);
         await _uow.SaveChangesAsync(ct);
         return ApiResponse<AlertThresholdDto>.Ok(MapThreshold(entity));
     }
@@ -71,7 +87,11 @@ public class AlertService : IAlertService
     {
         var entity = await _uow.AlertThresholds.GetByIdAsync(id, ct)
             ?? throw AppException.NotFound("AlertThreshold");
+        await EnsureThresholdAreaAsync(entity, ct);
         _uow.AlertThresholds.Remove(entity);
+        await ConfigAudit.WriteAsync(
+            _uow, (await _areas.CurrentUserAsync(ct))?.Id,
+            "DeleteAlertThreshold", "AlertThreshold", entity.Id, entity.SensorType, ct);
         await _uow.SaveChangesAsync(ct);
         return ApiResponse.Ok("Alert threshold deleted.");
     }
@@ -85,6 +105,8 @@ public class AlertService : IAlertService
         CancellationToken ct = default)
     {
         farmingAreaId = await ResolveFarmingAreaFromBoxAsync(boxId, farmingAreaId, ct);
+        if (farmingAreaId is Guid requestedArea)
+            await _areas.EnsureAsync(requestedArea, manage: false, ct);
 
         IEnumerable<Alert> items;
         if (activeOnly == true)
@@ -96,6 +118,7 @@ public class AlertService : IAlertService
             items = await _uow.Alerts.GetAllAsync(ct);
 
         items = await FilterByFarmingAreaAsync(items, farmingAreaId, ct);
+        items = await FilterToAssignedAreasAsync(items, ct);
         var dtos = await MapAlertsAsync(
             items.OrderByDescending(a => a.CreatedAt), ct);
         return ApiResponse<IEnumerable<AlertDto>>.Ok(dtos);
@@ -107,6 +130,8 @@ public class AlertService : IAlertService
         CancellationToken ct = default)
     {
         days = Math.Clamp(days, 1, 90);
+        if (farmingAreaId is Guid historyArea)
+            await _areas.EnsureAsync(historyArea, manage: false, ct);
         var cutoff = DateTime.UtcNow.AddDays(-days);
         var items = await _uow.Alerts.FindAsync(
             a => (a.Status == AlertStatus.Resolved
@@ -115,6 +140,7 @@ public class AlertService : IAlertService
                  && a.CreatedAt >= cutoff,
             ct);
         items = await FilterByFarmingAreaAsync(items, farmingAreaId, ct);
+        items = await FilterToAssignedAreasAsync(items, ct);
         var dtos = await MapAlertsAsync(
             items.OrderByDescending(a => a.CreatedAt), ct);
         return ApiResponse<IEnumerable<AlertDto>>.Ok(dtos);
@@ -124,6 +150,7 @@ public class AlertService : IAlertService
     {
         var alert = await _uow.Alerts.GetByIdAsync(id, ct)
             ?? throw AppException.NotFound("Alert");
+        await EnsureAlertAreaAsync(alert, ct);
         var dto = (await MapAlertsAsync(new[] { alert }, ct)).First();
         return ApiResponse<AlertDto>.Ok(dto);
     }
@@ -139,6 +166,7 @@ public class AlertService : IAlertService
     {
         var alert = await _uow.Alerts.GetByIdAsync(id, ct)
             ?? throw AppException.NotFound("Alert");
+        await EnsureAlertAreaAsync(alert, ct);
         alert.Status = AlertStatus.Acknowledged;
         alert.AcknowledgedAt = DateTime.UtcNow;
         alert.AcknowledgedBy = req.UserId;
@@ -153,6 +181,7 @@ public class AlertService : IAlertService
     {
         var alert = await _uow.Alerts.GetByIdAsync(id, ct)
             ?? throw AppException.NotFound("Alert");
+        await EnsureAlertAreaAsync(alert, ct);
         alert.Status = AlertStatus.InProgress;
         alert.ProcessingStartedAt = DateTime.UtcNow;
         alert.ProcessingBy = req?.UserId;
@@ -172,6 +201,7 @@ public class AlertService : IAlertService
     {
         var alert = await _uow.Alerts.GetByIdAsync(id, ct)
             ?? throw AppException.NotFound("Alert");
+        await EnsureAlertAreaAsync(alert, ct);
         alert.Status = req?.DeviceRecovered == true ? AlertStatus.Recovered : AlertStatus.Resolved;
         alert.ResolvedAt = DateTime.UtcNow;
         alert.ResolvedBy = req?.UserId;
@@ -195,8 +225,10 @@ public class AlertService : IAlertService
 
         if (min is null || max is null)
         {
-            var thr = (await _uow.AlertThresholds.FindAsync(
-                t => t.IsActive && t.SensorType == sensor.SensorType, ct)).FirstOrDefault();
+            var candidates = await _uow.AlertThresholds.FindAsync(
+                t => t.IsActive && t.SensorType == sensor.SensorType, ct);
+            var areaId = await AreaOfWaterSystemAsync(sensor.WaterSystemId, ct);
+            var thr = PickThreshold(candidates, areaId, sensor.WaterSystemId);
             if (thr is null) return;
             min = thr.MinValue;
             max = thr.MaxValue;
@@ -779,6 +811,103 @@ public class AlertService : IAlertService
     private static AlertSeverity ParseSeverity(string? s) =>
         Enum.TryParse<AlertSeverity>(s, true, out var v) ? v : AlertSeverity.Warning;
 
+    private async Task<Guid?> RequireThresholdAreaAsync(Guid? farmingAreaId, CancellationToken ct)
+    {
+        var user = await _areas.CurrentUserAsync(ct);
+        if (user is null)
+            return farmingAreaId is Guid id && id != Guid.Empty ? id : null;
+        if (farmingAreaId is not Guid areaId || areaId == Guid.Empty)
+            throw AppException.BadRequest("Ngưỡng môi trường phải gắn với một khu nuôi.");
+        await _areas.EnsureAsync(areaId, manage: true, ct);
+        return areaId;
+    }
+
+    private async Task<Guid?> RequireWaterSystemAsync(Guid? waterSystemId, Guid? areaId, CancellationToken ct)
+    {
+        if (waterSystemId is not Guid id || id == Guid.Empty) return null;
+        var system = await _uow.WaterSystems.GetByIdAsync(id, ct)
+            ?? throw AppException.NotFound("WaterSystem");
+        if (areaId is Guid area && system.FarmingAreaId != area)
+            throw AppException.BadRequest("Hệ thống nước không thuộc khu này.");
+        if (system.FarmingAreaId is Guid systemArea)
+            await _areas.EnsureAsync(systemArea, manage: true, ct);
+        return id;
+    }
+
+    private async Task EnsureThresholdAreaAsync(AlertThreshold entity, CancellationToken ct)
+    {
+        if (entity.FarmingAreaId is not Guid areaId || areaId == Guid.Empty)
+            throw AppException.Forbidden("Ngưỡng chưa gắn khu nuôi.");
+        await _areas.EnsureAsync(areaId, manage: true, ct);
+    }
+
+    private async Task EnsureAlertAreaAsync(Alert alert, CancellationToken ct)
+    {
+        var scope = await _areas.AreaIdsAsync(ct);
+        if (scope is null) return;
+        var areas = await AreaByAlertAsync(new[] { alert }, ct);
+        if (!areas.TryGetValue(alert.Id, out var areaId) || areaId is not Guid id || !scope.Contains(id))
+            throw AppException.Forbidden("Cảnh báo không thuộc khu được phân công.");
+    }
+
+    private async Task<IEnumerable<Alert>> FilterToAssignedAreasAsync(IEnumerable<Alert> items, CancellationToken ct)
+    {
+        var scope = await _areas.AreaIdsAsync(ct);
+        if (scope is null) return items;
+        var list = items.ToList();
+        var areas = await AreaByAlertAsync(list, ct);
+        return list.Where(alert =>
+            areas.TryGetValue(alert.Id, out var areaId)
+            && areaId is Guid id
+            && scope.Contains(id));
+    }
+
+    private async Task<Dictionary<Guid, Guid?>> AreaByAlertAsync(IReadOnlyCollection<Alert> alerts, CancellationToken ct)
+    {
+        var sensorIds = alerts.Where(alert => alert.SensorId is Guid).Select(alert => alert.SensorId!.Value).Distinct().ToList();
+        var sensors = sensorIds.Count == 0
+            ? new List<Sensor>()
+            : (await _uow.Sensors.FindAsync(sensor => sensorIds.Contains(sensor.Id), ct)).ToList();
+        var sensorMap = sensors.ToDictionary(sensor => sensor.Id);
+        var systemIds = sensors.Where(sensor => sensor.WaterSystemId is Guid).Select(sensor => sensor.WaterSystemId!.Value).Distinct().ToList();
+        var systems = systemIds.Count == 0
+            ? new List<WaterSystem>()
+            : (await _uow.WaterSystems.FindAsync(system => systemIds.Contains(system.Id), ct)).ToList();
+        var areaBySystem = systems.ToDictionary(system => system.Id, system => system.FarmingAreaId);
+
+        var result = new Dictionary<Guid, Guid?>();
+        foreach (var alert in alerts)
+        {
+            Guid? area = null;
+            if (alert.SensorId is Guid sensorId
+                && sensorMap.TryGetValue(sensorId, out var sensor)
+                && sensor.WaterSystemId is Guid systemId
+                && areaBySystem.TryGetValue(systemId, out var found))
+                area = found;
+            result[alert.Id] = area;
+        }
+        return result;
+    }
+
+    private static AlertThreshold? PickThreshold(
+        IEnumerable<AlertThreshold> candidates, Guid? areaId, Guid? waterSystemId)
+    {
+        var list = candidates.ToList();
+        if (waterSystemId is Guid systemId)
+        {
+            var bySystem = list.FirstOrDefault(item => item.WaterSystemId == systemId);
+            if (bySystem is not null) return bySystem;
+        }
+        if (areaId is Guid area)
+        {
+            var byArea = list.FirstOrDefault(item => item.FarmingAreaId == area && item.WaterSystemId is null);
+            if (byArea is not null) return byArea;
+        }
+        return list.FirstOrDefault(item => item.FarmingAreaId is null && item.WaterSystemId is null)
+            ?? list.FirstOrDefault();
+    }
+
     private static AlertThresholdDto MapThreshold(AlertThreshold t) =>
-        new(t.Id, t.SensorType, t.MinValue, t.MaxValue, t.Severity.ToString(), t.IsActive);
+        new(t.Id, t.SensorType, t.MinValue, t.MaxValue, t.Severity.ToString(), t.IsActive,
+            t.FarmingAreaId, t.WaterSystemId);
 }
