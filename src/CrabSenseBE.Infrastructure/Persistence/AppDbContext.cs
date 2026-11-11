@@ -10,6 +10,8 @@ public class AppDbContext : DbContext
 
     // Auth
     public DbSet<AppUser> AppUsers => Set<AppUser>();
+    public DbSet<FarmManagerAssignment> FarmManagerAssignments => Set<FarmManagerAssignment>();
+    public DbSet<FarmStaffAssignment> FarmStaffAssignments => Set<FarmStaffAssignment>();
 
     // Farm hierarchy (each FarmingArea represents one farm)
     public DbSet<FarmingArea> FarmingAreas => Set<FarmingArea>();
@@ -119,18 +121,7 @@ public class AppDbContext : DbContext
             .HasConversion(
                 v => v.ToString(),
                 v => UserRoleParsing.FromStorage(v));
-        modelBuilder.Entity<FarmingArea>()
-            .HasOne(area => area.Owner)
-            .WithMany(user => user.OwnedAreas)
-            .HasForeignKey(area => area.OwnerId)
-            .OnDelete(DeleteBehavior.Cascade);
-        // Mỗi Manager/Staff chỉ thuộc một khu; không cho xóa khu khi còn tài khoản được gán.
-        modelBuilder.Entity<AppUser>()
-            .HasOne(u => u.FarmingArea)
-            .WithMany(area => area.Users)
-            .HasForeignKey(u => u.FarmingAreaId)
-            .OnDelete(DeleteBehavior.Restrict);
-        // FarmingArea là ranh giới trang trại; mỗi khu có thể có nhiều Admin và mỗi Admin quản lý nhiều khu.
+        // Một Farm Administrator quản lý nhiều khu; mỗi khu chỉ một Farm Administrator.
         modelBuilder.Entity<AppUser>()
             .HasMany(u => u.ManagedAreas)
             .WithMany(area => area.Administrators)
@@ -150,6 +141,7 @@ public class AppDbContext : DbContext
                 {
                     join.ToTable("FarmingAreaAdministrators", "be");
                     join.HasKey("UserId", "FarmingAreaId");
+                    join.HasIndex("FarmingAreaId").IsUnique();
                 });
 
         modelBuilder.Entity<Alert>()
@@ -563,14 +555,66 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<ServiceApiKey>()
             .HasIndex(x => x.Prefix);
 
-        modelBuilder.HasSequence<long>("employee_id_sequence", "be")
-            .StartsAt(1)
-            .IncrementsBy(1);
+        foreach (var sequence in new[]
+                 {
+                     "user_code_sad_seq",
+                     "user_code_fad_seq",
+                     "user_code_fmn_seq",
+                     "user_code_fst_seq"
+                 })
+        {
+            modelBuilder.HasSequence<long>(sequence, "be")
+                .StartsAt(1)
+                .IncrementsBy(1);
+        }
 
         modelBuilder.Entity<AppUser>()
-            .HasIndex(user => user.EmployeeId)
+            .HasIndex(user => user.UserCode)
             .IsUnique()
-            .HasFilter("\"EmployeeId\" IS NOT NULL");
+            .HasFilter("\"UserCode\" IS NOT NULL");
+
+        modelBuilder.Entity<FarmManagerAssignment>()
+            .HasIndex(a => a.ManagerUserId)
+            .IsUnique();
+        modelBuilder.Entity<FarmManagerAssignment>()
+            .HasOne(a => a.Manager)
+            .WithMany()
+            .HasForeignKey(a => a.ManagerUserId)
+            .OnDelete(DeleteBehavior.Cascade);
+        modelBuilder.Entity<FarmManagerAssignment>()
+            .HasOne(a => a.FarmingArea)
+            .WithMany()
+            .HasForeignKey(a => a.FarmingAreaId)
+            .OnDelete(DeleteBehavior.Restrict);
+        modelBuilder.Entity<FarmManagerAssignment>()
+            .HasOne(a => a.AssignedBy)
+            .WithMany()
+            .HasForeignKey(a => a.AssignedByUserId)
+            .OnDelete(DeleteBehavior.Restrict);
+
+        modelBuilder.Entity<FarmStaffAssignment>()
+            .HasIndex(a => a.StaffUserId)
+            .IsUnique();
+        modelBuilder.Entity<FarmStaffAssignment>()
+            .HasOne(a => a.Staff)
+            .WithMany()
+            .HasForeignKey(a => a.StaffUserId)
+            .OnDelete(DeleteBehavior.Cascade);
+        modelBuilder.Entity<FarmStaffAssignment>()
+            .HasOne(a => a.Manager)
+            .WithMany()
+            .HasForeignKey(a => a.ManagerUserId)
+            .OnDelete(DeleteBehavior.Restrict);
+        modelBuilder.Entity<FarmStaffAssignment>()
+            .HasOne(a => a.FarmingArea)
+            .WithMany()
+            .HasForeignKey(a => a.FarmingAreaId)
+            .OnDelete(DeleteBehavior.Restrict);
+        modelBuilder.Entity<FarmStaffAssignment>()
+            .HasOne(a => a.AssignedBy)
+            .WithMany()
+            .HasForeignKey(a => a.AssignedByUserId)
+            .OnDelete(DeleteBehavior.Restrict);
     }
 
     public override Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)

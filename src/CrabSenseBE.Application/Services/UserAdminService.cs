@@ -24,14 +24,16 @@ public class UserAdminService : IUserAdminService
         UserRole callerRole, Guid callerId, CancellationToken ct = default)
     {
         var users = await _uow.Users.GetAllAsync(ct);
+        var managerAssignments = (await _uow.FarmManagerAssignments.GetAllAsync(ct)).ToList();
+        var staffAssignments = (await _uow.FarmStaffAssignments.GetAllAsync(ct)).ToList();
         IEnumerable<AppUser> visible = users;
         if (callerRole != UserRole.SystemAdministrator)
         {
             var areaIds = await GetManagedAreaIdsAsync(callerId, ct);
             visible = users.Where(user =>
                 CanManageRole(callerRole, user.Role) &&
-                user.FarmingAreaId.HasValue &&
-                areaIds.Contains(user.FarmingAreaId.Value));
+                AreaIdOf(user, managerAssignments, staffAssignments) is Guid areaId &&
+                areaIds.Contains(areaId));
         }
 
         var visibleUsers = visible.ToList();
@@ -57,6 +59,22 @@ public class UserAdminService : IUserAdminService
                             ? managedAreaIds
                             : Array.Empty<Guid>()
                     };
+                else if (user.Role == UserRole.FarmManager)
+                {
+                    var assignment = managerAssignments.FirstOrDefault(item => item.ManagerUserId == user.Id);
+                    if (assignment is not null)
+                        dto = dto with { FarmingAreaId = assignment.FarmingAreaId };
+                }
+                else if (user.Role == UserRole.FarmStaff)
+                {
+                    var assignment = staffAssignments.FirstOrDefault(item => item.StaffUserId == user.Id);
+                    if (assignment is not null)
+                        dto = dto with
+                        {
+                            FarmingAreaId = assignment.FarmingAreaId,
+                            ManagerUserId = assignment.ManagerUserId
+                        };
+                }
                 return dto;
             })
             .ToList();
@@ -72,7 +90,7 @@ public class UserAdminService : IUserAdminService
         if (!await CanManageAsync(callerRole, user, callerId, ct))
             throw AppException.NotFound("User");
 
-        return ApiResponse<UserDto>.Ok(AuthService.MapToDto(user));
+        return ApiResponse<UserDto>.Ok(await ToDtoAsync(user, ct));
     }
 
     public async Task<ApiResponse<UserDto>> SetActiveAsync(
@@ -101,7 +119,7 @@ public class UserAdminService : IUserAdminService
         await _uow.SaveChangesAsync(ct);
 
         return ApiResponse<UserDto>.Ok(
-            AuthService.MapToDto(user),
+            await ToDtoAsync(user, ct),
             isActive ? "Đã kích hoạt tài khoản." : "Đã vô hiệu hoá tài khoản.");
     }
 
@@ -182,18 +200,13 @@ public class UserAdminService : IUserAdminService
             ? null
             : request.Phone.Trim();
 
-        user.EmployeeId =
-            string.IsNullOrWhiteSpace(request.EmployeeId)
-                ? null
-                : request.EmployeeId.Trim();
-
         user.UpdatedAt = DateTime.UtcNow;
 
         _uow.Users.Update(user);
         await _uow.SaveChangesAsync(ct);
 
         return ApiResponse<UserDto>.Ok(
-            AuthService.MapToDto(user),
+            await ToDtoAsync(user, ct),
             "User updated successfully.");
     }
 
@@ -245,10 +258,13 @@ public class UserAdminService : IUserAdminService
 
         if (user.Role == newRole)
             return ApiResponse<UserDto>.Ok(
-                AuthService.MapToDto(user),
+                await ToDtoAsync(user, ct),
                 "User already has this role.");
 
+        await MoveAssignmentForRoleChangeAsync(user, newRole, request.ManagerUserId, callerId, ct);
+
         user.Role = newRole;
+        user.UserCode = await NextUserCodeAsync(newRole, ct);
         user.UpdatedAt = DateTime.UtcNow;
 
         // Invalidate the refresh token after role change.
@@ -259,7 +275,7 @@ public class UserAdminService : IUserAdminService
         await _uow.SaveChangesAsync(ct);
 
         return ApiResponse<UserDto>.Ok(
-            AuthService.MapToDto(user),
+            await ToDtoAsync(user, ct),
             "User role updated successfully.");
     }
 
@@ -274,13 +290,126 @@ public class UserAdminService : IUserAdminService
     {
         if (callerRole == UserRole.SystemAdministrator)
             return true;
-        if (!CanManageRole(callerRole, target.Role) || !target.FarmingAreaId.HasValue)
+        var areaId = await AssignedAreaIdAsync(target, ct);
+        if (!CanManageRole(callerRole, target.Role) || areaId is null)
             return false;
 
         return (await _uow.FarmingAreas.FindAsync(
-            area => area.Id == target.FarmingAreaId.Value &&
+            area => area.Id == areaId.Value &&
                     area.Administrators.Any(admin => admin.Id == callerId),
             ct)).Any();
+    }
+
+    private async Task MoveAssignmentForRoleChangeAsync(
+        AppUser user,
+        UserRole newRole,
+        Guid? managerUserId,
+        Guid callerId,
+        CancellationToken ct)
+    {
+        var currentAreaId = await AssignedAreaIdAsync(user, ct)
+            ?? throw AppException.BadRequest("Tài khoản chưa được gán khu.");
+
+        if (user.Role == UserRole.FarmManager && newRole == UserRole.FarmStaff)
+        {
+            if (await _uow.FarmStaffAssignments.AnyAsync(item => item.ManagerUserId == user.Id, ct))
+                throw AppException.BadRequest("Hãy chuyển nhân viên sang manager khác trước khi đổi role manager này.");
+            if (!managerUserId.HasValue || managerUserId == Guid.Empty || managerUserId == user.Id)
+                throw AppException.BadRequest("FarmStaff phải được gán dưới một FarmManager của cùng khu.");
+            var managerAssignment = await _uow.FarmManagerAssignments.FirstOrDefaultAsync(
+                item => item.ManagerUserId == managerUserId.Value, ct)
+                ?? throw AppException.BadRequest("FarmManager chưa được gán khu.");
+            if (managerAssignment.FarmingAreaId != currentAreaId)
+                throw AppException.BadRequest("FarmManager không quản lý khu của tài khoản này.");
+
+            var own = await _uow.FarmManagerAssignments.FirstOrDefaultAsync(
+                item => item.ManagerUserId == user.Id, ct);
+            if (own is not null)
+                _uow.FarmManagerAssignments.Remove(own);
+            await _uow.FarmStaffAssignments.AddAsync(new FarmStaffAssignment
+            {
+                StaffUserId = user.Id,
+                ManagerUserId = managerUserId.Value,
+                FarmingAreaId = currentAreaId,
+                AssignedByUserId = callerId
+            }, ct);
+            return;
+        }
+
+        if (user.Role == UserRole.FarmStaff && newRole == UserRole.FarmManager)
+        {
+            var own = await _uow.FarmStaffAssignments.FirstOrDefaultAsync(
+                item => item.StaffUserId == user.Id, ct);
+            if (own is not null)
+                _uow.FarmStaffAssignments.Remove(own);
+            await _uow.FarmManagerAssignments.AddAsync(new FarmManagerAssignment
+            {
+                ManagerUserId = user.Id,
+                FarmingAreaId = currentAreaId,
+                AssignedByUserId = callerId
+            }, ct);
+        }
+    }
+
+    private async Task<Guid?> AssignedAreaIdAsync(AppUser user, CancellationToken ct)
+    {
+        if (user.Role == UserRole.FarmManager)
+            return (await _uow.FarmManagerAssignments.FirstOrDefaultAsync(
+                item => item.ManagerUserId == user.Id, ct))?.FarmingAreaId;
+        if (user.Role == UserRole.FarmStaff)
+            return (await _uow.FarmStaffAssignments.FirstOrDefaultAsync(
+                item => item.StaffUserId == user.Id, ct))?.FarmingAreaId;
+        return null;
+    }
+
+    private static Guid? AreaIdOf(
+        AppUser user,
+        IReadOnlyCollection<FarmManagerAssignment> managers,
+        IReadOnlyCollection<FarmStaffAssignment> staff)
+    {
+        if (user.Role == UserRole.FarmManager)
+            return managers.FirstOrDefault(item => item.ManagerUserId == user.Id)?.FarmingAreaId;
+        if (user.Role == UserRole.FarmStaff)
+            return staff.FirstOrDefault(item => item.StaffUserId == user.Id)?.FarmingAreaId;
+        return null;
+    }
+
+    private async Task<UserDto> ToDtoAsync(AppUser user, CancellationToken ct)
+    {
+        var dto = AuthService.MapToDto(user);
+        if (user.Role == UserRole.FarmManager)
+        {
+            var assignment = await _uow.FarmManagerAssignments.FirstOrDefaultAsync(
+                item => item.ManagerUserId == user.Id, ct);
+            if (assignment is not null)
+                dto = dto with { FarmingAreaId = assignment.FarmingAreaId };
+        }
+        else if (user.Role == UserRole.FarmStaff)
+        {
+            var assignment = await _uow.FarmStaffAssignments.FirstOrDefaultAsync(
+                item => item.StaffUserId == user.Id, ct);
+            if (assignment is not null)
+                dto = dto with
+                {
+                    FarmingAreaId = assignment.FarmingAreaId,
+                    ManagerUserId = assignment.ManagerUserId
+                };
+        }
+
+        return dto;
+    }
+
+    private async Task<string> NextUserCodeAsync(UserRole role, CancellationToken ct)
+    {
+        var number = await _uow.GetNextUserCodeNumberAsync(role, ct);
+        var userCode = UserCodes.Format(role, number);
+        while (await _uow.Users.AnyAsync(user => user.UserCode == userCode, ct))
+        {
+            number = await _uow.GetNextUserCodeNumberAsync(role, ct);
+            userCode = UserCodes.Format(role, number);
+        }
+
+        return userCode;
     }
 
     private async Task<HashSet<Guid>> GetManagedAreaIdsAsync(Guid callerId, CancellationToken ct) =>

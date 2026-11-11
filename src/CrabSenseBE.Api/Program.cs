@@ -110,7 +110,7 @@ builder.Services.AddSwaggerGen(c =>
         Version = "v1",
         Description = "CrabSense/CrabGuardian backend API.\n\n" +
                       "Hierarchy on CREATE:\n" +
-                      "1) Area (khu) — OwnerId from JWT (not in body)\n" +
+                      "1) Area (khu) — Farm Administrator from JWT (not in body)\n" +
                       "2) Row (dãy) — requires farmingAreaId\n" +
                       "3) Box (hộp) — requires farmingRowId (Area auto)\n" +
                       "4) Crab (cua) — requires boxId + crabLotId + cropBatchId (Row/Area auto from box)\n\n" +

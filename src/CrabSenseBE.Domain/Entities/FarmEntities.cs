@@ -3,12 +3,9 @@ using CrabSenseBE.Domain.Enums;
 
 namespace CrabSenseBE.Domain.Entities;
 
-/// <summary>Khu nuôi (Area) — thuộc Owner. Hierachy: Owner → Khu → Dãy → Hộp → Cua.</summary>
+/// <summary>Khu nuôi. Farm Administrator quản lý khu qua FarmingAreaAdministrators.</summary>
 public class FarmingArea : BaseEntity
 {
-    /// <summary>Chủ sở hữu khu — gắn từ JWT lúc tạo.</summary>
-    public Guid OwnerId { get; set; }
-
     /// <summary>Mã khu hệ thống: AREA-A01, AREA-A02… Không sửa từ client.</summary>
     public string Code { get; set; } = string.Empty;
 
@@ -41,11 +38,8 @@ public class FarmingArea : BaseEntity
     public double? Longitude { get; set; }
 
     // Navigation
-    public AppUser? Owner { get; set; }
-    /// <summary>Các Farm Administrator được gán quản lý khu này.</summary>
+    /// <summary>Farm Administrator duy nhất của khu này.</summary>
     public ICollection<AppUser> Administrators { get; set; } = new List<AppUser>();
-    /// <summary>Các Manager/Staff được gán trực tiếp vào khu này.</summary>
-    public ICollection<AppUser> Users { get; set; } = new List<AppUser>();
     public ICollection<FarmingRow> Rows { get; set; } = new List<FarmingRow>();
     public ICollection<WaterSystem> WaterSystems { get; set; } = new List<WaterSystem>();
 }

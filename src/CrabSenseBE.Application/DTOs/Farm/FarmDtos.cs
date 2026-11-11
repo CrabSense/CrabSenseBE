@@ -1,7 +1,7 @@
 namespace CrabSenseBE.Application.DTOs.Farm;
 
 // Hierarchy on create (Swagger shows these required parents):
-//   Area  → OwnerId from JWT (not in body)
+//   Area  → Farm Administrator từ JWT, ghi vào FarmingAreaAdministrators
 //   Row   → FarmingAreaId
 //   Box   → FarmingRowId  (Area auto from row)
 //   Crab  → BoxId (+ auto Row/Area) + CrabLotId + CropBatchId
@@ -9,6 +9,7 @@ namespace CrabSenseBE.Application.DTOs.Farm;
 // --- FarmingArea (Khu) ---
 public record FarmingAreaDto(
     Guid Id,
+    /// <summary>Farm Administrator của khu. Guid.Empty nếu khu chưa được gán.</summary>
     Guid OwnerId,
     string? OwnerName,
     string Code,
@@ -62,7 +63,7 @@ public record UpdateMapPointRequest(decimal? MapX = null, decimal? MapY = null);
 
 /// <summary>
 /// Tạo khu. Code hệ thống tự sinh AREA-A01… — không gửi trong body.
-/// OwnerId lấy từ JWT. Bắt buộc: Name.
+/// Farm Administrator lấy từ JWT. Bắt buộc: Name.
 /// </summary>
 public record CreateFarmingAreaRequest(
     string Name,

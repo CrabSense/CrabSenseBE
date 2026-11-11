@@ -20,11 +20,18 @@ public class AuthServiceRegisterTests
     private readonly FarmingArea _area = new()
     {
         Id = Guid.NewGuid(),
-        OwnerId = Guid.NewGuid(),
         Code = "AREA-1",
         Name = "Area 1"
     };
+    private readonly FarmingArea _freeArea = new()
+    {
+        Id = Guid.NewGuid(),
+        Code = "AREA-2",
+        Name = "Area 2"
+    };
     private readonly Guid _farmAdministratorId = Guid.NewGuid();
+    private readonly Guid _managerId = Guid.NewGuid();
+    private readonly List<FarmManagerAssignment> _managerAssignments = new();
 
     public AuthServiceRegisterTests()
     {
@@ -36,13 +43,34 @@ public class AuthServiceRegisterTests
             .ReturnsAsync((Guid id, CancellationToken _) => id == _area.Id ? _area : null);
         _areas.Setup(r => r.FindAsync(It.IsAny<System.Linq.Expressions.Expression<Func<FarmingArea, bool>>>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((System.Linq.Expressions.Expression<Func<FarmingArea, bool>> predicate, CancellationToken _) =>
-                new[] { _area }.AsQueryable().Where(predicate).ToList());
+                new[] { _area, _freeArea }.AsQueryable().Where(predicate).ToList());
         _areas.Setup(r => r.AnyAsync(It.IsAny<System.Linq.Expressions.Expression<Func<FarmingArea, bool>>>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((System.Linq.Expressions.Expression<Func<FarmingArea, bool>> predicate, CancellationToken _) =>
                 new[] { _area }.AsQueryable().Any(predicate));
         _area.Administrators.Add(new AppUser { Id = _farmAdministratorId, Role = UserRole.FarmAdministrator });
+        _managerAssignments.Add(new FarmManagerAssignment
+        {
+            ManagerUserId = _managerId,
+            FarmingAreaId = _area.Id,
+            AssignedByUserId = _farmAdministratorId
+        });
+        var managerRepo = new Mock<IRepository<FarmManagerAssignment>>();
+        managerRepo.Setup(r => r.FirstOrDefaultAsync(
+                It.IsAny<System.Linq.Expressions.Expression<Func<FarmManagerAssignment, bool>>>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync((System.Linq.Expressions.Expression<Func<FarmManagerAssignment, bool>> predicate, CancellationToken _) =>
+                _managerAssignments.AsQueryable().FirstOrDefault(predicate));
+        managerRepo.Setup(r => r.AddAsync(It.IsAny<FarmManagerAssignment>(), It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+        var staffRepo = new Mock<IRepository<FarmStaffAssignment>>();
+        staffRepo.Setup(r => r.AddAsync(It.IsAny<FarmStaffAssignment>(), It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
         _uow.Setup(u => u.Users).Returns(_users.Object);
         _uow.Setup(u => u.FarmingAreas).Returns(_areas.Object);
+        _uow.Setup(u => u.FarmManagerAssignments).Returns(managerRepo.Object);
+        _uow.Setup(u => u.FarmStaffAssignments).Returns(staffRepo.Object);
+        _uow.Setup(u => u.GetNextUserCodeNumberAsync(It.IsAny<UserRole>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(1);
         _uow.Setup(u => u.SaveChangesAsync(It.IsAny<CancellationToken>())).ReturnsAsync(1);
         _uow.Setup(u => u.OperationLogs).Returns(new Mock<IRepository<OperationLog>>().Object);
     }
@@ -57,7 +85,8 @@ public class AuthServiceRegisterTests
             "Test User",
             role,
             role is "FarmManager" or "FarmStaff" ? _area.Id : null,
-            role == "FarmAdministrator" ? new[] { _area.Id } : null);
+            role == "FarmAdministrator" ? new[] { _freeArea.Id } : null,
+            role == "FarmStaff" ? _managerId : null);
 
     [Theory]
     [InlineData("FarmAdministrator")]

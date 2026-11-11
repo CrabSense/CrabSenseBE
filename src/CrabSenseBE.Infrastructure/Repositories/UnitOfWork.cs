@@ -1,4 +1,5 @@
 using CrabSenseBE.Domain.Entities;
+using CrabSenseBE.Domain.Enums;
 using CrabSenseBE.Domain.Interfaces;
 using CrabSenseBE.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
@@ -214,6 +215,14 @@ public class UnitOfWork : IUnitOfWork
     public IRepository<EdgeCommand> EdgeCommands =>
         _edgeCommands ??= new GenericRepository<EdgeCommand>(_context);
 
+    private IRepository<FarmManagerAssignment>? _farmManagerAssignments;
+    public IRepository<FarmManagerAssignment> FarmManagerAssignments =>
+        _farmManagerAssignments ??= new GenericRepository<FarmManagerAssignment>(_context);
+
+    private IRepository<FarmStaffAssignment>? _farmStaffAssignments;
+    public IRepository<FarmStaffAssignment> FarmStaffAssignments =>
+        _farmStaffAssignments ??= new GenericRepository<FarmStaffAssignment>(_context);
+
     private IRepository<FarmKiosk>? _farmKiosks;
     public IRepository<FarmKiosk> FarmKiosks =>
         _farmKiosks ??= new GenericRepository<FarmKiosk>(_context);
@@ -250,11 +259,19 @@ public class UnitOfWork : IUnitOfWork
                 group => (IReadOnlyCollection<Guid>)group.Select(row => row.FarmingAreaId).ToList());
     }
 
-    public Task<long> GetNextEmployeeNumberAsync(CancellationToken ct = default)
-    => _context.Database
-        .SqlQueryRaw<long>(
-            "SELECT nextval('be.employee_id_sequence') AS \"Value\"")
-        .SingleAsync(ct);
+    public Task<long> GetNextUserCodeNumberAsync(UserRole role, CancellationToken ct = default)
+    {
+        // Tên sequence cố định theo role, không ghép từ input.
+        var sql = role switch
+        {
+            UserRole.SystemAdministrator => "SELECT nextval('be.user_code_sad_seq') AS \"Value\"",
+            UserRole.FarmAdministrator => "SELECT nextval('be.user_code_fad_seq') AS \"Value\"",
+            UserRole.FarmManager => "SELECT nextval('be.user_code_fmn_seq') AS \"Value\"",
+            UserRole.FarmStaff => "SELECT nextval('be.user_code_fst_seq') AS \"Value\"",
+            _ => throw new ArgumentOutOfRangeException(nameof(role), role, "Role không có dãy mã tài khoản.")
+        };
+        return _context.Database.SqlQueryRaw<long>(sql).SingleAsync(ct);
+    }
 
     public async Task<List<CrabMortalityRecord>> GetMortalityRecordsWithDetailsAsync(CancellationToken ct = default)
     {

@@ -72,7 +72,7 @@ public class AuthService : IAuthService
             accessToken,
             refreshToken,
             DateTime.UtcNow.AddDays(30),
-            MapToDto(user)
+            await ToDtoAsync(user, ct)
         ));
     }
 
@@ -98,7 +98,7 @@ public class AuthService : IAuthService
         await _uow.SaveChangesAsync(ct);
 
         return ApiResponse<LoginResponse>.Ok(new LoginResponse(
-            accessToken, newRefresh, DateTime.UtcNow.AddDays(30), MapToDto(user)));
+            accessToken, newRefresh, DateTime.UtcNow.AddDays(30), await ToDtoAsync(user, ct)));
     }
 
     public async Task<ApiResponse> LogoutAsync(Guid userId, CancellationToken ct = default)
@@ -155,6 +155,12 @@ public class AuthService : IAuthService
             managedAreas = (await _uow.FarmingAreas.FindAsync(item => areaIds.Contains(item.Id), ct)).ToList();
             if (managedAreas.Count != areaIds.Count)
                 throw AppException.BadRequest("Một hoặc nhiều khu/trang trại không tồn tại.");
+            var takenAreaIds = (await _uow.FarmingAreas.FindAsync(
+                item => areaIds.Contains(item.Id) && item.Administrators.Any(), ct))
+                .Select(item => item.Id)
+                .ToList();
+            if (takenAreaIds.Count > 0)
+                throw AppException.Conflict("Mỗi khu chỉ được gán một Farm Administrator.");
         }
         else
         {
@@ -176,19 +182,20 @@ public class AuthService : IAuthService
                     throw AppException.Forbidden(
                         "Bạn chỉ được tạo tài khoản trong khu/trang trại mình quản lý.");
             }
+
+            if (role == UserRole.FarmStaff)
+            {
+                if (!request.ManagerUserId.HasValue || request.ManagerUserId == Guid.Empty)
+                    throw AppException.BadRequest("FarmStaff phải được gán dưới một FarmManager của khu đó.");
+                var managerAssignment = await _uow.FarmManagerAssignments.FirstOrDefaultAsync(
+                    item => item.ManagerUserId == request.ManagerUserId.Value, ct)
+                    ?? throw AppException.BadRequest("FarmManager chưa được gán khu.");
+                if (managerAssignment.FarmingAreaId != area.Id)
+                    throw AppException.BadRequest("FarmManager không quản lý khu được chọn.");
+            }
         }
 
-        //thêm EmployeeID
-        var employeeNumber = await _uow.GetNextEmployeeNumberAsync(ct);
-        var employeeId = $"EMP-{employeeNumber:D6}";
-
-        while (await _uow.Users.AnyAsync(
-                   user => user.EmployeeId == employeeId,
-                   ct))
-        {
-            employeeNumber = await _uow.GetNextEmployeeNumberAsync(ct);
-            employeeId = $"EMP-{employeeNumber:D6}";
-        }
+        var userCode = await NextUserCodeAsync(role, ct);
 
         var user = new AppUser
         {
@@ -197,15 +204,51 @@ public class AuthService : IAuthService
             FullName = request.FullName,
             PasswordHash = BCrypt.Net.BCrypt.HashPassword(request.Password),
             Role = role,
-            EmployeeId = employeeId,
-            FarmingAreaId = area?.Id,
-            FarmingArea = area,
+            UserCode = userCode,
             ManagedAreas = managedAreas
         };
 
         await _uow.Users.AddAsync(user, ct);
+        if (role == UserRole.FarmManager && area is not null)
+        {
+            await _uow.FarmManagerAssignments.AddAsync(new FarmManagerAssignment
+            {
+                ManagerUserId = user.Id,
+                Manager = user,
+                FarmingAreaId = area.Id,
+                FarmingArea = area,
+                AssignedByUserId = callerId
+            }, ct);
+        }
+        else if (role == UserRole.FarmStaff && area is not null && request.ManagerUserId.HasValue)
+        {
+            await _uow.FarmStaffAssignments.AddAsync(new FarmStaffAssignment
+            {
+                StaffUserId = user.Id,
+                Staff = user,
+                ManagerUserId = request.ManagerUserId.Value,
+                FarmingAreaId = area.Id,
+                FarmingArea = area,
+                AssignedByUserId = callerId
+            }, ct);
+        }
+
         await _uow.SaveChangesAsync(ct);
-        return ApiResponse<UserDto>.Ok(MapToDto(user), "User registered successfully.");
+        var dto = await ToDtoAsync(user, ct);
+        return ApiResponse<UserDto>.Ok(dto, "User registered successfully.");
+    }
+
+    private async Task<string> NextUserCodeAsync(UserRole role, CancellationToken ct)
+    {
+        var number = await _uow.GetNextUserCodeNumberAsync(role, ct);
+        var userCode = UserCodes.Format(role, number);
+        while (await _uow.Users.AnyAsync(user => user.UserCode == userCode, ct))
+        {
+            number = await _uow.GetNextUserCodeNumberAsync(role, ct);
+            userCode = UserCodes.Format(role, number);
+        }
+
+        return userCode;
     }
 
     public async Task<ApiResponse> ChangePasswordAsync(Guid userId, ChangePasswordRequest request, CancellationToken ct = default)
@@ -227,7 +270,7 @@ public class AuthService : IAuthService
     {
         var user = await _uow.Users.GetByIdAsync(userId, ct)
             ?? throw AppException.NotFound("User");
-        return ApiResponse<UserDto>.Ok(MapToDto(user));
+        return ApiResponse<UserDto>.Ok(await ToDtoAsync(user, ct));
     }
 
     public async Task<ApiResponse<UserDto>> UpdateProfileAsync(Guid userId, UpdateProfileRequest request, CancellationToken ct = default)
@@ -249,16 +292,13 @@ public class AuthService : IAuthService
         if (request.Phone is not null)
             user.Phone = string.IsNullOrWhiteSpace(request.Phone) ? null : request.Phone.Trim();
 
-        if (request.EmployeeId is not null)
-            user.EmployeeId = string.IsNullOrWhiteSpace(request.EmployeeId) ? null : request.EmployeeId.Trim();
-
         if (request.AvatarUrl is not null)
             user.AvatarUrl = string.IsNullOrWhiteSpace(request.AvatarUrl) ? null : request.AvatarUrl.Trim();
 
         user.UpdatedAt = DateTime.UtcNow;
         _uow.Users.Update(user);
         await _uow.SaveChangesAsync(ct);
-        return ApiResponse<UserDto>.Ok(MapToDto(user), "Profile updated.");
+        return ApiResponse<UserDto>.Ok(await ToDtoAsync(user, ct), "Profile updated.");
     }
 
     public async Task<ApiResponse<NotificationPreferencesDto>> GetNotificationPreferencesAsync(
@@ -315,11 +355,36 @@ public class AuthService : IAuthService
         u.IsActive,
         u.LastLoginAt,
         u.Phone,
-        u.EmployeeId,
+        u.UserCode,
         u.AvatarUrl,
         u.CreatedAt,
-        u.FarmingAreaId,
+        null,
         // EF không Include thì collection có thể null — không được ném 500 lúc login.
         u.ManagedAreas?.Select(area => area.Id).ToList()
     );
+
+    private async Task<UserDto> ToDtoAsync(AppUser user, CancellationToken ct)
+    {
+        var dto = MapToDto(user);
+        if (user.Role == UserRole.FarmManager)
+        {
+            var assignment = await _uow.FarmManagerAssignments.FirstOrDefaultAsync(
+                item => item.ManagerUserId == user.Id, ct);
+            if (assignment is not null)
+                dto = dto with { FarmingAreaId = assignment.FarmingAreaId };
+        }
+        else if (user.Role == UserRole.FarmStaff)
+        {
+            var assignment = await _uow.FarmStaffAssignments.FirstOrDefaultAsync(
+                item => item.StaffUserId == user.Id, ct);
+            if (assignment is not null)
+                dto = dto with
+                {
+                    FarmingAreaId = assignment.FarmingAreaId,
+                    ManagerUserId = assignment.ManagerUserId
+                };
+        }
+
+        return dto;
+    }
 }

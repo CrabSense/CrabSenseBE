@@ -1214,7 +1214,7 @@ public static class DevDbBootstrap
             return;
 
         var demoArea = await db.FarmingAreas
-            .Where(area => area.OwnerId == owner.Id)
+            .Where(area => area.Administrators.Any(admin => admin.Id == owner.Id))
             .OrderByDescending(area => db.Boxes.Any(box =>
                 db.FarmingRows.Any(row =>
                     row.Id == box.FarmingRowId && row.FarmingAreaId == area.Id)))

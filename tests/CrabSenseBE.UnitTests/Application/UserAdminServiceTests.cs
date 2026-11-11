@@ -19,6 +19,8 @@ public class UserAdminServiceTests
     private readonly Mock<IRepository<FarmingArea>> _areas = new();
     private readonly List<AppUser> _store = new();
     private readonly List<FarmingArea> _areaStore = new();
+    private readonly List<FarmManagerAssignment> _managerAssignments = new();
+    private readonly List<FarmStaffAssignment> _staffAssignments = new();
 
     public UserAdminServiceTests()
     {
@@ -30,8 +32,26 @@ public class UserAdminServiceTests
         _areas.Setup(r => r.FindAsync(It.IsAny<System.Linq.Expressions.Expression<Func<FarmingArea, bool>>>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((System.Linq.Expressions.Expression<Func<FarmingArea, bool>> predicate, CancellationToken _) =>
                 _areaStore.AsQueryable().Where(predicate).ToList());
+        var managers = new Mock<IRepository<FarmManagerAssignment>>();
+        managers.Setup(r => r.GetAllAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(() => _managerAssignments.ToList());
+        managers.Setup(r => r.FirstOrDefaultAsync(
+                It.IsAny<System.Linq.Expressions.Expression<Func<FarmManagerAssignment, bool>>>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync((System.Linq.Expressions.Expression<Func<FarmManagerAssignment, bool>> predicate, CancellationToken _) =>
+                _managerAssignments.AsQueryable().FirstOrDefault(predicate));
+        var staff = new Mock<IRepository<FarmStaffAssignment>>();
+        staff.Setup(r => r.GetAllAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(() => _staffAssignments.ToList());
+        staff.Setup(r => r.FirstOrDefaultAsync(
+                It.IsAny<System.Linq.Expressions.Expression<Func<FarmStaffAssignment, bool>>>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync((System.Linq.Expressions.Expression<Func<FarmStaffAssignment, bool>> predicate, CancellationToken _) =>
+                _staffAssignments.AsQueryable().FirstOrDefault(predicate));
         _uow.Setup(u => u.Users).Returns(_users.Object);
         _uow.Setup(u => u.FarmingAreas).Returns(_areas.Object);
+        _uow.Setup(u => u.FarmManagerAssignments).Returns(managers.Object);
+        _uow.Setup(u => u.FarmStaffAssignments).Returns(staff.Object);
         _uow.Setup(u => u.GetFarmAdministratorAreaAssignmentsAsync(
                 It.IsAny<IReadOnlyCollection<Guid>>(),
                 It.IsAny<CancellationToken>()))
@@ -59,12 +79,26 @@ public class UserAdminServiceTests
             FullName = "Test",
             PasswordHash = "hash",
             Role = role,
-            FarmingAreaId = role is UserRole.FarmManager or UserRole.FarmStaff ? AreaOne.Id : null,
             IsActive = isActive,
             RefreshToken = "refresh",
             RefreshTokenExpiry = DateTime.UtcNow.AddDays(10)
         };
         _store.Add(user);
+        if (role == UserRole.FarmManager)
+            _managerAssignments.Add(new FarmManagerAssignment
+            {
+                ManagerUserId = user.Id,
+                FarmingAreaId = AreaOne.Id,
+                AssignedByUserId = Guid.NewGuid()
+            });
+        if (role == UserRole.FarmStaff)
+            _staffAssignments.Add(new FarmStaffAssignment
+            {
+                StaffUserId = user.Id,
+                ManagerUserId = Guid.NewGuid(),
+                FarmingAreaId = AreaOne.Id,
+                AssignedByUserId = Guid.NewGuid()
+            });
         return user;
     }
 
@@ -76,7 +110,6 @@ public class UserAdminServiceTests
                 _areaStore.Add(new FarmingArea
                 {
                     Id = Guid.NewGuid(),
-                    OwnerId = Guid.NewGuid(),
                     Code = "AREA-1",
                     Name = "Area 1"
                 });
@@ -116,7 +149,6 @@ public class UserAdminServiceTests
         var otherArea = new FarmingArea
         {
             Id = Guid.NewGuid(),
-            OwnerId = Guid.NewGuid(),
             Code = "AREA-2",
             Name = "Area 2"
         };
@@ -127,8 +159,14 @@ public class UserAdminServiceTests
             Username = "other_farm_staff",
             Email = "other@example.com",
             FullName = "Other",
-            Role = UserRole.FarmStaff,
-            FarmingAreaId = otherArea.Id
+            Role = UserRole.FarmStaff
+        });
+        _staffAssignments.Add(new FarmStaffAssignment
+        {
+            StaffUserId = _store[^1].Id,
+            ManagerUserId = Guid.NewGuid(),
+            FarmingAreaId = otherArea.Id,
+            AssignedByUserId = Guid.NewGuid()
         });
 
         var result = await Create().ListAsync(UserRole.FarmAdministrator, admin.Id);

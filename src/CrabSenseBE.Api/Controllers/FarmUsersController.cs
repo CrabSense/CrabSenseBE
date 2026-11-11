@@ -72,7 +72,8 @@ public class FarmUsersController : ControllerBase
             request.Password,
             request.FullName,
             request.Role,
-            request.FarmingAreaId
+            request.FarmingAreaId,
+            ManagerUserId: request.ManagerUserId
         );
 
         var result = await _authService.RegisterAsync(

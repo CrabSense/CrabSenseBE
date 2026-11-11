@@ -472,12 +472,9 @@ public class NotificationService : INotificationService
         List<AppUser> users, bool scopeByArea, Guid? areaId, CancellationToken ct)
     {
         if (!scopeByArea || areaId is not Guid id || id == Guid.Empty) return users;
-        var area = await _uow.FarmingAreas.GetByIdAsync(id, ct);
-        if (area is null) return users;
-
-        // ponytail: chỉ FarmAdministrator có ràng buộc khu (FarmingArea.OwnerId). Manager/Staff chưa có
-        // bảng phân công khu nên vẫn nhận — cần UserAreaAssignment mới siết được hoàn toàn.
-        return users.Where(u => u.Role != UserRole.FarmAdministrator || u.Id == area.OwnerId).ToList();
+        var administratorId = await AreaAdministratorQuery.IdAsync(_uow.FarmingAreas.Query(), id, ct);
+        return users.Where(user =>
+            user.Role != UserRole.FarmAdministrator || user.Id == administratorId).ToList();
     }
 
     private static bool PrefsAllow(string? prefsJson, string typeCode, string? severity)

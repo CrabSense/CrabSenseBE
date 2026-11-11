@@ -130,18 +130,22 @@ public class FarmHistoryService : IFarmHistoryService
                     : $"Chuyển cua sang hộp {box.Code}|{req.Notes}"
         }, ct);
 
-        await _uow.OperationLogs.AddAsync(new OperationLog
+        var administratorId = await AreaAdministratorQuery.IdAsync(_uow.FarmingAreas.Query(), area.Id, ct);
+        if (administratorId != Guid.Empty)
         {
-            UserId = area.OwnerId,
-            Action = previousBoxId == Guid.Empty ? "crab_assigned" : "crab_transferred",
-            EntityType = "Crab",
-            EntityId = crab.Id,
-            Details = previousBoxId == Guid.Empty
-                ? $"Gán cua {crab.Code} vào hộp {box.Code}"
-                : string.IsNullOrWhiteSpace(req.Notes)
-                    ? $"Chuyển cua {crab.Code} sang hộp {box.Code}"
-                    : $"Chuyển cua {crab.Code} sang hộp {box.Code} — {req.Notes}"
-        }, ct);
+            await _uow.OperationLogs.AddAsync(new OperationLog
+            {
+                UserId = administratorId,
+                Action = previousBoxId == Guid.Empty ? "crab_assigned" : "crab_transferred",
+                EntityType = "Crab",
+                EntityId = crab.Id,
+                Details = previousBoxId == Guid.Empty
+                    ? $"Gán cua {crab.Code} vào hộp {box.Code}"
+                    : string.IsNullOrWhiteSpace(req.Notes)
+                        ? $"Chuyển cua {crab.Code} sang hộp {box.Code}"
+                        : $"Chuyển cua {crab.Code} sang hộp {box.Code} — {req.Notes}"
+            }, ct);
+        }
 
         await _uow.SaveChangesAsync(ct);
         return ApiResponse<CrabBoxAllocationDto>.Ok(MapAlloc(alloc), "Allocated.");

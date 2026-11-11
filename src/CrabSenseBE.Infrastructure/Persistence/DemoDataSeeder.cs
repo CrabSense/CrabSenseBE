@@ -84,7 +84,6 @@ public static class DemoDataSeeder
         // ── Farm hierarchy ───────────────────────────────────────────────────
         var areaA = new FarmingArea
         {
-            OwnerId = owner.Id,
             Code = "AREA-A01",
             Name = DemoAreaMarker,
             Location = "Nhà nuôi số 1 - Tầng 1",
@@ -98,7 +97,6 @@ public static class DemoDataSeeder
         };
         var areaB = new FarmingArea
         {
-            OwnerId = owner.Id,
             Code = "AREA-A02",
             Name = "Khu Demo RAS-B",
             Location = "Nhà nuôi số 2",
@@ -110,6 +108,8 @@ public static class DemoDataSeeder
             Status = FarmStatus.Active,
             IsActive = true
         };
+        areaA.Administrators.Add(owner);
+        areaB.Administrators.Add(owner);
         db.FarmingAreas.AddRange(areaA, areaB);
         await db.SaveChangesAsync(ct);
 

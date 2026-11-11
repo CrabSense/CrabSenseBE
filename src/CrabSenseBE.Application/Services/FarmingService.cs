@@ -51,10 +51,13 @@ public class FarmingService : IFarmingService
         FarmingAreaFilter filter, CancellationToken ct = default)
     {
         var all = await _uow.FarmingAreas.GetAllAsync(ct);
+        var administrators = await AreaAdministratorQuery.ByAreaAsync(
+            _uow.FarmingAreas.Query(), all.Select(area => area.Id), ct);
         var q = all.AsEnumerable();
 
         if (filter.OwnerId.HasValue && filter.OwnerId.Value != Guid.Empty)
-            q = q.Where(a => a.OwnerId == filter.OwnerId.Value);
+            q = q.Where(area =>
+                administrators.TryGetValue(area.Id, out var admin) && admin.Id == filter.OwnerId.Value);
         // Nếu có danh sách khu được phép, chỉ trả về các khu nằm trong phạm vi đó.
         if (filter.AreaIds is not null)
             q = q.Where(area => filter.AreaIds.Contains(area.Id));
@@ -77,21 +80,21 @@ public class FarmingService : IFarmingService
                 || (a.Region?.Contains(s, StringComparison.OrdinalIgnoreCase) ?? false));
         }
 
-        var owners = (await _uow.Users.GetAllAsync(ct)).ToDictionary(u => u.Id);
         var list = q.OrderBy(a => a.Code).ThenBy(a => a.Name).ToList();
         var stats = await BuildAreaStatsAsync(list.Select(a => a.Id), ct);
         return ApiResponse<PagedResult<FarmingAreaDto>>.Ok(
             Page(list, filter.Page, filter.PageSize,
-                a => MapArea(a, owners.GetValueOrDefault(a.OwnerId)?.FullName, stats.GetValueOrDefault(a.Id))));
+                area => MapArea(area, administrators.GetValueOrDefault(area.Id), stats.GetValueOrDefault(area.Id))));
     }
 
     public async Task<ApiResponse<FarmingAreaDto>> GetAreaByIdAsync(Guid id, CancellationToken ct = default)
     {
         var area = await RequireAreaAsync(id, requireActive: false, ct);
-        var owner = await _uow.Users.GetByIdAsync(area.OwnerId, ct);
+        var administrators = await AreaAdministratorQuery.ByAreaAsync(
+            _uow.FarmingAreas.Query(), new[] { area.Id }, ct);
         var stats = await BuildAreaStatsAsync(new[] { area.Id }, ct);
         return ApiResponse<FarmingAreaDto>.Ok(
-            MapArea(area, owner?.FullName, stats.GetValueOrDefault(area.Id)));
+            MapArea(area, administrators.GetValueOrDefault(area.Id), stats.GetValueOrDefault(area.Id)));
     }
 
     public async Task<ApiResponse<NextFarmCodeDto>> GetNextAreaCodeAsync(CancellationToken ct = default)
@@ -101,21 +104,22 @@ public class FarmingService : IFarmingService
         CreateFarmingAreaRequest req, Guid ownerUserId, CancellationToken ct = default)
     {
         if (ownerUserId == Guid.Empty)
-            throw AppException.BadRequest("Owner (logged-in user) is required to create an area.");
+            throw AppException.BadRequest("Farm Administrator (logged-in user) is required to create an area.");
         if (string.IsNullOrWhiteSpace(req.Name))
             throw AppException.BadRequest("Name is required.");
         if (req.AreaSquareMeters is < 0)
             throw AppException.BadRequest("AreaSquareMeters must be >= 0.");
 
-        var owner = await _uow.Users.GetByIdAsync(ownerUserId, ct)
-            ?? throw AppException.NotFound("Owner user");
-        if (!owner.IsActive)
-            throw AppException.BadRequest("Owner user is inactive.");
+        var administrator = await _uow.Users.GetByIdAsync(ownerUserId, ct)
+            ?? throw AppException.NotFound("Farm Administrator");
+        if (!administrator.IsActive)
+            throw AppException.BadRequest("Farm Administrator is inactive.");
+        if (administrator.Role != UserRole.FarmAdministrator)
+            throw AppException.Forbidden("Chỉ Farm Administrator được tạo khu.");
 
         var status = ParseFarmStatus(req.Status, FarmStatus.Active);
         var area = new FarmingArea
         {
-            OwnerId = owner.Id,
             Code = await AllocateAreaCodeAsync(ct),
             Name = req.Name.Trim(),
             Location = NormalizeOptional(req.Location),
@@ -129,9 +133,11 @@ public class FarmingService : IFarmingService
             Longitude = NormalizeCoord(req.Longitude, -180, 180, "Longitude"),
         };
         ApplyStatus(area, status);
+        area.Administrators.Add(administrator);
         await _uow.FarmingAreas.AddAsync(area, ct);
         await _uow.SaveChangesAsync(ct);
-        return ApiResponse<FarmingAreaDto>.Ok(MapArea(area, owner.FullName), "Created.");
+        return ApiResponse<FarmingAreaDto>.Ok(
+            MapArea(area, new AreaAdministratorQuery.Person(administrator.Id, administrator.FullName)), "Created.");
     }
 
     public async Task<ApiResponse<FarmingAreaDto>> UpdateAreaAsync(Guid id, UpdateFarmingAreaRequest req, CancellationToken ct = default)
@@ -169,9 +175,11 @@ public class FarmingService : IFarmingService
 
         _uow.FarmingAreas.Update(area);
         await _uow.SaveChangesAsync(ct);
-        var owner = await _uow.Users.GetByIdAsync(area.OwnerId, ct);
+        var administrators = await AreaAdministratorQuery.ByAreaAsync(
+            _uow.FarmingAreas.Query(), new[] { area.Id }, ct);
         var stats = await BuildAreaStatsAsync(new[] { area.Id }, ct);
-        return ApiResponse<FarmingAreaDto>.Ok(MapArea(area, owner?.FullName, stats.GetValueOrDefault(area.Id)));
+        return ApiResponse<FarmingAreaDto>.Ok(
+            MapArea(area, administrators.GetValueOrDefault(area.Id), stats.GetValueOrDefault(area.Id)));
     }
 
     public async Task<ApiResponse<FarmingAreaDto>> UpdateAreaMapAsync(
@@ -201,10 +209,12 @@ public class FarmingService : IFarmingService
 
         _uow.FarmingAreas.Update(area);
         await _uow.SaveChangesAsync(ct);
-        var owner = await _uow.Users.GetByIdAsync(area.OwnerId, ct);
+        var administrators = await AreaAdministratorQuery.ByAreaAsync(
+            _uow.FarmingAreas.Query(), new[] { area.Id }, ct);
         var stats = await BuildAreaStatsAsync(new[] { area.Id }, ct);
         return ApiResponse<FarmingAreaDto>.Ok(
-            MapArea(area, owner?.FullName, stats.GetValueOrDefault(area.Id)), "Map layout updated.");
+            MapArea(area, administrators.GetValueOrDefault(area.Id), stats.GetValueOrDefault(area.Id)),
+            "Map layout updated.");
     }
 
     /// <summary>Toạ độ bản đồ là tỉ lệ 0–1 theo kích thước ảnh.</summary>
@@ -2445,11 +2455,11 @@ public class FarmingService : IFarmingService
         public static AreaStats Empty { get; } = new(0, 0, 0, 0, 0);
     }
 
-    private static FarmingAreaDto MapArea(FarmingArea a, string? ownerName = null, AreaStats? stats = null)
+    private static FarmingAreaDto MapArea(FarmingArea a, AreaAdministratorQuery.Person? administrator = null, AreaStats? stats = null)
     {
         stats ??= AreaStats.Empty;
         return new(
-            a.Id, a.OwnerId, ownerName, a.Code, a.Name, a.Location, a.Address, a.Region,
+            a.Id, administrator?.Id ?? Guid.Empty, administrator?.Name, a.Code, a.Name, a.Location, a.Address, a.Region,
             a.AreaSquareMeters, a.EstablishedAt, a.CreatedAt, a.Description, a.AvatarUrl,
             a.Status.ToString(), a.IsActive, stats.RowCount,
             stats.BoxCount, stats.CrabCount, stats.HealthyBoxCount, stats.AlertBoxCount,

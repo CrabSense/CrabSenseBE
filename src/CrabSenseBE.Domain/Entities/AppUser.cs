@@ -11,14 +11,12 @@ public class AppUser : BaseEntity
     public string PasswordHash { get; set; } = string.Empty;
     public string FullName { get; set; } = string.Empty;
     public string? Phone { get; set; }
-    public string? EmployeeId { get; set; }
+    /// <summary>Mã tài khoản theo role: SAD/FAD/FMN/FST-00001. Hệ thống sinh, không sửa từ client.</summary>
+    public string? UserCode { get; set; }
     public string? AvatarUrl { get; set; }
     /// <summary>JSON prefs cho thông báo cá nhân (Account tab).</summary>
     public string? NotificationPrefsJson { get; set; }
     public UserRole Role { get; set; } = UserRole.FarmStaff;
-    /// <summary>Khu/trang trại duy nhất được gán cho FarmManager hoặc FarmStaff.</summary>
-    public Guid? FarmingAreaId { get; set; }
-    public FarmingArea? FarmingArea { get; set; }
     /// <summary>Các khu/trang trại được gán cho FarmAdministrator; quan hệ nhiều-nhiều.</summary>
     public ICollection<FarmingArea> ManagedAreas { get; set; } = new List<FarmingArea>();
     public bool IsActive { get; set; } = true;
@@ -29,7 +27,6 @@ public class AppUser : BaseEntity
     public DateTime? RefreshTokenExpiry { get; set; }
 
     // Navigation
-    public ICollection<FarmingArea> OwnedAreas { get; set; } = new List<FarmingArea>();
     public ICollection<OperationLog> OperationLogs { get; set; } = new List<OperationLog>();
     public ICollection<Notification> Notifications { get; set; } = new List<Notification>();
 }

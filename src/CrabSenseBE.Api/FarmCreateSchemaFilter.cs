@@ -38,7 +38,7 @@ public sealed class FarmCreateSchemaFilter : ISchemaFilter
                 "Create KHU.\n" +
                 "Required: name.\n" +
                 "Code is NOT in body — API assigns AREA-A01, AREA-A02… from existing areas in DB.\n" +
-                "OwnerId is NOT in body — API assigns from JWT.\n" +
+                "Farm Administrator is NOT in body — API assigns from JWT.\n" +
                 "Status: Active | Suspended | Closed (default Active).";
             SetRequired(schema, "name");
             schema.Example = Obj(

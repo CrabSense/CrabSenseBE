@@ -5,6 +5,7 @@ public record LoginRequest(string Username, string Password);
 /// <param name="Role">FarmAdministrator, FarmManager hoặc FarmStaff; không tạo SystemAdministrator qua request này.</param>
 /// <param name="FarmingAreaId">Bắt buộc với FarmManager/FarmStaff; người tạo chọn một khu/trang trại đã có.</param>
 /// <param name="FarmingAreaIds">Bắt buộc với FarmAdministrator; danh sách khu/trang trại được giao quản lý.</param>
+/// <param name="ManagerUserId">Bắt buộc với FarmStaff; manager đang quản lý đúng khu đó.</param>
 public record RegisterRequest(
     string Username,
     string Email,
@@ -12,7 +13,8 @@ public record RegisterRequest(
     string FullName,
     string Role,
     Guid? FarmingAreaId = null,
-    IReadOnlyCollection<Guid>? FarmingAreaIds = null);
+    IReadOnlyCollection<Guid>? FarmingAreaIds = null,
+    Guid? ManagerUserId = null);
 public record RefreshTokenRequest(string RefreshToken);
 public record ChangePasswordRequest(string CurrentPassword, string NewPassword);
 public record SetUserActiveRequest(bool IsActive);
@@ -21,7 +23,6 @@ public record UpdateProfileRequest(
     string? FullName,
     string? Email,
     string? Phone,
-    string? EmployeeId,
     string? AvatarUrl
 );
 public record NotificationPreferencesDto(
@@ -53,13 +54,15 @@ public record UserDto(
     bool IsActive,
     DateTime? LastLoginAt,
     string? Phone = null,
-    string? EmployeeId = null,
+    string? UserCode = null,
     string? AvatarUrl = null,
     DateTime? CreatedAt = null,
     /// <summary>ID khu của Manager/Staff; null với role không gắn một khu trực tiếp.</summary>
     Guid? FarmingAreaId = null,
     /// <summary>Các khu Farm Administrator được giao quản lý.</summary>
-    IReadOnlyCollection<Guid>? FarmingAreaIds = null
+    IReadOnlyCollection<Guid>? FarmingAreaIds = null,
+    /// <summary>Manager của Farm Staff.</summary>
+    Guid? ManagerUserId = null
 );
 
 
@@ -69,13 +72,14 @@ public record UserDto(
 public record UpdateAdminUserRequest(
     string FullName,
     string Email,
-    string? Phone,
-    string? EmployeeId
+    string? Phone
 );
 
 /// <summary>
 /// Admin changes employee role.
 /// </summary>
 public record ChangeUserRoleRequest(
-    string Role
+    string Role,
+    /// <summary>Bắt buộc khi đổi sang FarmStaff: manager cùng khu.</summary>
+    Guid? ManagerUserId = null
 );

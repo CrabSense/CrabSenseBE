@@ -454,11 +454,14 @@ public class BoxDetailService : IBoxDetailService
         var area = row is null
             ? null
             : await _uow.FarmingAreas.GetByIdAsync(row.FarmingAreaId, ct);
-        if (area is not null)
+        var administratorId = area is null
+            ? Guid.Empty
+            : await AreaAdministratorQuery.IdAsync(_uow.FarmingAreas.Query(), area.Id, ct);
+        if (administratorId != Guid.Empty)
         {
             await _uow.OperationLogs.AddAsync(new OperationLog
             {
-                UserId = area.OwnerId,
+                UserId = administratorId,
                 Action = "crab_added",
                 EntityType = "Crab",
                 EntityId = crab.Id,

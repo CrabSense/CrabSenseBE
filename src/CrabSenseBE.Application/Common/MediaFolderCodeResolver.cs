@@ -157,7 +157,7 @@ public static class MediaFolderCodeResolver
 
     private static string UserPath(AppUser? user, Guid id)
     {
-        var name = NullIfBlank(user?.Username) ?? NullIfBlank(user?.EmployeeId);
+        var name = NullIfBlank(user?.Username) ?? NullIfBlank(user?.UserCode);
         if (name is not null) name = name.Replace('@', '_');
         return MediaFolderPath.Join(MediaFolderPath.UsersRoot, MediaFolderPath.Leaf(id, name));
     }

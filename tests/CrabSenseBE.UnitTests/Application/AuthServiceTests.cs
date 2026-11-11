@@ -15,6 +15,22 @@ public class AuthServiceTests
     private readonly Mock<IUnitOfWork> _uowMock = new();
     private readonly Mock<IJwtService> _jwtMock = new();
 
+    public AuthServiceTests()
+    {
+        var managers = new Mock<IRepository<FarmManagerAssignment>>();
+        managers.Setup(r => r.FirstOrDefaultAsync(
+                It.IsAny<System.Linq.Expressions.Expression<Func<FarmManagerAssignment, bool>>>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync((FarmManagerAssignment?)null);
+        var staff = new Mock<IRepository<FarmStaffAssignment>>();
+        staff.Setup(r => r.FirstOrDefaultAsync(
+                It.IsAny<System.Linq.Expressions.Expression<Func<FarmStaffAssignment, bool>>>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync((FarmStaffAssignment?)null);
+        _uowMock.Setup(u => u.FarmManagerAssignments).Returns(managers.Object);
+        _uowMock.Setup(u => u.FarmStaffAssignments).Returns(staff.Object);
+    }
+
     private AuthService CreateService() => new(_uowMock.Object, _jwtMock.Object);
 
     [Fact]

@@ -1,4 +1,5 @@
 using CrabSenseBE.Domain.Entities;
+using CrabSenseBE.Domain.Enums;
 
 namespace CrabSenseBE.Domain.Interfaces;
 
@@ -62,6 +63,8 @@ public interface IUnitOfWork : IDisposable
     IRepository<TrainingLabel> TrainingLabels { get; }
     IRepository<EdgeCommand> EdgeCommands { get; }
     IRepository<FrozenCrabItem> FrozenCrabItems { get; }
+    IRepository<FarmManagerAssignment> FarmManagerAssignments { get; }
+    IRepository<FarmStaffAssignment> FarmStaffAssignments { get; }
     IRepository<FarmKiosk> FarmKiosks { get; }
     IRepository<KioskProvisioningCode> KioskProvisioningCodes { get; }
     IRepository<KioskCredential> KioskCredentials { get; }
@@ -74,5 +77,6 @@ public interface IUnitOfWork : IDisposable
         CancellationToken ct = default);
     Task<List<CrabMortalityRecord>> GetMortalityRecordsWithDetailsAsync(CancellationToken ct = default);
     Task<Crab?> GetCrabWithDetailsAsync(Guid crabId,CancellationToken cancellationToken = default);
-    Task<long> GetNextEmployeeNumberAsync(CancellationToken ct = default);
+    /// <summary>Số tiếp theo trong dãy UserCode của đúng role.</summary>
+    Task<long> GetNextUserCodeNumberAsync(UserRole role, CancellationToken ct = default);
 }

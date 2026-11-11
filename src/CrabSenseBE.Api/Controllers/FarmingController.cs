@@ -28,7 +28,7 @@ public class FarmingAreasController : ControllerBase
         _uow = uow;
     }
 
-    /// <summary>[READ] Liệt kê khu; Farm Administrator chỉ thấy khu được gán, các role cũ vẫn lọc theo OwnerId.</summary>
+    /// <summary>[READ] Liệt kê khu; Farm Administrator chỉ thấy khu được gán.</summary>
     [HttpGet]
     public async Task<IActionResult> GetAll(
         [FromQuery] Guid? ownerId = null,
@@ -42,7 +42,7 @@ public class FarmingAreasController : ControllerBase
         IReadOnlyCollection<Guid>? managedAreaIds = null;
         if (User.IsInRole(AppRoles.FarmAdministrator) || User.IsInRole("FarmOwner"))
         {
-            // Lấy danh sách khu được gán trực tiếp cho Admin để không phụ thuộc OwnerId đơn chủ cũ.
+            // Lấy danh sách khu được gán trực tiếp cho Admin.
             var userId = TryGetUserId();
             managedAreaIds = userId.HasValue
                 ? await _uow.FarmingAreas.Query()
@@ -67,7 +67,7 @@ public class FarmingAreasController : ControllerBase
     public async Task<IActionResult> GetById(Guid id, CancellationToken ct)
         => Ok(await _service.GetAreaByIdAsync(id, ct));
 
-    /// <summary>[CREATE] Create khu — body: name; code auto AREA-xxx; OwnerId from JWT</summary>
+    /// <summary>[CREATE] Create khu — body: name; code auto AREA-xxx; Farm Administrator từ JWT</summary>
     [HttpPost]
     [Authorize(Roles = AppRoles.FarmWrite)]
     public async Task<IActionResult> Create([FromBody] CreateFarmingAreaRequest req, CancellationToken ct)
