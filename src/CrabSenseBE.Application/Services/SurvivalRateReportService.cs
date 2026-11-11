@@ -99,14 +99,37 @@ public class SurvivalRateReportService
         }
 
         // Kiểm tra lô cua (nếu có) trước khi dùng làm bộ lọc.
+        Domain.Entities.CrabLot? selectedLot = null;
         if (filter.CrabLotId.HasValue)
         {
-            var lotExists = await _uow.CrabLots.AnyAsync(
-                lot => lot.Id == filter.CrabLotId.Value,
-                cancellationToken);
-
-            if (!lotExists)
+            selectedLot = await _uow.CrabLots.GetByIdAsync(
+                filter.CrabLotId.Value, cancellationToken);
+            if (selectedLot is null)
                 throw AppException.BadRequest("Crab lot does not exist.");
+        }
+
+        if (selectedLot is not null
+            && filter.AreaId is null
+            && filter.FromDate is null
+            && filter.ToDate is null
+            && selectedLot.ClosedAt is not null
+            && selectedLot.RegisteredCountAtClose is int registered
+            && selectedLot.AliveCountAtClose is int snapshotAlive
+            && selectedLot.DeadCountAtClose is int snapshotDead
+            && selectedLot.HarvestedCountAtClose is int snapshotHarvested
+            && await CanReadWholeLotSnapshotAsync(
+                selectedLot.Id, allowedAreas, cancellationToken))
+        {
+            return new SurvivalRateReportDto(
+                TotalCrabs: registered,
+                AliveCrabs: snapshotAlive,
+                DeadCrabs: snapshotDead,
+                HarvestedCrabs: snapshotHarvested,
+                SurvivalRate: CalculateRate(snapshotAlive, registered),
+                MortalityRate: CalculateRate(snapshotDead, registered),
+                HarvestRate: CalculateRate(snapshotHarvested, registered),
+                ByAreas: [],
+                Trend: []);
         }
 
         // ============================================================
@@ -487,5 +510,19 @@ public class SurvivalRateReportService
         return total > 0
             ? decimal.Round(
                 (decimal)count / total * 100, 2) : 0;
+    }
+
+    private async Task<bool> CanReadWholeLotSnapshotAsync(
+        Guid lotId,
+        HashSet<Guid>? allowedAreas,
+        CancellationToken ct)
+    {
+        if (allowedAreas is null) return true;
+        var linkedAreas = (await _uow.CrabLotAreas.FindAsync(
+                link => link.CrabLotId == lotId, ct))
+            .Select(link => link.FarmingAreaId)
+            .Distinct()
+            .ToArray();
+        return linkedAreas.Length > 0 && linkedAreas.All(allowedAreas.Contains);
     }
 }

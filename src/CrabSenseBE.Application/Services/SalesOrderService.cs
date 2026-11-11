@@ -11,11 +11,13 @@ public class SalesOrderService : ISalesOrderService
 {
     private readonly IUnitOfWork _uow;
     private readonly ICurrentUserService _currentUser;
+    private readonly FarmAreaScope _areas;
 
     public SalesOrderService(IUnitOfWork uow, ICurrentUserService currentUser)
     {
         _uow = uow;
         _currentUser = currentUser;
+        _areas = new FarmAreaScope(uow, currentUser);
     }
 
     public async Task<ApiResponse<IEnumerable<CustomerDto>>> GetCustomersAsync(
@@ -48,11 +50,11 @@ public class SalesOrderService : ISalesOrderService
         Guid? farmingAreaId = null,
         CancellationToken ct = default)
     {
+        var allowedAreas = await _areas.SelectionAsync(farmingAreaId, ct)
+            ?? new HashSet<Guid>();
         var orders = (await _uow.SalesOrders.GetAllAsync(ct))
-            .Where(o =>
-                farmingAreaId is null
-                || farmingAreaId == Guid.Empty
-                || o.FarmingAreaId == farmingAreaId)
+            .Where(o => o.FarmingAreaId is Guid areaId
+                && allowedAreas.Contains(areaId))
             .OrderByDescending(o => o.OrderDate)
             .ThenByDescending(o => o.CreatedAt)
             .ToList();
@@ -68,6 +70,7 @@ public class SalesOrderService : ISalesOrderService
     {
         var order = await _uow.SalesOrders.GetByIdAsync(id, ct)
             ?? throw AppException.NotFound("SalesOrder");
+        await EnsureOrderAreaAsync(order, ct);
         return ApiResponse<SalesOrderDto>.Ok(await MapOrderAsync(order, ct));
     }
 
@@ -85,6 +88,9 @@ public class SalesOrderService : ISalesOrderService
         if (string.IsNullOrWhiteSpace(request.CustomerName)
             && orderStatus == OrderStatus.Draft)
             throw AppException.BadRequest("Nháp vẫn cần tên khách hàng.");
+        if (request.FarmingAreaId is not Guid areaId || areaId == Guid.Empty)
+            throw AppException.BadRequest("FarmingAreaId là bắt buộc.");
+        await _areas.EnsureAsync(areaId, manage: false, ct);
 
         var duplicate = lines.GroupBy(l => l.CrabId).FirstOrDefault(g => g.Count() > 1);
         if (duplicate is not null)
@@ -117,7 +123,7 @@ public class SalesOrderService : ISalesOrderService
             DeliveryStatus = delivery,
             Notes = string.IsNullOrWhiteSpace(request.Notes) ? null : request.Notes.Trim(),
             CreatedBy = _currentUser.UserId,
-            FarmingAreaId = request.FarmingAreaId,
+            FarmingAreaId = areaId,
             SellerName = seller,
             DiscountAmount = discount,
             ShippingFee = shipping
@@ -126,7 +132,8 @@ public class SalesOrderService : ISalesOrderService
         decimal subtotal = 0;
         foreach (var lineReq in lines)
         {
-            var (line, amount) = await BuildLineAsync(order.Id, lineReq, ct);
+            var (line, amount) = await BuildLineAsync(
+                order.Id, lineReq, areaId, ct);
             subtotal += amount;
             order.Lines.Add(line);
         }
@@ -162,6 +169,7 @@ public class SalesOrderService : ISalesOrderService
     {
         var order = await _uow.SalesOrders.GetByIdAsync(id, ct)
             ?? throw AppException.NotFound("SalesOrder");
+        await EnsureOrderAreaAsync(order, ct);
         if (order.Status == OrderStatus.Cancelled)
             throw AppException.Conflict($"Đơn '{order.OrderCode}' đã hủy.");
         if (order.Status == OrderStatus.Completed)
@@ -186,6 +194,7 @@ public class SalesOrderService : ISalesOrderService
     {
         var order = await _uow.SalesOrders.GetByIdAsync(id, ct)
             ?? throw AppException.NotFound("SalesOrder");
+        await EnsureOrderAreaAsync(order, ct);
         if (order.Status == OrderStatus.Cancelled)
             return ApiResponse<SalesOrderDto>.Ok(await MapOrderAsync(order, ct), "Đơn đã hủy.");
 
@@ -207,14 +216,15 @@ public class SalesOrderService : ISalesOrderService
         Guid? farmingAreaId = null,
         CancellationToken ct = default)
     {
+        var allowedAreas = await _areas.SelectionAsync(farmingAreaId, ct)
+            ?? new HashSet<Guid>();
         var today = DateTime.UtcNow.Date;
         var tomorrow = today.AddDays(1);
         var orders = (await _uow.SalesOrders.GetAllAsync(ct))
             .Where(o =>
                 o.Status == OrderStatus.Completed
-                && (farmingAreaId is null
-                    || farmingAreaId == Guid.Empty
-                    || o.FarmingAreaId == farmingAreaId))
+                && o.FarmingAreaId is Guid areaId
+                && allowedAreas.Contains(areaId))
             .ToList();
         var todayOrders = orders
             .Where(o => o.OrderDate >= today && o.OrderDate < tomorrow)
@@ -227,10 +237,8 @@ public class SalesOrderService : ISalesOrderService
                 .Sum(l => l.Quantity <= 0 ? 1 : l.Quantity);
 
         var allArea = (await _uow.SalesOrders.GetAllAsync(ct))
-            .Where(o =>
-                farmingAreaId is null
-                || farmingAreaId == Guid.Empty
-                || o.FarmingAreaId == farmingAreaId)
+            .Where(o => o.FarmingAreaId is Guid areaId
+                && allowedAreas.Contains(areaId))
             .ToList();
         var yesterday = today.AddDays(-1);
         var yOrders = allArea
@@ -281,14 +289,17 @@ public class SalesOrderService : ISalesOrderService
         Guid? farmingAreaId = null,
         CancellationToken ct = default)
     {
+        var allowedAreas = await _areas.SelectionAsync(farmingAreaId, ct)
+            ?? new HashSet<Guid>();
         var reserved = await ReservedCrabIdsAsync(null, ct);
         var harvested = (await _uow.Crabs.FindAsync(c => c.Status == CrabStatus.Harvested, ct))
             .Where(c => !reserved.Contains(c.Id))
             .ToList();
-        if (farmingAreaId is Guid areaId && areaId != Guid.Empty)
         {
             var areaVoucherIds = (await _uow.HarvestVouchers.FindAsync(
-                    v => v.FarmingAreaId == areaId && v.Status == HarvestStatus.Completed, ct))
+                    v => v.FarmingAreaId != null
+                        && allowedAreas.Contains(v.FarmingAreaId.Value)
+                        && v.Status == HarvestStatus.Completed, ct))
                 .Select(v => v.Id)
                 .ToHashSet();
             var crabIds = areaVoucherIds.Count == 0
@@ -362,6 +373,7 @@ public class SalesOrderService : ISalesOrderService
     private async Task<(SalesOrderLine Line, decimal Amount)> BuildLineAsync(
         Guid orderId,
         CreateSalesOrderLineRequest lineReq,
+        Guid farmingAreaId,
         CancellationToken ct)
     {
         var crab = await _uow.Crabs.GetByIdAsync(lineReq.CrabId, ct)
@@ -369,6 +381,7 @@ public class SalesOrderService : ISalesOrderService
         if (crab.Status != CrabStatus.Harvested)
             throw AppException.Conflict(
                 $"Cua '{crab.Code}' chưa ở tồn kho (Đã thu hoạch). Không bán cua đang nuôi.");
+        await EnsureCrabHarvestAreaAsync(crab, farmingAreaId, ct);
 
         var reserved = await ReservedCrabIdsAsync(null, ct);
         if (reserved.Contains(crab.Id))
@@ -401,6 +414,8 @@ public class SalesOrderService : ISalesOrderService
 
     private async Task MarkLinesSoldAsync(SalesOrder order, CancellationToken ct)
     {
+        if (order.FarmingAreaId is not Guid farmingAreaId)
+            throw AppException.Forbidden("Đơn bán chưa xác định khu sở hữu.");
         foreach (var line in order.Lines)
         {
             if (line.CrabId is not Guid crabId) continue;
@@ -410,6 +425,7 @@ public class SalesOrderService : ISalesOrderService
             if (crab.Status != CrabStatus.Harvested)
                 throw AppException.Conflict(
                     $"Cua '{crab.Code}' không còn trong kho để xác nhận bán.");
+            await EnsureCrabHarvestAreaAsync(crab, farmingAreaId, ct);
 
             var oldStatus = crab.Status;
             var oldCondition = crab.Condition;
@@ -476,6 +492,32 @@ public class SalesOrderService : ISalesOrderService
                 l => l.CrabId != null && activeIds.Contains(l.SalesOrderId), ct))
             .Select(l => l.CrabId!.Value)
             .ToHashSet();
+    }
+
+    private async Task EnsureOrderAreaAsync(
+        SalesOrder order,
+        CancellationToken ct)
+    {
+        if (order.FarmingAreaId is not Guid areaId || areaId == Guid.Empty)
+            throw AppException.Forbidden("Đơn bán chưa xác định khu sở hữu.");
+        await _areas.EnsureAsync(areaId, manage: false, ct);
+    }
+
+    private async Task EnsureCrabHarvestAreaAsync(
+        Crab crab,
+        Guid farmingAreaId,
+        CancellationToken ct)
+    {
+        var harvestLine = await _uow.HarvestLines.FirstOrDefaultAsync(
+            line => line.CrabId == crab.Id, ct)
+            ?? throw AppException.Conflict(
+                $"Cua '{crab.Code}' chưa có dòng thu hoạch xác định khu.");
+        var voucher = await _uow.HarvestVouchers.GetByIdAsync(
+            harvestLine.HarvestVoucherId, ct)
+            ?? throw AppException.NotFound("HarvestVoucher");
+        if (voucher.FarmingAreaId != farmingAreaId)
+            throw AppException.Forbidden(
+                $"Cua '{crab.Code}' không thuộc khu của đơn bán.");
     }
 
     private async Task LoadLinesAsync(SalesOrder order, CancellationToken ct)

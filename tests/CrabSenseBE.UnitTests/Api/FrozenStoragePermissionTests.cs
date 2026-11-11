@@ -4,6 +4,8 @@ using CrabSenseBE.Application.Services;
 using CrabSenseBE.Domain.Entities;
 using CrabSenseBE.Domain.Enums;
 using CrabSenseBE.Domain.Interfaces;
+using CrabSenseBE.Infrastructure.Persistence;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Moq;
 
@@ -24,6 +26,7 @@ public sealed class FrozenStoragePermissionTests : IAsyncLifetime
     private readonly List<FrozenInventoryAdjustment> _adjustments = new();
     private FrozenLot _lotA = null!;
     private int _saves;
+    private Exception? _saveFailure;
     private PermissionApiFactory _api = null!;
 
     public Task InitializeAsync()
@@ -108,8 +111,13 @@ public sealed class FrozenStoragePermissionTests : IAsyncLifetime
         uow.Setup(x => x.FrozenStorageTransactions).Returns(transactionRepo.Object);
         uow.Setup(x => x.FrozenInventoryAdjustments).Returns(adjustmentRepo.Object);
         uow.Setup(x => x.SaveChangesAsync(It.IsAny<CancellationToken>()))
-            .Callback(() => _saves++)
-            .ReturnsAsync(1);
+            .Returns((CancellationToken _) =>
+            {
+                _saves++;
+                if (_saveFailure is not null)
+                    throw _saveFailure;
+                return Task.FromResult(1);
+            });
 
         _api = PermissionApiFactory.Create(services =>
         {
@@ -152,9 +160,16 @@ public sealed class FrozenStoragePermissionTests : IAsyncLifetime
                 "{\"actualQuantity\":5,\"actualWeightKg\":1.2}");
             await Expect(failures, "FS thực hiện", 200, AppRoles.FarmStaff, StaffA,
                 HttpMethod.Post, $"/api/frozen-storage-transactions/{transaction.Id}/execute",
-                "{\"actualQuantity\":5,\"actualWeightKg\":1.2}");
+                "{\"actualQuantity\":5,\"actualWeightKg\":1.2," +
+                "\"varianceReason\":\"Sai số cân thực tế\"}");
             if (_lotA.Quantity != 5 || _lotA.WeightKg != 1.2m || _adjustments.Count != 1)
                 failures.Add("Thực hiện nhập kho không cập nhật đúng số thực tế hoặc không ghi nhật ký.");
+            if (transaction.ApprovedQuantity != 5
+                || transaction.ApprovedWeightKg != 1.25m
+                || transaction.QuantityVariance != 0
+                || transaction.WeightVarianceKg != -0.05m
+                || transaction.VarianceReason != "Sai số cân thực tế")
+                failures.Add("Phiếu không giữ đúng snapshot duyệt hoặc chênh lệch thực tế.");
 
             await Expect(failures, "FS thực hiện lặp", 409, AppRoles.FarmStaff, StaffA,
                 HttpMethod.Post, $"/api/frozen-storage-transactions/{transaction.Id}/execute",
@@ -229,6 +244,141 @@ public sealed class FrozenStoragePermissionTests : IAsyncLifetime
 
         Assert.True(failures.Count == 0, string.Join(Environment.NewLine, failures));
     }
+
+    [Fact]
+    public async Task Execution_respects_approved_limits_stock_and_variance_policy()
+    {
+        var failures = new List<string>();
+        var exact = ApprovedTransaction(
+            FrozenStorageTransactionType.Inbound, 10, 2m);
+        _transactions.Add(exact);
+
+        await Expect(failures, "Thực hiện đúng mức duyệt", 200,
+            AppRoles.FarmStaff, StaffA, HttpMethod.Post,
+            $"/api/frozen-storage-transactions/{exact.Id}/execute",
+            "{\"actualQuantity\":10,\"actualWeightKg\":2}");
+        if (_lotA.Quantity != 10 || _lotA.WeightKg != 2m
+            || exact.RequestedQuantity != 10 || exact.RequestedWeightKg != 2m)
+            failures.Add("Thực hiện đúng mức không cập nhật tồn hoặc đã sửa dữ liệu đề nghị.");
+
+        var over = ApprovedTransaction(
+            FrozenStorageTransactionType.Inbound, 10, 2m);
+        _transactions.Add(over);
+        var adjustmentCount = _adjustments.Count;
+        await Expect(failures, "Thực hiện vượt mức duyệt", 409,
+            AppRoles.FarmStaff, StaffA, HttpMethod.Post,
+            $"/api/frozen-storage-transactions/{over.Id}/execute",
+            "{\"actualQuantity\":20,\"actualWeightKg\":4}");
+        if (_lotA.Quantity != 10 || _lotA.WeightKg != 2m
+            || _adjustments.Count != adjustmentCount
+            || over.Status != FrozenStorageTransactionStatus.Approved)
+            failures.Add("Request vượt mức duyệt đã làm thay đổi dữ liệu.");
+
+        var under = ApprovedTransaction(
+            FrozenStorageTransactionType.Inbound, 10, 2m);
+        _transactions.Add(under);
+        await Expect(failures, "Thiếu thực tế nhưng không ghi lý do", 400,
+            AppRoles.FarmStaff, StaffA, HttpMethod.Post,
+            $"/api/frozen-storage-transactions/{under.Id}/execute",
+            "{\"actualQuantity\":8,\"actualWeightKg\":1.5}");
+        if (_lotA.Quantity != 10 || _lotA.WeightKg != 2m
+            || _adjustments.Count != adjustmentCount)
+            failures.Add("Request thiếu lý do chênh lệch đã làm thay đổi dữ liệu.");
+
+        await Expect(failures, "Thiếu thực tế có lý do", 200,
+            AppRoles.FarmStaff, StaffA, HttpMethod.Post,
+            $"/api/frozen-storage-transactions/{under.Id}/execute",
+            "{\"actualQuantity\":8,\"actualWeightKg\":1.5," +
+            "\"varianceReason\":\"Hàng lỗi khi kiểm đếm\"}");
+        if (_lotA.Quantity != 18 || _lotA.WeightKg != 3.5m
+            || under.QuantityVariance != -2 || under.WeightVarianceKg != -0.5m
+            || under.VarianceReason != "Hàng lỗi khi kiểm đếm"
+            || _adjustments.Count != adjustmentCount + 1)
+            failures.Add("Chênh lệch thực tế hợp lệ không được lưu nhất quán.");
+
+        var insufficient = ApprovedTransaction(
+            FrozenStorageTransactionType.Outbound, 20, 4m);
+        _transactions.Add(insufficient);
+        adjustmentCount = _adjustments.Count;
+        await Expect(failures, "Xuất vượt tồn", 409,
+            AppRoles.FarmStaff, StaffA, HttpMethod.Post,
+            $"/api/frozen-storage-transactions/{insufficient.Id}/execute",
+            "{\"actualQuantity\":20,\"actualWeightKg\":4}");
+        if (_lotA.Quantity != 18 || _lotA.WeightKg != 3.5m
+            || _adjustments.Count != adjustmentCount
+            || insufficient.Status != FrozenStorageTransactionStatus.Approved)
+            failures.Add("Request xuất vượt tồn đã làm thay đổi dữ liệu.");
+
+        var mismatchedArea = ApprovedTransaction(
+            FrozenStorageTransactionType.Inbound, 1, 0.1m);
+        mismatchedArea.FrozenLotId = LotB;
+        _transactions.Add(mismatchedArea);
+        await Expect(failures, "Phiếu và lô khác khu", 403,
+            AppRoles.FarmStaff, StaffA, HttpMethod.Post,
+            $"/api/frozen-storage-transactions/{mismatchedArea.Id}/execute",
+            "{\"actualQuantity\":1,\"actualWeightKg\":0.1}");
+        if (_lotA.Quantity != 18 || _lotA.WeightKg != 3.5m
+            || _adjustments.Count != adjustmentCount)
+            failures.Add("Request sai khu đã làm thay đổi dữ liệu.");
+
+        Assert.True(failures.Count == 0, string.Join(Environment.NewLine, failures));
+    }
+
+    [Fact]
+    public async Task Concurrent_inventory_update_is_returned_as_conflict()
+    {
+        var transaction = ApprovedTransaction(
+            FrozenStorageTransactionType.Inbound, 1, 0.1m);
+        _transactions.Add(transaction);
+        _saveFailure = new DbUpdateConcurrencyException("simulated concurrent update");
+        var failures = new List<string>();
+
+        await Expect(failures, "Xung đột optimistic concurrency", 409,
+            AppRoles.FarmStaff, StaffA, HttpMethod.Post,
+            $"/api/frozen-storage-transactions/{transaction.Id}/execute",
+            "{\"actualQuantity\":1,\"actualWeightKg\":0.1}");
+
+        Assert.True(failures.Count == 0, string.Join(Environment.NewLine, failures));
+    }
+
+    [Fact]
+    public void Frozen_lot_and_transaction_are_optimistic_concurrency_entities()
+    {
+        var options = new DbContextOptionsBuilder<AppDbContext>()
+            .UseNpgsql("Host=localhost;Database=metadata_only")
+            .Options;
+        using var context = new AppDbContext(options);
+
+        Assert.True(context.Model.FindEntityType(typeof(FrozenLot))!
+            .FindProperty(nameof(FrozenLot.ConcurrencyVersion))!.IsConcurrencyToken);
+        Assert.True(context.Model.FindEntityType(typeof(FrozenStorageTransaction))!
+            .FindProperty(nameof(FrozenStorageTransaction.ConcurrencyVersion))!.IsConcurrencyToken);
+        Assert.True(context.Model.FindEntityType(typeof(FrozenInventoryAdjustment))!
+            .GetIndexes()
+            .Single(index => index.Properties.Count == 1
+                && index.Properties[0].Name
+                    == nameof(FrozenInventoryAdjustment.FrozenStorageTransactionId))
+            .IsUnique);
+    }
+
+    private static FrozenStorageTransaction ApprovedTransaction(
+        FrozenStorageTransactionType type,
+        int quantity,
+        decimal weight) => new()
+    {
+        Id = Guid.NewGuid(),
+        FrozenLotId = LotA,
+        FarmingAreaId = AreaA,
+        Type = type,
+        Status = FrozenStorageTransactionStatus.Approved,
+        RequestedQuantity = quantity,
+        RequestedWeightKg = weight,
+        ApprovedQuantity = quantity,
+        ApprovedWeightKg = weight,
+        CreatedByUserId = Guid.NewGuid(),
+        ApprovedByUserId = ManagerA,
+        ApprovedAt = DateTime.UtcNow
+    };
 
     private static Mock<IRepository<T>> Repo<T>(IList<T> items, Func<T, Guid> id) where T : class
     {

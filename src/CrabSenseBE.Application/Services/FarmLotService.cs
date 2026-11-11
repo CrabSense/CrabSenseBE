@@ -3,6 +3,7 @@ using CrabSenseBE.Application.DTOs.Farm;
 using CrabSenseBE.Application.DTOs.Media;
 using CrabSenseBE.Application.Interfaces;
 using CrabSenseBE.Domain.Entities;
+using CrabSenseBE.Domain.Enums;
 using CrabSenseBE.Domain.Interfaces;
 
 namespace CrabSenseBE.Application.Services;
@@ -28,9 +29,10 @@ public class FarmLotService : IFarmLotService
         var scope = await _areas.AreaIdsAsync(ct);
         if (scope is not null)
             lots = lots.Where(lot => LinksOverlap(links, lot.Id, scope)).ToList();
-        var placed = await LoadPlacedCountsAsync(ct);
+        var placed = await LoadPlacedCountsAsync(scope, ct);
         return ApiResponse<IEnumerable<CrabLotDto>>.Ok(
-            lots.OrderByDescending(l => l.ImportDate).Select(l => MapLot(l, placed, links)));
+            lots.OrderByDescending(l => l.ImportDate)
+                .Select(l => MapLot(l, placed, links, scope)));
     }
 
     public async Task<ApiResponse<CrabLotDto>> GetLotByIdAsync(Guid id, CancellationToken ct = default)
@@ -38,9 +40,9 @@ public class FarmLotService : IFarmLotService
         var lot = await _uow.CrabLots.GetByIdAsync(id, ct)
             ?? throw AppException.NotFound("CrabLot");
         var links = await LoadLinksAsync(ct);
-        await EnsureLotAreasAsync(links, lot.Id, ct);
-        var placed = await LoadPlacedCountsAsync(ct);
-        return ApiResponse<CrabLotDto>.Ok(MapLot(lot, placed, links));
+        var scope = await EnsureLotReadAsync(links, lot.Id, ct);
+        var placed = await LoadPlacedCountsAsync(scope, ct);
+        return ApiResponse<CrabLotDto>.Ok(MapLot(lot, placed, links, scope));
     }
 
     public async Task<ApiResponse<NextCrabLotCodeDto>> GetNextLotCodeAsync(
@@ -109,9 +111,14 @@ public class FarmLotService : IFarmLotService
         var lot = await _uow.CrabLots.GetByIdAsync(id, ct)
             ?? throw AppException.NotFound("CrabLot");
         var links = await LoadLinksAsync(ct);
-        await EnsureLotAreasAsync(links, lot.Id, ct);
+        await EnsureLotManageAsync(links, lot.Id, ct);
         if (lot.ClosedAt is not null)
             throw AppException.Conflict("Lô đã kết thúc, không sửa thông tin.");
+
+        IReadOnlyList<Guid>? replacementAreas = null;
+        if (req.FarmingAreaIds is not null)
+            replacementAreas = await ValidateAreaLinkReplacementAsync(
+                lot.Id, req.FarmingAreaIds, links, ct);
 
         if (req.Name is not null)
         {
@@ -149,9 +156,8 @@ public class FarmLotService : IFarmLotService
                 throw AppException.BadRequest("Trạng thái phân bổ không dùng để kết thúc lô. Gọi POST /api/crab-lots/{id}/close.");
             lot.Status = next;
         }
-        if (req.FarmingAreaIds is not null)
-            await ReplaceAreaLinksAsync(lot.Id, req.FarmingAreaIds, ct);
-
+        if (replacementAreas is not null)
+            await ReplaceAreaLinksAsync(lot.Id, replacementAreas, ct);
         RecalcDerived(lot);
         _uow.CrabLots.Update(lot);
         await ConfigAudit.WriteAsync(
@@ -168,7 +174,10 @@ public class FarmLotService : IFarmLotService
     {
         var lot = await _uow.CrabLots.GetByIdAsync(id, ct)
             ?? throw AppException.NotFound("CrabLot");
-        await EnsureLotAreasAsync(await LoadLinksAsync(ct), lot.Id, ct);
+        await EnsureLotManageAsync(await LoadLinksAsync(ct), lot.Id, ct);
+        if (lot.ClosedAt is not null)
+            throw AppException.Conflict(
+                "Lô đã kết thúc phải được giữ lại để bảo toàn lịch sử và snapshot báo cáo.");
 
         var inUse = await _uow.Crabs.AnyAsync(c => c.CrabLotId == id, ct);
         if (inUse)
@@ -189,25 +198,61 @@ public class FarmLotService : IFarmLotService
         var lot = await _uow.CrabLots.GetByIdAsync(id, ct)
             ?? throw AppException.NotFound("CrabLot");
         var links = await LoadLinksAsync(ct);
-        await EnsureLotAreasAsync(links, lot.Id, ct);
+        await EnsureLotManageAsync(links, lot.Id, ct);
         if (lot.ClosedAt is not null)
             throw AppException.Conflict("Lô đã kết thúc.");
         if (IsCancelled(lot.Status))
             throw AppException.Conflict("Lô đã hủy, không kết thúc.");
 
-        var unmolted = (await _uow.Crabs.FindAsync(crab => crab.CrabLotId == id, ct))
-            .Count(crab => crab.MoltedAt is null);
+        if (lot.StockedAt is null)
+            throw AppException.BadRequest(
+                "Lô chưa có ngày bắt đầu thả cua, không thể xác nhận ngày kết thúc.");
+        var closedAt = req.ClosedAt is { } requested && requested != default
+            ? requested
+            : DateTime.UtcNow;
+        if (closedAt < lot.StockedAt.Value)
+            throw AppException.BadRequest("Ngày kết thúc không được trước ngày bắt đầu thả cua.");
+
+        var crabs = (await _uow.Crabs.FindAsync(crab => crab.CrabLotId == id, ct)).ToList();
+        var crabIds = crabs.Select(crab => crab.Id).ToHashSet();
+        var successfullyMoltedIds = (await _uow.MoltingRecords.GetAllAsync(ct))
+            .Where(record => crabIds.Contains(record.CrabId)
+                && !record.IsVoided
+                && string.Equals(record.Result, "success", StringComparison.OrdinalIgnoreCase))
+            .Select(record => record.CrabId)
+            .ToHashSet();
+        successfullyMoltedIds.UnionWith(
+            crabs.Where(crab => crab.MoltedAt is not null).Select(crab => crab.Id));
+
+        var registered = crabs.Count;
+        var alive = crabs.Count(crab => IsLiving(crab.Status));
+        var unmolted = crabs.Count(
+            crab => IsLiving(crab.Status) && !successfullyMoltedIds.Contains(crab.Id));
+        var molted = successfullyMoltedIds.Count;
+        var harvested = crabs.Count(
+            crab => crab.Status is CrabStatus.Harvested or CrabStatus.Sold);
+        var dead = crabs.Count(crab => crab.Status == CrabStatus.Dead);
+        var unstocked = Math.Max(0, lot.Quantity - lot.DeadOnArrival - registered);
         var disposition = TrimOrNull(req.Disposition);
         if (unmolted > 0 && disposition is null)
             throw AppException.BadRequest("Lô còn cua chưa lột. Cần ghi phương án xử lý khi kết thúc.");
 
-        lot.ClosedAt = req.ClosedAt is { } closed && closed != default ? closed : DateTime.UtcNow;
+        lot.ClosedAt = closedAt;
+        lot.RegisteredCountAtClose = registered;
+        lot.AliveCountAtClose = alive;
         lot.UnmoltedCountAtClose = unmolted;
+        lot.MoltedCountAtClose = molted;
+        lot.HarvestedCountAtClose = harvested;
+        lot.DeadCountAtClose = dead;
+        lot.UnstockedCountAtClose = unstocked;
         lot.CloseDisposition = disposition;
         _uow.CrabLots.Update(lot);
         await ConfigAudit.WriteAsync(
             _uow, (await _areas.CurrentUserAsync(ct))?.Id,
-            "CloseCrabLot", "CrabLot", lot.Id, $"{lot.LotCode}|unmolted={unmolted}", ct);
+            "CloseCrabLot", "CrabLot", lot.Id,
+            $"{lot.LotCode}|registered={registered}|alive={alive}|unmolted={unmolted}"
+            + $"|molted={molted}|harvested={harvested}|dead={dead}|unstocked={unstocked}",
+            ct);
         await _uow.SaveChangesAsync(ct);
 
         var placed = await LoadPlacedCountsAsync(ct);
@@ -223,7 +268,9 @@ public class FarmLotService : IFarmLotService
         ImageUploadRules.ValidateBatch(files);
         var lot = await _uow.CrabLots.GetByIdAsync(lotId, ct)
             ?? throw AppException.NotFound("CrabLot");
-        await EnsureLotAreasAsync(await LoadLinksAsync(ct), lot.Id, ct);
+        await EnsureLotManageAsync(await LoadLinksAsync(ct), lot.Id, ct);
+        if (lot.ClosedAt.HasValue)
+            throw AppException.Conflict("Không thể thêm ảnh cho Crab Lot đã kết thúc.");
 
         var existing = JsonStringList.Parse(lot.ImageUrlsJson);
         if (existing.Count + files.Count > ImageUploadRules.MaxUrls)
@@ -273,7 +320,15 @@ public class FarmLotService : IFarmLotService
         if (index < 0) return null;
         var lot = await _uow.CrabLots.GetByIdAsync(lotId, ct);
         if (lot is null) return null;
-        await EnsureLotAreasAsync(await LoadLinksAsync(ct), lot.Id, ct);
+        var links = await LoadLinksAsync(ct);
+        var scope = await EnsureLotReadAsync(links, lot.Id, ct);
+        if (scope is not null
+            && links.TryGetValue(lot.Id, out var lotAreas)
+            && lotAreas.Any(areaId => !scope.Contains(areaId)))
+        {
+            throw AppException.Forbidden(
+                "Không thể xem ảnh toàn lô khi bạn không được phân công tất cả khu của lô.");
+        }
 
         var urls = JsonStringList.Parse(lot.ImageUrlsJson).ToList();
         var assets = (await _uow.MediaAssets.FindAsync(
@@ -299,48 +354,82 @@ public class FarmLotService : IFarmLotService
         return await MediaPhotoResolver.OpenAsync(_images, url, assetMatch, ct);
     }
 
-    private async Task<Dictionary<Guid, int>> LoadPlacedCountsAsync(CancellationToken ct)
+    private async Task<Dictionary<Guid, int>> LoadPlacedCountsAsync(CancellationToken ct) =>
+        await LoadPlacedCountsAsync(null, ct);
+
+    private async Task<Dictionary<Guid, int>> LoadPlacedCountsAsync(
+        HashSet<Guid>? scope,
+        CancellationToken ct)
     {
         var crabs = await _uow.Crabs.GetAllAsync(ct);
+        if (scope is not null)
+        {
+            var rows = (await _uow.FarmingRows.GetAllAsync(ct))
+                .Where(row => scope.Contains(row.FarmingAreaId))
+                .Select(row => row.Id)
+                .ToHashSet();
+            var boxIds = (await _uow.Boxes.GetAllAsync(ct))
+                .Where(box => rows.Contains(box.FarmingRowId))
+                .Select(box => box.Id)
+                .ToHashSet();
+            crabs = crabs.Where(crab => crab.BoxId is Guid boxId && boxIds.Contains(boxId));
+        }
         return crabs.GroupBy(c => c.CrabLotId).ToDictionary(g => g.Key, g => g.Count());
     }
 
     private static CrabLotDto MapLot(
         CrabLot l,
         IReadOnlyDictionary<Guid, int> placed,
-        IReadOnlyDictionary<Guid, List<Guid>>? links = null)
+        IReadOnlyDictionary<Guid, List<Guid>>? links = null,
+        HashSet<Guid>? scope = null)
     {
         placed.TryGetValue(l.Id, out var count);
-        IReadOnlyList<Guid> areas = links is not null && links.TryGetValue(l.Id, out var found)
+        IReadOnlyList<Guid> allAreas = links is not null && links.TryGetValue(l.Id, out var found)
             ? found
             : Array.Empty<Guid>();
+        var partial = scope is not null && allAreas.Any(areaId => !scope.Contains(areaId));
+        IReadOnlyList<Guid> areas = scope is null
+            ? allAreas
+            : allAreas.Where(scope.Contains).ToArray();
+        var displayedCount = !partial && l.ClosedAt is not null
+            ? l.RegisteredCountAtClose ?? count
+            : count;
         return new(
             l.Id,
             l.LotCode,
             string.IsNullOrWhiteSpace(l.Name) ? l.LotCode : l.Name,
             l.ImportDate,
-            l.Quantity,
-            count,
-            l.SupplierName,
-            l.TotalWeightKg,
-            l.AverageWeightGram,
-            l.WeightMinGram,
-            l.WeightMaxGram,
-            l.UnitPriceVndPerKg,
-            l.CrabCostVnd,
-            l.ShippingCostVnd,
-            l.OtherCostVnd,
-            l.TotalCostVnd,
+            partial ? displayedCount : l.Quantity,
+            displayedCount,
+            partial ? null : l.SupplierName,
+            partial ? null : l.TotalWeightKg,
+            partial ? null : l.AverageWeightGram,
+            partial ? null : l.WeightMinGram,
+            partial ? null : l.WeightMaxGram,
+            partial ? null : l.UnitPriceVndPerKg,
+            partial ? null : l.CrabCostVnd,
+            partial ? null : l.ShippingCostVnd,
+            partial ? null : l.OtherCostVnd,
+            partial ? null : l.TotalCostVnd,
             string.IsNullOrWhiteSpace(l.Condition) ? "Good" : l.Condition,
-            l.DeadOnArrival,
-            l.Notes,
-            ResolveWorkflowStatus(l.Status, count, l.Quantity),
-            JsonStringList.Parse(l.ImageUrlsJson),
+            partial ? 0 : l.DeadOnArrival,
+            partial ? null : l.Notes,
+            partial
+                ? IsCancelled(l.Status) ? "Cancelled" : count > 0 ? "Allocating" : "Pending"
+                : ResolveWorkflowStatus(l.Status, displayedCount, l.Quantity),
+            partial ? Array.Empty<string>() : JsonStringList.Parse(l.ImageUrlsJson),
             l.StockedAt,
             l.ClosedAt,
-            l.UnmoltedCountAtClose,
-            l.CloseDisposition,
-            areas);
+            partial ? null : l.UnmoltedCountAtClose,
+            partial ? null : l.CloseDisposition,
+            areas,
+            partial,
+            partial ? null : l.RegisteredCountAtClose,
+            partial ? null : l.AliveCountAtClose,
+            partial ? null : l.MoltedCountAtClose,
+            partial ? null : l.HarvestedCountAtClose,
+            partial ? null : l.DeadCountAtClose,
+            partial ? null : l.UnstockedCountAtClose);
     }
 
     private async Task<List<Guid>> RequireCreateAreasAsync(CreateCrabLotRequest req, CancellationToken ct)
@@ -351,24 +440,79 @@ public class FarmLotService : IFarmLotService
             return requested;
         if (requested.Count == 0)
             throw AppException.BadRequest("Lô cua phải gắn với ít nhất một khu nuôi.");
-        foreach (var areaId in requested)
-            await _areas.EnsureAsync(areaId, manage: false, ct);
+        await _areas.EnsureAllAssignedAsync(requested, ct);
         return requested;
     }
 
     private async Task ReplaceAreaLinksAsync(Guid lotId, IReadOnlyList<Guid>? areaIds, CancellationToken ct)
     {
         var requested = NormalizeAreaIds(areaIds, null);
-        if (requested.Count == 0)
-            throw AppException.BadRequest("Lô cua phải gắn với ít nhất một khu nuôi.");
-        foreach (var areaId in requested)
-            await _areas.EnsureAsync(areaId, manage: false, ct);
         if (_uow.CrabLotAreas is null) return;
         var current = (await _uow.CrabLotAreas.GetAllAsync(ct)).Where(link => link.CrabLotId == lotId).ToList();
         foreach (var link in current.Where(link => !requested.Contains(link.FarmingAreaId)))
             _uow.CrabLotAreas.Remove(link);
         var existing = current.Select(link => link.FarmingAreaId).ToHashSet();
         await AddAreaLinksAsync(lotId, requested.Where(id => !existing.Contains(id)), ct);
+    }
+
+    private async Task<IReadOnlyList<Guid>> ValidateAreaLinkReplacementAsync(
+        Guid lotId,
+        IReadOnlyList<Guid> areaIds,
+        IReadOnlyDictionary<Guid, List<Guid>> links,
+        CancellationToken ct)
+    {
+        var requested = NormalizeAreaIds(areaIds, null);
+        if (requested.Count == 0)
+            throw AppException.BadRequest("Lô cua phải gắn với ít nhất một khu nuôi.");
+
+        await _areas.EnsureAllAssignedAsync(requested, ct);
+        var current = links.TryGetValue(lotId, out var linked)
+            ? linked
+            : new List<Guid>();
+        var removed = current.Where(areaId => !requested.Contains(areaId)).ToHashSet();
+        if (removed.Count == 0)
+            return requested;
+
+        var removedRowIds = (await _uow.FarmingRows.GetAllAsync(ct))
+            .Where(row => removed.Contains(row.FarmingAreaId))
+            .Select(row => row.Id)
+            .ToHashSet();
+        var removedBoxIds = (await _uow.Boxes.GetAllAsync(ct))
+            .Where(box => removedRowIds.Contains(box.FarmingRowId))
+            .Select(box => box.Id)
+            .ToHashSet();
+        var lotCrabs = (await _uow.Crabs.FindAsync(crab => crab.CrabLotId == lotId, ct)).ToList();
+        var crabIds = lotCrabs.Select(crab => crab.Id).ToHashSet();
+
+        var hasCurrentCrab = lotCrabs.Any(
+            crab => crab.BoxId is Guid boxId && removedBoxIds.Contains(boxId));
+        var hasAllocationHistory = (await _uow.CrabBoxAllocations.GetAllAsync(ct)).Any(
+            item => crabIds.Contains(item.CrabId) && removedBoxIds.Contains(item.BoxId));
+        var hasMoltingHistory = (await _uow.MoltingRecords.GetAllAsync(ct)).Any(
+            item => crabIds.Contains(item.CrabId)
+                && item.BoxId is Guid boxId
+                && removedBoxIds.Contains(boxId));
+        var hasMortalityHistory = (await _uow.CrabMortalityRecords.GetAllAsync(ct)).Any(
+            item => crabIds.Contains(item.CrabId)
+                && item.BoxId is Guid boxId
+                && removedBoxIds.Contains(boxId));
+        var hasHarvestHistory = (await _uow.HarvestLines.GetAllAsync(ct)).Any(
+            item => item.CrabId is Guid crabId
+                && crabIds.Contains(crabId)
+                && item.BoxId is Guid boxId
+                && removedBoxIds.Contains(boxId));
+
+        if (hasCurrentCrab
+            || hasAllocationHistory
+            || hasMoltingHistory
+            || hasMortalityHistory
+            || hasHarvestHistory)
+        {
+            throw AppException.Conflict(
+                "Không thể bỏ khu khỏi lô vì khu còn cua hoặc lịch sử nghiệp vụ của lô.");
+        }
+
+        return requested;
     }
 
     private async Task AddAreaLinksAsync(Guid lotId, IEnumerable<Guid> areaIds, CancellationToken ct)
@@ -384,13 +528,30 @@ public class FarmLotService : IFarmLotService
         }
     }
 
-    private async Task EnsureLotAreasAsync(
-        IReadOnlyDictionary<Guid, List<Guid>> links, Guid lotId, CancellationToken ct)
+    private async Task<HashSet<Guid>?> EnsureLotReadAsync(
+        IReadOnlyDictionary<Guid, List<Guid>> links,
+        Guid lotId,
+        CancellationToken ct)
+    {
+        var scope = await _areas.AreaIdsAsync(ct);
+        if (scope is null) return null;
+        if (!LinksOverlap(links, lotId, scope))
+            throw AppException.Forbidden("Bạn không được phân công khu của lô này.");
+        return scope;
+    }
+
+    private async Task EnsureLotManageAsync(
+        IReadOnlyDictionary<Guid, List<Guid>> links,
+        Guid lotId,
+        CancellationToken ct)
     {
         var scope = await _areas.AreaIdsAsync(ct);
         if (scope is null) return;
-        if (!LinksOverlap(links, lotId, scope))
-            throw AppException.Forbidden("Bạn không được phân công khu của lô này.");
+        if (!links.TryGetValue(lotId, out var lotAreas) || lotAreas.Count == 0)
+            throw AppException.Forbidden("Lô cua chưa có khu nuôi hợp lệ để quản lý.");
+        if (lotAreas.Any(areaId => !scope.Contains(areaId)))
+            throw AppException.Forbidden(
+                "Bạn phải được phân công tất cả khu của Crab Lot để quản lý toàn lô.");
     }
 
     private static bool LinksOverlap(
@@ -473,6 +634,9 @@ public class FarmLotService : IFarmLotService
         var key = (raw ?? "").Trim().ToLowerInvariant().Replace(" ", "", StringComparison.Ordinal);
         return key is "cancelled" or "canceled" or "dahuy" or "đãhủy";
     }
+
+    private static bool IsLiving(CrabStatus status) =>
+        status is CrabStatus.Alive or CrabStatus.Molting or CrabStatus.Quarantined;
 
     private static string ParseWorkflowStatus(string raw, bool allowCancel)
     {

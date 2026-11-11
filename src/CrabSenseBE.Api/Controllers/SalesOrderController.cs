@@ -8,7 +8,7 @@ namespace CrabSenseBE.Api.Controllers;
 
 [ApiController]
 [Route("api/customers")]
-[Authorize]
+[Authorize(Roles = AppRoles.FarmPortal)]
 [Tags("22. CRUD — Customers")]
 [Produces("application/json")]
 public class CustomersController : ControllerBase
@@ -29,7 +29,7 @@ public class CustomersController : ControllerBase
 
 [ApiController]
 [Route("api/sales-orders")]
-[Authorize]
+[Authorize(Roles = AppRoles.FarmPortal)]
 [Tags("24. CRUD — Sales Orders")]
 [Produces("application/json")]
 public class SalesOrdersController : ControllerBase

@@ -89,6 +89,8 @@ public sealed class FarmStaffOperationPermissionTests : IAsyncLifetime
             HttpMethod.Post, "/api/crabs", createCrab);
         await Expect(failures, "FA tạo cua", 403, AppRoles.FarmAdministrator, AdminId,
             HttpMethod.Post, "/api/crabs", createCrab);
+        await Expect(failures, "SA tạo cua", 403, AppRoles.SystemAdministrator, SystemId,
+            HttpMethod.Post, "/api/crabs", createCrab);
         await Expect(failures, "FS sửa thông tin thực tế", 200, AppRoles.FarmStaff, StaffId,
             HttpMethod.Put, $"/api/crabs/{CrabId}", updateCrab);
         await Expect(failures, "FS xóa cua", 403, AppRoles.FarmStaff, StaffId,

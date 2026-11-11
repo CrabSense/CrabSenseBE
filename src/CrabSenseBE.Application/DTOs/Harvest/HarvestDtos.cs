@@ -7,7 +7,6 @@ namespace CrabSenseBE.Application.DTOs.Harvest;
 public record HarvestVoucherDto(
     Guid Id,
     string VoucherCode,
-    // Guid? CropBatchId,
     DateTime HarvestDate,
     string Status,
     int TotalQuantity,
@@ -31,13 +30,16 @@ public record HarvestVoucherDto(
     Guid? PerformedByUserId = null,
     DateTime? ExecutionCompletedAt = null,
     Guid? ConfirmedByUserId = null,
-    DateTime? ConfirmedAt = null
+    DateTime? ConfirmedAt = null,
+    int ApprovalVersion = 0,
+    int ApprovedQuantity = 0,
+    int ExecutionShortfallCount = 0,
+    string? ExecutionShortfallReason = null
 );
 
 public record HarvestVoucherDetailDto(
     Guid Id,
     string VoucherCode,
-    // Guid? CropBatchId,
     DateTime HarvestDate,
     string Status,
     int TotalQuantity,
@@ -61,7 +63,12 @@ public record HarvestVoucherDetailDto(
     Guid? PerformedByUserId = null,
     DateTime? ExecutionCompletedAt = null,
     Guid? ConfirmedByUserId = null,
-    DateTime? ConfirmedAt = null
+    DateTime? ConfirmedAt = null,
+    int ApprovalVersion = 0,
+    int ApprovedQuantity = 0,
+    int ExecutionShortfallCount = 0,
+    string? ExecutionShortfallReason = null,
+    IReadOnlyCollection<HarvestApprovedLineDto>? ApprovedLines = null
 );
 
 public record HarvestLineDto(
@@ -83,7 +90,6 @@ public record HarvestLineDto(
 );
 
 public record CreateHarvestVoucherRequest(
-    Guid? CropBatchId,
     DateTime HarvestDate,
     string? Notes,
     IEnumerable<HarvestLineRequest> Lines,
@@ -123,9 +129,26 @@ public record RejectHarvestRequest(string Reason);
 public record ExecuteHarvestRequest(
     IEnumerable<HarvestLineRequest> Lines,
     string? Notes = null,
-    IEnumerable<string>? PhotoUrls = null);
+    IEnumerable<string>? PhotoUrls = null,
+    string? ShortfallReason = null);
 
 public record ConfirmHarvestRequest(string? Notes = null);
+
+public record RequestHarvestAdjustmentRequest(
+    IEnumerable<HarvestLineRequest> Lines,
+    string Reason);
+
+public record HarvestApprovedLineDto(
+    Guid Id,
+    int ApprovalVersion,
+    Guid? CrabId,
+    Guid? BoxId,
+    Guid FarmingAreaId,
+    Guid ApprovedByUserId,
+    DateTime ApprovedAt,
+    string? CrabCode,
+    string? BoxCode,
+    string? LotCode);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Harvest Statistics

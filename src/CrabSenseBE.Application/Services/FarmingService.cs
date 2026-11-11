@@ -913,16 +913,27 @@ public class FarmingService : IFarmingService
                     .Include(c => c.MoltingRecords)
                     .ToListAsync(ct);
         var ctx = await LoadBoxContextAsync(ct);
+        var scope = await ScopeAreaIdsAsync(ct);
+        if (farmingAreaId is Guid requestedAreaId && requestedAreaId != Guid.Empty)
+            await EnsureAreaAsync(requestedAreaId, manage: false, ct);
+        Guid? CrabAreaId(Crab crab)
+        {
+            var boxId = LastKnownBoxId(crab, ctx);
+            var box = ctx.Boxes.FirstOrDefault(candidate => candidate.Id == boxId);
+            return box is not null
+                && ctx.Rows.TryGetValue(box.FarmingRowId, out var row)
+                ? row.FarmingAreaId
+                : null;
+        }
+        if (scope is not null)
+            all = all.Where(crab =>
+            {
+                var areaId = CrabAreaId(crab);
+                return areaId.HasValue && scope.Contains(areaId.Value);
+            }).ToList();
         if (farmingAreaId is Guid areaId && areaId != Guid.Empty)
         {
-            all = all.Where(c =>
-            {
-                var boxId = LastKnownBoxId(c, ctx);
-                var box = ctx.Boxes.FirstOrDefault(b => b.Id == boxId);
-                if (box is null) return false;
-                return ctx.Rows.TryGetValue(box.FarmingRowId, out var row)
-                    && row.FarmingAreaId == areaId;
-            }).ToList();
+            all = all.Where(crab => CrabAreaId(crab) == areaId).ToList();
         }
         int? size = pageSize <= 0 ? null : pageSize;
         return ApiResponse<PagedResult<CrabDto>>.Ok(
@@ -941,6 +952,7 @@ public class FarmingService : IFarmingService
             .Include(c => c.BoxAllocations)
             .Include(c => c.MoltingRecords)
             .FirstOrDefaultAsync(c => c.Id == id, ct) ?? throw AppException.NotFound("Crab");
+        await EnsureCrabAreaAsync(crab, ct);
         var ctx = await LoadBoxContextAsync(ct);
         var lot = crab.CrabLotId != Guid.Empty
             ? await _uow.CrabLots.GetByIdAsync(crab.CrabLotId, ct)
@@ -957,6 +969,7 @@ public class FarmingService : IFarmingService
             .Include(c => c.BoxAllocations)
             .Include(c => c.MoltingRecords)
             .FirstOrDefaultAsync(c => c.Id == id, ct) ?? throw AppException.NotFound("Crab");
+        await EnsureCrabAreaAsync(crab, ct);
         var ctx = await LoadBoxContextAsync(ct);
         var lot = crab.CrabLotId != Guid.Empty
             ? await _uow.CrabLots.GetByIdAsync(crab.CrabLotId, ct)
@@ -1021,6 +1034,10 @@ public class FarmingService : IFarmingService
 
     public async Task<ApiResponse<CrabDto>> CreateCrabAsync(CreateCrabRequest req, CancellationToken ct = default)
     {
+        if (req.CrabLotId == Guid.Empty)
+            throw AppException.BadRequest("CrabLotId is required — crab must belong to a lot.");
+        await EnsureLotCapacityAsync(req.CrabLotId, 1, ct);
+
         Box box;
 
         if (req.AutoAssignEmptyBox)
@@ -1071,6 +1088,9 @@ public class FarmingService : IFarmingService
                 throw AppException.BadRequest("FarmingAreaId does not match box. Omit farmingAreaId to auto-fill.");
         }
 
+        _ = await CrabLotRegistrationGuard.EnsureLotAllowsBoxAsync(
+            _uow, req.CrabLotId, box.Id, ct);
+
         var liveInBox = await _uow.Crabs.Query()
             .Include(c => c.BoxAllocations)
             .AnyAsync(c => c.BoxAllocations.Any(a => a.BoxId == box.Id && a.EndTime == null)
@@ -1079,13 +1099,6 @@ public class FarmingService : IFarmingService
                                || c.Status == CrabStatus.Quarantined), ct);
         if (liveInBox)
             throw AppException.Conflict($"Hộp '{box.Code}' vừa được sử dụng.");
-
-        if (req.CrabLotId == Guid.Empty)
-            throw AppException.BadRequest("CrabLotId is required — crab must belong to a lot.");
-
-        _ = await _uow.CrabLots.GetByIdAsync(req.CrabLotId, ct)
-            ?? throw AppException.NotFound("CrabLot");
-        await EnsureLotCapacityAsync(req.CrabLotId, 1, ct);
 
         if (req.WeightGram is null or <= 0)
             throw AppException.BadRequest("WeightGram is required and must be > 0.");
@@ -1241,6 +1254,13 @@ public class FarmingService : IFarmingService
                 reserved.Add(box.Id);
             }
 
+            _ = await CrabLotRegistrationGuard.EnsureLotAllowsBoxAsync(
+                _uow, req.CrabLotId, box.Id, ct);
+            assigned.Add((item, box));
+        }
+
+        foreach (var (_, box) in assigned)
+        {
             var liveInBox = await _uow.Crabs.Query()
                 .Include(c => c.BoxAllocations)
                 .AnyAsync(c => c.BoxAllocations.Any(al => al.BoxId == box.Id && al.EndTime == null)
@@ -1248,9 +1268,8 @@ public class FarmingService : IFarmingService
                                    || c.Status == CrabStatus.Molting
                                    || c.Status == CrabStatus.Quarantined), ct);
             if (liveInBox)
-                throw AppException.Conflict($"Hộp '{box.Code}' vừa được sử dụng. Vui lòng làm mới và chọn lại hộp.");
-
-            assigned.Add((item, box));
+                throw AppException.Conflict(
+                    $"Hộp '{box.Code}' vừa được sử dụng. Vui lòng làm mới và chọn lại hộp.");
         }
 
         var created = new List<Crab>(assigned.Count);
@@ -1420,7 +1439,9 @@ public class FarmingService : IFarmingService
     public async Task<ApiResponse<IReadOnlyList<CrabStatusHistoryDto>>> GetCrabStatusHistoryAsync(
         Guid crabId, CancellationToken ct = default)
     {
-        _ = await _uow.Crabs.GetByIdAsync(crabId, ct) ?? throw AppException.NotFound("Crab");
+        var crab = await _uow.Crabs.GetByIdAsync(crabId, ct)
+            ?? throw AppException.NotFound("Crab");
+        await EnsureCrabAreaAsync(crab, ct);
         var rows = (await _uow.CrabStatusHistories.FindAsync(h => h.CrabId == crabId, ct))
             .OrderByDescending(h => h.ChangedAt)
             .Select(h => new CrabStatusHistoryDto(
@@ -1435,7 +1456,9 @@ public class FarmingService : IFarmingService
     public async Task<ApiResponse<IReadOnlyList<CrabWeightHistoryDto>>> GetCrabWeightHistoryAsync(
         Guid crabId, CancellationToken ct = default)
     {
-        _ = await _uow.Crabs.GetByIdAsync(crabId, ct) ?? throw AppException.NotFound("Crab");
+        var crab = await _uow.Crabs.GetByIdAsync(crabId, ct)
+            ?? throw AppException.NotFound("Crab");
+        await EnsureCrabAreaAsync(crab, ct);
         var rows = (await _uow.CrabWeightHistories.FindAsync(h => h.CrabId == crabId, ct))
             .OrderByDescending(h => h.MeasuredAt)
             .Select(MapWeight)
@@ -1500,6 +1523,7 @@ public class FarmingService : IFarmingService
         Guid crabId, DateTime? from = null, DateTime? to = null, CancellationToken ct = default)
     {
         var crab = await _uow.Crabs.GetByIdAsync(crabId, ct) ?? throw AppException.NotFound("Crab");
+        await EnsureCrabAreaAsync(crab, ct);
         var weights = (await _uow.CrabWeightHistories.FindAsync(h => h.CrabId == crabId, ct))
             .Where(h => (!from.HasValue || h.MeasuredAt >= from.Value) && (!to.HasValue || h.MeasuredAt <= to.Value))
             .OrderBy(h => h.MeasuredAt)
@@ -1526,6 +1550,7 @@ public class FarmingService : IFarmingService
         CancellationToken ct = default)
     {
         var crab = await _uow.Crabs.GetByIdAsync(crabId, ct) ?? throw AppException.NotFound("Crab");
+        await EnsureCrabAreaAsync(crab, ct);
         var ctx = await LoadBoxContextAsync(ct);
         var lot = crab.CrabLotId != Guid.Empty
             ? await _uow.CrabLots.GetByIdAsync(crab.CrabLotId, ct)
@@ -2172,7 +2197,9 @@ public class FarmingService : IFarmingService
     public async Task<ApiResponse<IReadOnlyList<CrabAiAnalysisDto>>> GetCrabAiAnalysesAsync(
         Guid crabId, CancellationToken ct = default)
     {
-        _ = await _uow.Crabs.GetByIdAsync(crabId, ct) ?? throw AppException.NotFound("Crab");
+        var crab = await _uow.Crabs.GetByIdAsync(crabId, ct)
+            ?? throw AppException.NotFound("Crab");
+        await EnsureCrabAreaAsync(crab, ct);
         var rows = (await _uow.CrabAiAnalyses.FindAsync(h => h.CrabId == crabId, ct))
             .OrderByDescending(h => h.AnalyzedAt)
             .Select(h => new CrabAiAnalysisDto(
@@ -2185,7 +2212,9 @@ public class FarmingService : IFarmingService
     public async Task<ApiResponse<IReadOnlyList<CrabHarvestHistoryDto>>> GetCrabHarvestHistoryAsync(
         Guid crabId, CancellationToken ct = default)
     {
-        _ = await _uow.Crabs.GetByIdAsync(crabId, ct) ?? throw AppException.NotFound("Crab");
+        var crab = await _uow.Crabs.GetByIdAsync(crabId, ct)
+            ?? throw AppException.NotFound("Crab");
+        await EnsureCrabAreaAsync(crab, ct);
         var rows = (await _uow.CrabHarvestHistories.FindAsync(h => h.CrabId == crabId, ct))
             .OrderByDescending(h => h.HarvestedAt)
             .Select(h => new CrabHarvestHistoryDto(
@@ -2702,8 +2731,10 @@ public class FarmingService : IFarmingService
         }
         var lotAreas = await _uow.CrabLotAreas.FindAsync(
             link => link.CrabLotId == crab.CrabLotId, ct);
-        if (!lotAreas.Any(link => scope.Contains(link.FarmingAreaId)))
-            throw AppException.Forbidden("Bạn không được phân công khu của cua này.");
+        var areaIds = lotAreas.Select(link => link.FarmingAreaId).Distinct().ToArray();
+        if (areaIds.Length == 0 || areaIds.Any(areaId => !scope.Contains(areaId)))
+            throw AppException.Forbidden(
+                "Không xác định được một khu duy nhất trong phạm vi được phân công cho cua này.");
     }
 
     private static Guid ResolveCurrentBoxId(
@@ -3398,15 +3429,8 @@ public class FarmingService : IFarmingService
 
     private async Task EnsureLotCapacityAsync(Guid lotId, int adding, CancellationToken ct)
     {
-        var lot = await _uow.CrabLots.GetByIdAsync(lotId, ct)
-            ?? throw AppException.NotFound("CrabLot");
-        if (string.Equals(lot.Status, "Cancelled", StringComparison.OrdinalIgnoreCase))
-            throw AppException.BadRequest("Lô nhập đã hủy.");
-        var placed = await _uow.Crabs.Query().CountAsync(c => c.CrabLotId == lotId, ct);
-        var remaining = lot.Quantity - placed - lot.DeadOnArrival;
-        if (remaining < adding)
-            throw AppException.BadRequest(
-                $"Lô này chỉ còn {Math.Max(0, remaining)} cá thể chưa được tạo.");
+        _ = await CrabLotRegistrationGuard.EnsureCanRegisterAsync(
+            _uow, lotId, adding, ct);
     }
 
     private static bool IsBoxUnusable(string? status)

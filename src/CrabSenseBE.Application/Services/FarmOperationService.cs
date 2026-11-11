@@ -11,16 +11,21 @@ namespace CrabSenseBE.Application.Services;
 public class FarmOperationService : IFarmOperationService
 {
     private readonly IUnitOfWork _uow;
+    private readonly FarmAreaScope _areas;
     private static readonly JsonSerializerOptions JsonOpts = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
 
-    public FarmOperationService(IUnitOfWork uow) => _uow = uow;
+    public FarmOperationService(IUnitOfWork uow, ICurrentUserService currentUser)
+    {
+        _uow = uow;
+        _areas = new FarmAreaScope(uow, currentUser);
+    }
 
     public async Task<ApiResponse<IEnumerable<FeedingHistoryDayDto>>> GetFeedingHistoryAsync(
         int days = 7, CancellationToken ct = default)
     {
         var end = DateTime.UtcNow.Date.AddDays(1);
         var start = end.AddDays(-(Math.Clamp(days, 1, 31)));
-        var operations = await _uow.FarmOperations.GetAllAsync(ct);
+        var operations = await OperationsInScopeAsync(ct);
         var totals = Enumerable.Range(0, (end.Date - start.Date).Days)
             .Select(offset => start.Date.AddDays(offset))
             .ToDictionary(date => date, _ => new int[3]);
@@ -82,7 +87,7 @@ public class FarmOperationService : IFarmOperationService
         int page = 1, int limit = 50, string? type = null,
         DateTime? startDate = null, DateTime? endDate = null, CancellationToken ct = default)
     {
-        var all = (await _uow.FarmOperations.GetAllAsync(ct)).AsEnumerable();
+        var all = (await OperationsInScopeAsync(ct)).AsEnumerable();
         if (!string.IsNullOrWhiteSpace(type))
             all = all.Where(o => string.Equals(o.Type, type, StringComparison.OrdinalIgnoreCase));
         if (startDate.HasValue)
@@ -104,6 +109,7 @@ public class FarmOperationService : IFarmOperationService
         Guid boxId, int page = 1, int limit = 50, string? type = null,
         DateTime? startDate = null, DateTime? endDate = null, CancellationToken ct = default)
     {
+        await _areas.EnsureBoxAsync(boxId, manage: false, ct);
         var boxKey = boxId.ToString();
         var crabKeys = await OccupantCrabKeysAsync(boxId, ct);
         var all = (await _uow.FarmOperations.GetAllAsync(ct)).AsEnumerable();
@@ -131,14 +137,22 @@ public class FarmOperationService : IFarmOperationService
         if (string.IsNullOrWhiteSpace(req.Type))
             throw AppException.BadRequest("Type is required.");
 
+        await EnsureRequestedBoxesAsync(req.BoxIds, ct);
         var crabIds = await ResolveCrabIdsAsync(req.CrabIds, req.BoxIds, ct);
+        await EnsureRequestedCrabsAsync(crabIds, ct);
+        var boxIds = NormalizeIds(req.BoxIds);
+        if (boxIds.Count == 0 && crabIds.Count == 0)
+            throw AppException.BadRequest(
+                "Farm operation phải gắn với ít nhất một box hoặc crab trong khu được phân công.");
+        var actor = await _areas.CurrentUserAsync(ct)
+            ?? throw AppException.Unauthorized();
         var condition = NormalizeConditionKey(req.Condition);
         ValidateFeedingAmounts(req.Quantity, req.EatenQuantity);
 
         var op = new FarmOperation
         {
             Type = req.Type.Trim(),
-            BoxIdsJson = JsonSerializer.Serialize(req.BoxIds ?? Array.Empty<string>(), JsonOpts),
+            BoxIdsJson = JsonSerializer.Serialize(boxIds, JsonOpts),
             CrabIdsJson = JsonSerializer.Serialize(crabIds, JsonOpts),
             Appetite = NormalizeAppetite(req.Appetite),
             FoodType = string.IsNullOrWhiteSpace(req.FoodType) ? null : req.FoodType.Trim(),
@@ -153,8 +167,10 @@ public class FarmOperationService : IFarmOperationService
             Notes = req.Notes ?? "",
             PhotoUrlsJson = JsonSerializer.Serialize(req.PhotoUrls ?? Array.Empty<string>(), JsonOpts),
             Timestamp = req.Timestamp ?? DateTime.UtcNow,
-            OperatorId = req.OperatorId ?? Guid.Empty,
-            OperatorName = req.OperatorName ?? "Operator",
+            OperatorId = actor.Id,
+            OperatorName = string.IsNullOrWhiteSpace(actor.FullName)
+                ? actor.Username
+                : actor.FullName,
             Source = string.IsNullOrWhiteSpace(req.Source) ? "manual" : req.Source.Trim(),
             LocationLabel = req.LocationLabel
         };
@@ -174,12 +190,26 @@ public class FarmOperationService : IFarmOperationService
     {
         var op = await _uow.FarmOperations.GetByIdAsync(id, ct)
             ?? throw AppException.NotFound("Farm operation");
+        await EnsureOperationInScopeAsync(op, ct);
         if (op.Timestamp < DateTime.UtcNow.AddHours(-24))
             throw AppException.BadRequest("Operation can only be edited within 24 hours.");
 
+        await EnsureRequestedBoxesAsync(req.BoxIds, ct);
+        await EnsureRequestedCrabsAsync(NormalizeIds(req.CrabIds), ct);
+        var proposedBoxIds = req.BoxIds is null
+            ? ParseStringList(op.BoxIdsJson)
+            : NormalizeIds(req.BoxIds);
+        var proposedCrabIds = req.CrabIds is null
+            ? ParseStringList(op.CrabIdsJson)
+            : NormalizeIds(req.CrabIds);
+        if (proposedBoxIds.Count == 0 && proposedCrabIds.Count == 0)
+            throw AppException.BadRequest(
+                "Farm operation phải gắn với ít nhất một box hoặc crab trong khu được phân công.");
         if (!string.IsNullOrWhiteSpace(req.Type)) op.Type = req.Type.Trim();
-        if (req.BoxIds is not null) op.BoxIdsJson = JsonSerializer.Serialize(req.BoxIds, JsonOpts);
-        if (req.CrabIds is not null) op.CrabIdsJson = JsonSerializer.Serialize(NormalizeIds(req.CrabIds), JsonOpts);
+        if (req.BoxIds is not null)
+            op.BoxIdsJson = JsonSerializer.Serialize(proposedBoxIds, JsonOpts);
+        if (req.CrabIds is not null)
+            op.CrabIdsJson = JsonSerializer.Serialize(proposedCrabIds, JsonOpts);
         if (req.Appetite is not null) op.Appetite = NormalizeAppetite(req.Appetite);
         if (req.FoodType is not null) op.FoodType = string.IsNullOrWhiteSpace(req.FoodType) ? null : req.FoodType.Trim();
         if (req.Condition is not null) op.Condition = NormalizeConditionKey(req.Condition);
@@ -205,6 +235,7 @@ public class FarmOperationService : IFarmOperationService
         Guid crabId, int page = 1, int limit = 50, string? type = null,
         DateTime? startDate = null, DateTime? endDate = null, CancellationToken ct = default)
     {
+        await EnsureCrabInScopeAsync(crabId, ct);
         var allocs = (await _uow.CrabBoxAllocations.FindAsync(a => a.CrabId == crabId, ct)).ToList();
         var all = (await _uow.FarmOperations.GetAllAsync(ct)).AsEnumerable();
         all = all.Where(o => MatchesCrab(o, crabId, allocs));
@@ -245,6 +276,7 @@ public class FarmOperationService : IFarmOperationService
     public async Task<ApiResponse<CrabFeedingActivityDto>> GetCrabFeedingActivityAsync(
         Guid crabId, DateTime? from, DateTime? to, int page = 1, int limit = 10, CancellationToken ct = default)
     {
+        await EnsureCrabInScopeAsync(crabId, ct);
         var end = (to ?? DateTime.UtcNow).ToUniversalTime();
         var start = (from ?? end.AddDays(-7)).ToUniversalTime();
         if (start >= end) throw AppException.BadRequest("'from' must be earlier than 'to'.");
@@ -385,6 +417,123 @@ public class FarmOperationService : IFarmOperationService
             return ("AI phát hiện mức vận động trung bình thấp trong kỳ. Nên tiếp tục theo dõi.", "watch");
         return ("AI nhận định: Mức ăn và vận động ổn định trong kỳ.", "ok");
     }
+
+    private async Task<IReadOnlyList<FarmOperation>> OperationsInScopeAsync(
+        CancellationToken ct)
+    {
+        var operations = await _uow.FarmOperations.GetAllAsync(ct);
+        var allowedAreas = await _areas.AreaIdsAsync(ct);
+        if (allowedAreas is null)
+            return operations.ToList();
+
+        var rowIds = (await _uow.FarmingRows.GetAllAsync(ct))
+            .Where(row => allowedAreas.Contains(row.FarmingAreaId))
+            .Select(row => row.Id)
+            .ToHashSet();
+        var allowedBoxIds = (await _uow.Boxes.GetAllAsync(ct))
+            .Where(box => rowIds.Contains(box.FarmingRowId))
+            .Select(box => box.Id)
+            .ToHashSet();
+        var currentBoxes = (await _uow.Crabs.GetAllAsync(ct))
+            .Where(crab => crab.BoxId.HasValue)
+            .ToDictionary(crab => crab.Id, crab => crab.BoxId!.Value);
+        var allocations = (await _uow.CrabBoxAllocations.GetAllAsync(ct))
+            .GroupBy(item => item.CrabId)
+            .ToDictionary(group => group.Key, group => group.ToList());
+        bool CrabWasInScope(Guid crabId, DateTime at)
+        {
+            var boxAtOperation = allocations.GetValueOrDefault(crabId)?
+                .Where(item => item.StartTime <= at
+                    && (!item.EndTime.HasValue || item.EndTime.Value > at))
+                .OrderByDescending(item => item.StartTime)
+                .Select(item => (Guid?)item.BoxId)
+                .FirstOrDefault();
+            if (!boxAtOperation.HasValue
+                && currentBoxes.TryGetValue(crabId, out var currentBoxId))
+                boxAtOperation = currentBoxId;
+            return boxAtOperation.HasValue
+                && allowedBoxIds.Contains(boxAtOperation.Value);
+        }
+
+        return operations.Where(operation =>
+        {
+            var boxIds = ParseGuidSet(operation.BoxIdsJson);
+            var crabIds = ParseGuidSet(operation.CrabIdsJson);
+            if (boxIds.Count == 0 && crabIds.Count == 0)
+                return false;
+            return boxIds.All(allowedBoxIds.Contains)
+                && crabIds.All(crabId => CrabWasInScope(crabId, operation.Timestamp));
+        }).ToList();
+    }
+
+    private async Task EnsureOperationInScopeAsync(
+        FarmOperation operation,
+        CancellationToken ct)
+    {
+        if (!(await OperationsInScopeAsync(ct)).Any(item => item.Id == operation.Id))
+            throw AppException.Forbidden("Không xác định được khu của bản ghi nghiệp vụ.");
+    }
+
+    private async Task EnsureRequestedBoxesAsync(
+        IReadOnlyList<string>? rawIds,
+        CancellationToken ct)
+    {
+        if (rawIds is null)
+            return;
+        foreach (var raw in rawIds.Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            if (!Guid.TryParse(raw, out var boxId) || boxId == Guid.Empty)
+                throw AppException.BadRequest($"BoxId '{raw}' không hợp lệ.");
+            await _areas.EnsureBoxAsync(boxId, manage: false, ct);
+        }
+    }
+
+    private async Task EnsureRequestedCrabsAsync(
+        IReadOnlyList<string>? rawIds,
+        CancellationToken ct)
+    {
+        if (rawIds is null)
+            return;
+        foreach (var raw in rawIds.Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            if (!Guid.TryParse(raw, out var crabId) || crabId == Guid.Empty)
+                throw AppException.BadRequest($"CrabId '{raw}' không hợp lệ.");
+            await EnsureCrabInScopeAsync(crabId, ct);
+        }
+    }
+
+    private async Task EnsureCrabInScopeAsync(Guid crabId, CancellationToken ct)
+    {
+        var crab = await _uow.Crabs.GetByIdAsync(crabId, ct)
+            ?? throw AppException.NotFound("Crab");
+        if (crab.BoxId is Guid boxId && boxId != Guid.Empty)
+        {
+            await _areas.EnsureBoxAsync(boxId, manage: false, ct);
+            return;
+        }
+
+        var allocation = (await _uow.CrabBoxAllocations.FindAsync(
+                item => item.CrabId == crabId, ct))
+            .OrderByDescending(item => item.StartTime)
+            .FirstOrDefault();
+        if (allocation is not null)
+        {
+            await _areas.EnsureBoxAsync(allocation.BoxId, manage: false, ct);
+            return;
+        }
+
+        var lotAreaIds = (await _uow.CrabLotAreas.FindAsync(
+                item => item.CrabLotId == crab.CrabLotId, ct))
+            .Select(item => item.FarmingAreaId)
+            .ToArray();
+        await _areas.EnsureAllAssignedAsync(lotAreaIds, ct);
+    }
+
+    private static HashSet<Guid> ParseGuidSet(string? json) =>
+        ParseStringList(json)
+            .Select(value => Guid.TryParse(value, out var id) ? id : Guid.Empty)
+            .Where(id => id != Guid.Empty)
+            .ToHashSet();
 
     private static IReadOnlyList<string> NormalizeIds(IReadOnlyList<string>? raw)
     {

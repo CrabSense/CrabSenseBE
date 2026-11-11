@@ -1,8 +1,10 @@
 using CrabSenseBE.Application.Common;
 using CrabSenseBE.Application.DTOs.Farm;
 using CrabSenseBE.Application.Interfaces;
+using CrabSenseBE.Application.Services;
 using CrabSenseBE.Domain.Entities;
 using CrabSenseBE.Domain.Enums;
+using CrabSenseBE.Domain.Interfaces;
 using CrabSenseBE.Infrastructure.Persistence;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -22,12 +24,20 @@ namespace CrabSenseBE.Api.Controllers;
 public class SyncQueueStubController : ControllerBase
 {
     private readonly AppDbContext _db;
+    private readonly IUnitOfWork _uow;
     private readonly IFarmHistoryService _farmHistory;
+    private readonly FarmAreaScope _areas;
 
-    public SyncQueueStubController(AppDbContext db, IFarmHistoryService farmHistory)
+    public SyncQueueStubController(
+        AppDbContext db,
+        IUnitOfWork uow,
+        IFarmHistoryService farmHistory,
+        ICurrentUserService currentUser)
     {
         _db = db;
+        _uow = uow;
         _farmHistory = farmHistory;
+        _areas = new FarmAreaScope(uow, currentUser);
     }
 
     /// <summary>
@@ -35,6 +45,7 @@ public class SyncQueueStubController : ControllerBase
     /// consume each item while clients already have a stable sync contract.
     /// </summary>
     [HttpPost("/api/sync/batch")]
+    [Authorize(Roles = AppRoles.FarmStaff)]
     [ProducesResponseType(StatusCodes.Status200OK)]
     public async Task<IActionResult> Batch([FromBody] SyncBatchRequest request)
     {
@@ -94,22 +105,22 @@ public class SyncQueueStubController : ControllerBase
     /// scoped to one farming area so other farms are not downloaded.
     /// </summary>
     [HttpGet("/api/sync/pull")]
+    [Authorize(Roles = AppRoles.FarmPortal)]
     [ProducesResponseType(StatusCodes.Status200OK)]
     public async Task<IActionResult> PullEntities(
         [FromQuery] DateTimeOffset? since = null,
         [FromQuery] Guid? farmingAreaId = null,
-        [FromQuery] int limit = 200)
+        [FromQuery] int limit = 200,
+        CancellationToken ct = default)
     {
         limit = Math.Clamp(limit, 1, 500);
         var sinceUtc = since?.UtcDateTime;
+        var allowedAreas = await _areas.SelectionAsync(farmingAreaId, ct)
+            ?? new HashSet<Guid>();
 
-        var boxQuery = _db.Boxes.AsNoTracking().AsQueryable();
-        if (farmingAreaId.HasValue)
-        {
-            boxQuery = boxQuery.Where(
-                box => box.FarmingRow != null &&
-                       box.FarmingRow.FarmingAreaId == farmingAreaId.Value);
-        }
+        var boxQuery = _db.Boxes.AsNoTracking().Where(
+            box => box.FarmingRow != null
+                && allowedAreas.Contains(box.FarmingRow.FarmingAreaId));
         if (sinceUtc.HasValue)
         {
             boxQuery = boxQuery.Where(
@@ -134,14 +145,10 @@ public class SyncQueueStubController : ControllerBase
             })
             .ToListAsync();
 
-        var crabQuery = _db.Crabs.AsNoTracking().AsQueryable();
-        if (farmingAreaId.HasValue)
-        {
-            crabQuery = crabQuery.Where(
-                crab => crab.Box != null &&
-                        crab.Box.FarmingRow != null &&
-                        crab.Box.FarmingRow.FarmingAreaId == farmingAreaId.Value);
-        }
+        var crabQuery = _db.Crabs.AsNoTracking().Where(
+            crab => crab.Box != null
+                && crab.Box.FarmingRow != null
+                && allowedAreas.Contains(crab.Box.FarmingRow.FarmingAreaId));
         if (sinceUtc.HasValue)
         {
             crabQuery = crabQuery.Where(
@@ -209,6 +216,7 @@ public class SyncQueueStubController : ControllerBase
         var statusRaw = SyncPayload.Str(payload, "status");
         if (statusRaw == null ||
             !Enum.TryParse<CrabStatus>(statusRaw, ignoreCase: true, out var status) ||
+            !Enum.IsDefined(status) ||
             !Guid.TryParse(item.EntityId, out var crabId))
         {
             Fail(inbox, failed, item, "update_crab cần entityId + payload.status (CrabStatus).");
@@ -221,6 +229,26 @@ public class SyncQueueStubController : ControllerBase
             Fail(inbox, failed, item, "Không tìm thấy cua theo entityId.");
             return;
         }
+        var currentBoxId = crab.BoxId
+            ?? (await _uow.CrabBoxAllocations.FindAsync(
+                    allocation => allocation.CrabId == crab.Id
+                        && allocation.EndTime == null,
+                    HttpContext.RequestAborted))
+                .OrderByDescending(allocation => allocation.StartTime)
+                .FirstOrDefault()?.BoxId;
+        if (currentBoxId is not Guid scopedBoxId)
+        {
+            Fail(inbox, failed, item, "Không xác định được khu hiện tại của cua.");
+            return;
+        }
+        await _areas.EnsureBoxAsync(
+            scopedBoxId, manage: false, HttpContext.RequestAborted);
+        if (status is CrabStatus.Dead or CrabStatus.Harvested or CrabStatus.Sold)
+        {
+            Fail(inbox, failed, item,
+                "Trạng thái chết hoặc thu hoạch phải dùng quy trình nghiệp vụ có audit.");
+            return;
+        }
 
         if (ServerWins(item, crab.UpdatedAt ?? crab.CreatedAt))
         {
@@ -228,8 +256,24 @@ public class SyncQueueStubController : ControllerBase
             return;
         }
 
+        var oldStatus = crab.Status;
+        var oldCondition = crab.Condition;
         crab.Status = status;
+        crab.Condition = CrabConditions.FromMoltingAndStatus(
+            crab.MoltingStage, status);
         crab.UpdatedAt = SyncBatchItem.ResolveClientUpdatedAt(item)!.Value.UtcDateTime;
+        _db.CrabStatusHistories.Add(new CrabStatusHistory
+        {
+            CrabId = crab.Id,
+            OldCondition = oldCondition,
+            NewCondition = crab.Condition,
+            OldStatus = oldStatus,
+            NewStatus = status,
+            ChangedAt = DateTime.UtcNow,
+            Source = "offline-sync",
+            ChangedByUserId = (await _areas.CurrentUserAsync(
+                HttpContext.RequestAborted))?.Id
+        });
         Done(inbox, processed, item);
     }
 
@@ -246,13 +290,74 @@ public class SyncQueueStubController : ControllerBase
         var crab = await _db.Crabs.FindAsync(crabId);
         if (crab == null)
         {
-            var lotId = await _db.CrabLots.AsNoTracking()
-                .OrderBy(lot => lot.CreatedAt)
-                .Select(lot => lot.Id)
-                .FirstOrDefaultAsync();
-            if (lotId == Guid.Empty)
+            var targetBoxRaw = SyncPayload.Str(payload, "boxId")
+                ?? SyncPayload.Str(item.Payload ?? new(), "boxId");
+            if (!Guid.TryParse(targetBoxRaw, out var targetBoxId) || targetBoxId == Guid.Empty)
             {
-                Fail(inbox, failed, item, "Chưa có CrabLot trên server để gắn cua mới.");
+                Fail(inbox, failed, item, "create_crab cần boxId hợp lệ.");
+                return;
+            }
+            try
+            {
+                await _areas.EnsureBoxAsync(targetBoxId, manage: false, HttpContext.RequestAborted);
+            }
+            catch (AppException ex)
+            {
+                Fail(inbox, failed, item, ex.Message);
+                return;
+            }
+
+            var targetBox = await _uow.Boxes.GetByIdAsync(targetBoxId, HttpContext.RequestAborted);
+            var targetRow = targetBox is null
+                ? null
+                : await _uow.FarmingRows.GetByIdAsync(
+                    targetBox.FarmingRowId, HttpContext.RequestAborted);
+            if (targetRow is null)
+            {
+                Fail(inbox, failed, item, "Không xác định được khu của hộp đích.");
+                return;
+            }
+
+            var linkedLotIds = (await _uow.CrabLotAreas.FindAsync(
+                    link => link.FarmingAreaId == targetRow.FarmingAreaId,
+                    HttpContext.RequestAborted))
+                .Select(link => link.CrabLotId)
+                .ToHashSet();
+            var lots = (await _uow.CrabLots.GetAllAsync(HttpContext.RequestAborted))
+                .Where(lot => linkedLotIds.Contains(lot.Id)
+                    && lot.ClosedAt is null
+                    && !string.Equals(lot.Status, "Cancelled", StringComparison.OrdinalIgnoreCase))
+                .OrderBy(lot => lot.CreatedAt)
+                .ToList();
+            CrabLot? selectedLot = null;
+            foreach (var candidate in lots)
+            {
+                var placed = await _uow.Crabs.CountAsync(
+                    row => row.CrabLotId == candidate.Id,
+                    HttpContext.RequestAborted);
+                if (placed < candidate.Quantity - candidate.DeadOnArrival)
+                {
+                    selectedLot = candidate;
+                    break;
+                }
+            }
+            if (selectedLot is null)
+            {
+                Fail(inbox, failed, item,
+                    "Không có Crab Lot đang mở, thuộc khu hộp đích và còn sức chứa.");
+                return;
+            }
+            var lotId = selectedLot.Id;
+            try
+            {
+                _ = await CrabLotRegistrationGuard.EnsureCanRegisterAsync(
+                    _uow, lotId, adding: 1, HttpContext.RequestAborted);
+                _ = await CrabLotRegistrationGuard.EnsureLotAllowsBoxAsync(
+                    _uow, lotId, targetBoxId, HttpContext.RequestAborted);
+            }
+            catch (AppException ex)
+            {
+                Fail(inbox, failed, item, ex.Message);
                 return;
             }
 
@@ -268,10 +373,19 @@ public class SyncQueueStubController : ControllerBase
                 StockedAt = DateTime.UtcNow,
                 MoltingStage = SyncPayload.Str(payload, "moltingStatus", "moltingStage") ?? "",
             };
-            if (Enum.TryParse<CrabStatus>(SyncPayload.Str(payload, "status") ?? "", true, out var st))
+            if (Enum.TryParse<CrabStatus>(
+                    SyncPayload.Str(payload, "status") ?? "", true, out var st)
+                && Enum.IsDefined(st))
+            {
+                if (st is CrabStatus.Dead or CrabStatus.Harvested or CrabStatus.Sold)
+                {
+                    Fail(inbox, failed, item,
+                        "Không thể đăng ký cua mới với trạng thái chết hoặc thu hoạch.");
+                    return;
+                }
                 crab.Status = st;
+            }
             _db.Crabs.Add(crab);
-            await _db.SaveChangesAsync();
         }
 
         var boxRaw = SyncPayload.Str(payload, "boxId") ?? SyncPayload.Str(item.Payload ?? new(), "boxId");
@@ -320,6 +434,8 @@ public class SyncQueueStubController : ControllerBase
             Fail(inbox, failed, item, "Không tìm thấy hộp.");
             return;
         }
+        await _areas.EnsureBoxAsync(
+            box.Id, manage: false, HttpContext.RequestAborted);
 
         if (ServerWins(item, box.UpdatedAt ?? box.CreatedAt))
         {
@@ -329,10 +445,39 @@ public class SyncQueueStubController : ControllerBase
 
         var code = SyncPayload.Str(payload, "code", "qrCode");
         if (!string.IsNullOrWhiteSpace(code))
-            box.Code = code;
+        {
+            Fail(inbox, failed, item,
+                "Farm Staff không được sửa mã hộp qua đồng bộ vận hành.");
+            return;
+        }
         var status = SyncPayload.Str(payload, "status");
         if (!string.IsNullOrWhiteSpace(status))
-            box.Status = status;
+        {
+            if (!BoxStatuses.IsValid(status))
+            {
+                Fail(inbox, failed, item,
+                    $"Trạng thái hộp không hợp lệ: {status}.");
+                return;
+            }
+            var oldStatus = box.Status;
+            var nextStatus = BoxStatuses.Normalize(status);
+            box.Status = nextStatus;
+            if (!string.Equals(oldStatus, nextStatus, StringComparison.OrdinalIgnoreCase))
+            {
+                _db.BoxStatusHistories.Add(new BoxStatusHistory
+                {
+                    BoxId = box.Id,
+                    OldStatus = oldStatus,
+                    NewStatus = nextStatus,
+                    OldIsOccupied = box.IsOccupied,
+                    NewIsOccupied = box.IsOccupied,
+                    ChangedAt = DateTime.UtcNow,
+                    Reason = "Offline sync",
+                    ChangedByUserId = (await _areas.CurrentUserAsync(
+                        HttpContext.RequestAborted))?.Id
+                });
+            }
+        }
         box.UpdatedAt = SyncBatchItem.ResolveClientUpdatedAt(item)!.Value.UtcDateTime;
         Done(inbox, processed, item);
     }
@@ -367,6 +512,7 @@ public class SyncQueueStubController : ControllerBase
 
     /// <summary>[READ] Hàng đợi sync (stub)</summary>
     [HttpGet("/api/sync/queue")]
+    [Authorize(Roles = AppRoles.Platform)]
     [ProducesResponseType(StatusCodes.Status200OK)]
     public async Task<IActionResult> GetSyncQueue(
         [FromQuery] int page = 1,
@@ -412,6 +558,7 @@ public class SyncQueueStubController : ControllerBase
 
     /// <summary>[CREATE] Enqueue sync job (stub)</summary>
     [HttpPost("/api/sync/queue")]
+    [Authorize(Roles = AppRoles.Platform)]
     [ProducesResponseType(StatusCodes.Status200OK)]
     public IActionResult EnqueueSync([FromBody] object? body)
         => Ok(ApiResponse<object>.Ok(new
@@ -503,7 +650,7 @@ internal static class SyncPayload
 }
 
 [ApiController]
-[Authorize]
+[Authorize(Roles = AppRoles.Platform)]
 [Route("api/v1/sync")]
 [Tags("09b. Sync stubs (FE)")]
 [Produces("application/json")]
@@ -617,7 +764,7 @@ public class SyncV1StubController : ControllerBase
 }
 
 [ApiController]
-[Authorize]
+[Authorize(Roles = AppRoles.Platform)]
 [Route("api/v1/synchronization")]
 [Tags("09b. Sync stubs (FE)")]
 [Produces("application/json")]

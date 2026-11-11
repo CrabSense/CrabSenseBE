@@ -20,7 +20,7 @@ public class AppDbContext : DbContext
     public DbSet<Crab> Crabs => Set<Crab>();
     public DbSet<CrabLot> CrabLots => Set<CrabLot>();
     public DbSet<CrabLotArea> CrabLotAreas => Set<CrabLotArea>();
-    // public DbSet<CropBatch> CropBatches => Set<CropBatch>();
+    public DbSet<CrabLotAreaReviewItem> CrabLotAreaReviewItems => Set<CrabLotAreaReviewItem>();
     public DbSet<OperationLog> OperationLogs => Set<OperationLog>();
     public DbSet<CrabBoxAllocation> CrabBoxAllocations => Set<CrabBoxAllocation>();
     public DbSet<MoltingRecord> MoltingRecords => Set<MoltingRecord>();
@@ -56,6 +56,7 @@ public class AppDbContext : DbContext
     // Harvest / Frozen / QR
     public DbSet<HarvestVoucher> HarvestVouchers => Set<HarvestVoucher>();
     public DbSet<HarvestLine> HarvestLines => Set<HarvestLine>();
+    public DbSet<HarvestApprovedLine> HarvestApprovedLines => Set<HarvestApprovedLine>();
     public DbSet<FrozenLot> FrozenLots => Set<FrozenLot>();
     public DbSet<FrozenStorageTransaction> FrozenStorageTransactions => Set<FrozenStorageTransaction>();
     public DbSet<FrozenInventoryAdjustment> FrozenInventoryAdjustments => Set<FrozenInventoryAdjustment>();
@@ -240,6 +241,9 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<FrozenLot>()
             .Property(f => f.Status)
             .HasConversion<string>();
+        modelBuilder.Entity<FrozenLot>()
+            .Property(f => f.ConcurrencyVersion)
+            .IsConcurrencyToken();
         modelBuilder.Entity<QrCode>()
             .Property(q => q.ApprovalStatus)
             .HasConversion<string>();
@@ -272,9 +276,13 @@ public class AppDbContext : DbContext
             entity.Property(x => x.Type).HasConversion<string>();
             entity.Property(x => x.Status).HasConversion<string>();
             entity.Property(x => x.RequestedWeightKg).HasPrecision(12, 3);
+            entity.Property(x => x.ApprovedWeightKg).HasPrecision(12, 3);
             entity.Property(x => x.ActualWeightKg).HasPrecision(12, 3);
+            entity.Property(x => x.WeightVarianceKg).HasPrecision(12, 3);
             entity.Property(x => x.TransactionCode).HasMaxLength(32);
             entity.Property(x => x.RejectionReason).HasMaxLength(500);
+            entity.Property(x => x.VarianceReason).HasMaxLength(500);
+            entity.Property(x => x.ConcurrencyVersion).IsConcurrencyToken();
             entity.HasIndex(x => x.TransactionCode).IsUnique();
             entity.HasIndex(x => new { x.FarmingAreaId, x.Status });
             entity.HasOne(x => x.FrozenLot)
@@ -464,6 +472,20 @@ public class AppDbContext : DbContext
             .WithMany()
             .HasForeignKey(link => link.FarmingAreaId)
             .OnDelete(DeleteBehavior.Restrict);
+        modelBuilder.Entity<CrabLotAreaReviewItem>()
+            .HasIndex(item => item.CrabLotId)
+            .IsUnique();
+        modelBuilder.Entity<CrabLotAreaReviewItem>()
+            .Property(item => item.Reason)
+            .HasMaxLength(256);
+        modelBuilder.Entity<CrabLotAreaReviewItem>()
+            .Property(item => item.ResolutionNotes)
+            .HasMaxLength(1000);
+        modelBuilder.Entity<CrabLotAreaReviewItem>()
+            .HasOne(item => item.CrabLot)
+            .WithMany()
+            .HasForeignKey(item => item.CrabLotId)
+            .OnDelete(DeleteBehavior.Cascade);
 
         modelBuilder.Entity<CrabStatusHistory>()
             .Property(h => h.OldCondition)
@@ -494,6 +516,26 @@ public class AppDbContext : DbContext
             b.Property(r => r.CarapaceWidthMm).HasPrecision(10, 2);
             b.Property(r => r.CarapaceLengthMm).HasPrecision(10, 2);
         });
+
+        modelBuilder.Entity<HarvestVoucher>()
+            .Property(voucher => voucher.ConcurrencyVersion)
+            .IsConcurrencyToken();
+        modelBuilder.Entity<HarvestVoucher>()
+            .Property(voucher => voucher.ExecutionShortfallReason)
+            .HasMaxLength(500);
+        modelBuilder.Entity<HarvestVoucher>()
+            .Property(voucher => voucher.AdjustmentReason)
+            .HasMaxLength(500);
+        modelBuilder.Entity<HarvestApprovedLine>()
+            .HasIndex(line => new { line.HarvestVoucherId, line.ApprovalVersion });
+        modelBuilder.Entity<HarvestApprovedLine>()
+            .HasIndex(line => new { line.HarvestVoucherId, line.ApprovalVersion, line.CrabId })
+            .IsUnique();
+        modelBuilder.Entity<HarvestApprovedLine>()
+            .HasOne(line => line.HarvestVoucher)
+            .WithMany(voucher => voucher.ApprovedLines)
+            .HasForeignKey(line => line.HarvestVoucherId)
+            .OnDelete(DeleteBehavior.Cascade);
 
         modelBuilder.Entity<UserPushToken>()
             .HasIndex(t => new { t.UserId, t.Token })

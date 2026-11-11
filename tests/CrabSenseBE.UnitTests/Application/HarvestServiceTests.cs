@@ -151,7 +151,6 @@ public class HarvestServiceTests
         _uow.Setup(u => u.SaveChangesAsync(It.IsAny<CancellationToken>())).ReturnsAsync(1);
 
         var request = new CreateHarvestVoucherRequest(
-            null,
             DateTime.UtcNow,
             "test harvest",
             new List<HarvestLineRequest>
@@ -183,7 +182,17 @@ public class HarvestServiceTests
         var workflow = Voucher(areaA, staffA, HarvestStatus.PendingApproval);
         var rejected = Voucher(areaA, staffA, HarvestStatus.PendingApproval);
         var vouchers = new List<HarvestVoucher> { foreign, selfApproval, workflow, rejected };
-        var lines = new List<HarvestLine>();
+        var lines = new List<HarvestLine>
+        {
+            new()
+            {
+                Id = Guid.NewGuid(),
+                HarvestVoucherId = workflow.Id,
+                WeightGram = 0,
+                IsSoftshell = true
+            }
+        };
+        var approvedLines = new List<HarvestApprovedLine>();
         var crab = new Crab { Id = Guid.NewGuid(), Status = CrabStatus.Alive, Condition = CrabCondition.Normal };
         var saves = 0;
 
@@ -202,6 +211,22 @@ public class HarvestServiceTests
                 CancellationToken _) => lines.Where(predicate.Compile()).ToList());
         lineRepo.Setup(repo => repo.Remove(It.IsAny<HarvestLine>()))
             .Callback<HarvestLine>(item => lines.Remove(item));
+        var approvedLineRepo = new Mock<IRepository<HarvestApprovedLine>>();
+        approvedLineRepo.Setup(repo => repo.FindAsync(
+                It.IsAny<System.Linq.Expressions.Expression<Func<HarvestApprovedLine, bool>>>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync((
+                System.Linq.Expressions.Expression<Func<HarvestApprovedLine, bool>> predicate,
+                CancellationToken _) => approvedLines.Where(predicate.Compile()).ToList());
+        approvedLineRepo.Setup(repo => repo.AddAsync(
+                It.IsAny<HarvestApprovedLine>(), It.IsAny<CancellationToken>()))
+            .Callback<HarvestApprovedLine, CancellationToken>((item, _) => approvedLines.Add(item))
+            .Returns(Task.CompletedTask);
+        var harvestHistories = new Mock<IRepository<CrabHarvestHistory>>();
+        harvestHistories.Setup(repo => repo.AnyAsync(
+                It.IsAny<System.Linq.Expressions.Expression<Func<CrabHarvestHistory, bool>>>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(false);
 
         var users = new Dictionary<Guid, AppUser>
         {
@@ -243,6 +268,8 @@ public class HarvestServiceTests
 
         _uow.Setup(unit => unit.HarvestVouchers).Returns(voucherRepo.Object);
         _uow.Setup(unit => unit.HarvestLines).Returns(lineRepo.Object);
+        _uow.Setup(unit => unit.HarvestApprovedLines).Returns(approvedLineRepo.Object);
+        _uow.Setup(unit => unit.CrabHarvestHistories).Returns(harvestHistories.Object);
         _uow.Setup(unit => unit.Users).Returns(userRepo.Object);
         _uow.Setup(unit => unit.FarmManagerAssignments).Returns(managerAssignments.Object);
         _uow.Setup(unit => unit.FarmStaffAssignments).Returns(staffAssignments.Object);

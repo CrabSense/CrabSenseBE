@@ -31,7 +31,7 @@ public class DashboardController : ControllerBase
 
 [ApiController]
 [Route("api/operations")]
-[Authorize]
+[Authorize(Roles = AppRoles.FarmPortal)]
 [Tags("34. Operations")]
 [Produces("application/json")]
 public class OperationsController : ControllerBase

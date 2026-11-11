@@ -136,6 +136,13 @@ public class HarvestController : ControllerBase
         Guid id, [FromBody] ExecuteHarvestRequest request, CancellationToken ct)
         => Ok(await _harvestService.ExecuteAsync(id, request, ct));
 
+    /// <summary>[ADJUSTMENT] Yêu cầu thay đổi danh sách đã duyệt; FM phải duyệt lại trước khi thực hiện.</summary>
+    [HttpPost("{id:guid}/adjustment-request")]
+    [Authorize(Roles = AppRoles.FarmManager + "," + AppRoles.FarmStaff)]
+    public async Task<IActionResult> RequestAdjustment(
+        Guid id, [FromBody] RequestHarvestAdjustmentRequest request, CancellationToken ct)
+        => Ok(await _harvestService.RequestAdjustmentAsync(id, request, ct));
+
     /// <summary>[DECISION] FM xác nhận kết quả cuối sau khi FS thực hiện.</summary>
     [HttpPost("{id:guid}/confirm")]
     [Authorize(Roles = AppRoles.FarmManager)]

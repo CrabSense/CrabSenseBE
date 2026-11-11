@@ -36,8 +36,10 @@ public class UnitOfWork : IUnitOfWork
     private IRepository<CrabLotArea>? _crabLotAreas;
     public IRepository<CrabLotArea> CrabLotAreas => _crabLotAreas ??= new GenericRepository<CrabLotArea>(_context);
 
-    // private IRepository<CropBatch>? _cropBatches;
-    // public IRepository<CropBatch> CropBatches => _cropBatches ??= new GenericRepository<CropBatch>(_context);
+    private IRepository<CrabLotAreaReviewItem>? _crabLotAreaReviewItems;
+    public IRepository<CrabLotAreaReviewItem> CrabLotAreaReviewItems =>
+        _crabLotAreaReviewItems ??= new GenericRepository<CrabLotAreaReviewItem>(_context);
+
 
     private IRepository<OperationLog>? _operationLogs;
     public IRepository<OperationLog> OperationLogs => _operationLogs ??= new GenericRepository<OperationLog>(_context);
@@ -146,6 +148,10 @@ public class UnitOfWork : IUnitOfWork
 
     private IRepository<HarvestLine>? _harvestLines;
     public IRepository<HarvestLine> HarvestLines => _harvestLines ??= new GenericRepository<HarvestLine>(_context);
+
+    private IRepository<HarvestApprovedLine>? _harvestApprovedLines;
+    public IRepository<HarvestApprovedLine> HarvestApprovedLines =>
+        _harvestApprovedLines ??= new GenericRepository<HarvestApprovedLine>(_context);
 
     private IRepository<FrozenLot>? _frozenLots;
     public IRepository<FrozenLot> FrozenLots => _frozenLots ??= new GenericRepository<FrozenLot>(_context);

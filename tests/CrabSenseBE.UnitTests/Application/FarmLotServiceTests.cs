@@ -2,6 +2,7 @@ using CrabSenseBE.Application.Common;
 using CrabSenseBE.Application.DTOs.Farm;
 using CrabSenseBE.Application.Interfaces;
 using CrabSenseBE.Application.Services;
+using CrabSenseBE.Domain.Common;
 using CrabSenseBE.Domain.Entities;
 using CrabSenseBE.Domain.Interfaces;
 using FluentAssertions;
@@ -173,5 +174,75 @@ public class FarmLotServiceTests
         result.Data.Should().HaveCount(1);
         JsonStringList.Parse(lot.ImageUrlsJson).Should().ContainSingle()
             .Which.Should().Contain("drive-file");
+    }
+
+    [Fact]
+    public async Task UpdateLot_CannotRemoveAreaWithCrab_AndDoesNotMutateLot()
+    {
+        var lotId = Guid.NewGuid();
+        var areaA = Guid.NewGuid();
+        var areaB = Guid.NewGuid();
+        var rowB = Guid.NewGuid();
+        var boxB = Guid.NewGuid();
+        var lot = new CrabLot
+        {
+            Id = lotId,
+            LotCode = "LOT-AB",
+            Name = "Tên cũ",
+            Quantity = 10
+        };
+        var lotRepo = new Mock<IRepository<CrabLot>>();
+        lotRepo.Setup(repo => repo.GetByIdAsync(lotId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(lot);
+        var links = new List<CrabLotArea>
+        {
+            new() { CrabLotId = lotId, FarmingAreaId = areaA },
+            new() { CrabLotId = lotId, FarmingAreaId = areaB }
+        };
+        var linkRepo = new Mock<IRepository<CrabLotArea>>();
+        linkRepo.Setup(repo => repo.GetAllAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(() => links.ToList());
+        var crab = new Crab
+        {
+            Id = Guid.NewGuid(),
+            CrabLotId = lotId,
+            BoxId = boxB,
+            Code = "CRAB-B"
+        };
+        var crabRepo = new Mock<IRepository<Crab>>();
+        crabRepo.Setup(repo => repo.FindAsync(
+                It.IsAny<System.Linq.Expressions.Expression<Func<Crab, bool>>>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new[] { crab });
+        _uow.Setup(unit => unit.CrabLots).Returns(lotRepo.Object);
+        _uow.Setup(unit => unit.CrabLotAreas).Returns(linkRepo.Object);
+        _uow.Setup(unit => unit.FarmingRows).Returns(RepoWithAll(
+            new FarmingRow { Id = rowB, FarmingAreaId = areaB }).Object);
+        _uow.Setup(unit => unit.Boxes).Returns(RepoWithAll(
+            new Box { Id = boxB, FarmingRowId = rowB, Code = "BOX-B" }).Object);
+        _uow.Setup(unit => unit.Crabs).Returns(crabRepo.Object);
+        _uow.Setup(unit => unit.CrabBoxAllocations).Returns(RepoWithAll<CrabBoxAllocation>().Object);
+        _uow.Setup(unit => unit.MoltingRecords).Returns(RepoWithAll<MoltingRecord>().Object);
+        _uow.Setup(unit => unit.CrabMortalityRecords).Returns(RepoWithAll<CrabMortalityRecord>().Object);
+        _uow.Setup(unit => unit.HarvestLines).Returns(RepoWithAll<HarvestLine>().Object);
+
+        var act = () => Create().UpdateLotAsync(lotId, new UpdateCrabLotRequest(
+            Name: "Tên không được lưu",
+            FarmingAreaIds: new[] { areaA }));
+
+        var error = await act.Should().ThrowAsync<AppException>();
+        error.Which.StatusCode.Should().Be(409);
+        lot.Name.Should().Be("Tên cũ");
+        links.Should().HaveCount(2);
+        _uow.Verify(unit => unit.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    private static Mock<IRepository<T>> RepoWithAll<T>(params T[] items)
+        where T : BaseEntity
+    {
+        var repository = new Mock<IRepository<T>>();
+        repository.Setup(repo => repo.GetAllAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(items);
+        return repository;
     }
 }

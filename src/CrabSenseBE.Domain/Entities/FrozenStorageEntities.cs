@@ -27,6 +27,7 @@ public class FrozenLot : BaseEntity
         = FrozenLotStatus.Available;
 
     public string? StorageLocation { get; set; }
+    public uint ConcurrencyVersion { get; set; }
 
     // Navigation
     public FarmingArea? FarmingArea { get; set; }
@@ -46,8 +47,13 @@ public class FrozenStorageTransaction : BaseEntity
         = FrozenStorageTransactionStatus.PendingApproval;
     public int RequestedQuantity { get; set; }
     public decimal RequestedWeightKg { get; set; }
+    public int? ApprovedQuantity { get; set; }
+    public decimal? ApprovedWeightKg { get; set; }
     public int? ActualQuantity { get; set; }
     public decimal? ActualWeightKg { get; set; }
+    public int? QuantityVariance { get; set; }
+    public decimal? WeightVarianceKg { get; set; }
+    public string? VarianceReason { get; set; }
     public Guid CreatedByUserId { get; set; }
     public Guid? ApprovedByUserId { get; set; }
     public DateTime? ApprovedAt { get; set; }
@@ -55,6 +61,7 @@ public class FrozenStorageTransaction : BaseEntity
     public Guid? PerformedByUserId { get; set; }
     public DateTime? PerformedAt { get; set; }
     public string? Notes { get; set; }
+    public uint ConcurrencyVersion { get; set; }
 
     public FrozenLot? FrozenLot { get; set; }
     public FarmingArea? FarmingArea { get; set; }

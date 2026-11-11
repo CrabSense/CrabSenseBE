@@ -25,9 +25,11 @@ public class FarmHistoryServiceTests
         var newBox = Guid.NewGuid();
         var rowId = Guid.NewGuid();
         var areaId = Guid.NewGuid();
+        var lotId = Guid.NewGuid();
         var crab = new Crab
         {
             Id = crabId,
+            CrabLotId = lotId,
             Status = CrabStatus.Alive,
             BoxAllocations = new List<CrabBoxAllocation>
     {
@@ -72,6 +74,11 @@ public class FarmHistoryServiceTests
         var logRepo = new Mock<IRepository<OperationLog>>();
         logRepo.Setup(r => r.AddAsync(It.IsAny<OperationLog>(), It.IsAny<CancellationToken>()))
             .Returns(Task.CompletedTask);
+        var lotAreas = new Mock<IRepository<CrabLotArea>>();
+        lotAreas.Setup(r => r.AnyAsync(
+                It.IsAny<System.Linq.Expressions.Expression<Func<CrabLotArea, bool>>>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
 
         _uow.Setup(u => u.Crabs).Returns(crabRepo.Object);
         _uow.Setup(u => u.Boxes).Returns(boxRepo.Object);
@@ -81,6 +88,7 @@ public class FarmHistoryServiceTests
         _uow.Setup(u => u.BoxStatusHistories).Returns(statusHistRepo.Object);
         _uow.Setup(u => u.CrabStatusHistories).Returns(crabStatusHistRepo.Object);
         _uow.Setup(u => u.OperationLogs).Returns(logRepo.Object);
+        _uow.Setup(u => u.CrabLotAreas).Returns(lotAreas.Object);
         _uow.Setup(u => u.SaveChangesAsync(It.IsAny<CancellationToken>())).ReturnsAsync(1);
 
         var result = await Create().AllocateCrabAsync(new AllocateCrabRequest(crabId, newBox, areaId, rowId, "stock"));
@@ -274,5 +282,56 @@ public class FarmHistoryServiceTests
         savedCorrection.Should().NotBeNull();
         savedCorrection!.Action.Should().Be("void");
         molts.Verify(repo => repo.Remove(It.IsAny<MoltingRecord>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task Allocation_correction_is_audited_and_confirmed_history_cannot_be_deleted()
+    {
+        var allocation = new CrabBoxAllocation
+        {
+            Id = Guid.NewGuid(),
+            CrabId = Guid.NewGuid(),
+            BoxId = Guid.NewGuid(),
+            StartTime = DateTime.UtcNow.AddDays(-2),
+            EndTime = DateTime.UtcNow.AddDays(-1),
+            Notes = "original"
+        };
+        var allocations = new Mock<IRepository<CrabBoxAllocation>>();
+        allocations.Setup(repo => repo.GetByIdAsync(
+                allocation.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(allocation);
+        var corrections = new Mock<IRepository<CrabEventCorrection>>();
+        CrabEventCorrection? savedCorrection = null;
+        corrections.Setup(repo => repo.AddAsync(
+                It.IsAny<CrabEventCorrection>(), It.IsAny<CancellationToken>()))
+            .Callback<CrabEventCorrection, CancellationToken>(
+                (item, _) => savedCorrection = item)
+            .Returns(Task.CompletedTask);
+        _uow.Setup(unit => unit.CrabBoxAllocations).Returns(allocations.Object);
+        _uow.Setup(unit => unit.CrabEventCorrections).Returns(corrections.Object);
+        _uow.Setup(unit => unit.SaveChangesAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(1);
+        var service = Create();
+
+        var updated = await service.UpdateAllocationAsync(
+            allocation.Id,
+            new UpdateAllocationRequest(
+                allocation.StartTime,
+                allocation.EndTime,
+                "Sửa thời gian theo nhật ký thiết bị"));
+
+        updated.Success.Should().BeTrue();
+        savedCorrection.Should().NotBeNull();
+        savedCorrection!.EventType.Should().Be("allocation");
+        savedCorrection.Action.Should().Be("update");
+        savedCorrection.PreviousDataJson.Should().Contain("original");
+
+        await Assert.ThrowsAsync<AppException>(
+            () => service.DeleteAllocationAsync(allocation.Id));
+        allocations.Verify(
+            repo => repo.Remove(It.IsAny<CrabBoxAllocation>()), Times.Never);
+        _uow.Verify(
+            unit => unit.SaveChangesAsync(It.IsAny<CancellationToken>()),
+            Times.Once);
     }
 }

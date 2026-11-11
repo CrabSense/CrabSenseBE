@@ -31,10 +31,26 @@ public class BoxDetailServiceAddCrabTests
 
     private Crab? _saved;
     private QrCode? _savedQr;
+    private int _saveCalls;
 
-    private BoxDetailService Create(Guid boxId)
+    private BoxDetailService Create(
+        Guid boxId,
+        DateTime? closedAt = null,
+        string status = "Pending",
+        bool lotAllowsArea = true,
+        Guid? boxAreaId = null,
+        ICurrentUserService? currentUser = null,
+        Guid? assignedAreaId = null)
     {
-        var box = new Box { Id = boxId, Code = "A01", Status = "empty" };
+        var rowId = Guid.NewGuid();
+        var areaId = boxAreaId ?? Guid.NewGuid();
+        var box = new Box
+        {
+            Id = boxId,
+            FarmingRowId = rowId,
+            Code = "A01",
+            Status = "empty"
+        };
 
         var boxes = new Mock<IRepository<Box>>();
         boxes.Setup(r => r.GetByIdAsync(boxId, It.IsAny<CancellationToken>())).ReturnsAsync(box);
@@ -50,6 +66,10 @@ public class BoxDetailServiceAddCrabTests
                 _table.Any(p.Compile()));
         crabs.Setup(r => r.GetAllAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(() => _table.ToList());
+        crabs.Setup(r => r.CountAsync(
+                It.IsAny<Expression<Func<Crab, bool>>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((Expression<Func<Crab, bool>> p, CancellationToken _) =>
+                _table.Count(p.Compile()));
         crabs.Setup(r => r.AddAsync(It.IsAny<Crab>(), It.IsAny<CancellationToken>()))
             .Callback<Crab, CancellationToken>((c, _) =>
             {
@@ -59,8 +79,17 @@ public class BoxDetailServiceAddCrabTests
             .Returns(Task.CompletedTask);
 
         var lots = new Mock<IRepository<CrabLot>>();
+        var lot = new CrabLot
+        {
+            Id = LotId,
+            Quantity = 20,
+            ClosedAt = closedAt,
+            Status = status
+        };
         lots.Setup(r => r.GetByIdAsync(LotId, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new CrabLot { Id = LotId });
+            .ReturnsAsync(lot);
+        lots.Setup(r => r.GetAllAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync([lot]);
 
         var allocations = new Mock<IRepository<CrabBoxAllocation>>();
         allocations.Setup(r => r.AddAsync(
@@ -73,19 +102,161 @@ public class BoxDetailServiceAddCrabTests
             .Returns(Task.CompletedTask);
 
         var rows = new Mock<IRepository<FarmingRow>>();
+        rows.Setup(r => r.GetByIdAsync(rowId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new FarmingRow
+            {
+                Id = rowId,
+                FarmingAreaId = areaId,
+                Code = "ROW-A"
+            });
+        var areas = new Mock<IRepository<FarmingArea>>();
+        var area = new FarmingArea { Id = areaId, Code = "AREA-A", Name = "Khu A" };
+        areas.Setup(r => r.GetByIdAsync(areaId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(area);
+        areas.Setup(r => r.Query()).Returns(Array.Empty<FarmingArea>().AsQueryable());
+        var lotAreas = new Mock<IRepository<CrabLotArea>>();
+        lotAreas.Setup(r => r.AnyAsync(
+                It.IsAny<Expression<Func<CrabLotArea, bool>>>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync((Expression<Func<CrabLotArea, bool>> predicate, CancellationToken _) =>
+                lotAllowsArea && predicate.Compile()(new CrabLotArea
+                {
+                    CrabLotId = LotId,
+                    FarmingAreaId = areaId
+                }));
         _uow.Setup(u => u.Boxes).Returns(boxes.Object);
         _uow.Setup(u => u.Crabs).Returns(crabs.Object);
         _uow.Setup(u => u.CrabLots).Returns(lots.Object);
         _uow.Setup(u => u.CrabBoxAllocations).Returns(allocations.Object);
         _uow.Setup(u => u.QrCodes).Returns(qrCodes.Object);
         _uow.Setup(u => u.FarmingRows).Returns(rows.Object);
-        _uow.Setup(u => u.SaveChangesAsync(It.IsAny<CancellationToken>())).ReturnsAsync(1);
+        _uow.Setup(u => u.FarmingAreas).Returns(areas.Object);
+        _uow.Setup(u => u.CrabLotAreas).Returns(lotAreas.Object);
+        if (currentUser is not null)
+        {
+            var users = new Mock<IRepository<AppUser>>();
+            users.Setup(r => r.GetByIdAsync(
+                    currentUser.UserId, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new AppUser
+                {
+                    Id = currentUser.UserId,
+                    Username = "staff",
+                    Role = UserRole.FarmStaff,
+                    IsActive = true
+                });
+            var assignments = new Mock<IRepository<FarmStaffAssignment>>();
+            assignments.Setup(r => r.FirstOrDefaultAsync(
+                    It.IsAny<Expression<Func<FarmStaffAssignment, bool>>>(),
+                    It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new FarmStaffAssignment
+                {
+                    StaffUserId = currentUser.UserId,
+                    ManagerUserId = Guid.NewGuid(),
+                    FarmingAreaId = assignedAreaId ?? areaId
+                });
+            _uow.Setup(u => u.Users).Returns(users.Object);
+            _uow.Setup(u => u.FarmStaffAssignments).Returns(assignments.Object);
+        }
+        _uow.Setup(u => u.SaveChangesAsync(It.IsAny<CancellationToken>()))
+            .Callback(() => _saveCalls++)
+            .ReturnsAsync(1);
 
-        return new BoxDetailService(_uow.Object, _boxQr.Object);
+        return new BoxDetailService(_uow.Object, _boxQr.Object, currentUser);
     }
 
     private static MobileAddCrabRequest Minimal(string? condition = null, string? molt = null) =>
         new(CrabLotId: LotId, WeightGram: 200m, Condition: condition, MoltingStage: molt);
+
+    [Fact]
+    public async Task AddCrab_OpenLot_Succeeds()
+    {
+        var boxId = Guid.NewGuid();
+        var result = await Create(boxId).AddCrabAsync(boxId, Minimal());
+
+        result.Success.Should().BeTrue();
+        _saved.Should().NotBeNull();
+        _saveCalls.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task AddCrab_ClosedLot_IsRejectedWithoutDatabaseChanges()
+    {
+        var boxId = Guid.NewGuid();
+        var service = Create(boxId, closedAt: DateTime.UtcNow);
+
+        var act = () => service.AddCrabAsync(boxId, Minimal());
+
+        var error = await act.Should().ThrowAsync<CrabSenseBE.Application.Common.AppException>();
+        error.Which.StatusCode.Should().Be(409);
+        _saved.Should().BeNull();
+        _savedQr.Should().BeNull();
+        _table.Should().BeEmpty();
+        _saveCalls.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task AddCrab_BoxOutsideLotAreas_IsRejectedWithoutDatabaseChanges()
+    {
+        var boxId = Guid.NewGuid();
+        var service = Create(boxId, lotAllowsArea: false);
+
+        var act = () => service.AddCrabAsync(boxId, Minimal());
+
+        var error = await act.Should().ThrowAsync<CrabSenseBE.Application.Common.AppException>();
+        error.Which.StatusCode.Should().Be(403);
+        _saved.Should().BeNull();
+        _savedQr.Should().BeNull();
+        _table.Should().BeEmpty();
+        _saveCalls.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task AddCrab_MultiAreaLot_SucceedsForStaffAssignedToBoxArea()
+    {
+        var staffId = Guid.NewGuid();
+        var areaB = Guid.NewGuid();
+        var current = new Mock<ICurrentUserService>();
+        current.SetupGet(service => service.IsAuthenticated).Returns(true);
+        current.SetupGet(service => service.UserId).Returns(staffId);
+        var boxId = Guid.NewGuid();
+        var service = Create(
+            boxId,
+            lotAllowsArea: true,
+            boxAreaId: areaB,
+            currentUser: current.Object,
+            assignedAreaId: areaB);
+
+        var result = await service.AddCrabAsync(boxId, Minimal());
+
+        result.Success.Should().BeTrue();
+        _saved.Should().NotBeNull();
+        _saveCalls.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task AddCrab_StaffNotAssignedToBoxArea_IsRejected()
+    {
+        var staffId = Guid.NewGuid();
+        var areaA = Guid.NewGuid();
+        var areaB = Guid.NewGuid();
+        var current = new Mock<ICurrentUserService>();
+        current.SetupGet(service => service.IsAuthenticated).Returns(true);
+        current.SetupGet(service => service.UserId).Returns(staffId);
+        var boxId = Guid.NewGuid();
+        var service = Create(
+            boxId,
+            lotAllowsArea: true,
+            boxAreaId: areaB,
+            currentUser: current.Object,
+            assignedAreaId: areaA);
+
+        var act = () => service.AddCrabAsync(boxId, Minimal());
+
+        var error = await act.Should().ThrowAsync<CrabSenseBE.Application.Common.AppException>();
+        error.Which.StatusCode.Should().Be(403);
+        _saved.Should().BeNull();
+        _saveCalls.Should().Be(0);
+    }
 
     [Fact]
     public async Task AddCrab_PersistsEveryOwnerFieldTheMobileFormCollects()

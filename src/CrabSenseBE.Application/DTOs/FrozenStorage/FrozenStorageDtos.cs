@@ -157,7 +157,8 @@ public record RejectFrozenStorageTransactionRequest(string Reason);
 public record ExecuteFrozenStorageTransactionRequest(
     int ActualQuantity,
     decimal ActualWeightKg,
-    string? Notes = null);
+    string? Notes = null,
+    string? VarianceReason = null);
 
 public record FrozenStorageTransactionDto(
     Guid Id,
@@ -177,7 +178,12 @@ public record FrozenStorageTransactionDto(
     Guid? PerformedByUserId,
     DateTime? PerformedAt,
     string? Notes,
-    DateTime CreatedAt);
+    DateTime CreatedAt,
+    int? ApprovedQuantity = null,
+    decimal? ApprovedWeightKg = null,
+    int? QuantityVariance = null,
+    decimal? WeightVarianceKg = null,
+    string? VarianceReason = null);
 
 public record FrozenInventoryAdjustmentDto(
     Guid Id,

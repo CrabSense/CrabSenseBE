@@ -854,6 +854,9 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uuid");
 
+                    b.Property<int?>("AliveCountAtClose")
+                        .HasColumnType("integer");
+
                     b.Property<decimal?>("AverageWeightGram")
                         .HasPrecision(10, 2)
                         .HasColumnType("numeric(10,2)");
@@ -877,7 +880,13 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<int?>("DeadCountAtClose")
+                        .HasColumnType("integer");
+
                     b.Property<int>("DeadOnArrival")
+                        .HasColumnType("integer");
+
+                    b.Property<int?>("HarvestedCountAtClose")
                         .HasColumnType("integer");
 
                     b.Property<string>("ImageUrlsJson")
@@ -892,6 +901,9 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                         .HasMaxLength(32)
                         .HasColumnType("character varying(32)");
 
+                    b.Property<int?>("MoltedCountAtClose")
+                        .HasColumnType("integer");
+
                     b.Property<string>("Name")
                         .IsRequired()
                         .HasMaxLength(128)
@@ -905,6 +917,9 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                         .HasColumnType("numeric(14,2)");
 
                     b.Property<int>("Quantity")
+                        .HasColumnType("integer");
+
+                    b.Property<int?>("RegisteredCountAtClose")
                         .HasColumnType("integer");
 
                     b.Property<decimal?>("ShippingCostVnd")
@@ -935,6 +950,9 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                         .HasColumnType("numeric(14,2)");
 
                     b.Property<int?>("UnmoltedCountAtClose")
+                        .HasColumnType("integer");
+
+                    b.Property<int?>("UnstockedCountAtClose")
                         .HasColumnType("integer");
 
                     b.Property<DateTime?>("UpdatedAt")
@@ -982,6 +1000,41 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                         .IsUnique();
 
                     b.ToTable("CrabLotAreas", "be");
+                });
+
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.CrabLotAreaReviewItem", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("CrabLotId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Reason")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)");
+
+                    b.Property<string>("ResolutionNotes")
+                        .HasMaxLength(1000)
+                        .HasColumnType("character varying(1000)");
+
+                    b.Property<DateTime?>("ResolvedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTime?>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("CrabLotId")
+                        .IsUnique();
+
+                    b.ToTable("CrabLotAreaReviewItems", "be");
                 });
 
             modelBuilder.Entity("CrabSenseBE.Domain.Entities.CrabMortalityRecord", b =>
@@ -1932,6 +1985,10 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uuid");
 
+                    b.Property<long>("ConcurrencyVersion")
+                        .IsConcurrencyToken()
+                        .HasColumnType("bigint");
+
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("timestamp with time zone");
 
@@ -1998,6 +2055,17 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.Property<Guid?>("ApprovedByUserId")
                         .HasColumnType("uuid");
 
+                    b.Property<int?>("ApprovedQuantity")
+                        .HasColumnType("integer");
+
+                    b.Property<decimal?>("ApprovedWeightKg")
+                        .HasPrecision(12, 3)
+                        .HasColumnType("numeric(12,3)");
+
+                    b.Property<long>("ConcurrencyVersion")
+                        .IsConcurrencyToken()
+                        .HasColumnType("bigint");
+
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("timestamp with time zone");
 
@@ -2018,6 +2086,9 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
 
                     b.Property<Guid?>("PerformedByUserId")
                         .HasColumnType("uuid");
+
+                    b.Property<int?>("QuantityVariance")
+                        .HasColumnType("integer");
 
                     b.Property<string>("RejectionReason")
                         .HasMaxLength(500)
@@ -2046,6 +2117,14 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.Property<DateTime?>("UpdatedAt")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<string>("VarianceReason")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)");
+
+                    b.Property<decimal?>("WeightVarianceKg")
+                        .HasPrecision(12, 3)
+                        .HasColumnType("numeric(12,3)");
+
                     b.HasKey("Id");
 
                     b.HasIndex("FrozenLotId");
@@ -2056,6 +2135,65 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.HasIndex("FarmingAreaId", "Status");
 
                     b.ToTable("FrozenStorageTransactions", "be");
+                });
+
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.HarvestApprovedLine", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<int>("ApprovalVersion")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTime>("ApprovedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("ApprovedByUserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("BoxCode")
+                        .HasColumnType("text");
+
+                    b.Property<Guid?>("BoxId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("CrabCode")
+                        .HasColumnType("text");
+
+                    b.Property<Guid?>("CrabId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("FarmingAreaId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("HarvestVoucherId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("LotCode")
+                        .HasColumnType("text");
+
+                    b.Property<Guid?>("SourceHarvestLineId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime?>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("BoxId");
+
+                    b.HasIndex("CrabId");
+
+                    b.HasIndex("HarvestVoucherId", "ApprovalVersion");
+
+                    b.HasIndex("HarvestVoucherId", "ApprovalVersion", "CrabId")
+                        .IsUnique();
+
+                    b.ToTable("HarvestApprovedLines", "be");
                 });
 
             modelBuilder.Entity("CrabSenseBE.Domain.Entities.HarvestLine", b =>
@@ -2134,11 +2272,31 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uuid");
 
+                    b.Property<string>("AdjustmentReason")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)");
+
+                    b.Property<DateTime?>("AdjustmentRequestedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("AdjustmentRequestedByUserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<int>("ApprovalVersion")
+                        .HasColumnType("integer");
+
                     b.Property<DateTime?>("ApprovedAt")
                         .HasColumnType("timestamp with time zone");
 
                     b.Property<Guid?>("ApprovedByUserId")
                         .HasColumnType("uuid");
+
+                    b.Property<int>("ApprovedQuantity")
+                        .HasColumnType("integer");
+
+                    b.Property<long>("ConcurrencyVersion")
+                        .IsConcurrencyToken()
+                        .HasColumnType("bigint");
 
                     b.Property<DateTime?>("ConfirmedAt")
                         .HasColumnType("timestamp with time zone");
@@ -2154,6 +2312,13 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
 
                     b.Property<DateTime?>("ExecutionCompletedAt")
                         .HasColumnType("timestamp with time zone");
+
+                    b.Property<int>("ExecutionShortfallCount")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("ExecutionShortfallReason")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)");
 
                     b.Property<Guid?>("FarmingAreaId")
                         .HasColumnType("uuid");
@@ -4107,6 +4272,17 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.Navigation("FarmingArea");
                 });
 
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.CrabLotAreaReviewItem", b =>
+                {
+                    b.HasOne("CrabSenseBE.Domain.Entities.CrabLot", "CrabLot")
+                        .WithMany()
+                        .HasForeignKey("CrabLotId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("CrabLot");
+                });
+
             modelBuilder.Entity("CrabSenseBE.Domain.Entities.CrabMortalityRecord", b =>
                 {
                     b.HasOne("CrabSenseBE.Domain.Entities.Box", "Box")
@@ -4342,6 +4518,29 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.Navigation("FarmingArea");
 
                     b.Navigation("FrozenLot");
+                });
+
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.HarvestApprovedLine", b =>
+                {
+                    b.HasOne("CrabSenseBE.Domain.Entities.Box", "Box")
+                        .WithMany()
+                        .HasForeignKey("BoxId");
+
+                    b.HasOne("CrabSenseBE.Domain.Entities.Crab", "Crab")
+                        .WithMany()
+                        .HasForeignKey("CrabId");
+
+                    b.HasOne("CrabSenseBE.Domain.Entities.HarvestVoucher", "HarvestVoucher")
+                        .WithMany("ApprovedLines")
+                        .HasForeignKey("HarvestVoucherId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Box");
+
+                    b.Navigation("Crab");
+
+                    b.Navigation("HarvestVoucher");
                 });
 
             modelBuilder.Entity("CrabSenseBE.Domain.Entities.HarvestLine", b =>
@@ -4788,6 +4987,8 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
 
             modelBuilder.Entity("CrabSenseBE.Domain.Entities.HarvestVoucher", b =>
                 {
+                    b.Navigation("ApprovedLines");
+
                     b.Navigation("Lines");
                 });
 

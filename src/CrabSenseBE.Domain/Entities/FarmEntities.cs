@@ -184,8 +184,26 @@ public class CrabLot : BaseEntity
     /// <summary>Ngày kết thúc vòng đời lô. Không dùng UpdatedAt.</summary>
     public DateTime? ClosedAt { get; set; }
 
-    /// <summary>Số cua chưa lột tại thời điểm kết thúc lô.</summary>
+    /// <summary>Số cua còn sống chưa từng lột tại thời điểm kết thúc lô.</summary>
     public int? UnmoltedCountAtClose { get; set; }
+
+    /// <summary>Tổng số cua thực tế đã đăng ký vào lô tại thời điểm đóng.</summary>
+    public int? RegisteredCountAtClose { get; set; }
+
+    /// <summary>Số cua thuộc nhóm trạng thái sống tại thời điểm đóng.</summary>
+    public int? AliveCountAtClose { get; set; }
+
+    /// <summary>Số cua từng lột thành công; đây là chỉ số sự kiện và có thể giao với nhóm vòng đời.</summary>
+    public int? MoltedCountAtClose { get; set; }
+
+    /// <summary>Số cua thuộc nhóm trạng thái đã thu hoạch hoặc đã bán tại thời điểm đóng.</summary>
+    public int? HarvestedCountAtClose { get; set; }
+
+    /// <summary>Số cua thuộc trạng thái chết tại thời điểm đóng.</summary>
+    public int? DeadCountAtClose { get; set; }
+
+    /// <summary>Số cua dự kiến chưa được thả, sau khi trừ cua chết khi nhập.</summary>
+    public int? UnstockedCountAtClose { get; set; }
 
     /// <summary>Phương án xử lý cua chưa lột khi kết thúc lô.</summary>
     public string? CloseDisposition { get; set; }
@@ -203,21 +221,18 @@ public class CrabLotArea : BaseEntity
     public FarmingArea? FarmingArea { get; set; }
 }
 
-/// <summary>Đợt nuôi (CropBatch) — theo vụ</summary>
-// public class CropBatch : BaseEntity
-// {
-//     public string BatchCode { get; set; } = string.Empty;
-//     public DateTime StartDate { get; set; }
-//     public DateTime? EndDate { get; set; }
-//     /// <summary> Tổng số cua được thả ban đầu vào đợt nuôi.</summary>
-//     public int InitialQuantity { get; set; }
-//     public string? Status { get; set; }
-//     public string? Notes { get; set; }
-
-//     public ICollection<Crab> Crabs { get; set; } = new List<Crab>();
-//     public ICollection<CrabMortalityRecord> MortalityRecords { get; set; }
-//         = new List<CrabMortalityRecord>();
-// }
+/// <summary>
+/// Crab Lot lịch sử chưa thể xác định khu từ dữ liệu hộp đáng tin cậy.
+/// Quản trị viên phải rà soát và xử lý thủ công; migration không suy đoán khu.
+/// </summary>
+public class CrabLotAreaReviewItem : BaseEntity
+{
+    public Guid CrabLotId { get; set; }
+    public CrabLot? CrabLot { get; set; }
+    public string Reason { get; set; } = string.Empty;
+    public DateTime? ResolvedAt { get; set; }
+    public string? ResolutionNotes { get; set; }
+}
 
 /// <summary>Nhật ký vận hành — MOD-FARM</summary>
 public class OperationLog : BaseEntity

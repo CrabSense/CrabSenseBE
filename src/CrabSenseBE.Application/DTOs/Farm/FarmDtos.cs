@@ -4,7 +4,7 @@ namespace CrabSenseBE.Application.DTOs.Farm;
 //   Area  → Farm Administrator từ JWT, ghi vào FarmingAreaAdministrators
 //   Row   → FarmingAreaId
 //   Box   → FarmingRowId  (Area auto from row)
-//   Crab  → BoxId (+ auto Row/Area) + CrabLotId + CropBatchId
+//   Crab  → BoxId (+ auto Row/Area) + CrabLotId
 
 // --- FarmingArea (Khu) ---
 public record FarmingAreaDto(

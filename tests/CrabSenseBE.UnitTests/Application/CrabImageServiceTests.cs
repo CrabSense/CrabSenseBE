@@ -2,6 +2,7 @@ using CrabSenseBE.Application.Common;
 using CrabSenseBE.Application.Interfaces;
 using CrabSenseBE.Application.Services;
 using CrabSenseBE.Domain.Entities;
+using CrabSenseBE.Domain.Enums;
 using CrabSenseBE.Domain.Interfaces;
 using FluentAssertions;
 using Moq;
@@ -14,6 +15,8 @@ public class CrabImageServiceTests
     private readonly Mock<IPublicImageStorage> _storage = new();
     private readonly Mock<IRepository<Crab>> _crabs = new();
     private readonly Mock<IRepository<MediaAsset>> _media = new();
+    private readonly Mock<ICurrentUserService> _currentUser = new();
+    private readonly Guid _areaId = Guid.NewGuid();
 
     public CrabImageServiceTests()
     {
@@ -29,9 +32,40 @@ public class CrabImageServiceTests
         _media.Setup(r => r.AddAsync(It.IsAny<MediaAsset>(), It.IsAny<CancellationToken>()))
             .Returns(Task.CompletedTask);
         _storage.SetupGet(s => s.ProviderName).Returns("S3");
+        var userId = Guid.NewGuid();
+        _currentUser.SetupGet(service => service.IsAuthenticated).Returns(true);
+        _currentUser.SetupGet(service => service.UserId).Returns(userId);
+        var users = new Mock<IRepository<AppUser>>();
+        users.Setup(repo => repo.GetByIdAsync(userId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new AppUser
+            {
+                Id = userId, Username = "staff", Role = UserRole.FarmStaff, IsActive = true
+            });
+        var assignments = new Mock<IRepository<FarmStaffAssignment>>();
+        assignments.Setup(repo => repo.FirstOrDefaultAsync(
+                It.IsAny<System.Linq.Expressions.Expression<Func<FarmStaffAssignment, bool>>>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new FarmStaffAssignment
+            {
+                StaffUserId = userId, FarmingAreaId = _areaId
+            });
+        var lotAreas = new Mock<IRepository<CrabLotArea>>();
+        lotAreas.Setup(repo => repo.FindAsync(
+                It.IsAny<System.Linq.Expressions.Expression<Func<CrabLotArea, bool>>>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new[]
+            {
+                new CrabLotArea { CrabLotId = Guid.Empty, FarmingAreaId = _areaId }
+            });
+        _uow.Setup(unit => unit.Users).Returns(users.Object);
+        _uow.Setup(unit => unit.FarmStaffAssignments).Returns(assignments.Object);
+        _uow.Setup(unit => unit.CrabLotAreas).Returns(lotAreas.Object);
+        _uow.Setup(unit => unit.FarmingAreas)
+            .Returns(new Mock<IRepository<FarmingArea>>().Object);
     }
 
-    private CrabImageService Create() => new(_uow.Object, _storage.Object);
+    private CrabImageService Create() =>
+        new(_uow.Object, _storage.Object, _currentUser.Object);
 
     [Fact]
     public async Task Upload_WithoutCrab_ReturnsS3Urls()
@@ -100,7 +134,10 @@ public class CrabImageServiceTests
     {
         var voucherId = Guid.NewGuid();
         var crabId = Guid.NewGuid();
-        var voucher = new HarvestVoucher { Id = voucherId, VoucherCode = "HAR-009" };
+        var voucher = new HarvestVoucher
+        {
+            Id = voucherId, VoucherCode = "HAR-009", FarmingAreaId = _areaId
+        };
         var crab = new Crab { Id = crabId };
 
         var vouchers = new Mock<IRepository<HarvestVoucher>>();

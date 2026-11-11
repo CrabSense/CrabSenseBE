@@ -8,7 +8,7 @@ namespace CrabSenseBE.Api.Controllers;
 
 [ApiController]
 [Route("api/sales")]
-[Authorize]
+[Authorize(Roles = AppRoles.FarmPortal)]
 [Tags("36. Sales (Mobile)")]
 [Produces("application/json")]
 public class SalesController : ControllerBase

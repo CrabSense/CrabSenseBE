@@ -14,6 +14,7 @@ using CrabSenseBE.Application.Services;
 using CrabSenseBE.Domain.Entities;
 using CrabSenseBE.Domain.Enums;
 using CrabSenseBE.Domain.Interfaces;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Builder;
@@ -181,6 +182,34 @@ public sealed class ChangedApiPermissionTests : IAsyncLifetime
         }
 
         Assert.True(failures.Count == 0, string.Join(Environment.NewLine, failures));
+    }
+
+    [Fact]
+    public void Sync_business_data_excludes_platform_and_queue_is_platform_only()
+    {
+        var pullRoles = typeof(SyncQueueStubController)
+            .GetMethod(nameof(SyncQueueStubController.PullEntities))!
+            .GetCustomAttributes(typeof(AuthorizeAttribute), inherit: true)
+            .Cast<AuthorizeAttribute>()
+            .Select(attribute => attribute.Roles)
+            .Single(role => role is not null);
+        Assert.Equal(AppRoles.FarmPortal, pullRoles);
+        Assert.DoesNotContain(AppRoles.SystemAdministrator, pullRoles);
+
+        var queueRoles = typeof(SyncQueueStubController)
+            .GetMethod(nameof(SyncQueueStubController.GetSyncQueue))!
+            .GetCustomAttributes(typeof(AuthorizeAttribute), inherit: true)
+            .Cast<AuthorizeAttribute>()
+            .Select(attribute => attribute.Roles)
+            .Single(role => role is not null);
+        Assert.Equal(AppRoles.Platform, queueRoles);
+
+        var v1Roles = typeof(SyncV1StubController)
+            .GetCustomAttributes(typeof(AuthorizeAttribute), inherit: true)
+            .Cast<AuthorizeAttribute>()
+            .Select(attribute => attribute.Roles)
+            .Single(role => role is not null);
+        Assert.Equal(AppRoles.Platform, v1Roles);
     }
 
     private async Task Check(List<string> failures, ApiCall call, string? role, Guid? userId, int expected)

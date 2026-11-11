@@ -130,6 +130,9 @@ public class TraceabilityService : ITraceabilityService
         var voucher = await _uow.HarvestVouchers.GetByIdAsync(voucherId, ct)
             ?? throw AppException.NotFound("HarvestVoucher");
         await EnsureHarvestVoucherAreaAsync(voucher, ct);
+        if (voucher.Status != HarvestStatus.Completed)
+            throw AppException.Conflict(
+                "Chỉ được đề xuất QR sản phẩm sau khi phiếu thu hoạch đã được xác nhận hoàn tất.");
 
         // Đã có QR active → trả về luôn
         var existing = await _uow.QrCodes.FirstOrDefaultAsync(

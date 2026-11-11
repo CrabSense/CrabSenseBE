@@ -74,7 +74,7 @@ public sealed class KiosksController : ControllerBase
     [AllowAnonymous]
     [HttpGet("me")]
     public Task<IActionResult> Me(CancellationToken ct)
-        => Execute(() => _kiosks.TouchAsync(EdgeKey(), null, ct));
+        => Execute(() => _kiosks.GetSessionAsync(EdgeKey(), ct));
 
     private string EdgeKey() => Request.Headers["X-Kiosk-Key"].FirstOrDefault() ?? "";
 

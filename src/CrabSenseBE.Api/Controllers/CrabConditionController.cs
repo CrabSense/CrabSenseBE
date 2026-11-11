@@ -34,18 +34,20 @@ public class CrabConditionController : ControllerBase
 
     /// <summary>[CREATE] Tính Kn + lưu Inspection (type=condition) cho lịch sử mobile</summary>
     [HttpPost("condition/submit")]
-    [Authorize(Roles = AppRoles.FarmWrite)]
+    [Authorize(Roles = AppRoles.FarmStaff)]
     public async Task<IActionResult> Submit(
         [FromBody] SubmitCrabConditionRequest req, CancellationToken ct)
         => Ok(await _service.SubmitAsync(req, ct));
 
     /// <summary>[READ] Lịch sử condition theo box</summary>
     [HttpGet("condition/box/{boxId:guid}")]
+    [Authorize(Roles = AppRoles.FarmPortal)]
     public async Task<IActionResult> ByBox(Guid boxId, CancellationToken ct)
         => Ok(await _service.ListByBoxAsync(boxId, ct));
 
     /// <summary>[READ] Condition record by id</summary>
     [HttpGet("condition/{id:guid}")]
+    [Authorize(Roles = AppRoles.FarmPortal)]
     public async Task<IActionResult> GetById(Guid id, CancellationToken ct)
         => Ok(await _service.GetByIdAsync(id, ct));
 
@@ -74,16 +76,18 @@ public class CrabConditionAliasController : ControllerBase
         => Ok(await _service.EvaluateAsync(req, ct));
 
     [HttpPost]
-    [Authorize(Roles = AppRoles.FarmWrite)]
+    [Authorize(Roles = AppRoles.FarmStaff)]
     public async Task<IActionResult> Submit(
         [FromBody] SubmitCrabConditionRequest req, CancellationToken ct)
         => Ok(await _service.SubmitAsync(req, ct));
 
     [HttpGet("box/{boxId:guid}")]
+    [Authorize(Roles = AppRoles.FarmPortal)]
     public async Task<IActionResult> ByBox(Guid boxId, CancellationToken ct)
         => Ok(await _service.ListByBoxAsync(boxId, ct));
 
     [HttpGet("{id:guid}")]
+    [Authorize(Roles = AppRoles.FarmPortal)]
     public async Task<IActionResult> GetById(Guid id, CancellationToken ct)
         => Ok(await _service.GetByIdAsync(id, ct));
 }

@@ -394,10 +394,19 @@ public class BoxDetailService : IBoxDetailService
         }
         else
         {
-            lot = (await _uow.CrabLots.GetAllAsync(ct)).OrderBy(l => l.CreatedAt).FirstOrDefault()
-                ?? throw AppException.BadRequest("No CrabLot available — create a crab lot first, or pass crabLotId.");
+            lot = (await _uow.CrabLots.GetAllAsync(ct))
+                .Where(item => item.ClosedAt is null
+                    && !string.Equals(item.Status, "Cancelled", StringComparison.OrdinalIgnoreCase))
+                .OrderBy(item => item.CreatedAt)
+                .FirstOrDefault()
+                ?? throw AppException.BadRequest(
+                    "Không có Crab Lot đang mở để đăng ký cua mới.");
             crabLotId = lot.Id;
         }
+        _ = await CrabLotRegistrationGuard.EnsureCanRegisterAsync(
+            _uow, crabLotId, adding: 1, ct);
+        _ = await CrabLotRegistrationGuard.EnsureLotAllowsBoxAsync(
+            _uow, crabLotId, boxId, ct);
 
         var weight = req.WeightGram ?? req.Weight;
         var molt = req.MoltingStage ?? req.MoltingStatus ?? "hardShell";

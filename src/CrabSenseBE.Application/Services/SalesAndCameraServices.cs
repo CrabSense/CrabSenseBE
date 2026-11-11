@@ -10,8 +10,15 @@ namespace CrabSenseBE.Application.Services;
 public class SalesService : ISalesService
 {
     private readonly IUnitOfWork _uow;
+    private readonly ICurrentUserService _currentUser;
+    private readonly FarmAreaScope _areas;
 
-    public SalesService(IUnitOfWork uow) => _uow = uow;
+    public SalesService(IUnitOfWork uow, ICurrentUserService currentUser)
+    {
+        _uow = uow;
+        _currentUser = currentUser;
+        _areas = new FarmAreaScope(uow, currentUser);
+    }
 
     public async Task<ApiResponse<SaleDto>> CreateAsync(CreateSaleRequest req, CancellationToken ct = default)
     {
@@ -21,6 +28,26 @@ public class SalesService : ISalesService
             throw AppException.BadRequest("Quantity must be > 0.");
         if (req.UnitPrice < 0)
             throw AppException.BadRequest("UnitPrice must be >= 0.");
+
+        Guid areaId;
+        if (req.BoxId is Guid boxId && boxId != Guid.Empty)
+        {
+            var box = await _uow.Boxes.GetByIdAsync(boxId, ct)
+                ?? throw AppException.NotFound("Box");
+            areaId = await _areas.AreaIdOfBoxAsync(box, ct);
+            if (req.FarmingAreaId is Guid suppliedArea
+                && suppliedArea != Guid.Empty
+                && suppliedArea != areaId)
+                throw AppException.BadRequest(
+                    "FarmingAreaId không khớp khu thực tế của hộp.");
+        }
+        else
+        {
+            areaId = req.FarmingAreaId ?? req.FarmId
+                ?? throw AppException.BadRequest(
+                    "FarmingAreaId hoặc BoxId là bắt buộc.");
+        }
+        await _areas.EnsureAsync(areaId, manage: false, ct);
 
         var total = req.TotalAmount ?? Math.Round(req.Quantity * req.UnitPrice, 2);
         var sale = new SaleTransaction
@@ -33,9 +60,9 @@ public class SalesService : ISalesService
             PaymentMethod = string.IsNullOrWhiteSpace(req.PaymentMethod) ? "CASH" : req.PaymentMethod.Trim().ToUpperInvariant(),
             PaymentStatus = string.IsNullOrWhiteSpace(req.PaymentStatus) ? "COMPLETED" : req.PaymentStatus.Trim().ToUpperInvariant(),
             SaleDate = req.SaleDate ?? DateTime.UtcNow,
-            FarmingAreaId = req.FarmingAreaId ?? req.FarmId,
+            FarmingAreaId = areaId,
             BoxId = req.BoxId,
-            OperatorId = req.OperatorId ?? Guid.Empty,
+            OperatorId = _currentUser.UserId,
             OperatorName = req.OperatorName ?? "Operator",
             Notes = req.Notes
         };
@@ -56,9 +83,10 @@ public class SalesService : ISalesService
         int limit = 50,
         CancellationToken ct = default)
     {
+        var allowedAreas = await _areas.SelectionAsync(farmId, ct)
+            ?? new HashSet<Guid>();
         var q = (await _uow.SaleTransactions.GetAllAsync(ct)).AsEnumerable();
-        if (farmId is Guid fid && fid != Guid.Empty)
-            q = q.Where(s => s.FarmingAreaId == fid);
+        q = q.Where(s => s.FarmingAreaId is Guid id && allowedAreas.Contains(id));
         if (!string.IsNullOrWhiteSpace(buyerName))
             q = q.Where(s => s.BuyerName.Contains(buyerName, StringComparison.OrdinalIgnoreCase));
         if (startDate.HasValue) q = q.Where(s => s.SaleDate >= startDate.Value);
@@ -81,10 +109,13 @@ public class SalesService : ISalesService
     public async Task<ApiResponse<SalesSummaryDto>> GetSummaryAsync(
         DateTime startDate, DateTime endDate, Guid? farmId = null, CancellationToken ct = default)
     {
+        var allowedAreas = await _areas.SelectionAsync(farmId, ct)
+            ?? new HashSet<Guid>();
         var q = (await _uow.SaleTransactions.GetAllAsync(ct)).AsEnumerable()
-            .Where(s => s.SaleDate >= startDate && s.SaleDate <= endDate);
-        if (farmId is Guid fid && fid != Guid.Empty)
-            q = q.Where(s => s.FarmingAreaId == fid);
+            .Where(s => s.SaleDate >= startDate
+                && s.SaleDate <= endDate
+                && s.FarmingAreaId is Guid id
+                && allowedAreas.Contains(id));
 
         var list = q.ToList();
         return ApiResponse<SalesSummaryDto>.Ok(new SalesSummaryDto(
@@ -99,14 +130,35 @@ public class SalesService : ISalesService
     {
         var sale = await _uow.SaleTransactions.GetByIdAsync(id, ct)
             ?? throw AppException.NotFound("Sale");
+        if (sale.FarmingAreaId is not Guid areaId)
+            throw AppException.Forbidden("Giao dịch chưa xác định khu sở hữu.");
+        await _areas.EnsureAsync(areaId, manage: false, ct);
         return ApiResponse<SaleDto>.Ok(Map(sale));
     }
 
     public async Task<ApiResponse<object>> GetAvailableInventoryAsync(
         Guid? farmId = null, CancellationToken ct = default)
     {
+        var allowedAreas = await _areas.SelectionAsync(farmId, ct)
+            ?? new HashSet<Guid>();
+        var rows = (await _uow.FarmingRows.GetAllAsync(ct))
+            .ToDictionary(row => row.Id);
+        var boxes = (await _uow.Boxes.GetAllAsync(ct))
+            .Where(box => rows.TryGetValue(box.FarmingRowId, out var row)
+                && allowedAreas.Contains(row.FarmingAreaId))
+            .Select(box => box.Id)
+            .ToHashSet();
+        var lastBoxes = (await _uow.CrabBoxAllocations.GetAllAsync(ct))
+            .GroupBy(allocation => allocation.CrabId)
+            .ToDictionary(
+                group => group.Key,
+                group => group.OrderByDescending(allocation => allocation.StartTime)
+                    .First().BoxId);
         var crabs = (await _uow.Crabs.GetAllAsync(ct)).AsEnumerable()
-            .Where(c => c.Status == CrabStatus.Harvested);
+            .Where(c => c.Status == CrabStatus.Harvested
+                && boxes.Contains(
+                    c.BoxId
+                    ?? lastBoxes.GetValueOrDefault(c.Id)));
         // Approximate kg available from harvested weight grams.
         var kg = crabs.Where(c => c.WeightGram.HasValue).Sum(c => c.WeightGram!.Value) / 1000m;
         return ApiResponse<object>.Ok(new { availableKg = Math.Round(kg, 2), farmId });

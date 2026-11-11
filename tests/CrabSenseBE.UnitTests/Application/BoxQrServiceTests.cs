@@ -122,11 +122,13 @@ public class BoxQrServiceTests
         var rowId = Guid.NewGuid();
         var areaId = Guid.NewGuid();
         var crabId = Guid.NewGuid();
+        var lotId = Guid.NewGuid();
         var sourceQr = new QrCode { Code = "SRC", EntityType = "box", BoxId = sourceBox, IsActive = true };
         var targetQr = new QrCode { Code = "DST", EntityType = "box", BoxId = targetBox, IsActive = true };
         var crab = new Crab
         {
             Id = crabId,
+            CrabLotId = lotId,
             Status = CrabStatus.Alive,
             BoxAllocations = new List<CrabBoxAllocation>
     {
@@ -142,17 +144,26 @@ public class BoxQrServiceTests
         crabRepo.Setup(r => r.GetByIdAsync(crabId, It.IsAny<CancellationToken>())).ReturnsAsync(crab);
 
         var boxRepo = new Mock<IRepository<Box>>();
-        boxRepo.Setup(r => r.GetByIdAsync(targetBox, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new Box { Id = targetBox, FarmingRowId = rowId, Code = "DST" });
+        boxRepo.Setup(r => r.GetByIdAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((Guid id, CancellationToken _) =>
+                id == sourceBox
+                    ? new Box { Id = sourceBox, FarmingRowId = rowId, Code = "SRC" }
+                    : new Box { Id = targetBox, FarmingRowId = rowId, Code = "DST" });
 
         var rowRepo = new Mock<IRepository<FarmingRow>>();
         rowRepo.Setup(r => r.GetByIdAsync(rowId, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new FarmingRow { Id = rowId, FarmingAreaId = areaId, Name = "R1", IsActive = true });
+        var lotAreas = new Mock<IRepository<CrabLotArea>>();
+        lotAreas.Setup(r => r.AnyAsync(
+                It.IsAny<System.Linq.Expressions.Expression<Func<CrabLotArea, bool>>>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
 
         _uow.Setup(u => u.QrCodes).Returns(qrRepo.Object);
         _uow.Setup(u => u.Crabs).Returns(crabRepo.Object);
         _uow.Setup(u => u.Boxes).Returns(boxRepo.Object);
         _uow.Setup(u => u.FarmingRows).Returns(rowRepo.Object);
+        _uow.Setup(u => u.CrabLotAreas).Returns(lotAreas.Object);
 
         _history.Setup(h => h.AllocateCrabAsync(It.IsAny<AllocateCrabRequest>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(ApiResponse<CrabBoxAllocationDto>.Ok(
@@ -168,6 +179,90 @@ public class BoxQrServiceTests
                 && r.FarmingRowId == rowId
                 && r.FarmingAreaId == areaId),
             It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task MoveCrab_ByQr_ToAreaOutsideLot_IsRejectedWithoutCallingHistory()
+    {
+        var sourceBox = Guid.NewGuid();
+        var targetBox = Guid.NewGuid();
+        var sourceRow = Guid.NewGuid();
+        var targetRow = Guid.NewGuid();
+        var areaA = Guid.NewGuid();
+        var areaB = Guid.NewGuid();
+        var crabId = Guid.NewGuid();
+        var lotId = Guid.NewGuid();
+        var sourceQr = new QrCode
+        {
+            Code = "SRC-A", EntityType = "box", BoxId = sourceBox, IsActive = true
+        };
+        var targetQr = new QrCode
+        {
+            Code = "DST-B", EntityType = "box", BoxId = targetBox, IsActive = true
+        };
+        var crab = new Crab
+        {
+            Id = crabId,
+            CrabLotId = lotId,
+            Status = CrabStatus.Alive,
+            BoxId = sourceBox,
+            BoxAllocations =
+            [
+                new CrabBoxAllocation
+                {
+                    CrabId = crabId,
+                    BoxId = sourceBox,
+                    StartTime = DateTime.UtcNow
+                }
+            ]
+        };
+        var qrRepo = new Mock<IRepository<QrCode>>();
+        qrRepo.SetupSequence(repo => repo.FirstOrDefaultAsync(
+                It.IsAny<System.Linq.Expressions.Expression<Func<QrCode, bool>>>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(sourceQr)
+            .ReturnsAsync(targetQr);
+        var crabs = new Mock<IRepository<Crab>>();
+        crabs.Setup(repo => repo.GetByIdAsync(crabId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(crab);
+        var boxes = new Mock<IRepository<Box>>();
+        boxes.Setup(repo => repo.GetByIdAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((Guid id, CancellationToken _) =>
+                id == sourceBox
+                    ? new Box { Id = sourceBox, FarmingRowId = sourceRow, Code = "SRC-A" }
+                    : new Box { Id = targetBox, FarmingRowId = targetRow, Code = "DST-B" });
+        var rows = new Mock<IRepository<FarmingRow>>();
+        rows.Setup(repo => repo.GetByIdAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((Guid id, CancellationToken _) =>
+                id == sourceRow
+                    ? new FarmingRow { Id = sourceRow, FarmingAreaId = areaA }
+                    : new FarmingRow { Id = targetRow, FarmingAreaId = areaB });
+        var links = new Mock<IRepository<CrabLotArea>>();
+        links.Setup(repo => repo.AnyAsync(
+                It.IsAny<System.Linq.Expressions.Expression<Func<CrabLotArea, bool>>>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync((
+                System.Linq.Expressions.Expression<Func<CrabLotArea, bool>> predicate,
+                CancellationToken _) => predicate.Compile()(new CrabLotArea
+                {
+                    CrabLotId = lotId,
+                    FarmingAreaId = areaA
+                }));
+        _uow.Setup(unit => unit.QrCodes).Returns(qrRepo.Object);
+        _uow.Setup(unit => unit.Crabs).Returns(crabs.Object);
+        _uow.Setup(unit => unit.Boxes).Returns(boxes.Object);
+        _uow.Setup(unit => unit.FarmingRows).Returns(rows.Object);
+        _uow.Setup(unit => unit.CrabLotAreas).Returns(links.Object);
+
+        var act = () => Create().MoveCrabAsync(
+            "SRC-A", new MoveCrabByScanRequest(crabId, null, "DST-B", "move"));
+
+        var error = await act.Should().ThrowAsync<AppException>();
+        error.Which.StatusCode.Should().Be(403);
+        crab.BoxId.Should().Be(sourceBox);
+        _history.Verify(service => service.AllocateCrabAsync(
+            It.IsAny<AllocateCrabRequest>(), It.IsAny<CancellationToken>()), Times.Never);
+        _uow.Verify(unit => unit.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]
@@ -195,5 +290,102 @@ public class BoxQrServiceTests
 
         await Assert.ThrowsAsync<AppException>(() =>
             Create().UpdateCrabFromScanAsync("A01-X", crab.Id, new UpdateCrabFromScanRequest(null, 100, null, null, null)));
+    }
+
+    [Fact]
+    public async Task UpdateCrabFromScan_Rejects_lifecycle_bypass_without_saving()
+    {
+        var boxId = Guid.NewGuid();
+        var qr = new QrCode
+        {
+            Code = "BOX-LIFE", EntityType = "box", BoxId = boxId, IsActive = true
+        };
+        var crab = new Crab
+        {
+            Id = Guid.NewGuid(),
+            BoxId = boxId,
+            Status = CrabStatus.Alive,
+            WeightGram = 100
+        };
+        var qrRepo = new Mock<IRepository<QrCode>>();
+        qrRepo.Setup(repo => repo.FirstOrDefaultAsync(
+                It.IsAny<System.Linq.Expressions.Expression<Func<QrCode, bool>>>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(qr);
+        var crabs = new Mock<IRepository<Crab>>();
+        crabs.Setup(repo => repo.GetByIdAsync(
+                crab.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(crab);
+        _uow.Setup(unit => unit.QrCodes).Returns(qrRepo.Object);
+        _uow.Setup(unit => unit.Crabs).Returns(crabs.Object);
+
+        await Assert.ThrowsAsync<AppException>(() =>
+            Create().UpdateCrabFromScanAsync(
+                qr.Code,
+                crab.Id,
+                new UpdateCrabFromScanRequest(null, null, null, false, null)));
+
+        crab.Status.Should().Be(CrabStatus.Alive);
+        _uow.Verify(
+            unit => unit.SaveChangesAsync(It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Fact]
+    public async Task UpdateCrabFromScan_Records_weight_history()
+    {
+        var boxId = Guid.NewGuid();
+        var qr = new QrCode
+        {
+            Code = "BOX-WEIGHT", EntityType = "box", BoxId = boxId, IsActive = true
+        };
+        var crab = new Crab
+        {
+            Id = Guid.NewGuid(),
+            BoxId = boxId,
+            Status = CrabStatus.Alive,
+            WeightGram = 100
+        };
+        var qrRepo = new Mock<IRepository<QrCode>>();
+        qrRepo.Setup(repo => repo.FirstOrDefaultAsync(
+                It.IsAny<System.Linq.Expressions.Expression<Func<QrCode, bool>>>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(qr);
+        var crabs = new Mock<IRepository<Crab>>();
+        crabs.Setup(repo => repo.GetByIdAsync(
+                crab.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(crab);
+        var weights = new Mock<IRepository<CrabWeightHistory>>();
+        CrabWeightHistory? savedWeight = null;
+        weights.Setup(repo => repo.AddAsync(
+                It.IsAny<CrabWeightHistory>(), It.IsAny<CancellationToken>()))
+            .Callback<CrabWeightHistory, CancellationToken>(
+                (item, _) => savedWeight = item)
+            .Returns(Task.CompletedTask);
+        _uow.Setup(unit => unit.QrCodes).Returns(qrRepo.Object);
+        _uow.Setup(unit => unit.Crabs).Returns(crabs.Object);
+        _uow.Setup(unit => unit.CrabWeightHistories).Returns(weights.Object);
+        var boxes = new Mock<IRepository<Box>>();
+        boxes.Setup(repo => repo.GetByIdAsync(
+                boxId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new Box { Id = boxId, FarmingRowId = Guid.NewGuid() });
+        var rows = new Mock<IRepository<FarmingRow>>();
+        rows.Setup(repo => repo.GetByIdAsync(
+                It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new FarmingRow { Id = Guid.NewGuid(), FarmingAreaId = Guid.NewGuid() });
+        _uow.Setup(unit => unit.Boxes).Returns(boxes.Object);
+        _uow.Setup(unit => unit.FarmingRows).Returns(rows.Object);
+        _uow.Setup(unit => unit.SaveChangesAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(1);
+
+        var result = await Create().UpdateCrabFromScanAsync(
+            qr.Code,
+            crab.Id,
+            new UpdateCrabFromScanRequest(null, 125, null, null, null));
+
+        result.Success.Should().BeTrue();
+        crab.WeightGram.Should().Be(125);
+        savedWeight.Should().NotBeNull();
+        savedWeight!.Source.Should().Be("box-qr");
     }
 }

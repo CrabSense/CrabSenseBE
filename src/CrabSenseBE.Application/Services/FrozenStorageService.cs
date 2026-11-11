@@ -4,6 +4,7 @@ using CrabSenseBE.Application.Interfaces;
 using CrabSenseBE.Domain.Entities;
 using CrabSenseBE.Domain.Enums;
 using CrabSenseBE.Domain.Interfaces;
+using Microsoft.EntityFrameworkCore;
 using SkiaSharp;
 using ZXing;
 using ZXing.Common;
@@ -99,6 +100,9 @@ public class FrozenStorageService : IFrozenStorageService
                 throw AppException.BadRequest(
                     "Phiếu thu hoạch được chọn không tồn tại.");
             }
+            if (harvestVoucher.Status != HarvestStatus.Completed)
+                throw AppException.Conflict(
+                    "Chỉ được tạo lô đông từ phiếu thu hoạch đã được xác nhận hoàn tất.");
 
             if (request.FrozenDate.Date < harvestVoucher.HarvestDate.Date)
             {
@@ -480,9 +484,12 @@ public class FrozenStorageService : IFrozenStorageService
         transaction.Status = FrozenStorageTransactionStatus.Approved;
         transaction.ApprovedByUserId = _currentUser.UserId;
         transaction.ApprovedAt = DateTime.UtcNow;
+        transaction.ApprovedQuantity = transaction.RequestedQuantity;
+        transaction.ApprovedWeightKg = transaction.RequestedWeightKg;
         transaction.RejectionReason = null;
+        transaction.ConcurrencyVersion++;
         _uow.FrozenStorageTransactions.Update(transaction);
-        await _uow.SaveChangesAsync(ct);
+        await SaveInventoryChangesAsync(ct);
         return ApiResponse<FrozenStorageTransactionDto>.Ok(
             MapTransaction(transaction), "Đã duyệt phiếu nhập/xuất kho.");
     }
@@ -504,8 +511,9 @@ public class FrozenStorageService : IFrozenStorageService
         transaction.ApprovedByUserId = _currentUser.UserId;
         transaction.ApprovedAt = DateTime.UtcNow;
         transaction.RejectionReason = reason;
+        transaction.ConcurrencyVersion++;
         _uow.FrozenStorageTransactions.Update(transaction);
-        await _uow.SaveChangesAsync(ct);
+        await SaveInventoryChangesAsync(ct);
         return ApiResponse<FrozenStorageTransactionDto>.Ok(
             MapTransaction(transaction), "Đã từ chối phiếu nhập/xuất kho.");
     }
@@ -517,6 +525,7 @@ public class FrozenStorageService : IFrozenStorageService
     {
         if (request.ActualQuantity <= 0 || request.ActualWeightKg <= 0)
             throw AppException.BadRequest("Số lượng và trọng lượng thực tế phải lớn hơn 0.");
+        var actualWeight = decimal.Round(request.ActualWeightKg, 3);
         var transaction = await GetTransactionAsync(id, ct);
         if (transaction.Status != FrozenStorageTransactionStatus.Approved)
             throw AppException.Conflict("Chỉ phiếu đã được duyệt mới được thực hiện.");
@@ -528,12 +537,33 @@ public class FrozenStorageService : IFrozenStorageService
         var lot = await _uow.FrozenLots.GetByIdAsync(transaction.FrozenLotId, ct)
             ?? throw AppException.NotFound("Frozen lot");
         await EnsureLotAreaAsync(lot, ct);
+        if (lot.FarmingAreaId != transaction.FarmingAreaId)
+            throw AppException.Forbidden(
+                "Phiếu nhập/xuất không thuộc khu sở hữu của lô đông.");
+
+        var approvedQuantity = transaction.ApprovedQuantity
+            ?? transaction.RequestedQuantity;
+        var approvedWeight = transaction.ApprovedWeightKg
+            ?? transaction.RequestedWeightKg;
+        if (request.ActualQuantity > approvedQuantity
+            || actualWeight > approvedWeight)
+            throw AppException.Conflict(
+                "Số lượng hoặc trọng lượng thực tế vượt mức đã duyệt. Cần lập và duyệt phiếu bổ sung.");
+
+        var quantityVariance = request.ActualQuantity - approvedQuantity;
+        var weightVariance = decimal.Round(actualWeight - approvedWeight, 3);
+        var varianceReason = NormalizeOptionalText(request.VarianceReason);
+        if ((quantityVariance < 0 || weightVariance < 0)
+            && varianceReason is null)
+            throw AppException.BadRequest(
+                "Cần ghi lý do khi số lượng hoặc trọng lượng thực tế thấp hơn mức đã duyệt.");
+
         var quantityDelta = transaction.Type == FrozenStorageTransactionType.Inbound
             ? request.ActualQuantity
             : -request.ActualQuantity;
         var weightDelta = transaction.Type == FrozenStorageTransactionType.Inbound
-            ? request.ActualWeightKg
-            : -request.ActualWeightKg;
+            ? actualWeight
+            : -actualWeight;
         var quantityAfter = lot.Quantity + quantityDelta;
         var weightAfter = lot.WeightKg + weightDelta;
         if (quantityAfter < 0 || weightAfter < 0)
@@ -554,7 +584,9 @@ public class FrozenStorageService : IFrozenStorageService
             WeightBeforeKg = lot.WeightKg,
             WeightAfterKg = decimal.Round(weightAfter, 3),
             PerformedByUserId = _currentUser.UserId,
-            Reason = NormalizeOptionalText(request.Notes) ?? transaction.Notes
+            Reason = varianceReason
+                ?? NormalizeOptionalText(request.Notes)
+                ?? transaction.Notes
         };
         lot.Quantity = adjustment.QuantityAfter;
         lot.WeightKg = adjustment.WeightAfterKg;
@@ -564,16 +596,21 @@ public class FrozenStorageService : IFrozenStorageService
                 ? FrozenLotStatus.Available
                 : lot.Status;
         transaction.ActualQuantity = request.ActualQuantity;
-        transaction.ActualWeightKg = decimal.Round(request.ActualWeightKg, 3);
+        transaction.ActualWeightKg = actualWeight;
+        transaction.QuantityVariance = quantityVariance;
+        transaction.WeightVarianceKg = weightVariance;
+        transaction.VarianceReason = varianceReason;
         transaction.PerformedByUserId = _currentUser.UserId;
         transaction.PerformedAt = DateTime.UtcNow;
         transaction.Status = FrozenStorageTransactionStatus.Completed;
         transaction.Notes = NormalizeOptionalText(request.Notes) ?? transaction.Notes;
+        lot.ConcurrencyVersion++;
+        transaction.ConcurrencyVersion++;
 
         _uow.FrozenLots.Update(lot);
         _uow.FrozenStorageTransactions.Update(transaction);
         await _uow.FrozenInventoryAdjustments.AddAsync(adjustment, ct);
-        await _uow.SaveChangesAsync(ct);
+        await SaveInventoryChangesAsync(ct);
         return ApiResponse<FrozenStorageTransactionDto>.Ok(
             MapTransaction(transaction), "Đã thực hiện giao dịch và cập nhật tồn kho.");
     }
@@ -620,6 +657,9 @@ public class FrozenStorageService : IFrozenStorageService
 
         var voucher = await _uow.HarvestVouchers.GetByIdAsync(voucherId, ct)
             ?? throw AppException.NotFound("Harvest voucher");
+        if (voucher.Status != HarvestStatus.Completed)
+            throw AppException.Conflict(
+                "Chỉ được đăng ký sản phẩm đông từ phiếu thu hoạch đã được xác nhận hoàn tất.");
 
         // Request đăng ký toàn bộ sản phẩm cua của lô trong một lần.
         if (request.Items.Count != lot.Quantity)
@@ -1007,7 +1047,31 @@ public class FrozenStorageService : IFrozenStorageService
         transaction.PerformedByUserId,
         transaction.PerformedAt,
         transaction.Notes,
-        transaction.CreatedAt);
+        transaction.CreatedAt,
+        transaction.ApprovedQuantity,
+        transaction.ApprovedWeightKg,
+        transaction.QuantityVariance,
+        transaction.WeightVarianceKg,
+        transaction.VarianceReason);
+
+    private async Task SaveInventoryChangesAsync(CancellationToken ct)
+    {
+        try
+        {
+            await _uow.SaveChangesAsync(ct);
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            throw AppException.Conflict(
+                "Dữ liệu kho vừa được thay đổi bởi giao dịch khác. Vui lòng tải lại trước khi tiếp tục.");
+        }
+        catch (DbUpdateException exception) when (
+            exception.Entries.Any(entry => entry.Entity is FrozenInventoryAdjustment))
+        {
+            throw AppException.Conflict(
+                "Giao dịch kho đã được xử lý hoặc dữ liệu tồn kho vừa thay đổi.");
+        }
+    }
 
     private static FrozenInventoryAdjustmentDto MapAdjustment(
         FrozenInventoryAdjustment adjustment) => new(

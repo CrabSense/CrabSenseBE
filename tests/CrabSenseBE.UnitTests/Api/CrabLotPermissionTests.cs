@@ -28,6 +28,7 @@ public sealed class CrabLotPermissionTests : IAsyncLifetime
     private readonly List<Crab> _crabs = new();
     private int _saves;
     private CrabLot _lotB = null!;
+    private CrabLot _closedEmptyLot = null!;
     private PermissionApiFactory _api = null!;
 
     public Task InitializeAsync()
@@ -54,6 +55,22 @@ public sealed class CrabLotPermissionTests : IAsyncLifetime
         };
         _lots.Add(_lotB);
         _links.Add(new CrabLotArea { CrabLotId = LotB, FarmingAreaId = AreaB });
+        _closedEmptyLot = new CrabLot
+        {
+            Id = Guid.NewGuid(),
+            LotCode = "LOT-CLOSED",
+            Name = "Lô đã kết thúc",
+            Quantity = 0,
+            Status = "Pending",
+            StockedAt = DateTime.UtcNow.AddDays(-2),
+            ClosedAt = DateTime.UtcNow.AddDays(-1)
+        };
+        _lots.Add(_closedEmptyLot);
+        _links.Add(new CrabLotArea
+        {
+            CrabLotId = _closedEmptyLot.Id,
+            FarmingAreaId = AreaA
+        });
 
         var userRepo = new Mock<IRepository<AppUser>>();
         userRepo.Setup(r => r.GetByIdAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
@@ -103,6 +120,10 @@ public sealed class CrabLotPermissionTests : IAsyncLifetime
         uow.Setup(u => u.CrabLots).Returns(lotRepo.Object);
         uow.Setup(u => u.CrabLotAreas).Returns(linkRepo.Object);
         uow.Setup(u => u.Crabs).Returns(crabRepo.Object);
+        uow.Setup(u => u.MoltingRecords).Returns(
+            Repo(new List<MoltingRecord>(), record => record.Id).Object);
+        uow.Setup(u => u.FarmingRows).Returns(Repo(new List<FarmingRow>(), row => row.Id).Object);
+        uow.Setup(u => u.Boxes).Returns(Repo(new List<Box>(), box => box.Id).Object);
         uow.Setup(u => u.SaveChangesAsync(It.IsAny<CancellationToken>()))
             .Callback(() => _saves++)
             .ReturnsAsync(1);
@@ -164,10 +185,31 @@ public sealed class CrabLotPermissionTests : IAsyncLifetime
         if (_lots.Any(lot => lot.Name == "Lô B mới"))
             failures.Add("FM tạo được lô ở khu không được giao.");
 
+        var savesBeforeClosedDelete = _saves;
+        await Expect(failures, "FM xóa lô đã kết thúc", 409,
+            AppRoles.FarmManager, ManagerA, HttpMethod.Delete,
+            $"/api/crab-lots/{_closedEmptyLot.Id}", "{}");
+        if (_saves != savesBeforeClosedDelete || !_lots.Contains(_closedEmptyLot))
+            failures.Add("Request xóa lô đã kết thúc đã làm thay đổi dữ liệu lịch sử.");
+
         await Expect(failures, "FM tạo lô khu khác", 403, AppRoles.FarmManager, ManagerA, HttpMethod.Post, "/api/crab-lots", createB);
 
         if (lotA is not null)
         {
+            var savesBeforeAddingArea = _saves;
+            var originalName = lotA.Name;
+            var addUnassignedArea =
+                $"{{\"name\":\"Không được đổi\",\"farmingAreaIds\":[\"{AreaA}\",\"{AreaB}\"]}}";
+            await Expect(failures, "FM thêm khu chưa được phân công vào lô", 403,
+                AppRoles.FarmManager, ManagerA, HttpMethod.Put,
+                $"/api/crab-lots/{lotA.Id}", addUnassignedArea);
+            if (_saves != savesBeforeAddingArea
+                || lotA.Name != originalName
+                || _links.Any(link => link.CrabLotId == lotA.Id && link.FarmingAreaId == AreaB))
+            {
+                failures.Add("Request thêm khu chưa được phân công đã thay đổi dữ liệu lô.");
+            }
+
             _crabs.Add(new Crab { CrabLotId = lotA.Id, Code = "CUA-1", Status = CrabStatus.Alive, MoltedAt = null });
             await Expect(failures, "FM kết thúc khi còn cua chưa lột mà không có phương án", 400,
                 AppRoles.FarmManager, ManagerA, HttpMethod.Post, $"/api/crab-lots/{lotA.Id}/close", "{}");
@@ -198,6 +240,28 @@ public sealed class CrabLotPermissionTests : IAsyncLifetime
 
             await Expect(failures, "FA kết thúc lô", 403, AppRoles.FarmAdministrator, AdminA, HttpMethod.Post, $"/api/crab-lots/{lotA.Id}/close", close);
             await Expect(failures, "FS kết thúc lô", 403, AppRoles.FarmStaff, StaffA, HttpMethod.Post, $"/api/crab-lots/{lotA.Id}/close", close);
+
+            _links.Add(new CrabLotArea { CrabLotId = lotA.Id, FarmingAreaId = AreaB });
+            using var partialRead = await Send(
+                AppRoles.FarmManager, ManagerA, HttpMethod.Get, $"/api/crab-lots/{lotA.Id}", "{}");
+            var partialBody = await partialRead.Content.ReadAsStringAsync();
+            if ((int)partialRead.StatusCode != 200
+                || partialBody.Contains(AreaB.ToString(), StringComparison.OrdinalIgnoreCase)
+                || !partialBody.Contains("\"isPartialScope\":true", StringComparison.OrdinalIgnoreCase))
+            {
+                failures.Add("READ lô nhiều khu làm lộ khu ngoài phạm vi hoặc không đánh dấu dữ liệu một phần.");
+            }
+
+            var savesBeforePartialManage = _saves;
+            await Expect(failures, "FM chỉ có khu A sửa lô A+B", 403,
+                AppRoles.FarmManager, ManagerA, HttpMethod.Put, $"/api/crab-lots/{lotA.Id}",
+                "{\"name\":\"Không được sửa toàn lô\"}");
+            await Expect(failures, "FM chỉ có khu A xóa lô A+B", 403,
+                AppRoles.FarmManager, ManagerA, HttpMethod.Delete, $"/api/crab-lots/{lotA.Id}", "{}");
+            await Expect(failures, "FM chỉ có khu A kết thúc lô A+B", 403,
+                AppRoles.FarmManager, ManagerA, HttpMethod.Post, $"/api/crab-lots/{lotA.Id}/close", close);
+            if (_saves != savesBeforePartialManage || lotA.Name != closedName)
+                failures.Add("Request MANAGE lô nhiều khu bị từ chối vẫn thay đổi dữ liệu.");
         }
 
         Assert.True(failures.Count == 0, string.Join(Environment.NewLine, failures));

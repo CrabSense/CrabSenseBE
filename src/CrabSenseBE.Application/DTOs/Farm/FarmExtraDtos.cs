@@ -27,7 +27,14 @@ public record CrabLotDto(
     DateTime? ClosedAt = null,
     int? UnmoltedCountAtClose = null,
     string? CloseDisposition = null,
-    IReadOnlyList<Guid>? FarmingAreaIds = null);
+    IReadOnlyList<Guid>? FarmingAreaIds = null,
+    bool IsPartialScope = false,
+    int? RegisteredCountAtClose = null,
+    int? AliveCountAtClose = null,
+    int? MoltedCountAtClose = null,
+    int? HarvestedCountAtClose = null,
+    int? DeadCountAtClose = null,
+    int? UnstockedCountAtClose = null);
 
 public record NextCrabLotCodeDto(string Code);
 
@@ -73,14 +80,6 @@ public record UpdateCrabLotRequest(
     IReadOnlyList<Guid>? FarmingAreaIds = null);
 
 public record CloseCrabLotRequest(string? Disposition = null, DateTime? ClosedAt = null);
-
-// --- CropBatch ---
-public record CropBatchDto(
-    Guid Id, string BatchCode, DateTime StartDate, DateTime? EndDate, string? Status, string? Notes);
-
-/// <summary>Create crop batch. Required: BatchCode, StartDate.</summary>
-public record CreateCropBatchRequest(string BatchCode, DateTime StartDate, string? Notes);
-public record UpdateCropBatchRequest(DateTime? EndDate, string? Status, string? Notes);
 
 // --- Allocation ---
 public record CrabBoxAllocationDto(

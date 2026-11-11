@@ -52,6 +52,9 @@ public interface IHarvestService
     Task<ApiResponse<HarvestVoucherDetailDto>> ExecuteAsync(
         Guid id, ExecuteHarvestRequest request, CancellationToken ct = default);
 
+    Task<ApiResponse<HarvestVoucherDetailDto>> RequestAdjustmentAsync(
+        Guid id, RequestHarvestAdjustmentRequest request, CancellationToken ct = default);
+
     Task<ApiResponse<HarvestVoucherDetailDto>> ConfirmAsync(
         Guid id, ConfirmHarvestRequest request, CancellationToken ct = default);
 

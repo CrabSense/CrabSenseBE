@@ -128,7 +128,6 @@ public sealed class FarmCreateSchemaFilter : ISchemaFilter
                 ("condition", new OpenApiString("normal")),
                 ("moltingStage", new OpenApiString("hard-shell")));
             Describe(schema, "crabLotId", $"Required — lô. Sample: {sample.LotCode}");
-            // Describe(schema, "cropBatchId", $"Required — vụ nuôi. Sample: {sample.BatchCode}");
             Describe(schema, "boxId", $"Hộp — Row/Area auto. Sample: {sample.BoxCode}");
             Describe(schema, "farmingRowId",
                 $"Auto from box if omitted. Sample: {sample.RowName} ({sample.RowId})");
@@ -142,7 +141,6 @@ public sealed class FarmCreateSchemaFilter : ISchemaFilter
             Describe(schema, "imageUrls",
                 "Optional. Public S3 URLs from POST /api/crabs/images. Multiple photos OK.");
             ForceUuid(schema, "crabLotId");
-            ForceUuid(schema, "cropBatchId");
             ForceUuid(schema, "boxId");
             ForceUuid(schema, "farmingRowId");
             ForceUuid(schema, "farmingAreaId");
@@ -233,10 +231,6 @@ public sealed class FarmCreateSchemaFilter : ISchemaFilter
                 .OrderBy(l => l.ImportDate)
                 .Select(l => new { l.Id, l.LotCode })
                 .FirstOrDefault();
-            // var batch = db.CropBatches.AsNoTracking()
-            //     .OrderBy(b => b.StartDate)
-            //     .Select(b => new { b.Id, b.BatchCode })
-            //     .FirstOrDefault();
             var crab = box is null
                 ? null
                 : db.Crabs.AsNoTracking()
@@ -253,8 +247,6 @@ public sealed class FarmCreateSchemaFilter : ISchemaFilter
                 BoxCode: box?.Code ?? "(create box first)",
                 LotId: lot?.Id ?? DemoGuid(4),
                 LotCode: lot?.LotCode ?? "(create crab-lot first)",
-                // BatchId: batch?.Id ?? DemoGuid(5),
-                // BatchCode: batch?.BatchCode ?? "(create crop-batch first)",
                 CrabId: crab?.Id ?? DemoGuid(5));
         }
         catch
@@ -271,7 +263,6 @@ public sealed class FarmCreateSchemaFilter : ISchemaFilter
         Guid RowId, string RowName,
         Guid BoxId, string BoxCode,
         Guid LotId, string LotCode,
-        // Guid BatchId, string BatchCode,
         Guid CrabId)
     {
         public static HierarchySample Fallback() => new(

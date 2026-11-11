@@ -121,11 +121,83 @@ public sealed class FarmAreaScopeTests
         uow.Setup(unit => unit.CrabLots).Returns(lots.Object);
         uow.Setup(unit => unit.CrabLotAreas).Returns(links.Object);
         uow.Setup(unit => unit.Crabs).Returns(RepositoryWithAll<Crab>().Object);
+        uow.Setup(unit => unit.FarmingRows).Returns(RepositoryWithAll<FarmingRow>().Object);
+        uow.Setup(unit => unit.Boxes).Returns(RepositoryWithAll<Box>().Object);
         var service = new FarmLotService(uow.Object, Mock.Of<IPublicImageStorage>(), current.Object);
 
         var response = await service.GetLotsAsync();
 
         response.Data.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Partially_scoped_lot_read_hides_other_area_and_global_totals()
+    {
+        var userId = Guid.NewGuid();
+        var areaA = Guid.NewGuid();
+        var areaB = Guid.NewGuid();
+        var rowA = Guid.NewGuid();
+        var rowB = Guid.NewGuid();
+        var boxA = Guid.NewGuid();
+        var boxB = Guid.NewGuid();
+        var lotId = Guid.NewGuid();
+        var current = new Mock<ICurrentUserService>();
+        current.SetupGet(service => service.IsAuthenticated).Returns(true);
+        current.SetupGet(service => service.UserId).Returns(userId);
+        var uow = new Mock<IUnitOfWork>();
+        uow.Setup(unit => unit.Users).Returns(RepositoryWithAll(new AppUser
+        {
+            Id = userId,
+            Username = "manager-a",
+            Role = UserRole.FarmManager,
+            IsActive = true
+        }).Object);
+        var assignments = new Mock<IRepository<FarmManagerAssignment>>();
+        assignments.Setup(repo => repo.FirstOrDefaultAsync(
+                It.IsAny<System.Linq.Expressions.Expression<Func<FarmManagerAssignment, bool>>>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new FarmManagerAssignment
+            {
+                ManagerUserId = userId,
+                FarmingAreaId = areaA
+            });
+        uow.Setup(unit => unit.FarmManagerAssignments).Returns(assignments.Object);
+        var lot = new CrabLot
+        {
+            Id = lotId,
+            LotCode = "LOT-AB",
+            Name = "Lô A+B",
+            Quantity = 20,
+            SupplierName = "Không được lộ",
+            TotalWeightKg = 10
+        };
+        var lots = RepositoryWithAll(lot);
+        lots.Setup(repo => repo.GetByIdAsync(lotId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(lot);
+        uow.Setup(unit => unit.CrabLots).Returns(lots.Object);
+        uow.Setup(unit => unit.CrabLotAreas).Returns(RepositoryWithAll(
+            new CrabLotArea { CrabLotId = lotId, FarmingAreaId = areaA },
+            new CrabLotArea { CrabLotId = lotId, FarmingAreaId = areaB }).Object);
+        uow.Setup(unit => unit.FarmingRows).Returns(RepositoryWithAll(
+            new FarmingRow { Id = rowA, FarmingAreaId = areaA },
+            new FarmingRow { Id = rowB, FarmingAreaId = areaB }).Object);
+        uow.Setup(unit => unit.Boxes).Returns(RepositoryWithAll(
+            new Box { Id = boxA, FarmingRowId = rowA, Code = "BOX-A" },
+            new Box { Id = boxB, FarmingRowId = rowB, Code = "BOX-B" }).Object);
+        uow.Setup(unit => unit.Crabs).Returns(RepositoryWithAll(
+            new Crab { CrabLotId = lotId, BoxId = boxA, Code = "CRAB-A" },
+            new Crab { CrabLotId = lotId, BoxId = boxB, Code = "CRAB-B" }).Object);
+        var service = new FarmLotService(
+            uow.Object, Mock.Of<IPublicImageStorage>(), current.Object);
+
+        var result = await service.GetLotByIdAsync(lotId);
+
+        result.Data!.IsPartialScope.Should().BeTrue();
+        result.Data.FarmingAreaIds.Should().Equal(areaA);
+        result.Data.PlacedCount.Should().Be(1);
+        result.Data.Quantity.Should().Be(1);
+        result.Data.SupplierName.Should().BeNull();
+        result.Data.TotalWeightKg.Should().BeNull();
     }
 
     [Fact]
@@ -293,6 +365,8 @@ public sealed class FarmAreaScopeTests
         var repository = new Mock<IRepository<T>>();
         repository.Setup(repo => repo.GetAllAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(items);
+        repository.Setup(repo => repo.GetByIdAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((Guid id, CancellationToken _) => items.FirstOrDefault(item => item.Id == id));
         return repository;
     }
 }

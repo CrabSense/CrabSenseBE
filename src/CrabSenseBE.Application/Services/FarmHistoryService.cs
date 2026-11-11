@@ -80,6 +80,16 @@ public class FarmHistoryService : IFarmHistoryService
         if (!area.IsActive)
             throw AppException.BadRequest($"Farming area '{area.Name}' is inactive.");
 
+        if (crab.CrabLotId == Guid.Empty)
+            throw AppException.BadRequest("Cua chưa được gắn Crab Lot.");
+        _ = await CrabLotRegistrationGuard.EnsureLotAllowsBoxAsync(
+            _uow, crab.CrabLotId, boxId, ct);
+        if (previousBoxId != Guid.Empty)
+        {
+            _ = await CrabLotRegistrationGuard.EnsureLotAllowsBoxAsync(
+                _uow, crab.CrabLotId, previousBoxId, ct);
+        }
+
         if (req.SourceBoxId is Guid src && src != Guid.Empty)
         {
             var current = GetCrabBoxId(crab);
@@ -207,6 +217,7 @@ public class FarmHistoryService : IFarmHistoryService
         var a = await _uow.CrabBoxAllocations.GetByIdAsync(id, ct)
             ?? throw AppException.NotFound("Allocation");
         await _areas.EnsureBoxAsync(a.BoxId, manage: false, ct);
+        var previous = JsonSerializer.Serialize(a);
 
         if (req.StartTime.HasValue)
             a.StartTime = req.StartTime.Value;
@@ -220,6 +231,13 @@ public class FarmHistoryService : IFarmHistoryService
             throw AppException.BadRequest("EndTime must be >= StartTime.");
 
         _uow.CrabBoxAllocations.Update(a);
+        await AddCorrectionAsync(
+            a.CrabId, "allocation", a.Id, "update",
+            previous, JsonSerializer.Serialize(a),
+            string.IsNullOrWhiteSpace(req.Notes)
+                ? "Farm Manager corrected allocation history."
+                : req.Notes.Trim(),
+            ct);
         await _uow.SaveChangesAsync(ct);
         return ApiResponse<CrabBoxAllocationDto>.Ok(MapAlloc(a), "Allocation updated.");
     }
@@ -232,10 +250,8 @@ public class FarmHistoryService : IFarmHistoryService
         if (a.EndTime is null)
             throw AppException.BadRequest(
                 "Cannot delete an open allocation (EndTime=null). Close it first or move the crab.");
-
-        _uow.CrabBoxAllocations.Remove(a);
-        await _uow.SaveChangesAsync(ct);
-        return ApiResponse.Ok("Allocation deleted.");
+        throw AppException.Conflict(
+            "Lịch sử phân hộp đã xác nhận không được xóa vĩnh viễn. Hãy sửa bản ghi để giữ audit.");
     }
 
     // ─── Molting ────────────────────────────────────────────────────────────
@@ -660,6 +676,7 @@ public class FarmHistoryService : IFarmHistoryService
         var h = await _uow.BoxStatusHistories.GetByIdAsync(id, ct)
             ?? throw AppException.NotFound("BoxStatusHistory");
         await _areas.EnsureBoxAsync(h.BoxId, manage: false, ct);
+        var previous = JsonSerializer.Serialize(h);
 
         if (req.OldStatus is not null) h.OldStatus = req.OldStatus;
         if (req.NewStatus is not null)
@@ -675,6 +692,16 @@ public class FarmHistoryService : IFarmHistoryService
         if (req.Reason is not null) h.Reason = req.Reason;
 
         _uow.BoxStatusHistories.Update(h);
+        await ConfigAudit.WriteAsync(
+            _uow, CurrentUserId(), "CorrectBoxStatusHistory",
+            "BoxStatusHistory", h.Id,
+            JsonSerializer.Serialize(new
+            {
+                Previous = previous,
+                Current = JsonSerializer.Serialize(h),
+                Reason = req.Reason
+            }),
+            ct);
         await _uow.SaveChangesAsync(ct);
         return ApiResponse<BoxStatusHistoryDto>.Ok(MapStatusHist(h), "Box status history updated.");
     }
@@ -684,9 +711,8 @@ public class FarmHistoryService : IFarmHistoryService
         var h = await _uow.BoxStatusHistories.GetByIdAsync(id, ct)
             ?? throw AppException.NotFound("BoxStatusHistory");
         await _areas.EnsureBoxAsync(h.BoxId, manage: false, ct);
-        _uow.BoxStatusHistories.Remove(h);
-        await _uow.SaveChangesAsync(ct);
-        return ApiResponse.Ok("Box status history deleted (box current status unchanged).");
+        throw AppException.Conflict(
+            "Lịch sử trạng thái hộp đã xác nhận không được xóa vĩnh viễn. Hãy sửa bản ghi để giữ audit.");
     }
 
     public async Task<ApiResponse<IEnumerable<BoxFarmingEventDto>>> GetBoxFarmingTimelineAsync(

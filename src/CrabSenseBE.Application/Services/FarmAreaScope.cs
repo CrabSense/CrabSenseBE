@@ -74,6 +74,20 @@ public sealed class FarmAreaScope
             throw AppException.Forbidden("Chỉ Farm Administrator được phân công khu này mới được sửa cấu trúc.");
     }
 
+    public async Task EnsureAllAssignedAsync(
+        IEnumerable<Guid> areaIds,
+        CancellationToken ct)
+    {
+        var required = areaIds.Where(id => id != Guid.Empty).Distinct().ToArray();
+        var allowed = await AreaIdsAsync(ct);
+        if (allowed is null) return;
+        if (required.Length == 0 || required.Any(id => !allowed.Contains(id)))
+        {
+            throw AppException.Forbidden(
+                "Bạn phải được phân công tất cả khu của Crab Lot để quản lý toàn lô.");
+        }
+    }
+
     public async Task<AppUser?> CurrentUserAsync(CancellationToken ct)
     {
         if (_currentUser is null)

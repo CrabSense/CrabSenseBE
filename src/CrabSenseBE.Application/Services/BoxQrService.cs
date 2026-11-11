@@ -184,14 +184,32 @@ public class BoxQrService : IBoxQrService
         // Chỉ cho sửa cua đang thuộc hộp của tem vừa quét (tránh nhầm hộp)
         if (GetCrabBoxId(crab) != qr.BoxId)
             throw AppException.BadRequest("Cua không thuộc hộp của mã QR này.");
+        if (crab.Status is CrabStatus.Dead or CrabStatus.Harvested or CrabStatus.Sold)
+            throw AppException.Conflict(
+                "Cua đã có trạng thái cuối cùng; chỉ được sửa qua quy trình correction có audit.");
+        if (req.IsAlive.HasValue)
+            throw AppException.BadRequest(
+                "Không đổi trạng thái sống/chết qua QR. Dùng API mortality hoặc correction tương ứng.");
+        if (req.MoltedAt.HasValue || req.MoltingStage is not null)
+            throw AppException.BadRequest(
+                "Không ghi nhận lột xác qua cập nhật QR chung. Dùng API molting để giữ lịch sử.");
 
+        var previousWeight = crab.WeightGram;
         if (req.Tag is not null) crab.Tag = req.Tag;
         if (req.WeightGram.HasValue) crab.WeightGram = req.WeightGram;
-        if (req.MoltingStage is not null) crab.MoltingStage = req.MoltingStage;
-        if (req.IsAlive.HasValue) crab.Status = req.IsAlive.Value ? CrabStatus.Alive : CrabStatus.Dead;
-        if (req.MoltedAt.HasValue) crab.MoltedAt = req.MoltedAt;
 
         _uow.Crabs.Update(crab);
+        if (req.WeightGram is decimal nextWeight && nextWeight != previousWeight)
+        {
+            await _uow.CrabWeightHistories.AddAsync(new CrabWeightHistory
+            {
+                CrabId = crab.Id,
+                WeightGram = nextWeight,
+                CarapaceWidthMm = crab.CarapaceWidthMm,
+                CarapaceLengthMm = crab.CarapaceLengthMm,
+                Source = "box-qr"
+            }, ct);
+        }
         await _uow.SaveChangesAsync(ct);
 
         var boxId = GetCrabBoxId(crab);
@@ -249,6 +267,12 @@ public class BoxQrService : IBoxQrService
         await _areas.EnsureBoxAsync(targetBoxId, manage: false, ct);
         var targetRow = await _uow.FarmingRows.GetByIdAsync(targetBox.FarmingRowId, ct)
             ?? throw AppException.NotFound("FarmingRow");
+        if (crab.CrabLotId == Guid.Empty)
+            throw AppException.BadRequest("Cua chưa được gắn Crab Lot.");
+        _ = await CrabLotRegistrationGuard.EnsureLotAllowsBoxAsync(
+            _uow, crab.CrabLotId, sourceQr.BoxId.Value, ct);
+        _ = await CrabLotRegistrationGuard.EnsureLotAllowsBoxAsync(
+            _uow, crab.CrabLotId, targetBoxId, ct);
 
         // Tái sử dụng logic allocation (đóng cũ / mở mới / cập nhật box)
         return await _history.AllocateCrabAsync(
@@ -282,6 +306,8 @@ public class BoxQrService : IBoxQrService
     private static Guid GetCrabBoxId(Crab c) =>
         c.BoxAllocations
          .OrderByDescending(a => a.StartTime)
-         .FirstOrDefault()?.BoxId ?? Guid.Empty;
+         .FirstOrDefault()?.BoxId
+         ?? c.BoxId
+         ?? Guid.Empty;
 }
 

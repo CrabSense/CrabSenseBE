@@ -14,8 +14,13 @@ public class CrabConditionService : ICrabConditionService
     private static readonly JsonSerializerOptions JsonOpts = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
 
     private readonly IUnitOfWork _uow;
+    private readonly FarmAreaScope _areas;
 
-    public CrabConditionService(IUnitOfWork uow) => _uow = uow;
+    public CrabConditionService(IUnitOfWork uow, ICurrentUserService currentUser)
+    {
+        _uow = uow;
+        _areas = new FarmAreaScope(uow, currentUser);
+    }
 
     public Task<ApiResponse<CrabConditionDto>> EvaluateAsync(
         EvaluateCrabConditionRequest req, CancellationToken ct = default)
@@ -55,6 +60,7 @@ public class CrabConditionService : ICrabConditionService
             throw AppException.BadRequest("BoxId is required.");
 
         _ = await _uow.Boxes.GetByIdAsync(req.BoxId, ct) ?? throw AppException.NotFound("Box");
+        await _areas.EnsureBoxAsync(req.BoxId, manage: false, ct);
 
         CrabConditionDto eval;
         try
@@ -76,6 +82,16 @@ public class CrabConditionService : ICrabConditionService
         if (req.CrabId is Guid crabId && crabId != Guid.Empty)
         {
             var crab = await _uow.Crabs.GetByIdAsync(crabId, ct) ?? throw AppException.NotFound("Crab");
+            var currentBoxId = crab.BoxId
+                ?? (await _uow.CrabBoxAllocations.FindAsync(
+                        allocation => allocation.CrabId == crab.Id
+                            && allocation.EndTime == null,
+                        ct))
+                    .OrderByDescending(allocation => allocation.StartTime)
+                    .FirstOrDefault()?.BoxId;
+            if (currentBoxId != req.BoxId)
+                throw AppException.BadRequest(
+                    "Cua không thuộc hộp được kiểm tra.");
             if (req.UpdateCrabRecord)
             {
                 crab.WeightGram = req.WeightG;
@@ -195,6 +211,7 @@ public class CrabConditionService : ICrabConditionService
     public async Task<ApiResponse<IEnumerable<CrabConditionDto>>> ListByBoxAsync(
         Guid boxId, CancellationToken ct = default)
     {
+        await _areas.EnsureBoxAsync(boxId, manage: false, ct);
         var list = (await _uow.Inspections.FindAsync(
                 i => i.BoxId == boxId && i.InspectionType == InspectionTypeCondition, ct))
             .OrderByDescending(i => i.InspectedAt)
@@ -209,6 +226,9 @@ public class CrabConditionService : ICrabConditionService
             ?? throw AppException.NotFound("CrabCondition");
         if (!string.Equals(entity.InspectionType, InspectionTypeCondition, StringComparison.OrdinalIgnoreCase))
             throw AppException.NotFound("CrabCondition");
+        if (entity.BoxId is not Guid boxId)
+            throw AppException.Forbidden("Bản ghi chưa xác định hộp và khu sở hữu.");
+        await _areas.EnsureBoxAsync(boxId, manage: false, ct);
         return ApiResponse<CrabConditionDto>.Ok(MapInspection(entity));
     }
 

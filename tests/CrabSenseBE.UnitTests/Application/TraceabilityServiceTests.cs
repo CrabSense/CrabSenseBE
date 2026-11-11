@@ -276,6 +276,31 @@ public class TraceabilityServiceTests
         result.Data.ApprovalStatus.Should().Be("Pending");
     }
 
+    [Theory]
+    [InlineData(HarvestStatus.PendingApproval)]
+    [InlineData(HarvestStatus.Approved)]
+    [InlineData(HarvestStatus.InProgress)]
+    public async Task EnsureHarvestVoucherQr_RejectsVoucherBeforeFinalConfirmation(
+        HarvestStatus status)
+    {
+        var voucherId = Guid.NewGuid();
+        var voucherRepo = new Mock<IRepository<HarvestVoucher>>();
+        voucherRepo.Setup(repo => repo.GetByIdAsync(
+                voucherId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new HarvestVoucher
+            {
+                Id = voucherId,
+                VoucherCode = "HV-NOT-COMPLETED",
+                Status = status
+            });
+        _uow.Setup(unit => unit.HarvestVouchers).Returns(voucherRepo.Object);
+
+        var act = () => Create().EnsureHarvestVoucherQrAsync(voucherId);
+
+        (await act.Should().ThrowAsync<AppException>()).Which.StatusCode.Should().Be(409);
+        _uow.Verify(unit => unit.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Never);
+    }
+
     // ─────────────────────────────────────────────────────────────────────────
     // GetTraceabilityAsync — frozen_lot
     // ─────────────────────────────────────────────────────────────────────────

@@ -15,13 +15,21 @@ public sealed class KioskProvisioningService : IKioskProvisioningService
     private static readonly char[] Alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789".ToCharArray();
 
     private readonly IUnitOfWork _uow;
+    private readonly FarmAreaScope _areas;
 
-    public KioskProvisioningService(IUnitOfWork uow) => _uow = uow;
+    public KioskProvisioningService(
+        IUnitOfWork uow,
+        ICurrentUserService currentUser)
+    {
+        _uow = uow;
+        _areas = new FarmAreaScope(uow, currentUser);
+    }
 
     public async Task<ApiResponse<KioskCreatedDto>> CreateAsync(CreateKioskRequest request, CancellationToken ct = default)
     {
         var area = await _uow.FarmingAreas.GetByIdAsync(request.FarmingAreaId, ct)
             ?? throw AppException.NotFound("FarmingArea");
+        await _areas.EnsureReadAsync(area.Id, ct);
 
         var kiosk = new FarmKiosk
         {
@@ -39,6 +47,7 @@ public sealed class KioskProvisioningService : IKioskProvisioningService
 
     public async Task<ApiResponse<IReadOnlyList<KioskListItemDto>>> ListAsync(Guid farmingAreaId, CancellationToken ct = default)
     {
+        await _areas.EnsureReadAsync(farmingAreaId, ct);
         var kiosks = (await _uow.FarmKiosks.FindAsync(k => k.FarmingAreaId == farmingAreaId, ct))
             .OrderBy(k => k.Code)
             .ToList();
@@ -59,6 +68,7 @@ public sealed class KioskProvisioningService : IKioskProvisioningService
     {
         var kiosk = await _uow.FarmKiosks.GetByIdAsync(kioskId, ct)
             ?? throw AppException.NotFound("Kiosk");
+        await _areas.EnsureReadAsync(kiosk.FarmingAreaId, ct);
         if (kiosk.Status == "Revoked")
             throw AppException.Conflict("Kiosk is revoked.");
 
@@ -118,13 +128,7 @@ public sealed class KioskProvisioningService : IKioskProvisioningService
 
     public async Task<ApiResponse<KioskSessionDto>> TouchAsync(string secret, string? lanIp, CancellationToken ct = default)
     {
-        var credential = await FindCredentialAsync(secret, ct);
-        var kiosk = await _uow.FarmKiosks.GetByIdAsync(credential.KioskId, ct)
-            ?? throw AppException.NotFound("Kiosk");
-        if (kiosk.Status == "Revoked")
-            throw AppException.Forbidden("Kiosk is revoked.");
-        var area = await _uow.FarmingAreas.GetByIdAsync(kiosk.FarmingAreaId, ct)
-            ?? throw AppException.NotFound("FarmingArea");
+        var (kiosk, area) = await GetActiveSessionEntitiesAsync(secret, ct);
 
         kiosk.Status = "Online";
         kiosk.LastSeenAt = DateTime.UtcNow;
@@ -135,10 +139,34 @@ public sealed class KioskProvisioningService : IKioskProvisioningService
             new KioskSessionDto(kiosk.Id, kiosk.Code, area.Code, kiosk.Status));
     }
 
+    public async Task<ApiResponse<KioskSessionDto>> GetSessionAsync(
+        string secret,
+        CancellationToken ct = default)
+    {
+        var (kiosk, area) = await GetActiveSessionEntitiesAsync(secret, ct);
+        return ApiResponse<KioskSessionDto>.Ok(
+            new KioskSessionDto(kiosk.Id, kiosk.Code, area.Code, kiosk.Status));
+    }
+
+    private async Task<(FarmKiosk Kiosk, FarmingArea Area)> GetActiveSessionEntitiesAsync(
+        string secret,
+        CancellationToken ct)
+    {
+        var credential = await FindCredentialAsync(secret, ct);
+        var kiosk = await _uow.FarmKiosks.GetByIdAsync(credential.KioskId, ct)
+            ?? throw AppException.NotFound("Kiosk");
+        if (kiosk.Status == "Revoked")
+            throw AppException.Forbidden("Kiosk is revoked.");
+        var area = await _uow.FarmingAreas.GetByIdAsync(kiosk.FarmingAreaId, ct)
+            ?? throw AppException.NotFound("FarmingArea");
+        return (kiosk, area);
+    }
+
     public async Task<ApiResponse<KioskListItemDto>> RevokeAsync(Guid kioskId, CancellationToken ct = default)
     {
         var kiosk = await _uow.FarmKiosks.GetByIdAsync(kioskId, ct)
             ?? throw AppException.NotFound("Kiosk");
+        await _areas.EnsureReadAsync(kiosk.FarmingAreaId, ct);
         var now = DateTime.UtcNow;
         kiosk.Status = "Revoked";
         await RevokeOpenCodesAsync(kiosk.Id, ct);
@@ -151,8 +179,9 @@ public sealed class KioskProvisioningService : IKioskProvisioningService
 
     public async Task<ApiResponse<KioskResetDto>> DeleteAsync(Guid kioskId, CancellationToken ct = default)
     {
-        _ = await _uow.FarmKiosks.GetByIdAsync(kioskId, ct)
+        var kiosk = await _uow.FarmKiosks.GetByIdAsync(kioskId, ct)
             ?? throw AppException.NotFound("Kiosk");
+        await _areas.EnsureReadAsync(kiosk.FarmingAreaId, ct);
         return await RemoveKiosksAsync(new[] { kioskId }, ct);
     }
 
@@ -160,6 +189,7 @@ public sealed class KioskProvisioningService : IKioskProvisioningService
     {
         _ = await _uow.FarmingAreas.GetByIdAsync(farmingAreaId, ct)
             ?? throw AppException.NotFound("FarmingArea");
+        await _areas.EnsureReadAsync(farmingAreaId, ct);
         var ids = (await _uow.FarmKiosks.FindAsync(k => k.FarmingAreaId == farmingAreaId, ct))
             .Select(k => k.Id);
         return await RemoveKiosksAsync(ids, ct);
@@ -265,6 +295,7 @@ public sealed class KioskProvisioningService : IKioskProvisioningService
         Guid farmingAreaId,
         CancellationToken ct = default)
     {
+        await _areas.EnsureReadAsync(farmingAreaId, ct);
         var kiosks = (await _uow.FarmKiosks.FindAsync(k => k.FarmingAreaId == farmingAreaId, ct))
             .ToDictionary(k => k.Id);
         var devices = (await _uow.Devices.GetAllAsync(ct))
@@ -279,6 +310,7 @@ public sealed class KioskProvisioningService : IKioskProvisioningService
     {
         var device = await _uow.Devices.GetByIdAsync(deviceId, ct)
             ?? throw AppException.NotFound("Device");
+        await EnsureDeviceAccessAsync(device, ct);
         if (device.EdgeState == "Revoked")
             throw AppException.Conflict("Controller is revoked.");
         var secret = Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
@@ -295,6 +327,7 @@ public sealed class KioskProvisioningService : IKioskProvisioningService
     {
         var device = await _uow.Devices.GetByIdAsync(deviceId, ct)
             ?? throw AppException.NotFound("Device");
+        await EnsureDeviceAccessAsync(device, ct);
         device.EdgeState = "Rejected";
         device.PendingSecret = null;
         device.CredentialHash = null;
@@ -310,6 +343,15 @@ public sealed class KioskProvisioningService : IKioskProvisioningService
             return null;
         var kiosk = await _uow.FarmKiosks.GetByIdAsync(id, ct);
         return kiosk?.Code;
+    }
+
+    private async Task EnsureDeviceAccessAsync(Device device, CancellationToken ct)
+    {
+        if (device.KioskId is not Guid kioskId)
+            throw AppException.Forbidden("Controller chưa gắn kiosk và khu sở hữu.");
+        var kiosk = await _uow.FarmKiosks.GetByIdAsync(kioskId, ct)
+            ?? throw AppException.NotFound("Kiosk");
+        await _areas.EnsureReadAsync(kiosk.FarmingAreaId, ct);
     }
 
     private static EdgeControllerDto MapController(Device device, string? kioskCode) =>

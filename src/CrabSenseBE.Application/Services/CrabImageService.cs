@@ -10,11 +10,16 @@ public class CrabImageService : ICrabImageService
 {
     private readonly IUnitOfWork _uow;
     private readonly IPublicImageStorage _storage;
+    private readonly FarmAreaScope _areas;
 
-    public CrabImageService(IUnitOfWork uow, IPublicImageStorage storage)
+    public CrabImageService(
+        IUnitOfWork uow,
+        IPublicImageStorage storage,
+        ICurrentUserService currentUser)
     {
         _uow = uow;
         _storage = storage;
+        _areas = new FarmAreaScope(uow, currentUser);
     }
 
     public async Task<ApiResponse<IReadOnlyList<CrabImageDto>>> UploadAsync(
@@ -32,6 +37,10 @@ public class CrabImageService : ICrabImageService
         {
             voucher = await _uow.HarvestVouchers.GetByIdAsync(voucherId, ct)
                 ?? throw AppException.NotFound("HarvestVoucher");
+            if (voucher.FarmingAreaId is not Guid voucherAreaId
+                || voucherAreaId == Guid.Empty)
+                throw AppException.Forbidden("Không xác định được khu của phiếu thu hoạch.");
+            await _areas.EnsureAsync(voucherAreaId, manage: false, ct);
             var voucherUrls = JsonStringList.Parse(voucher.PhotoUrlsJson);
             if (voucherUrls.Count + files.Count > ImageUploadRules.MaxUrls)
                 throw AppException.BadRequest($"A harvest voucher can have at most {ImageUploadRules.MaxUrls} images.");
@@ -41,6 +50,7 @@ public class CrabImageService : ICrabImageService
         if (crabId is Guid id && id != Guid.Empty)
         {
             crab = await _uow.Crabs.GetByIdAsync(id, ct) ?? throw AppException.NotFound("Crab");
+            await EnsureCrabAreaAsync(crab, ct);
             var existing = JsonStringList.Parse(crab.ImageUrlsJson);
             if (existing.Count + files.Count > ImageUploadRules.MaxUrls)
                 throw AppException.BadRequest($"A crab can have at most {ImageUploadRules.MaxUrls} images.");
@@ -106,6 +116,7 @@ public class CrabImageService : ICrabImageService
                 if (crab is not null && crab.Id == lineCrabId) continue;
                 var lineCrab = await _uow.Crabs.GetByIdAsync(lineCrabId, ct);
                 if (lineCrab is null) continue;
+                await EnsureCrabAreaAsync(lineCrab, ct);
                 lineCrab.ImageUrlsJson = JsonStringList.Serialize(
                     JsonStringList.Merge(lineCrab.ImageUrlsJson, urls, ImageUploadRules.MaxUrls), ImageUploadRules.MaxUrls);
                 _uow.Crabs.Update(lineCrab);
@@ -129,6 +140,7 @@ public class CrabImageService : ICrabImageService
 
         var crab = await _uow.Crabs.GetByIdAsync(crabId, ct);
         if (crab is null) return null;
+        await EnsureCrabAreaAsync(crab, ct);
 
         var urls = JsonStringList.Parse(crab.ImageUrlsJson).ToList();
         var assets = (await _uow.MediaAssets.FindAsync(
@@ -161,5 +173,29 @@ public class CrabImageService : ICrabImageService
         }
 
         return await MediaPhotoResolver.OpenAsync(_storage, url, assetMatch, ct);
+    }
+
+    private async Task EnsureCrabAreaAsync(Crab crab, CancellationToken ct)
+    {
+        if (crab.BoxId is Guid boxId && boxId != Guid.Empty)
+        {
+            await _areas.EnsureBoxAsync(boxId, manage: false, ct);
+            return;
+        }
+
+        var allocation = (await _uow.CrabBoxAllocations.FindAsync(
+                item => item.CrabId == crab.Id, ct))
+            .OrderByDescending(item => item.StartTime)
+            .FirstOrDefault();
+        if (allocation is not null)
+        {
+            await _areas.EnsureBoxAsync(allocation.BoxId, manage: false, ct);
+            return;
+        }
+
+        var lotAreas = await _uow.CrabLotAreas.FindAsync(
+            item => item.CrabLotId == crab.CrabLotId, ct);
+        await _areas.EnsureAllAssignedAsync(
+            lotAreas.Select(item => item.FarmingAreaId), ct);
     }
 }

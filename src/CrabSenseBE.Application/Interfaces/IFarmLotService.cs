@@ -4,7 +4,7 @@ using CrabSenseBE.Application.DTOs.Media;
 
 namespace CrabSenseBE.Application.Interfaces;
 
-/// <summary>CRUD lô cua + vụ nuôi (CropBatch).</summary>
+/// <summary>CRUD lô cua.</summary>
 public interface IFarmLotService
 {
     Task<ApiResponse<IEnumerable<CrabLotDto>>> GetLotsAsync(CancellationToken ct = default);
@@ -20,9 +20,4 @@ public interface IFarmLotService
         Guid? uploadedBy,
         CancellationToken ct = default);
     Task<CrabImageContent?> GetPhotoAsync(Guid lotId, int index, CancellationToken ct = default);
-
-//     Task<ApiResponse<IEnumerable<CropBatchDto>>> GetBatchesAsync(CancellationToken ct = default);
-//     Task<ApiResponse<CropBatchDto>> CreateBatchAsync(CreateCropBatchRequest req, CancellationToken ct = default);
-//     Task<ApiResponse<CropBatchDto>> UpdateBatchAsync(Guid id, UpdateCropBatchRequest req, CancellationToken ct = default);
-//     Task<ApiResponse> DeleteBatchAsync(Guid id, CancellationToken ct = default);
 }
