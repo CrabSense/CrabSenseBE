@@ -19,6 +19,7 @@ public class AppDbContext : DbContext
     public DbSet<Box> Boxes => Set<Box>();
     public DbSet<Crab> Crabs => Set<Crab>();
     public DbSet<CrabLot> CrabLots => Set<CrabLot>();
+    public DbSet<CrabLotArea> CrabLotAreas => Set<CrabLotArea>();
     // public DbSet<CropBatch> CropBatches => Set<CropBatch>();
     public DbSet<OperationLog> OperationLogs => Set<OperationLog>();
     public DbSet<CrabBoxAllocation> CrabBoxAllocations => Set<CrabBoxAllocation>();
@@ -26,6 +27,7 @@ public class AppDbContext : DbContext
     public DbSet<BoxStatusHistory> BoxStatusHistories => Set<BoxStatusHistory>();
     public DbSet<CrabMortalityRecord> CrabMortalityRecords => Set<CrabMortalityRecord>();
     public DbSet<CrabStatusHistory> CrabStatusHistories => Set<CrabStatusHistory>();
+    public DbSet<CrabEventCorrection> CrabEventCorrections => Set<CrabEventCorrection>();
     public DbSet<CrabWeightHistory> CrabWeightHistories => Set<CrabWeightHistory>();
     public DbSet<CrabAiAnalysis> CrabAiAnalyses => Set<CrabAiAnalysis>();
     public DbSet<CrabHarvestHistory> CrabHarvestHistories => Set<CrabHarvestHistory>();
@@ -55,6 +57,8 @@ public class AppDbContext : DbContext
     public DbSet<HarvestVoucher> HarvestVouchers => Set<HarvestVoucher>();
     public DbSet<HarvestLine> HarvestLines => Set<HarvestLine>();
     public DbSet<FrozenLot> FrozenLots => Set<FrozenLot>();
+    public DbSet<FrozenStorageTransaction> FrozenStorageTransactions => Set<FrozenStorageTransaction>();
+    public DbSet<FrozenInventoryAdjustment> FrozenInventoryAdjustments => Set<FrozenInventoryAdjustment>();
     public DbSet<QrCode> QrCodes => Set<QrCode>();
     public DbSet<TraceabilityLink> TraceabilityLinks => Set<TraceabilityLink>();
 
@@ -236,12 +240,78 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<FrozenLot>()
             .Property(f => f.Status)
             .HasConversion<string>();
+        modelBuilder.Entity<QrCode>()
+            .Property(q => q.ApprovalStatus)
+            .HasConversion<string>();
+        modelBuilder.Entity<QrCode>()
+            .Property(q => q.RejectionReason)
+            .HasMaxLength(500);
+        modelBuilder.Entity<QrCode>()
+            .HasIndex(q => new { q.ApprovalStatus, q.IsActive });
+        modelBuilder.Entity<CrabEventCorrection>(entity =>
+        {
+            entity.Property(x => x.EventType).HasMaxLength(32);
+            entity.Property(x => x.Action).HasMaxLength(32);
+            entity.Property(x => x.Reason).HasMaxLength(500);
+            entity.HasIndex(x => new { x.EventType, x.EventId, x.CorrectedAt });
+            entity.HasOne(x => x.Crab)
+                .WithMany()
+                .HasForeignKey(x => x.CrabId)
+                .OnDelete(DeleteBehavior.Restrict);
+        });
+        modelBuilder.Entity<FrozenLot>()
+            .HasIndex(f => f.FarmingAreaId);
+        modelBuilder.Entity<FrozenLot>()
+            .HasOne(f => f.FarmingArea)
+            .WithMany()
+            .HasForeignKey(f => f.FarmingAreaId)
+            .OnDelete(DeleteBehavior.Restrict);
+
+        modelBuilder.Entity<FrozenStorageTransaction>(entity =>
+        {
+            entity.Property(x => x.Type).HasConversion<string>();
+            entity.Property(x => x.Status).HasConversion<string>();
+            entity.Property(x => x.RequestedWeightKg).HasPrecision(12, 3);
+            entity.Property(x => x.ActualWeightKg).HasPrecision(12, 3);
+            entity.Property(x => x.TransactionCode).HasMaxLength(32);
+            entity.Property(x => x.RejectionReason).HasMaxLength(500);
+            entity.HasIndex(x => x.TransactionCode).IsUnique();
+            entity.HasIndex(x => new { x.FarmingAreaId, x.Status });
+            entity.HasOne(x => x.FrozenLot)
+                .WithMany(x => x.StorageTransactions)
+                .HasForeignKey(x => x.FrozenLotId)
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne(x => x.FarmingArea)
+                .WithMany()
+                .HasForeignKey(x => x.FarmingAreaId)
+                .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        modelBuilder.Entity<FrozenInventoryAdjustment>(entity =>
+        {
+            entity.Property(x => x.WeightDeltaKg).HasPrecision(12, 3);
+            entity.Property(x => x.WeightBeforeKg).HasPrecision(12, 3);
+            entity.Property(x => x.WeightAfterKg).HasPrecision(12, 3);
+            entity.HasIndex(x => x.FrozenStorageTransactionId).IsUnique();
+            entity.HasIndex(x => new { x.FarmingAreaId, x.CreatedAt });
+            entity.HasOne(x => x.FrozenLot)
+                .WithMany()
+                .HasForeignKey(x => x.FrozenLotId)
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne(x => x.FrozenStorageTransaction)
+                .WithMany(x => x.Adjustments)
+                .HasForeignKey(x => x.FrozenStorageTransactionId)
+                .OnDelete(DeleteBehavior.Restrict);
+        });
 
         modelBuilder.Entity<HarvestVoucher>()
             .Property(h => h.Status)
             .HasConversion<string>();
         modelBuilder.Entity<HarvestVoucher>()
             .HasIndex(h => h.FarmingAreaId);
+        modelBuilder.Entity<HarvestVoucher>()
+            .Property(h => h.RejectionReason)
+            .HasMaxLength(500);
 
         modelBuilder.Entity<SalesOrder>()
             .Property(o => o.PaymentStatus)
@@ -377,6 +447,23 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<CrabLot>()
             .Property(l => l.TotalCostVnd)
             .HasPrecision(14, 2);
+        modelBuilder.Entity<CrabLot>()
+            .Property(l => l.CloseDisposition)
+            .HasMaxLength(500);
+
+        modelBuilder.Entity<CrabLotArea>()
+            .HasIndex(link => new { link.CrabLotId, link.FarmingAreaId })
+            .IsUnique();
+        modelBuilder.Entity<CrabLotArea>()
+            .HasOne(link => link.CrabLot)
+            .WithMany(lot => lot.Areas)
+            .HasForeignKey(link => link.CrabLotId)
+            .OnDelete(DeleteBehavior.Cascade);
+        modelBuilder.Entity<CrabLotArea>()
+            .HasOne(link => link.FarmingArea)
+            .WithMany()
+            .HasForeignKey(link => link.FarmingAreaId)
+            .OnDelete(DeleteBehavior.Restrict);
 
         modelBuilder.Entity<CrabStatusHistory>()
             .Property(h => h.OldCondition)

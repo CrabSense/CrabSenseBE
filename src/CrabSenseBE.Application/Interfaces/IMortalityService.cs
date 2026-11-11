@@ -21,4 +21,10 @@ public interface IMortalityService
     Task<IReadOnlyList<MortalityRecordDto>>
         GetMortalityRecordsAsync(
             CancellationToken cancellationToken = default);
+
+    Task<MortalityRecordDto> CorrectMortalityAsync(
+        Guid id,
+        Guid correctedBy,
+        CorrectMortalityRequest request,
+        CancellationToken cancellationToken = default);
 }

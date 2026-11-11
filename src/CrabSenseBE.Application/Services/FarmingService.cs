@@ -1289,6 +1289,22 @@ public class FarmingService : IFarmingService
     public async Task<ApiResponse<CrabDto>> UpdateCrabAsync(Guid id, UpdateCrabRequest req, CancellationToken ct = default)
     {
         var crab = await _uow.Crabs.GetByIdAsync(id, ct) ?? throw AppException.NotFound("Crab");
+        await EnsureCrabAreaAsync(crab, ct);
+        if (crab.Status is CrabStatus.Dead or CrabStatus.Harvested or CrabStatus.Sold)
+            throw AppException.Conflict(
+                "Sự kiện chết hoặc thu hoạch đã xác nhận không được sửa qua hồ sơ cua.");
+        if (req.IsAlive == false)
+            throw AppException.BadRequest(
+                "Ghi nhận cua chết phải dùng POST /api/mortality để giữ lịch sử.");
+        if (!string.IsNullOrWhiteSpace(req.Condition))
+        {
+            var requestedCondition = CrabConditions.Parse(req.Condition, crab.Condition);
+            if (requestedCondition is CrabCondition.Dead
+                or CrabCondition.Harvested
+                or CrabCondition.Sold)
+                throw AppException.BadRequest(
+                    "Trạng thái chết/thu hoạch phải dùng quy trình nghiệp vụ riêng.");
+        }
         var oldCondition = crab.Condition;
         var oldStatus = crab.Status;
         var oldWeight = crab.WeightGram;
@@ -1385,26 +1401,12 @@ public class FarmingService : IFarmingService
     public async Task<ApiResponse> DeleteCrabAsync(Guid id, CancellationToken ct = default)
     {
         var crab = await _uow.Crabs.GetByIdAsync(id, ct) ?? throw AppException.NotFound("Crab");
+        await EnsureCrabAreaAsync(crab, ct);
         var alreadyInactive = !IsCrabAlive(crab);
 
         if (!alreadyInactive)
-        {
-            var oldCondition = crab.Condition;
-            var oldStatus = crab.Status;
-            crab.Status = CrabStatus.Dead;
-            crab.Condition = CrabCondition.Dead;
-            await _uow.CrabStatusHistories.AddAsync(new CrabStatusHistory
-            {
-                CrabId = crab.Id,
-                OldCondition = oldCondition,
-                NewCondition = CrabCondition.Dead,
-                OldStatus = oldStatus,
-                NewStatus = CrabStatus.Dead,
-                ChangedAt = DateTime.UtcNow,
-                Source = "system",
-                Reason = "Soft-delete"
-            }, ct);
-        }
+            throw AppException.Conflict(
+                "Không thể xóa cua đang sống. Dùng nghiệp vụ tử vong, thu hoạch hoặc thất lạc phù hợp.");
 
         var boxId = CurrentBoxId(crab);
         await ReleaseCrabFromBoxAsync(crab, "Crab soft-deleted", ct);
@@ -1412,9 +1414,7 @@ public class FarmingService : IFarmingService
         await _uow.SaveChangesAsync(ct);
         var box = boxId == Guid.Empty ? null : await _uow.Boxes.GetByIdAsync(boxId, ct);
         return ApiResponse.Ok(
-            alreadyInactive
-                ? $"Crab already inactive; box '{box?.Code}' freed if empty."
-                : $"Crab soft-deleted (IsAlive=false); box '{box?.Code}' freed if empty.");
+            $"Crab terminal record retained; box '{box?.Code}' freed if empty.");
     }
 
     public async Task<ApiResponse<IReadOnlyList<CrabStatusHistoryDto>>> GetCrabStatusHistoryAsync(
@@ -1447,6 +1447,9 @@ public class FarmingService : IFarmingService
         Guid crabId, RecordCrabWeightRequest req, CancellationToken ct = default)
     {
         var crab = await _uow.Crabs.GetByIdAsync(crabId, ct) ?? throw AppException.NotFound("Crab");
+        await EnsureCrabAreaAsync(crab, ct);
+        if (crab.Status is CrabStatus.Dead or CrabStatus.Harvested or CrabStatus.Sold)
+            throw AppException.Conflict("Không ghi thêm số đo cho cua đã chết hoặc đã thu hoạch.");
         if (req.WeightGram <= 0)
             throw AppException.BadRequest("WeightGram must be greater than 0.");
         if (req.CarapaceWidthMm is <= 0)
@@ -1484,6 +1487,9 @@ public class FarmingService : IFarmingService
         var row = await _uow.CrabWeightHistories.GetByIdAsync(weightId, ct)
             ?? throw AppException.NotFound("CrabWeightHistory");
         if (row.CrabId != crabId) throw AppException.NotFound("CrabWeightHistory");
+        var crab = await _uow.Crabs.GetByIdAsync(crabId, ct)
+            ?? throw AppException.NotFound("Crab");
+        await EnsureCrabAreaAsync(crab, ct);
         if (req.Notes is not null) row.Notes = req.Notes;
         _uow.CrabWeightHistories.Update(row);
         await _uow.SaveChangesAsync(ct);
@@ -2671,6 +2677,34 @@ public class FarmingService : IFarmingService
     }
 
     private static Guid CurrentBoxId(Crab c) => ResolveCurrentBoxId(c);
+
+    private async Task EnsureCrabAreaAsync(Crab crab, CancellationToken ct)
+    {
+        var scope = await ScopeAreaIdsAsync(ct);
+        if (scope is null) return;
+        if (crab.BoxId is Guid boxId)
+        {
+            var box = await _uow.Boxes.GetByIdAsync(boxId, ct)
+                ?? throw AppException.NotFound("Box");
+            await EnsureAreaAsync(await AreaIdOfBoxAsync(box, ct), manage: false, ct);
+            return;
+        }
+        var latest = (await _uow.CrabBoxAllocations.FindAsync(
+                allocation => allocation.CrabId == crab.Id, ct))
+            .OrderByDescending(allocation => allocation.StartTime)
+            .FirstOrDefault();
+        if (latest is not null)
+        {
+            var box = await _uow.Boxes.GetByIdAsync(latest.BoxId, ct)
+                ?? throw AppException.NotFound("Box");
+            await EnsureAreaAsync(await AreaIdOfBoxAsync(box, ct), manage: false, ct);
+            return;
+        }
+        var lotAreas = await _uow.CrabLotAreas.FindAsync(
+            link => link.CrabLotId == crab.CrabLotId, ct);
+        if (!lotAreas.Any(link => scope.Contains(link.FarmingAreaId)))
+            throw AppException.Forbidden("Bạn không được phân công khu của cua này.");
+    }
 
     private static Guid ResolveCurrentBoxId(
         Crab c, IReadOnlyDictionary<Guid, Guid>? openAllocByCrab = null)

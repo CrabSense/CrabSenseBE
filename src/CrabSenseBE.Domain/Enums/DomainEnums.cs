@@ -71,8 +71,33 @@ public enum FrozenLotStatus
     Expired
 }
 
+public enum FrozenStorageTransactionType
+{
+    Inbound,
+    Outbound
+}
+
+public enum FrozenStorageTransactionStatus
+{
+    PendingApproval,
+    Approved,
+    Rejected,
+    Completed,
+    Cancelled
+}
+
+public enum QrApprovalStatus
+{
+    Pending,
+    Approved,
+    Rejected
+}
+
 public enum HarvestStatus
 {
+    PendingApproval,
+    Approved,
+    Rejected,
     Planned,
     InProgress,
     Completed,

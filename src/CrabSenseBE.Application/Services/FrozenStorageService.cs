@@ -22,16 +22,23 @@ public class FrozenStorageService : IFrozenStorageService
         };
 
     private readonly IUnitOfWork _uow;
+    private readonly ICurrentUserService _currentUser;
+    private readonly FarmAreaScope _areas;
 
-    public FrozenStorageService(IUnitOfWork uow)
+    public FrozenStorageService(IUnitOfWork uow, ICurrentUserService currentUser)
     {
         _uow = uow;
+        _currentUser = currentUser;
+        _areas = new FarmAreaScope(uow, currentUser);
     }
 
     public async Task<ApiResponse<IEnumerable<FrozenLotDto>>> GetAllAsync(
         CancellationToken ct = default)
     {
-        var lots = await _uow.FrozenLots.GetAllAsync(ct);
+        var allowedAreas = await _areas.AreaIdsAsync(ct);
+        var lots = (await _uow.FrozenLots.GetAllAsync(ct))
+            .Where(lot => allowedAreas is null
+                || (lot.FarmingAreaId is Guid areaId && allowedAreas.Contains(areaId)));
 
         var result = lots
             .OrderByDescending(x => x.FrozenDate)
@@ -53,6 +60,7 @@ public class FrozenStorageService : IFrozenStorageService
         {
             throw AppException.NotFound("Frozen lot");
         }
+        await EnsureLotAreaAsync(lot, ct);
 
         return ApiResponse<FrozenLotDto>.Ok(
             MapToDto(lot),
@@ -79,6 +87,7 @@ public class FrozenStorageService : IFrozenStorageService
                 $"Mã lô cấp đông '{normalizedLotCode}' đã tồn tại.");
         }
 
+        Guid? voucherAreaId = null;
         if (request.HarvestVoucherId.HasValue)
         {
             var harvestVoucher = await _uow.HarvestVouchers.GetByIdAsync(
@@ -96,17 +105,26 @@ public class FrozenStorageService : IFrozenStorageService
                 throw AppException.BadRequest(
                     "Ngày cấp đông không được trước ngày thu hoạch.");
             }
+            voucherAreaId = harvestVoucher.FarmingAreaId;
         }
+
+        var areaId = request.FarmingAreaId ?? voucherAreaId;
+        if (areaId is not Guid ownerAreaId || ownerAreaId == Guid.Empty)
+            throw AppException.BadRequest("Lô đông phải xác định khu sở hữu.");
+        if (voucherAreaId is Guid harvestAreaId && harvestAreaId != ownerAreaId)
+            throw AppException.BadRequest("Lô đông và phiếu thu hoạch phải thuộc cùng một khu.");
+        await _areas.EnsureAsync(ownerAreaId, manage: false, ct);
 
         var lot = new FrozenLot
         {
             LotCode = normalizedLotCode,
             HarvestVoucherId = request.HarvestVoucherId,
+            FarmingAreaId = ownerAreaId,
             FrozenDate = request.FrozenDate,
             ExpiryDate = request.ExpiryDate,
-            WeightKg = request.WeightKg,
+            WeightKg = 0,
             Grade = normalizedGrade,
-            Quantity = request.Quantity,
+            Quantity = 0,
             Status = FrozenLotStatus.Available,
             StorageLocation = normalizedLocation
         };
@@ -132,15 +150,21 @@ public class FrozenStorageService : IFrozenStorageService
         {
             throw AppException.NotFound("Frozen lot");
         }
+        await EnsureLotAreaAsync(lot, ct);
 
         if (!Enum.TryParse<FrozenLotStatus>(
                 request.Status,
                 ignoreCase: true,
-                out var status))
+                out var requestedStatus))
         {
             throw AppException.BadRequest(
                 $"Trạng thái lô cấp đông '{request.Status}' không hợp lệ.");
         }
+        if (request.Quantity != lot.Quantity
+            || request.WeightKg != lot.WeightKg
+            || requestedStatus != lot.Status)
+            throw AppException.BadRequest(
+                "Không sửa số tồn hoặc trạng thái qua API thông tin lô. Hãy dùng phiếu nhập/xuất kho.");
 
         if (lot.HarvestVoucherId.HasValue)
         {
@@ -158,10 +182,7 @@ public class FrozenStorageService : IFrozenStorageService
 
         lot.FrozenDate = request.FrozenDate;
         lot.ExpiryDate = request.ExpiryDate;
-        lot.WeightKg = request.WeightKg;
         lot.Grade = NormalizeGrade(request.Grade);
-        lot.Quantity = request.Quantity;
-        lot.Status = status;
         lot.StorageLocation = NormalizeOptionalText(request.StorageLocation);
 
         _uow.FrozenLots.Update(lot);
@@ -182,6 +203,10 @@ public class FrozenStorageService : IFrozenStorageService
         {
             throw AppException.NotFound("Frozen lot");
         }
+        await EnsureLotAreaAsync(lot, ct);
+        if (await _uow.FrozenStorageTransactions.AnyAsync(
+                transaction => transaction.FrozenLotId == id, ct))
+            throw AppException.Conflict("Không thể xóa lô đã có lịch sử nhập/xuất kho.");
 
         if (lot.Status == FrozenLotStatus.Reserved)
         {
@@ -204,7 +229,7 @@ public class FrozenStorageService : IFrozenStorageService
     public async Task<ApiResponse<FrozenInventorySummaryDto>>
     GetInventorySummaryAsync(CancellationToken ct = default)
     {
-        var allLots = await _uow.FrozenLots.GetAllAsync(ct);
+        var allLots = await ScopedLotsAsync(ct);
         var today = DateTime.UtcNow.Date;
 
         /*
@@ -294,7 +319,7 @@ public class FrozenStorageService : IFrozenStorageService
     public async Task<ApiResponse<IEnumerable<FrozenStorageAgingDto>>>
     GetStorageAgingAsync(CancellationToken ct = default)
     {
-        var lots = await _uow.FrozenLots.GetAllAsync(ct);
+        var lots = await ScopedLotsAsync(ct);
         var today = DateTime.UtcNow.Date;
 
         var result = lots
@@ -349,7 +374,7 @@ public class FrozenStorageService : IFrozenStorageService
                 "Số ngày cảnh báo không được lớn hơn 365.");
         }
 
-        var lots = await _uow.FrozenLots.GetAllAsync(ct);
+        var lots = await ScopedLotsAsync(ct);
         var today = DateTime.UtcNow.Date;
 
         var result = lots
@@ -397,6 +422,182 @@ public class FrozenStorageService : IFrozenStorageService
             $"Lấy danh sách lô cấp đông sắp hết hạn trong {days} ngày thành công.");
     }
 
+    public async Task<ApiResponse<IEnumerable<FrozenStorageTransactionDto>>> GetTransactionsAsync(
+        CancellationToken ct = default)
+    {
+        var allowed = await _areas.AreaIdsAsync(ct);
+        var transactions = (await _uow.FrozenStorageTransactions.GetAllAsync(ct))
+            .Where(item => allowed is null || allowed.Contains(item.FarmingAreaId))
+            .OrderByDescending(item => item.CreatedAt)
+            .Select(MapTransaction)
+            .ToList();
+        return ApiResponse<IEnumerable<FrozenStorageTransactionDto>>.Ok(transactions);
+    }
+
+    public async Task<ApiResponse<FrozenStorageTransactionDto>> CreateTransactionAsync(
+        CreateFrozenStorageTransactionRequest request,
+        CancellationToken ct = default)
+    {
+        if (!Enum.TryParse<FrozenStorageTransactionType>(
+                request.Type, ignoreCase: true, out var type))
+            throw AppException.BadRequest("Type phải là Inbound hoặc Outbound.");
+        if (request.RequestedQuantity <= 0 || request.RequestedWeightKg <= 0)
+            throw AppException.BadRequest("Số lượng và trọng lượng dự kiến phải lớn hơn 0.");
+
+        var lot = await _uow.FrozenLots.GetByIdAsync(request.FrozenLotId, ct)
+            ?? throw AppException.NotFound("Frozen lot");
+        await EnsureLotAreaAsync(lot, ct);
+        if (lot.FarmingAreaId is not Guid areaId)
+            throw AppException.Conflict("Lô đông chưa xác định khu sở hữu.");
+
+        var transaction = new FrozenStorageTransaction
+        {
+            TransactionCode = NewTransactionCode(type),
+            FrozenLotId = lot.Id,
+            FarmingAreaId = areaId,
+            Type = type,
+            Status = FrozenStorageTransactionStatus.PendingApproval,
+            RequestedQuantity = request.RequestedQuantity,
+            RequestedWeightKg = decimal.Round(request.RequestedWeightKg, 3),
+            CreatedByUserId = _currentUser.UserId,
+            Notes = NormalizeOptionalText(request.Notes)
+        };
+        await _uow.FrozenStorageTransactions.AddAsync(transaction, ct);
+        await _uow.SaveChangesAsync(ct);
+        return ApiResponse<FrozenStorageTransactionDto>.Ok(
+            MapTransaction(transaction), "Đã lập phiếu nhập/xuất kho, chờ Farm Manager duyệt.");
+    }
+
+    public async Task<ApiResponse<FrozenStorageTransactionDto>> ApproveTransactionAsync(
+        Guid id,
+        CancellationToken ct = default)
+    {
+        var transaction = await GetTransactionAsync(id, ct);
+        if (transaction.Status != FrozenStorageTransactionStatus.PendingApproval)
+            throw AppException.Conflict("Chỉ phiếu đang chờ duyệt mới được duyệt.");
+        if (transaction.CreatedByUserId == _currentUser.UserId)
+            throw AppException.Forbidden("Người lập phiếu không được tự duyệt giao dịch kho.");
+        transaction.Status = FrozenStorageTransactionStatus.Approved;
+        transaction.ApprovedByUserId = _currentUser.UserId;
+        transaction.ApprovedAt = DateTime.UtcNow;
+        transaction.RejectionReason = null;
+        _uow.FrozenStorageTransactions.Update(transaction);
+        await _uow.SaveChangesAsync(ct);
+        return ApiResponse<FrozenStorageTransactionDto>.Ok(
+            MapTransaction(transaction), "Đã duyệt phiếu nhập/xuất kho.");
+    }
+
+    public async Task<ApiResponse<FrozenStorageTransactionDto>> RejectTransactionAsync(
+        Guid id,
+        RejectFrozenStorageTransactionRequest request,
+        CancellationToken ct = default)
+    {
+        var reason = NormalizeOptionalText(request.Reason);
+        if (reason is null)
+            throw AppException.BadRequest("Cần ghi lý do từ chối.");
+        var transaction = await GetTransactionAsync(id, ct);
+        if (transaction.Status != FrozenStorageTransactionStatus.PendingApproval)
+            throw AppException.Conflict("Chỉ phiếu đang chờ duyệt mới được từ chối.");
+        if (transaction.CreatedByUserId == _currentUser.UserId)
+            throw AppException.Forbidden("Người lập phiếu không được tự từ chối giao dịch kho.");
+        transaction.Status = FrozenStorageTransactionStatus.Rejected;
+        transaction.ApprovedByUserId = _currentUser.UserId;
+        transaction.ApprovedAt = DateTime.UtcNow;
+        transaction.RejectionReason = reason;
+        _uow.FrozenStorageTransactions.Update(transaction);
+        await _uow.SaveChangesAsync(ct);
+        return ApiResponse<FrozenStorageTransactionDto>.Ok(
+            MapTransaction(transaction), "Đã từ chối phiếu nhập/xuất kho.");
+    }
+
+    public async Task<ApiResponse<FrozenStorageTransactionDto>> ExecuteTransactionAsync(
+        Guid id,
+        ExecuteFrozenStorageTransactionRequest request,
+        CancellationToken ct = default)
+    {
+        if (request.ActualQuantity <= 0 || request.ActualWeightKg <= 0)
+            throw AppException.BadRequest("Số lượng và trọng lượng thực tế phải lớn hơn 0.");
+        var transaction = await GetTransactionAsync(id, ct);
+        if (transaction.Status != FrozenStorageTransactionStatus.Approved)
+            throw AppException.Conflict("Chỉ phiếu đã được duyệt mới được thực hiện.");
+        if (transaction.PerformedAt is not null
+            || await _uow.FrozenInventoryAdjustments.AnyAsync(
+                adjustment => adjustment.FrozenStorageTransactionId == id, ct))
+            throw AppException.Conflict("Phiếu này đã cập nhật tồn kho.");
+
+        var lot = await _uow.FrozenLots.GetByIdAsync(transaction.FrozenLotId, ct)
+            ?? throw AppException.NotFound("Frozen lot");
+        await EnsureLotAreaAsync(lot, ct);
+        var quantityDelta = transaction.Type == FrozenStorageTransactionType.Inbound
+            ? request.ActualQuantity
+            : -request.ActualQuantity;
+        var weightDelta = transaction.Type == FrozenStorageTransactionType.Inbound
+            ? request.ActualWeightKg
+            : -request.ActualWeightKg;
+        var quantityAfter = lot.Quantity + quantityDelta;
+        var weightAfter = lot.WeightKg + weightDelta;
+        if (quantityAfter < 0 || weightAfter < 0)
+            throw AppException.Conflict("Số tồn không đủ để thực hiện phiếu xuất kho.");
+        if ((quantityAfter == 0) != (weightAfter == 0))
+            throw AppException.Conflict(
+                "Số lượng và trọng lượng tồn phải cùng về 0 khi xuất hết lô.");
+
+        var adjustment = new FrozenInventoryAdjustment
+        {
+            FrozenLotId = lot.Id,
+            FrozenStorageTransactionId = transaction.Id,
+            FarmingAreaId = transaction.FarmingAreaId,
+            QuantityDelta = quantityDelta,
+            WeightDeltaKg = decimal.Round(weightDelta, 3),
+            QuantityBefore = lot.Quantity,
+            QuantityAfter = quantityAfter,
+            WeightBeforeKg = lot.WeightKg,
+            WeightAfterKg = decimal.Round(weightAfter, 3),
+            PerformedByUserId = _currentUser.UserId,
+            Reason = NormalizeOptionalText(request.Notes) ?? transaction.Notes
+        };
+        lot.Quantity = adjustment.QuantityAfter;
+        lot.WeightKg = adjustment.WeightAfterKg;
+        lot.Status = lot.Quantity == 0
+            ? FrozenLotStatus.Shipped
+            : lot.Status == FrozenLotStatus.Shipped
+                ? FrozenLotStatus.Available
+                : lot.Status;
+        transaction.ActualQuantity = request.ActualQuantity;
+        transaction.ActualWeightKg = decimal.Round(request.ActualWeightKg, 3);
+        transaction.PerformedByUserId = _currentUser.UserId;
+        transaction.PerformedAt = DateTime.UtcNow;
+        transaction.Status = FrozenStorageTransactionStatus.Completed;
+        transaction.Notes = NormalizeOptionalText(request.Notes) ?? transaction.Notes;
+
+        _uow.FrozenLots.Update(lot);
+        _uow.FrozenStorageTransactions.Update(transaction);
+        await _uow.FrozenInventoryAdjustments.AddAsync(adjustment, ct);
+        await _uow.SaveChangesAsync(ct);
+        return ApiResponse<FrozenStorageTransactionDto>.Ok(
+            MapTransaction(transaction), "Đã thực hiện giao dịch và cập nhật tồn kho.");
+    }
+
+    public async Task<ApiResponse<IEnumerable<FrozenInventoryAdjustmentDto>>> GetAdjustmentsAsync(
+        Guid? frozenLotId = null,
+        CancellationToken ct = default)
+    {
+        if (frozenLotId is Guid lotId)
+        {
+            var lot = await _uow.FrozenLots.GetByIdAsync(lotId, ct)
+                ?? throw AppException.NotFound("Frozen lot");
+            await EnsureLotAreaAsync(lot, ct);
+        }
+        var allowed = await _areas.AreaIdsAsync(ct);
+        var rows = (await _uow.FrozenInventoryAdjustments.GetAllAsync(ct))
+            .Where(item => (frozenLotId is null || item.FrozenLotId == frozenLotId)
+                && (allowed is null || allowed.Contains(item.FarmingAreaId)))
+            .OrderByDescending(item => item.CreatedAt)
+            .Select(MapAdjustment)
+            .ToList();
+        return ApiResponse<IEnumerable<FrozenInventoryAdjustmentDto>>.Ok(rows);
+    }
+
 
     public async Task<ApiResponse<IEnumerable<FrozenCrabItemDto>>> RegisterCrabItemsAsync(
     Guid lotId,
@@ -411,6 +612,7 @@ public class FrozenStorageService : IFrozenStorageService
 
         var lot = await _uow.FrozenLots.GetByIdAsync(lotId, ct)
             ?? throw AppException.NotFound("Frozen lot");
+        await EnsureLotAreaAsync(lot, ct);
 
         if (lot.HarvestVoucherId is not Guid voucherId || voucherId == Guid.Empty)
             throw AppException.BadRequest(
@@ -569,6 +771,9 @@ public class FrozenStorageService : IFrozenStorageService
             x => x.BarcodeValue == normalizedBarcode,
             ct)
             ?? throw AppException.NotFound("Frozen crab item");
+        var itemLot = await _uow.FrozenLots.GetByIdAsync(item.FrozenLotId, ct)
+            ?? throw AppException.NotFound("Frozen lot");
+        await EnsureLotAreaAsync(itemLot, ct);
 
         return ApiResponse<FrozenCrabItemDto>.Ok(
             MapToFrozenCrabItemDto(item));
@@ -588,6 +793,9 @@ public class FrozenStorageService : IFrozenStorageService
         x => x.BarcodeValue == normalizedBarcode,
         ct)
         ?? throw AppException.NotFound("Frozen crab item");
+    var itemLot = await _uow.FrozenLots.GetByIdAsync(item.FrozenLotId, ct)
+        ?? throw AppException.NotFound("Frozen lot");
+    await EnsureLotAreaAsync(itemLot, ct);
 
     // Tạo ảnh Code 128; giá trị encode chính là mã đã lưu cho cua này.
     var writer = new BarcodeWriter
@@ -636,9 +844,13 @@ public class FrozenStorageService : IFrozenStorageService
         ValidateCommonFields(
             request.FrozenDate,
             request.ExpiryDate,
+            requirePositiveInventory: false,
             request.WeightKg,
             request.Quantity,
             request.Grade);
+        if (request.WeightKg != 0 || request.Quantity != 0)
+            throw AppException.BadRequest(
+                "POST /api/frozen-lots chỉ tạo thông tin lô. Số tồn phải được ghi qua phiếu nhập kho.");
     }
 
     private static void ValidateUpdateRequest(UpdateFrozenLotRequest request)
@@ -652,6 +864,7 @@ public class FrozenStorageService : IFrozenStorageService
         ValidateCommonFields(
             request.FrozenDate,
             request.ExpiryDate,
+            requirePositiveInventory: true,
             request.WeightKg,
             request.Quantity,
             request.Grade);
@@ -660,6 +873,7 @@ public class FrozenStorageService : IFrozenStorageService
     private static void ValidateCommonFields(
         DateTime frozenDate,
         DateTime expiryDate,
+        bool requirePositiveInventory,
         decimal weightKg,
         int quantity,
         string? grade)
@@ -682,16 +896,16 @@ public class FrozenStorageService : IFrozenStorageService
                 "Ngày hết hạn phải sau ngày cấp đông.");
         }
 
-        if (weightKg <= 0)
+        if (requirePositiveInventory && weightKg < 0)
         {
             throw AppException.BadRequest(
-                "Trọng lượng lô phải lớn hơn 0.");
+                "Trọng lượng tồn không được âm.");
         }
 
-        if (quantity <= 0)
+        if (requirePositiveInventory && quantity < 0)
         {
             throw AppException.BadRequest(
-                "Số lượng cua trong lô phải lớn hơn 0.");
+                "Số lượng tồn không được âm.");
         }
 
         if (!string.IsNullOrWhiteSpace(grade) &&
@@ -739,8 +953,77 @@ public class FrozenStorageService : IFrozenStorageService
             effectiveStatus.ToString(),
             lot.StorageLocation,
             lot.CreatedAt,
-            lot.UpdatedAt);
+            lot.UpdatedAt,
+            lot.FarmingAreaId);
     }
+
+    private async Task<List<FrozenLot>> ScopedLotsAsync(CancellationToken ct)
+    {
+        var allowed = await _areas.AreaIdsAsync(ct);
+        return (await _uow.FrozenLots.GetAllAsync(ct))
+            .Where(lot => allowed is null
+                || (lot.FarmingAreaId is Guid areaId && allowed.Contains(areaId)))
+            .ToList();
+    }
+
+    private async Task EnsureLotAreaAsync(FrozenLot lot, CancellationToken ct)
+    {
+        if (lot.FarmingAreaId is not Guid areaId || areaId == Guid.Empty)
+            throw AppException.Forbidden("Lô đông chưa xác định khu sở hữu.");
+        await _areas.EnsureAsync(areaId, manage: false, ct);
+    }
+
+    private async Task<FrozenStorageTransaction> GetTransactionAsync(
+        Guid id, CancellationToken ct)
+    {
+        var transaction = await _uow.FrozenStorageTransactions.GetByIdAsync(id, ct)
+            ?? throw AppException.NotFound("Frozen storage transaction");
+        await _areas.EnsureAsync(transaction.FarmingAreaId, manage: false, ct);
+        return transaction;
+    }
+
+    private static string NewTransactionCode(FrozenStorageTransactionType type)
+    {
+        var prefix = type == FrozenStorageTransactionType.Inbound ? "IN" : "OUT";
+        return $"{prefix}-{DateTime.UtcNow:yyyyMMddHHmmssfff}-{Guid.NewGuid():N}"[..30];
+    }
+
+    private static FrozenStorageTransactionDto MapTransaction(
+        FrozenStorageTransaction transaction) => new(
+        transaction.Id,
+        transaction.TransactionCode,
+        transaction.FrozenLotId,
+        transaction.FarmingAreaId,
+        transaction.Type.ToString(),
+        transaction.Status.ToString(),
+        transaction.RequestedQuantity,
+        transaction.RequestedWeightKg,
+        transaction.ActualQuantity,
+        transaction.ActualWeightKg,
+        transaction.CreatedByUserId,
+        transaction.ApprovedByUserId,
+        transaction.ApprovedAt,
+        transaction.RejectionReason,
+        transaction.PerformedByUserId,
+        transaction.PerformedAt,
+        transaction.Notes,
+        transaction.CreatedAt);
+
+    private static FrozenInventoryAdjustmentDto MapAdjustment(
+        FrozenInventoryAdjustment adjustment) => new(
+        adjustment.Id,
+        adjustment.FrozenLotId,
+        adjustment.FrozenStorageTransactionId,
+        adjustment.FarmingAreaId,
+        adjustment.QuantityDelta,
+        adjustment.WeightDeltaKg,
+        adjustment.QuantityBefore,
+        adjustment.QuantityAfter,
+        adjustment.WeightBeforeKg,
+        adjustment.WeightAfterKg,
+        adjustment.PerformedByUserId,
+        adjustment.Reason,
+        adjustment.CreatedAt);
 
 
     private static FrozenLotStatus GetEffectiveStatus(

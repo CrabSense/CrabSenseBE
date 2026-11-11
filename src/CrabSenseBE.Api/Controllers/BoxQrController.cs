@@ -8,7 +8,7 @@ namespace CrabSenseBE.Api.Controllers;
 
 /// <summary>Box QR — scan / update / move crab</summary>
 [ApiController]
-[Authorize]
+[Authorize(Roles = AppRoles.FarmPortal)]
 [Tags("07. Box QR (scan)")]
 [Produces("application/json")]
 public class BoxQrController : ControllerBase
@@ -18,7 +18,7 @@ public class BoxQrController : ControllerBase
 
     /// <summary>[CREATE] Ensure / create QR label for box</summary>
     [HttpPost("api/boxes/{boxId:guid}/qr")]
-    [Authorize(Roles = AppRoles.FarmWrite)]
+    [Authorize(Roles = AppRoles.FarmAdministrator)]
     public async Task<IActionResult> EnsureQr(Guid boxId, CancellationToken ct)
         => Ok(await _service.EnsureBoxQrAsync(boxId, ct));
 
@@ -39,19 +39,19 @@ public class BoxQrController : ControllerBase
 
     /// <summary>[READ] Scan QR → box + crab info</summary>
     [HttpGet("api/box-qr/scan")]
-    [AllowAnonymous] // Cho phép quét QR công khai, không cần đăng nhập
+    [Authorize(Roles = AppRoles.FarmStaff)]
     public async Task<IActionResult> Scan([FromQuery] string code, CancellationToken ct)
         => Ok(await _service.ScanAsync(code, ct));
 
     /// <summary>[READ] Scan QR by path /api/box-qr/{code}</summary>
     [HttpGet("api/box-qr/{code}")]
-    [AllowAnonymous] // Cho phép quét QR công khai, không cần đăng nhập
+    [Authorize(Roles = AppRoles.FarmStaff)]
     public async Task<IActionResult> ScanByPath(string code, CancellationToken ct)
         => Ok(await _service.ScanAsync(code, ct));
 
     /// <summary>[READ] Mobile Quick Result alias via box-qr path</summary>
     [HttpGet("api/box-qr/{code}/quick-result")]
-    [Authorize(Roles = AppRoles.Any)]
+    [Authorize(Roles = AppRoles.FarmPortal)]
     public async Task<IActionResult> QuickResult(
         string code,
         [FromServices] IBoxDetailService detail,
@@ -60,14 +60,14 @@ public class BoxQrController : ControllerBase
 
     /// <summary>[UPDATE] Update crab at scanned box</summary>
     [HttpPatch("api/box-qr/{code}/crabs/{crabId:guid}")]
-    [Authorize(Roles = AppRoles.FarmWrite)]
+    [Authorize(Roles = AppRoles.FarmStaff)]
     public async Task<IActionResult> UpdateCrab(
         string code, Guid crabId, [FromBody] UpdateCrabFromScanRequest req, CancellationToken ct)
         => Ok(await _service.UpdateCrabFromScanAsync(code, crabId, req, ct));
 
     /// <summary>[UPDATE] Move crab to another box</summary>
     [HttpPost("api/box-qr/{code}/move-crab")]
-    [Authorize(Roles = AppRoles.FarmWrite)]
+    [Authorize(Roles = AppRoles.FarmStaff)]
     public async Task<IActionResult> MoveCrab(
         string code, [FromBody] MoveCrabByScanRequest req, CancellationToken ct)
         => Ok(await _service.MoveCrabAsync(code, req, ct));

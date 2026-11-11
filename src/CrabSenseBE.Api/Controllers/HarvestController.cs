@@ -12,7 +12,7 @@ namespace CrabSenseBE.Api.Controllers;
 /// </summary>
 [ApiController]
 [Route("api/harvest-vouchers")]
-[Authorize]
+[Authorize(Roles = AppRoles.FarmPortal)]
 [Tags("20. CRUD — Harvest")]
 [Produces("application/json")]
 public class HarvestController : ControllerBase
@@ -32,7 +32,7 @@ public class HarvestController : ControllerBase
     /// Ảnh được append vào photoUrls của phiếu và album của các con cua trong phiếu.
     /// </summary>
     [HttpPost("{id:guid}/images")]
-    [Authorize(Roles = AppRoles.FarmWriteWithPlatform)]
+    [Authorize(Roles = AppRoles.FarmStaff)]
     [RequestSizeLimit(30_000_000)]
     [Consumes("multipart/form-data")]
     public async Task<IActionResult> UploadImages(
@@ -41,8 +41,11 @@ public class HarvestController : ControllerBase
         IFormFile? file,
         [FromForm] bool replace = false,
         CancellationToken ct = default)
-        => Ok(await _images.UploadAsync(
+    {
+        _ = await _harvestService.GetByIdAsync(id, ct);
+        return Ok(await _images.UploadAsync(
             ToImageFiles(files, file), null, id, TryGetUserId(), ct, replace));
+    }
 
     /// <summary>
     /// [READ] Lấy danh sách phiếu thu hoạch.
@@ -98,7 +101,7 @@ public class HarvestController : ControllerBase
     /// CreatedBy được lấy từ JWT, không truyền trong request body.
     /// </remarks>
     [HttpPost]
-    [Authorize(Roles = AppRoles.FarmWriteWithPlatform)]
+    [Authorize(Roles = AppRoles.FarmManager + "," + AppRoles.FarmStaff)]
     [ProducesResponseType(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status401Unauthorized)]
@@ -112,40 +115,33 @@ public class HarvestController : ControllerBase
         return Ok(result);
     }
 
-    /// <summary>
-    /// [ACTION] Cập nhật trạng thái phiếu thu hoạch.
-    /// </summary>
-    /// <param name="id">ID phiếu thu hoạch.</param>
-    /// <param name="request">Trạng thái mới và ghi chú.</param>
-    /// <param name="ct">Cancellation token.</param>
-    /// <remarks>
-    /// Luồng trạng thái hợp lệ:
-    ///
-    /// Planned → InProgress → Completed
-    ///
-    /// Planned → Cancelled
-    ///
-    /// InProgress → Cancelled
-    /// </remarks>
-    [HttpPatch("{id:guid}/status")]
-    [Authorize(Roles = AppRoles.FarmWriteWithPlatform)]
-    [ProducesResponseType(StatusCodes.Status200OK)]
-    [ProducesResponseType(StatusCodes.Status400BadRequest)]
-    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
-    [ProducesResponseType(StatusCodes.Status404NotFound)]
-    [ProducesResponseType(StatusCodes.Status409Conflict)]
-    public async Task<IActionResult> UpdateStatus(
-        Guid id,
-        [FromBody] UpdateHarvestStatusRequest request,
-        CancellationToken ct)
-    {
-        var result = await _harvestService.UpdateStatusAsync(
-            id,
-            request,
-            ct);
+    /// <summary>[DECISION] FM duyệt yêu cầu thu hoạch.</summary>
+    [HttpPost("{id:guid}/approve")]
+    [Authorize(Roles = AppRoles.FarmManager)]
+    public async Task<IActionResult> Approve(
+        Guid id, [FromBody] ApproveHarvestRequest? request, CancellationToken ct)
+        => Ok(await _harvestService.ApproveAsync(id, request ?? new ApproveHarvestRequest(), ct));
 
-        return Ok(result);
-    }
+    /// <summary>[DECISION] FM từ chối yêu cầu thu hoạch.</summary>
+    [HttpPost("{id:guid}/reject")]
+    [Authorize(Roles = AppRoles.FarmManager)]
+    public async Task<IActionResult> Reject(
+        Guid id, [FromBody] RejectHarvestRequest request, CancellationToken ct)
+        => Ok(await _harvestService.RejectAsync(id, request, ct));
+
+    /// <summary>[EXECUTE] FS nhập cân nặng, số lượng và hoàn thành thao tác thực tế.</summary>
+    [HttpPost("{id:guid}/execute")]
+    [Authorize(Roles = AppRoles.FarmStaff)]
+    public async Task<IActionResult> Execute(
+        Guid id, [FromBody] ExecuteHarvestRequest request, CancellationToken ct)
+        => Ok(await _harvestService.ExecuteAsync(id, request, ct));
+
+    /// <summary>[DECISION] FM xác nhận kết quả cuối sau khi FS thực hiện.</summary>
+    [HttpPost("{id:guid}/confirm")]
+    [Authorize(Roles = AppRoles.FarmManager)]
+    public async Task<IActionResult> Confirm(
+        Guid id, [FromBody] ConfirmHarvestRequest? request, CancellationToken ct)
+        => Ok(await _harvestService.ConfirmAsync(id, request ?? new ConfirmHarvestRequest(), ct));
 
     /// <summary>
     /// [DELETE] Xóa phiếu thu hoạch.
@@ -157,7 +153,7 @@ public class HarvestController : ControllerBase
     /// và chưa được sử dụng để tạo lô cấp đông.
     /// </remarks>
     [HttpDelete("{id:guid}")]
-    [Authorize(Roles = AppRoles.FarmManageWithPlatform)]
+    [Authorize(Roles = AppRoles.FarmManager)]
     [ProducesResponseType(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status401Unauthorized)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]

@@ -304,7 +304,7 @@ public class BoxesController : ControllerBase
 
     /// <summary>[CREATE] Add crab into box (Mobile convenience; auto CrabLot if omitted)</summary>
     [HttpPost("{id:guid}/crabs")]
-    [Authorize(Roles = AppRoles.FarmWrite)]
+    [Authorize(Roles = AppRoles.FarmStaff)]
     public async Task<IActionResult> AddCrab(
         Guid id, [FromBody] CrabSenseBE.Application.DTOs.Ops.MobileAddCrabRequest req, CancellationToken ct)
         => Ok(await _detail.AddCrabAsync(id, req, ct));
@@ -359,7 +359,7 @@ public class BoxesController : ControllerBase
 /// <summary>CRUD Crabs</summary>
 [ApiController]
 [Route("api/crabs")]
-[Authorize]
+[Authorize(Roles = AppRoles.FarmPortal)]
 [Tags("04. CRUD — Crabs")]
 [Produces("application/json")]
 public class CrabsController : ControllerBase
@@ -392,7 +392,7 @@ public class CrabsController : ControllerBase
     /// Form field: files (multiple).
     /// </summary>
     [HttpPost("images")]
-    [Authorize(Roles = AppRoles.FarmWrite)]
+    [Authorize(Roles = AppRoles.FarmStaff)]
     [RequestSizeLimit(30_000_000)]
     [Consumes("multipart/form-data")]
     public async Task<IActionResult> UploadImages(
@@ -422,25 +422,25 @@ public class CrabsController : ControllerBase
 
     /// <summary>[CREATE] Place crab — required: crabLotId + boxId (Row/Area auto from box). imageUrls = S3 links from POST /api/crabs/images</summary>
     [HttpPost]
-    [Authorize(Roles = AppRoles.FarmWrite)]
+    [Authorize(Roles = AppRoles.FarmStaff)]
     public async Task<IActionResult> Create([FromBody] CreateCrabRequest req, CancellationToken ct)
         => Ok(await _service.CreateCrabAsync(req, ct));
 
     /// <summary>[CREATE] Tạo nhiều cua + gán hộp trong một transaction.</summary>
     [HttpPost("bulk")]
-    [Authorize(Roles = AppRoles.FarmWrite)]
+    [Authorize(Roles = AppRoles.FarmStaff)]
     public async Task<IActionResult> CreateBulk([FromBody] CreateCrabsBulkRequest req, CancellationToken ct)
         => Ok(await _service.CreateCrabsBulkAsync(req, ct));
 
     /// <summary>[UPDATE] Update crab details. Send imageUrls to replace the full photo list.</summary>
     [HttpPut("{id:guid}")]
-    [Authorize(Roles = AppRoles.FarmWrite)]
+    [Authorize(Roles = AppRoles.FarmStaff)]
     public async Task<IActionResult> Update(Guid id, [FromBody] UpdateCrabRequest req, CancellationToken ct)
         => Ok(await _service.UpdateCrabAsync(id, req, ct));
 
     /// <summary>[CREATE] Upload more photos to S3 and append URLs on this crab.</summary>
     [HttpPost("{id:guid}/images")]
-    [Authorize(Roles = AppRoles.FarmWrite)]
+    [Authorize(Roles = AppRoles.FarmStaff)]
     [RequestSizeLimit(30_000_000)]
     [Consumes("multipart/form-data")]
     public async Task<IActionResult> UploadImagesForCrab(
@@ -452,7 +452,7 @@ public class CrabsController : ControllerBase
 
     /// <summary>[DELETE] Soft-delete crab (IsAlive=false, free box, keep history)</summary>
     [HttpDelete("{id:guid}")]
-    [Authorize(Roles = AppRoles.FarmWrite)]
+    [Authorize(Roles = AppRoles.FarmManager)]
     public async Task<IActionResult> Delete(Guid id, CancellationToken ct)
         => Ok(await _service.DeleteCrabAsync(id, ct));
 
@@ -468,13 +468,13 @@ public class CrabsController : ControllerBase
 
     /// <summary>[CREATE] Ghi nhận lần đo sinh trưởng</summary>
     [HttpPost("{id:guid}/weights")]
-    [Authorize(Roles = AppRoles.FarmWrite)]
+    [Authorize(Roles = AppRoles.FarmStaff)]
     public async Task<IActionResult> RecordWeight(Guid id, [FromBody] RecordCrabWeightRequest req, CancellationToken ct)
         => Ok(await _service.RecordCrabWeightAsync(id, req, ct));
 
     /// <summary>[UPDATE] Sửa ghi chú lần đo</summary>
     [HttpPut("{id:guid}/weights/{weightId:guid}")]
-    [Authorize(Roles = AppRoles.FarmWrite)]
+    [Authorize(Roles = AppRoles.FarmManager)]
     public async Task<IActionResult> UpdateWeight(Guid id, Guid weightId, [FromBody] UpdateCrabWeightRequest req, CancellationToken ct)
         => Ok(await _service.UpdateCrabWeightAsync(id, weightId, req, ct));
 

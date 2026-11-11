@@ -18,17 +18,23 @@ public class BoxQrService : IBoxQrService
 {
     private readonly IUnitOfWork _uow;
     private readonly IFarmHistoryService _history;
+    private readonly FarmAreaScope _areas;
 
-    public BoxQrService(IUnitOfWork uow, IFarmHistoryService history)
+    public BoxQrService(
+        IUnitOfWork uow,
+        IFarmHistoryService history,
+        ICurrentUserService? currentUser = null)
     {
         _uow = uow;
         _history = history;
+        _areas = new FarmAreaScope(uow, currentUser);
     }
 
     public async Task<ApiResponse<BoxQrDto>> EnsureBoxQrAsync(Guid boxId, CancellationToken ct = default)
     {
         var box = await _uow.Boxes.GetByIdAsync(boxId, ct)
             ?? throw AppException.NotFound("Box");
+        await _areas.EnsureBoxAsync(boxId, manage: true, ct);
 
         // Đã có QR active cho box → trả về luôn
         var existing = await _uow.QrCodes.FirstOrDefaultAsync(
@@ -56,6 +62,7 @@ public class BoxQrService : IBoxQrService
             EntityType = "box",
             BoxId = boxId,
             IsActive = true,
+            ApprovalStatus = QrApprovalStatus.Approved,
             Payload = JsonSerializer.Serialize(new
             {
                 type = "box",
@@ -72,10 +79,11 @@ public class BoxQrService : IBoxQrService
 
     public async Task<ApiResponse<BoxQrDto>> GetQrByBoxAsync(Guid boxId, CancellationToken ct = default)
     {
+        await _areas.EnsureBoxAsync(boxId, manage: false, ct);
         var qr = await _uow.QrCodes.FirstOrDefaultAsync(
             q => q.BoxId == boxId && q.IsActive && q.EntityType == "box", ct);
         if (qr is null)
-            return await EnsureBoxQrAsync(boxId, ct);
+            throw AppException.NotFound("QrCode");
         return ApiResponse<BoxQrDto>.Ok(MapQr(qr));
     }
 
@@ -106,23 +114,15 @@ public class BoxQrService : IBoxQrService
         var qr = await _uow.QrCodes.FirstOrDefaultAsync(
             q => q.Code == normalized && q.IsActive, ct);
 
-        // Fallback: allow scanning by box.Code when QR row missing / not printed yet.
         if (qr is null)
-        {
-            var boxByCode = await _uow.Boxes.FirstOrDefaultAsync(b => b.Code == normalized, ct)
-                ?? throw AppException.NotFound("QrCode");
-            var ensured = await EnsureBoxQrAsync(boxByCode.Id, ct);
-            if (!ensured.Success || ensured.Data is null)
-                throw AppException.NotFound("QrCode");
-            qr = await _uow.QrCodes.GetByIdAsync(ensured.Data.Id, ct)
-                ?? throw AppException.NotFound("QrCode");
-        }
+            throw AppException.NotFound("QrCode");
 
         if (qr.EntityType != "box" || qr.BoxId is null)
             throw AppException.BadRequest("QR này không gắn với hộp nuôi.");
 
         var box = await _uow.Boxes.GetByIdAsync(qr.BoxId.Value, ct)
             ?? throw AppException.NotFound("Box");
+        await _areas.EnsureBoxAsync(box.Id, manage: false, ct);
 
         var row = await _uow.FarmingRows.GetByIdAsync(box.FarmingRowId, ct);
         var areaName = "";
@@ -177,6 +177,7 @@ public class BoxQrService : IBoxQrService
         string boxQrCode, Guid crabId, UpdateCrabFromScanRequest req, CancellationToken ct = default)
     {
         var qr = await RequireBoxQrAsync(boxQrCode, ct);
+        await _areas.EnsureBoxAsync(qr.BoxId!.Value, manage: false, ct);
         var crab = await _uow.Crabs.GetByIdAsync(crabId, ct)
             ?? throw AppException.NotFound("Crab");
 
@@ -217,6 +218,7 @@ public class BoxQrService : IBoxQrService
         string sourceBoxQrCode, MoveCrabByScanRequest req, CancellationToken ct = default)
     {
         var sourceQr = await RequireBoxQrAsync(sourceBoxQrCode, ct);
+        await _areas.EnsureBoxAsync(sourceQr.BoxId!.Value, manage: false, ct);
         var crab = await _uow.Crabs.GetByIdAsync(req.CrabId, ct)
             ?? throw AppException.NotFound("Crab");
 
@@ -244,6 +246,7 @@ public class BoxQrService : IBoxQrService
 
         var targetBox = await _uow.Boxes.GetByIdAsync(targetBoxId, ct)
             ?? throw AppException.NotFound("Box");
+        await _areas.EnsureBoxAsync(targetBoxId, manage: false, ct);
         var targetRow = await _uow.FarmingRows.GetByIdAsync(targetBox.FarmingRowId, ct)
             ?? throw AppException.NotFound("FarmingRow");
 

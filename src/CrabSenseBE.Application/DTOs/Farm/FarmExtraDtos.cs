@@ -22,7 +22,12 @@ public record CrabLotDto(
     int DeadOnArrival,
     string? Notes,
     string Status,
-    IReadOnlyList<string> ImageUrls);
+    IReadOnlyList<string> ImageUrls,
+    DateTime? StockedAt = null,
+    DateTime? ClosedAt = null,
+    int? UnmoltedCountAtClose = null,
+    string? CloseDisposition = null,
+    IReadOnlyList<Guid>? FarmingAreaIds = null);
 
 public record NextCrabLotCodeDto(string Code);
 
@@ -44,7 +49,10 @@ public record CreateCrabLotRequest(
     decimal? OtherCostVnd = null,
     string? Condition = null,
     int DeadOnArrival = 0,
-    string? Notes = null);
+    string? Notes = null,
+    DateTime? StockedAt = null,
+    Guid? FarmingAreaId = null,
+    IReadOnlyList<Guid>? FarmingAreaIds = null);
 
 public record UpdateCrabLotRequest(
     string? Name = null,
@@ -60,7 +68,11 @@ public record UpdateCrabLotRequest(
     string? Condition = null,
     int? DeadOnArrival = null,
     string? Notes = null,
-    string? Status = null);
+    string? Status = null,
+    DateTime? StockedAt = null,
+    IReadOnlyList<Guid>? FarmingAreaIds = null);
+
+public record CloseCrabLotRequest(string? Disposition = null, DateTime? ClosedAt = null);
 
 // --- CropBatch ---
 public record CropBatchDto(
@@ -119,7 +131,11 @@ public record MoltingRecordDto(
     decimal? ShellLengthBeforeMm = null,
     decimal? ShellWidthAfterMm = null,
     decimal? ShellLengthAfterMm = null,
-    string? CameraId = null);
+    string? CameraId = null,
+    bool IsVoided = false,
+    DateTime? VoidedAt = null,
+    Guid? VoidedByUserId = null,
+    string? VoidReason = null);
 
 public record CreateMoltingRecordRequest(
     Guid CrabId, Guid? BoxId, DateTime? MoltTime,
@@ -132,6 +148,8 @@ public record CreateMoltingRecordRequest(
     decimal? ShellWidthAfterMm = null,
     decimal? ShellLengthAfterMm = null,
     string? CameraId = null);
+
+public record VoidCrabEventRequest(string Reason);
 
 /// <summary>Sửa lần ghi lột xác (lỡ nhập sai).</summary>
 public record UpdateMoltingRecordRequest(
@@ -148,7 +166,8 @@ public record UpdateMoltingRecordRequest(
     decimal? ShellLengthBeforeMm = null,
     decimal? ShellWidthAfterMm = null,
     decimal? ShellLengthAfterMm = null,
-    string? CameraId = null);
+    string? CameraId = null,
+    string? CorrectionReason = null);
 
 /// <summary>One box status change event.</summary>
 public record BoxStatusHistoryDto(

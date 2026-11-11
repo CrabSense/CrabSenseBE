@@ -33,6 +33,9 @@ public class UnitOfWork : IUnitOfWork
     private IRepository<CrabLot>? _crabLots;
     public IRepository<CrabLot> CrabLots => _crabLots ??= new GenericRepository<CrabLot>(_context);
 
+    private IRepository<CrabLotArea>? _crabLotAreas;
+    public IRepository<CrabLotArea> CrabLotAreas => _crabLotAreas ??= new GenericRepository<CrabLotArea>(_context);
+
     // private IRepository<CropBatch>? _cropBatches;
     // public IRepository<CropBatch> CropBatches => _cropBatches ??= new GenericRepository<CropBatch>(_context);
 
@@ -54,6 +57,10 @@ public class UnitOfWork : IUnitOfWork
     private IRepository<CrabStatusHistory>? _crabStatusHistories;
     public IRepository<CrabStatusHistory> CrabStatusHistories =>
         _crabStatusHistories ??= new GenericRepository<CrabStatusHistory>(_context);
+
+    private IRepository<CrabEventCorrection>? _crabEventCorrections;
+    public IRepository<CrabEventCorrection> CrabEventCorrections =>
+        _crabEventCorrections ??= new GenericRepository<CrabEventCorrection>(_context);
 
     private IRepository<CrabWeightHistory>? _crabWeightHistories;
     public IRepository<CrabWeightHistory> CrabWeightHistories =>
@@ -142,6 +149,14 @@ public class UnitOfWork : IUnitOfWork
 
     private IRepository<FrozenLot>? _frozenLots;
     public IRepository<FrozenLot> FrozenLots => _frozenLots ??= new GenericRepository<FrozenLot>(_context);
+
+    private IRepository<FrozenStorageTransaction>? _frozenStorageTransactions;
+    public IRepository<FrozenStorageTransaction> FrozenStorageTransactions =>
+        _frozenStorageTransactions ??= new GenericRepository<FrozenStorageTransaction>(_context);
+
+    private IRepository<FrozenInventoryAdjustment>? _frozenInventoryAdjustments;
+    public IRepository<FrozenInventoryAdjustment> FrozenInventoryAdjustments =>
+        _frozenInventoryAdjustments ??= new GenericRepository<FrozenInventoryAdjustment>(_context);
 
     private IRepository<QrCode>? _qrCodes;
     public IRepository<QrCode> QrCodes => _qrCodes ??= new GenericRepository<QrCode>(_context);

@@ -14,7 +14,8 @@ namespace CrabSenseBE.UnitTests.Application;
 public class FarmHistoryServiceTests
 {
     private readonly Mock<IUnitOfWork> _uow = new();
-    private FarmHistoryService Create() => new(_uow.Object, Mock.Of<IPublicImageStorage>());
+    private FarmHistoryService Create() => new(
+        _uow.Object, Mock.Of<IPublicImageStorage>(), currentUser: null);
 
     [Fact]
     public async Task AllocateCrab_MovesCrabAndOpensAllocation()
@@ -229,5 +230,49 @@ public class FarmHistoryServiceTests
         await Assert.ThrowsAsync<AppException>(() =>
             Create().AllocateCrabAsync(new AllocateCrabRequest(
                 Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), null)));
+    }
+
+    [Fact]
+    public async Task VoidMolting_KeepsRecordAndWritesCorrection()
+    {
+        var crabId = Guid.NewGuid();
+        var record = new MoltingRecord
+        {
+            Id = Guid.NewGuid(),
+            CrabId = crabId,
+            Result = "success",
+            Source = "manual"
+        };
+        var crab = new Crab { Id = crabId, MoltedAt = DateTime.UtcNow };
+        var molts = new Mock<IRepository<MoltingRecord>>();
+        molts.Setup(repo => repo.GetByIdAsync(record.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(record);
+        molts.Setup(repo => repo.FindAsync(
+                It.IsAny<System.Linq.Expressions.Expression<Func<MoltingRecord, bool>>>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new[] { record });
+        var crabs = new Mock<IRepository<Crab>>();
+        crabs.Setup(repo => repo.GetByIdAsync(crabId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(crab);
+        var corrections = new Mock<IRepository<CrabEventCorrection>>();
+        CrabEventCorrection? savedCorrection = null;
+        corrections.Setup(repo => repo.AddAsync(
+                It.IsAny<CrabEventCorrection>(), It.IsAny<CancellationToken>()))
+            .Callback<CrabEventCorrection, CancellationToken>((item, _) => savedCorrection = item)
+            .Returns(Task.CompletedTask);
+        _uow.Setup(unit => unit.MoltingRecords).Returns(molts.Object);
+        _uow.Setup(unit => unit.Crabs).Returns(crabs.Object);
+        _uow.Setup(unit => unit.CrabEventCorrections).Returns(corrections.Object);
+        _uow.Setup(unit => unit.SaveChangesAsync(It.IsAny<CancellationToken>())).ReturnsAsync(1);
+
+        var result = await Create().VoidMoltingAsync(
+            record.Id, new VoidCrabEventRequest("Bản ghi trùng"));
+
+        result.Success.Should().BeTrue();
+        record.IsVoided.Should().BeTrue();
+        record.VoidReason.Should().Be("Bản ghi trùng");
+        savedCorrection.Should().NotBeNull();
+        savedCorrection!.Action.Should().Be("void");
+        molts.Verify(repo => repo.Remove(It.IsAny<MoltingRecord>()), Times.Never);
     }
 }

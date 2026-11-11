@@ -171,14 +171,36 @@ public class CrabLot : BaseEntity
 
     /// <summary>Good | Average | Problem</summary>
     public string Condition { get; set; } = "Good";
-    /// <summary>Pending | Allocating | Completed | Cancelled. Chỉ persist Cancelled; còn lại suy ra từ số đã thả.</summary>
+    /// <summary>Pending | Allocating | Completed | Cancelled. Trạng thái phân bổ cua, không phải ngày kết thúc lô.</summary>
     public string Status { get; set; } = "Pending";
     public int DeadOnArrival { get; set; }
     public string? Notes { get; set; }
     /// <summary>JSON array URL ảnh lô nhập (Google Drive).</summary>
     public string ImageUrlsJson { get; set; } = "[]";
 
+    /// <summary>Ngày bắt đầu thả cua. Tách khỏi ngày nhập và khỏi ngày kết thúc lô.</summary>
+    public DateTime? StockedAt { get; set; }
+
+    /// <summary>Ngày kết thúc vòng đời lô. Không dùng UpdatedAt.</summary>
+    public DateTime? ClosedAt { get; set; }
+
+    /// <summary>Số cua chưa lột tại thời điểm kết thúc lô.</summary>
+    public int? UnmoltedCountAtClose { get; set; }
+
+    /// <summary>Phương án xử lý cua chưa lột khi kết thúc lô.</summary>
+    public string? CloseDisposition { get; set; }
+
     public ICollection<Crab> Crabs { get; set; } = new List<Crab>();
+    public ICollection<CrabLotArea> Areas { get; set; } = new List<CrabLotArea>();
+}
+
+/// <summary>Lô cua có thể được phân bổ vào nhiều khu.</summary>
+public class CrabLotArea : BaseEntity
+{
+    public Guid CrabLotId { get; set; }
+    public CrabLot? CrabLot { get; set; }
+    public Guid FarmingAreaId { get; set; }
+    public FarmingArea? FarmingArea { get; set; }
 }
 
 /// <summary>Đợt nuôi (CropBatch) — theo vụ</summary>

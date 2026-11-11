@@ -262,7 +262,7 @@ public sealed class ChangedApiPermissionTests : IAsyncLifetime
         yield return new ApiCall(HttpMethod.Patch, $"/api/boxes/{box}/status", boxStatus).StaffOnly();
         yield return new ApiCall(HttpMethod.Get, "/api/farming-rows", null).FarmPortal();
         yield return new ApiCall(HttpMethod.Get, "/api/boxes", null).FarmPortal();
-        yield return new ApiCall(HttpMethod.Post, $"/api/boxes/{box}/crabs", "{}").FarmWrite();
+        yield return new ApiCall(HttpMethod.Post, $"/api/boxes/{box}/crabs", "{}").StaffOnly();
 
         yield return new ApiCall(HttpMethod.Get, "/api/alert-thresholds", null).FarmPortal();
         yield return new ApiCall(HttpMethod.Post, "/api/alert-thresholds", thresholdCreate).OnlyAdmin();

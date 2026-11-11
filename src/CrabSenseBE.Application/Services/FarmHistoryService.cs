@@ -6,6 +6,7 @@ using CrabSenseBE.Domain.Entities;
 using CrabSenseBE.Domain.Enums;
 using CrabSenseBE.Domain.Interfaces;
 using Microsoft.EntityFrameworkCore;
+using System.Text.Json;
 namespace CrabSenseBE.Application.Services;
 
 /// <summary>
@@ -15,11 +16,18 @@ public class FarmHistoryService : IFarmHistoryService
 {
     private readonly IUnitOfWork _uow;
     private readonly IPublicImageStorage _images;
+    private readonly ICurrentUserService? _currentUser;
+    private readonly FarmAreaScope _areas;
 
-    public FarmHistoryService(IUnitOfWork uow, IPublicImageStorage images)
+    public FarmHistoryService(
+        IUnitOfWork uow,
+        IPublicImageStorage images,
+        ICurrentUserService? currentUser)
     {
         _uow = uow;
         _images = images;
+        _currentUser = currentUser;
+        _areas = new FarmAreaScope(uow, currentUser);
     }
 
     // ─── Allocation ─────────────────────────────────────────────────────────
@@ -49,6 +57,9 @@ public class FarmHistoryService : IFarmHistoryService
 
         var box = await _uow.Boxes.GetByIdAsync(boxId, ct)
             ?? throw AppException.NotFound("Box");
+        await _areas.EnsureBoxAsync(box.Id, manage: false, ct);
+        if (previousBoxId != Guid.Empty)
+            await _areas.EnsureBoxAsync(previousBoxId, manage: false, ct);
         if (IsBoxUnusable(box.Status))
             throw AppException.BadRequest($"Hộp '{box.Code}' không thể sử dụng.");
         var row = await _uow.FarmingRows.GetByIdAsync(box.FarmingRowId, ct)
@@ -173,6 +184,9 @@ public class FarmHistoryService : IFarmHistoryService
     public async Task<ApiResponse<IEnumerable<CrabBoxAllocationDto>>> GetAllocationsByCrabAsync(
         Guid crabId, DateTime? from = null, DateTime? to = null, CancellationToken ct = default)
     {
+        var crab = await _uow.Crabs.GetByIdAsync(crabId, ct)
+            ?? throw AppException.NotFound("Crab");
+        await EnsureCrabAreaAsync(crab, ct);
         var list = await _uow.CrabBoxAllocations.FindAsync(a => a.CrabId == crabId, ct);
         return ApiResponse<IEnumerable<CrabBoxAllocationDto>>.Ok(
             FilterByRange(list, a => a.StartTime, from, to).Select(MapAlloc));
@@ -181,6 +195,7 @@ public class FarmHistoryService : IFarmHistoryService
     public async Task<ApiResponse<IEnumerable<CrabBoxAllocationDto>>> GetAllocationsByBoxAsync(
         Guid boxId, DateTime? from = null, DateTime? to = null, CancellationToken ct = default)
     {
+        await _areas.EnsureBoxAsync(boxId, manage: false, ct);
         var list = await _uow.CrabBoxAllocations.FindAsync(a => a.BoxId == boxId, ct);
         return ApiResponse<IEnumerable<CrabBoxAllocationDto>>.Ok(
             FilterByRange(list, a => a.StartTime, from, to).Select(MapAlloc));
@@ -191,6 +206,7 @@ public class FarmHistoryService : IFarmHistoryService
     {
         var a = await _uow.CrabBoxAllocations.GetByIdAsync(id, ct)
             ?? throw AppException.NotFound("Allocation");
+        await _areas.EnsureBoxAsync(a.BoxId, manage: false, ct);
 
         if (req.StartTime.HasValue)
             a.StartTime = req.StartTime.Value;
@@ -212,6 +228,7 @@ public class FarmHistoryService : IFarmHistoryService
     {
         var a = await _uow.CrabBoxAllocations.GetByIdAsync(id, ct)
             ?? throw AppException.NotFound("Allocation");
+        await _areas.EnsureBoxAsync(a.BoxId, manage: false, ct);
         if (a.EndTime is null)
             throw AppException.BadRequest(
                 "Cannot delete an open allocation (EndTime=null). Close it first or move the crab.");
@@ -241,7 +258,10 @@ public class FarmHistoryService : IFarmHistoryService
         {
             box = await _uow.Boxes.GetByIdAsync(resolvedBox, ct)
                 ?? throw AppException.NotFound("Box");
+            await _areas.EnsureBoxAsync(resolvedBox, manage: false, ct);
         }
+        else
+            await EnsureCrabAreaAsync(crab, ct);
 
         if (req.CompletedAt.HasValue && req.StartedAt.HasValue && req.CompletedAt < req.StartedAt)
             throw AppException.BadRequest("CompletedAt must be greater than or equal to StartedAt.");
@@ -315,6 +335,9 @@ public class FarmHistoryService : IFarmHistoryService
     public async Task<ApiResponse<IEnumerable<MoltingRecordDto>>> GetMoltingsByCrabAsync(
         Guid crabId, DateTime? from = null, DateTime? to = null, CancellationToken ct = default)
     {
+        var crab = await _uow.Crabs.GetByIdAsync(crabId, ct)
+            ?? throw AppException.NotFound("Crab");
+        await EnsureCrabAreaAsync(crab, ct);
         var list = await _uow.MoltingRecords.FindAsync(m => m.CrabId == crabId, ct);
         return ApiResponse<IEnumerable<MoltingRecordDto>>.Ok(
             FilterByRange(list, m => m.MoltTime, from, to).Select(MapMolt));
@@ -323,6 +346,7 @@ public class FarmHistoryService : IFarmHistoryService
     public async Task<ApiResponse<IEnumerable<MoltingRecordDto>>> GetMoltingsByBoxAsync(
         Guid boxId, DateTime? from = null, DateTime? to = null, CancellationToken ct = default)
     {
+        await _areas.EnsureBoxAsync(boxId, manage: false, ct);
         var list = await _uow.MoltingRecords.FindAsync(m => m.BoxId == boxId, ct);
         return ApiResponse<IEnumerable<MoltingRecordDto>>.Ok(
             FilterByRange(list, m => m.MoltTime, from, to).Select(MapMolt));
@@ -333,11 +357,21 @@ public class FarmHistoryService : IFarmHistoryService
     {
         var record = await _uow.MoltingRecords.GetByIdAsync(id, ct)
             ?? throw AppException.NotFound("MoltingRecord");
+        await EnsureMoltingAreaAsync(record, ct);
+        if (record.IsVoided)
+            throw AppException.Conflict("Bản ghi lột xác đã bị vô hiệu hóa.");
+        var reason = string.IsNullOrWhiteSpace(req.CorrectionReason)
+            ? null
+            : req.CorrectionReason.Trim();
+        if (reason is null)
+            throw AppException.BadRequest("Cần ghi lý do chỉnh sửa lịch sử lột xác.");
+        var previous = JsonSerializer.Serialize(record);
 
         if (req.BoxId.HasValue)
         {
             _ = await _uow.Boxes.GetByIdAsync(req.BoxId.Value, ct)
                 ?? throw AppException.NotFound("Box");
+            await _areas.EnsureBoxAsync(req.BoxId.Value, manage: false, ct);
             record.BoxId = req.BoxId.Value;
         }
         if (req.MoltTime.HasValue)
@@ -363,20 +397,38 @@ public class FarmHistoryService : IFarmHistoryService
             throw AppException.BadRequest("CompletedAt must be greater than or equal to StartedAt.");
 
         _uow.MoltingRecords.Update(record);
+        await AddCorrectionAsync(
+            record.CrabId, "molting", record.Id, "update",
+            previous, JsonSerializer.Serialize(record), reason, ct);
         await ResyncCrabFromMoltingsAsync(record.CrabId, excludeId: null, ct);
         await _uow.SaveChangesAsync(ct);
         return ApiResponse<MoltingRecordDto>.Ok(MapMolt(record), "Molting updated.");
     }
 
-    public async Task<ApiResponse> DeleteMoltingAsync(Guid id, CancellationToken ct = default)
+    public async Task<ApiResponse<MoltingRecordDto>> VoidMoltingAsync(
+        Guid id, VoidCrabEventRequest req, CancellationToken ct = default)
     {
         var record = await _uow.MoltingRecords.GetByIdAsync(id, ct)
             ?? throw AppException.NotFound("MoltingRecord");
-        var crabId = record.CrabId;
-        _uow.MoltingRecords.Remove(record);
-        await ResyncCrabFromMoltingsAsync(crabId, excludeId: id, ct);
+        await EnsureMoltingAreaAsync(record, ct);
+        if (record.IsVoided)
+            throw AppException.Conflict("Bản ghi lột xác đã bị vô hiệu hóa.");
+        var reason = string.IsNullOrWhiteSpace(req.Reason) ? null : req.Reason.Trim();
+        if (reason is null)
+            throw AppException.BadRequest("Cần ghi lý do vô hiệu hóa.");
+        var previous = JsonSerializer.Serialize(record);
+        record.IsVoided = true;
+        record.VoidedAt = DateTime.UtcNow;
+        record.VoidedByUserId = CurrentUserId();
+        record.VoidReason = reason;
+        _uow.MoltingRecords.Update(record);
+        await AddCorrectionAsync(
+            record.CrabId, "molting", record.Id, "void",
+            previous, JsonSerializer.Serialize(record), reason, ct);
+        await ResyncCrabFromMoltingsAsync(record.CrabId, excludeId: null, ct);
         await _uow.SaveChangesAsync(ct);
-        return ApiResponse.Ok("Molting deleted.");
+        return ApiResponse<MoltingRecordDto>.Ok(
+            MapMolt(record), "Molting record voided; history retained.");
     }
 
     // ─── Box farming status / history ───────────────────────────────────────
@@ -386,6 +438,7 @@ public class FarmHistoryService : IFarmHistoryService
     {
         var box = await _uow.Boxes.GetByIdAsync(boxId, ct)
             ?? throw AppException.NotFound("Box");
+        await _areas.EnsureBoxAsync(boxId, manage: false, ct);
         var dto = await BuildFarmingStatusAsync(box, ct);
         return ApiResponse<BoxFarmingStatusDto>.Ok(dto);
     }
@@ -393,8 +446,13 @@ public class FarmHistoryService : IFarmHistoryService
     public async Task<ApiResponse<IEnumerable<BoxFarmingStatusDto>>> ListBoxesFarmingStatusAsync(
         Guid? farmingAreaId = null, Guid? farmingRowId = null, string? status = null, CancellationToken ct = default)
     {
+        var allowedAreas = await _areas.SelectionAsync(farmingAreaId, ct);
         var boxes = (await _uow.Boxes.GetAllAsync(ct)).AsEnumerable();
         var rows = (await _uow.FarmingRows.GetAllAsync(ct)).ToDictionary(r => r.Id);
+        if (allowedAreas is not null)
+            boxes = boxes.Where(box =>
+                rows.TryGetValue(box.FarmingRowId, out var row)
+                && allowedAreas.Contains(row.FarmingAreaId));
 
         if (farmingRowId.HasValue)
             boxes = boxes.Where(b => b.FarmingRowId == farmingRowId.Value);
@@ -418,6 +476,7 @@ public class FarmHistoryService : IFarmHistoryService
         Guid boxId, DateTime? from = null, DateTime? to = null, CancellationToken ct = default)
     {
         _ = await _uow.Boxes.GetByIdAsync(boxId, ct) ?? throw AppException.NotFound("Box");
+        await _areas.EnsureBoxAsync(boxId, manage: false, ct);
         var list = await _uow.BoxStatusHistories.FindAsync(h => h.BoxId == boxId, ct);
         return ApiResponse<IEnumerable<BoxStatusHistoryDto>>.Ok(
             FilterByRange(list, h => h.ChangedAt, from, to)
@@ -429,10 +488,14 @@ public class FarmHistoryService : IFarmHistoryService
     {
         var dayCount = Math.Clamp(days, 1, 31);
         var today = DateTime.UtcNow.Date;
-        var boxes = (await _uow.Boxes.GetAllAsync(ct)).ToList();
+        var allowedBoxIds = await ScopedBoxIdsAsync(ct);
+        var boxes = (await _uow.Boxes.GetAllAsync(ct))
+            .Where(box => allowedBoxIds is null || allowedBoxIds.Contains(box.Id))
+            .ToList();
         var crabs = await _uow.Crabs.GetAllAsync(ct);
         var conditionsByBox = crabs
-            .Where(c => c.BoxId.HasValue)
+            .Where(c => c.BoxId.HasValue
+                && (allowedBoxIds is null || allowedBoxIds.Contains(c.BoxId.Value)))
             .GroupBy(c => c.BoxId!.Value)
             .ToDictionary(
                 group => group.Key,
@@ -441,7 +504,8 @@ public class FarmHistoryService : IFarmHistoryService
                     .OrderByDescending(ConditionPriority)
                     .FirstOrDefault());
         var events = (await _uow.BoxStatusHistories.GetAllAsync(ct))
-            .Where(h => h.ChangedAt >= today.AddDays(-(dayCount - 1)))
+            .Where(h => (allowedBoxIds is null || allowedBoxIds.Contains(h.BoxId))
+                && h.ChangedAt >= today.AddDays(-(dayCount - 1)))
             .OrderByDescending(h => h.ChangedAt)
             .ToList();
         var states = boxes.ToDictionary(
@@ -485,9 +549,22 @@ public class FarmHistoryService : IFarmHistoryService
     {
         var dayCount = Math.Clamp(days, 1, 31);
         var today = DateTime.UtcNow.Date;
-        var crabs = (await _uow.Crabs.GetAllAsync(ct)).ToList();
+        var allowedBoxIds = await ScopedBoxIdsAsync(ct);
+        var allowedCrabIds = allowedBoxIds is null
+            ? null
+            : (await _uow.CrabBoxAllocations.GetAllAsync(ct))
+                .Where(allocation => allowedBoxIds.Contains(allocation.BoxId))
+                .Select(allocation => allocation.CrabId)
+                .ToHashSet();
+        var crabs = (await _uow.Crabs.GetAllAsync(ct))
+            .Where(crab => allowedCrabIds is null
+                || allowedCrabIds.Contains(crab.Id)
+                || (crab.BoxId is Guid boxId && allowedBoxIds!.Contains(boxId)))
+            .ToList();
+        var crabIds = crabs.Select(crab => crab.Id).ToHashSet();
         var events = (await _uow.CrabStatusHistories.GetAllAsync(ct))
-            .Where(h => h.ChangedAt >= today.AddDays(-(dayCount - 1)))
+            .Where(h => crabIds.Contains(h.CrabId)
+                && h.ChangedAt >= today.AddDays(-(dayCount - 1)))
             .OrderByDescending(h => h.ChangedAt)
             .ToList();
         var states = crabs.ToDictionary(
@@ -582,6 +659,7 @@ public class FarmHistoryService : IFarmHistoryService
     {
         var h = await _uow.BoxStatusHistories.GetByIdAsync(id, ct)
             ?? throw AppException.NotFound("BoxStatusHistory");
+        await _areas.EnsureBoxAsync(h.BoxId, manage: false, ct);
 
         if (req.OldStatus is not null) h.OldStatus = req.OldStatus;
         if (req.NewStatus is not null)
@@ -605,6 +683,7 @@ public class FarmHistoryService : IFarmHistoryService
     {
         var h = await _uow.BoxStatusHistories.GetByIdAsync(id, ct)
             ?? throw AppException.NotFound("BoxStatusHistory");
+        await _areas.EnsureBoxAsync(h.BoxId, manage: false, ct);
         _uow.BoxStatusHistories.Remove(h);
         await _uow.SaveChangesAsync(ct);
         return ApiResponse.Ok("Box status history deleted (box current status unchanged).");
@@ -614,6 +693,7 @@ public class FarmHistoryService : IFarmHistoryService
         Guid boxId, DateTime? from = null, DateTime? to = null, CancellationToken ct = default)
     {
         _ = await _uow.Boxes.GetByIdAsync(boxId, ct) ?? throw AppException.NotFound("Box");
+        await _areas.EnsureBoxAsync(boxId, manage: false, ct);
 
         var events = new List<BoxFarmingEventDto>();
 
@@ -763,7 +843,7 @@ public class FarmHistoryService : IFarmHistoryService
         if (crab is null) return;
 
         var molts = (await _uow.MoltingRecords.FindAsync(m => m.CrabId == crabId, ct))
-            .Where(m => excludeId is null || m.Id != excludeId.Value)
+            .Where(m => !m.IsVoided && (excludeId is null || m.Id != excludeId.Value))
             .OrderByDescending(m => m.MoltTime)
             .ToList();
 
@@ -792,6 +872,78 @@ public class FarmHistoryService : IFarmHistoryService
         }
 
         _uow.Crabs.Update(crab);
+    }
+
+    private Guid CurrentUserId() =>
+        _currentUser is { IsAuthenticated: true } ? _currentUser.UserId : Guid.Empty;
+
+    private async Task EnsureCrabAreaAsync(Crab crab, CancellationToken ct)
+    {
+        if (_currentUser is null) return;
+        _ = await _areas.CurrentUserAsync(ct);
+        if (crab.BoxId is Guid boxId)
+        {
+            await _areas.EnsureBoxAsync(boxId, manage: false, ct);
+            return;
+        }
+        var latest = (await _uow.CrabBoxAllocations.FindAsync(
+                allocation => allocation.CrabId == crab.Id, ct))
+            .OrderByDescending(allocation => allocation.StartTime)
+            .FirstOrDefault();
+        if (latest is null)
+            throw AppException.Forbidden("Không xác định được khu của cua.");
+        await _areas.EnsureBoxAsync(latest.BoxId, manage: false, ct);
+    }
+
+    private async Task EnsureMoltingAreaAsync(MoltingRecord record, CancellationToken ct)
+    {
+        if (record.BoxId is Guid boxId)
+        {
+            await _areas.EnsureBoxAsync(boxId, manage: false, ct);
+            return;
+        }
+        var crab = await _uow.Crabs.GetByIdAsync(record.CrabId, ct)
+            ?? throw AppException.NotFound("Crab");
+        await EnsureCrabAreaAsync(crab, ct);
+    }
+
+    private async Task AddCorrectionAsync(
+        Guid crabId,
+        string eventType,
+        Guid eventId,
+        string action,
+        string previousJson,
+        string nextJson,
+        string reason,
+        CancellationToken ct)
+    {
+        if (_uow.CrabEventCorrections is null) return;
+        await _uow.CrabEventCorrections.AddAsync(new CrabEventCorrection
+        {
+            CrabId = crabId,
+            EventType = eventType,
+            EventId = eventId,
+            Action = action,
+            PreviousDataJson = previousJson,
+            NewDataJson = nextJson,
+            Reason = reason,
+            CorrectedByUserId = CurrentUserId(),
+            CorrectedAt = DateTime.UtcNow
+        }, ct);
+    }
+
+    private async Task<HashSet<Guid>?> ScopedBoxIdsAsync(CancellationToken ct)
+    {
+        var allowedAreas = await _areas.AreaIdsAsync(ct);
+        if (allowedAreas is null) return null;
+        var rowIds = (await _uow.FarmingRows.GetAllAsync(ct))
+            .Where(row => allowedAreas.Contains(row.FarmingAreaId))
+            .Select(row => row.Id)
+            .ToHashSet();
+        return (await _uow.Boxes.GetAllAsync(ct))
+            .Where(box => rowIds.Contains(box.FarmingRowId))
+            .Select(box => box.Id)
+            .ToHashSet();
     }
 
     private static bool IsBoxUnusable(string? status)
@@ -901,6 +1053,9 @@ public class FarmHistoryService : IFarmHistoryService
         ImageUploadRules.ValidateBatch(files);
         var record = await _uow.MoltingRecords.GetByIdAsync(moltingId, ct)
             ?? throw AppException.NotFound("MoltingRecord");
+        await EnsureMoltingAreaAsync(record, ct);
+        if (record.IsVoided)
+            throw AppException.Conflict("Không thể thêm ảnh vào bản ghi đã vô hiệu hóa.");
 
         var existing = JsonStringList.Parse(record.PhotoUrlsJson);
         if (existing.Count + files.Count > ImageUploadRules.MaxUrls)
@@ -954,6 +1109,7 @@ public class FarmHistoryService : IFarmHistoryService
         if (index < 0) return null;
         var record = await _uow.MoltingRecords.GetByIdAsync(moltingId, ct);
         if (record is null) return null;
+        await EnsureMoltingAreaAsync(record, ct);
 
         var urls = JsonStringList.Parse(record.PhotoUrlsJson).ToList();
         var assets = (await _uow.MediaAssets.FindAsync(
@@ -984,7 +1140,8 @@ public class FarmHistoryService : IFarmHistoryService
             JsonStringList.Parse(m.PhotoUrlsJson),
             m.StartedAt, m.CompletedAt, m.WeightBeforeGram,
             m.ShellWidthBeforeMm, m.ShellLengthBeforeMm,
-            m.ShellWidthAfterMm, m.ShellLengthAfterMm, m.CameraId);
+            m.ShellWidthAfterMm, m.ShellLengthAfterMm, m.CameraId,
+            m.IsVoided, m.VoidedAt, m.VoidedByUserId, m.VoidReason);
 
     private static BoxStatusHistoryDto MapStatusHist(BoxStatusHistory h) =>
         new(h.Id, h.BoxId, h.OldStatus, h.NewStatus,

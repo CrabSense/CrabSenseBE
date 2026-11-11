@@ -3,6 +3,7 @@ using CrabSenseBE.Application.Common;
 using CrabSenseBE.Application.DTOs.Harvest;
 using CrabSenseBE.Application.Interfaces;
 using CrabSenseBE.Domain.Entities;
+using CrabSenseBE.Domain.Enums;
 using CrabSenseBE.Domain.Interfaces;
 using QRCoder;
 
@@ -14,10 +15,14 @@ namespace CrabSenseBE.Application.Services;
 public class TraceabilityService : ITraceabilityService
 {
     private readonly IUnitOfWork _uow;
+    private readonly ICurrentUserService? _currentUser;
+    private readonly FarmAreaScope _areas;
 
-    public TraceabilityService(IUnitOfWork uow)
+    public TraceabilityService(IUnitOfWork uow, ICurrentUserService? currentUser)
     {
         _uow = uow;
+        _currentUser = currentUser;
+        _areas = new FarmAreaScope(uow, currentUser);
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -30,6 +35,7 @@ public class TraceabilityService : ITraceabilityService
     {
         var lot = await _uow.FrozenLots.GetByIdAsync(frozenLotId, ct)
             ?? throw AppException.NotFound("FrozenLot");
+        await EnsureFrozenLotAreaAsync(lot, ct);
 
         // Đã có QR active → trả về luôn
         var existing = await _uow.QrCodes.FirstOrDefaultAsync(
@@ -38,8 +44,19 @@ public class TraceabilityService : ITraceabilityService
                  && q.EntityType == "frozen_lot",
             ct);
 
-        if (existing is not null)
+        if (existing is not null && existing.ApprovalStatus != QrApprovalStatus.Rejected)
             return ApiResponse<QrCodeDto>.Ok(MapQrCodeDto(existing));
+        if (existing is not null)
+        {
+            existing.ApprovalStatus = QrApprovalStatus.Pending;
+            existing.ProposedByUserId = CurrentUserId();
+            existing.ApprovedByUserId = null;
+            existing.ApprovedAt = null;
+            existing.RejectionReason = null;
+            _uow.QrCodes.Update(existing);
+            await _uow.SaveChangesAsync(ct);
+            return ApiResponse<QrCodeDto>.Ok(MapQrCodeDto(existing), "QR assignment proposed again.");
+        }
 
         // Mã tem: FL-{lotCode}-{shortGuid}
         var shortId = frozenLotId.ToString("N")[..8].ToUpperInvariant();
@@ -54,6 +71,8 @@ public class TraceabilityService : ITraceabilityService
             EntityType = "frozen_lot",
             FrozenLotId = frozenLotId,
             IsActive = true,
+            ApprovalStatus = QrApprovalStatus.Pending,
+            ProposedByUserId = CurrentUserId(),
             Payload = JsonSerializer.Serialize(new
             {
                 type = "frozen_lot",
@@ -80,7 +99,10 @@ public class TraceabilityService : ITraceabilityService
             ct);
 
         if (qr is null)
-            return await EnsureFrozenLotQrAsync(frozenLotId, ct);
+            throw AppException.NotFound("QrCode");
+        var lot = await _uow.FrozenLots.GetByIdAsync(frozenLotId, ct)
+            ?? throw AppException.NotFound("FrozenLot");
+        await EnsureFrozenLotAreaAsync(lot, ct);
 
         return ApiResponse<QrCodeDto>.Ok(MapQrCodeDto(qr));
     }
@@ -107,6 +129,7 @@ public class TraceabilityService : ITraceabilityService
     {
         var voucher = await _uow.HarvestVouchers.GetByIdAsync(voucherId, ct)
             ?? throw AppException.NotFound("HarvestVoucher");
+        await EnsureHarvestVoucherAreaAsync(voucher, ct);
 
         // Đã có QR active → trả về luôn
         var existing = await _uow.QrCodes.FirstOrDefaultAsync(
@@ -115,8 +138,19 @@ public class TraceabilityService : ITraceabilityService
                  && q.EntityType == "harvest_voucher",
             ct);
 
-        if (existing is not null)
+        if (existing is not null && existing.ApprovalStatus != QrApprovalStatus.Rejected)
             return ApiResponse<QrCodeDto>.Ok(MapQrCodeDto(existing));
+        if (existing is not null)
+        {
+            existing.ApprovalStatus = QrApprovalStatus.Pending;
+            existing.ProposedByUserId = CurrentUserId();
+            existing.ApprovedByUserId = null;
+            existing.ApprovedAt = null;
+            existing.RejectionReason = null;
+            _uow.QrCodes.Update(existing);
+            await _uow.SaveChangesAsync(ct);
+            return ApiResponse<QrCodeDto>.Ok(MapQrCodeDto(existing), "QR assignment proposed again.");
+        }
 
         // Mã tem: HV-{voucherCode}-{shortGuid}
         var shortId = voucherId.ToString("N")[..8].ToUpperInvariant();
@@ -131,6 +165,8 @@ public class TraceabilityService : ITraceabilityService
             EntityType = "harvest_voucher",
             HarvestVoucherId = voucherId,
             IsActive = true,
+            ApprovalStatus = QrApprovalStatus.Pending,
+            ProposedByUserId = CurrentUserId(),
             Payload = JsonSerializer.Serialize(new
             {
                 type = "harvest_voucher",
@@ -157,7 +193,10 @@ public class TraceabilityService : ITraceabilityService
             ct);
 
         if (qr is null)
-            return await EnsureHarvestVoucherQrAsync(voucherId, ct);
+            throw AppException.NotFound("QrCode");
+        var voucher = await _uow.HarvestVouchers.GetByIdAsync(voucherId, ct)
+            ?? throw AppException.NotFound("HarvestVoucher");
+        await EnsureHarvestVoucherAreaAsync(voucher, ct);
 
         return ApiResponse<QrCodeDto>.Ok(MapQrCodeDto(qr));
     }
@@ -174,6 +213,48 @@ public class TraceabilityService : ITraceabilityService
         return GeneratePng(code, pixelsPerModule);
     }
 
+    public async Task<ApiResponse<QrCodeDto>> ApproveQrAsync(
+        Guid qrId,
+        CancellationToken ct = default)
+    {
+        var qr = await GetProductQrWithAreaCheckAsync(qrId, ct);
+        if (qr.ApprovalStatus != QrApprovalStatus.Pending)
+            throw AppException.Conflict("Chỉ mã QR đang chờ duyệt mới được phê duyệt.");
+        var currentUserId = CurrentUserId();
+        if (currentUserId.HasValue && qr.ProposedByUserId == currentUserId)
+            throw AppException.Forbidden("Người đề xuất không được tự phê duyệt QR sản phẩm.");
+        qr.ApprovalStatus = QrApprovalStatus.Approved;
+        qr.ApprovedByUserId = currentUserId;
+        qr.ApprovedAt = DateTime.UtcNow;
+        qr.RejectionReason = null;
+        _uow.QrCodes.Update(qr);
+        await _uow.SaveChangesAsync(ct);
+        return ApiResponse<QrCodeDto>.Ok(MapQrCodeDto(qr), "QR assignment approved.");
+    }
+
+    public async Task<ApiResponse<QrCodeDto>> RejectQrAsync(
+        Guid qrId,
+        RejectQrAssignmentRequest request,
+        CancellationToken ct = default)
+    {
+        var reason = string.IsNullOrWhiteSpace(request.Reason) ? null : request.Reason.Trim();
+        if (reason is null)
+            throw AppException.BadRequest("Cần ghi lý do từ chối gán QR.");
+        var qr = await GetProductQrWithAreaCheckAsync(qrId, ct);
+        if (qr.ApprovalStatus != QrApprovalStatus.Pending)
+            throw AppException.Conflict("Chỉ mã QR đang chờ duyệt mới được từ chối.");
+        var currentUserId = CurrentUserId();
+        if (currentUserId.HasValue && qr.ProposedByUserId == currentUserId)
+            throw AppException.Forbidden("Người đề xuất không được tự từ chối QR sản phẩm.");
+        qr.ApprovalStatus = QrApprovalStatus.Rejected;
+        qr.ApprovedByUserId = currentUserId;
+        qr.ApprovedAt = DateTime.UtcNow;
+        qr.RejectionReason = reason;
+        _uow.QrCodes.Update(qr);
+        await _uow.SaveChangesAsync(ct);
+        return ApiResponse<QrCodeDto>.Ok(MapQrCodeDto(qr), "QR assignment rejected.");
+    }
+
     // ─────────────────────────────────────────────────────────────────────────
     // Traceability (public)
     // ─────────────────────────────────────────────────────────────────────────
@@ -188,9 +269,14 @@ public class TraceabilityService : ITraceabilityService
         var normalized = code.Trim();
 
         var qr = await _uow.QrCodes.FirstOrDefaultAsync(
-            q => q.Code == normalized && q.IsActive,
+            q => q.Code == normalized
+                 && q.IsActive
+                 && q.ApprovalStatus == QrApprovalStatus.Approved,
             ct)
             ?? throw AppException.NotFound("QrCode");
+        if (qr.ApprovalStatus != QrApprovalStatus.Approved
+            || qr.EntityType == "box")
+            throw AppException.NotFound("QrCode");
 
         // Tăng scan count
         qr.ScanCount += 1;
@@ -198,7 +284,6 @@ public class TraceabilityService : ITraceabilityService
 
         TraceabilityPublicDto result = qr.EntityType switch
         {
-            "box" => await BuildBoxTraceabilityAsync(qr, ct),
             "frozen_lot" => await BuildFrozenLotTraceabilityAsync(qr, ct),
             "harvest_voucher" => await BuildHarvestVoucherTraceabilityAsync(qr, ct),
             _ => throw AppException.BadRequest($"Unsupported entity type: {qr.EntityType}")
@@ -325,7 +410,72 @@ public class TraceabilityService : ITraceabilityService
     // ─────────────────────────────────────────────────────────────────────────
 
     private static QrCodeDto MapQrCodeDto(QrCode q) =>
-        new(q.Id, q.Code, q.FrozenLotId ?? q.HarvestVoucherId ?? q.BoxId, q.ScanCount, q.ExpiresAt);
+        new(
+            q.Id,
+            q.Code,
+            q.FrozenLotId ?? q.HarvestVoucherId ?? q.BoxId,
+            q.ScanCount,
+            q.ExpiresAt,
+            q.ApprovalStatus.ToString(),
+            q.ProposedByUserId,
+            q.ApprovedByUserId,
+            q.ApprovedAt,
+            q.RejectionReason);
+
+    private Guid? CurrentUserId() =>
+        _currentUser is { IsAuthenticated: true } ? _currentUser.UserId : null;
+
+    private async Task EnsureFrozenLotAreaAsync(FrozenLot lot, CancellationToken ct)
+    {
+        if (lot.FarmingAreaId is Guid directAreaId)
+        {
+            await _areas.EnsureAsync(directAreaId, manage: false, ct);
+            return;
+        }
+        if (lot.HarvestVoucherId is Guid voucherId)
+        {
+            var voucher = await _uow.HarvestVouchers.GetByIdAsync(voucherId, ct)
+                ?? throw AppException.Forbidden("Không xác định được khu của lô đông.");
+            await EnsureHarvestVoucherAreaAsync(voucher, ct);
+            return;
+        }
+        if (await _areas.CurrentUserAsync(ct) is not null)
+            throw AppException.Forbidden("Lô đông chưa xác định khu sở hữu.");
+    }
+
+    private async Task EnsureHarvestVoucherAreaAsync(
+        HarvestVoucher voucher, CancellationToken ct)
+    {
+        if (voucher.FarmingAreaId is not Guid areaId)
+        {
+            if (await _areas.CurrentUserAsync(ct) is not null)
+                throw AppException.Forbidden("Phiếu thu hoạch chưa xác định khu.");
+            return;
+        }
+        await _areas.EnsureAsync(areaId, manage: false, ct);
+    }
+
+    private async Task<QrCode> GetProductQrWithAreaCheckAsync(
+        Guid qrId, CancellationToken ct)
+    {
+        var qr = await _uow.QrCodes.GetByIdAsync(qrId, ct)
+            ?? throw AppException.NotFound("QrCode");
+        if (qr.EntityType == "frozen_lot" && qr.FrozenLotId is Guid lotId)
+        {
+            var lot = await _uow.FrozenLots.GetByIdAsync(lotId, ct)
+                ?? throw AppException.NotFound("FrozenLot");
+            await EnsureFrozenLotAreaAsync(lot, ct);
+            return qr;
+        }
+        if (qr.EntityType == "harvest_voucher" && qr.HarvestVoucherId is Guid voucherId)
+        {
+            var voucher = await _uow.HarvestVouchers.GetByIdAsync(voucherId, ct)
+                ?? throw AppException.NotFound("HarvestVoucher");
+            await EnsureHarvestVoucherAreaAsync(voucher, ct);
+            return qr;
+        }
+        throw AppException.BadRequest("Chỉ QR sản phẩm hoặc lô đông mới cần phê duyệt.");
+    }
 
     private static byte[] GeneratePng(string code, int pixelsPerModule)
     {

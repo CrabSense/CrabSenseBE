@@ -9,7 +9,7 @@ public class HarvestVoucher : BaseEntity
     public string VoucherCode { get; set; } = string.Empty;
     // public Guid? CropBatchId { get; set; }
     public DateTime HarvestDate { get; set; }
-    public HarvestStatus Status { get; set; } = HarvestStatus.Planned;
+    public HarvestStatus Status { get; set; } = HarvestStatus.PendingApproval;
     public int TotalQuantity { get; set; }
     public decimal TotalWeightKg { get; set; }
     public string? Notes { get; set; }
@@ -17,6 +17,13 @@ public class HarvestVoucher : BaseEntity
     public Guid? FarmingAreaId { get; set; }
     public string? PerformedByName { get; set; }
     public string PhotoUrlsJson { get; set; } = "[]";
+    public Guid? ApprovedByUserId { get; set; }
+    public DateTime? ApprovedAt { get; set; }
+    public string? RejectionReason { get; set; }
+    public Guid? PerformedByUserId { get; set; }
+    public DateTime? ExecutionCompletedAt { get; set; }
+    public Guid? ConfirmedByUserId { get; set; }
+    public DateTime? ConfirmedAt { get; set; }
 
     // Navigation
     public ICollection<HarvestLine> Lines { get; set; } = new List<HarvestLine>();

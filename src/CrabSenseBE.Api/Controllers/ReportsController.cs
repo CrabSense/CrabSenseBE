@@ -64,13 +64,12 @@ public class ReportsController : ControllerBase
             {
                 var inLot = crabs.Where(crab => crab.CrabLotId == lot.Id).ToList();
                 var harvested = inLot.Where(crab => crab.Status == CrabStatus.Harvested || crab.Status == CrabStatus.Sold).ToList();
-                var ended = lot.Status is "Completed" or "Cancelled";
                 return new CrabLotCompareRow(
                     lot.Id,
                     lot.LotCode,
                     lot.Name,
-                    lot.ImportDate,
-                    ended ? lot.UpdatedAt ?? lot.CreatedAt : null,
+                    lot.StockedAt ?? lot.ImportDate,
+                    lot.ClosedAt,
                     lot.Quantity,
                     inLot.Count,
                     inLot.Count(crab => crab.Status is CrabStatus.Alive or CrabStatus.Molting),

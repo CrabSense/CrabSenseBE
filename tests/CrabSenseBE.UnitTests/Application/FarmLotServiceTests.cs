@@ -13,7 +13,7 @@ public class FarmLotServiceTests
 {
     private readonly Mock<IUnitOfWork> _uow = new();
     private readonly Mock<IPublicImageStorage> _images = new();
-    private FarmLotService Create() => new(_uow.Object, _images.Object);
+    private FarmLotService Create() => new(_uow.Object, _images.Object, currentUser: null);
 
     [Fact]
     public async Task CreateLot_StoresDeclaredQuantity_AndComputesAvgAndCost()

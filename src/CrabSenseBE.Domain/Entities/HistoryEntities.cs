@@ -52,6 +52,10 @@ public class MoltingRecord : BaseEntity
 
     /// <summary>JSON array URL ảnh lột xác trên Drive.</summary>
     public string PhotoUrlsJson { get; set; } = "[]";
+    public bool IsVoided { get; set; }
+    public DateTime? VoidedAt { get; set; }
+    public Guid? VoidedByUserId { get; set; }
+    public string? VoidReason { get; set; }
 
     public Crab? Crab { get; set; }
     public Box? Box { get; set; }
@@ -137,4 +141,23 @@ public class CrabHarvestHistory : BaseEntity
 
     public Crab? Crab { get; set; }
     public HarvestLine? HarvestLine { get; set; }
+}
+
+/// <summary>
+/// Nhật ký chỉnh sửa các sự kiện vòng đời quan trọng.
+/// Bản gốc không bị xóa; trước/sau được giữ dưới dạng JSON.
+/// </summary>
+public class CrabEventCorrection : BaseEntity
+{
+    public Guid CrabId { get; set; }
+    public string EventType { get; set; } = string.Empty;
+    public Guid EventId { get; set; }
+    public string Action { get; set; } = "update";
+    public string PreviousDataJson { get; set; } = "{}";
+    public string NewDataJson { get; set; } = "{}";
+    public string Reason { get; set; } = string.Empty;
+    public Guid CorrectedByUserId { get; set; }
+    public DateTime CorrectedAt { get; set; } = DateTime.UtcNow;
+
+    public Crab? Crab { get; set; }
 }

@@ -55,7 +55,7 @@ public class MortalityServiceTests
         _uow.Setup(u => u.SaveChangesAsync(It.IsAny<CancellationToken>())).ReturnsAsync(1);
     }
 
-    private MortalityService Create() => new(_uow.Object);
+    private MortalityService Create() => new(_uow.Object, currentUser: null);
 
     private Crab GivenCrab(decimal? weight = 85m, decimal? width = 62m, decimal? length = 55m)
     {

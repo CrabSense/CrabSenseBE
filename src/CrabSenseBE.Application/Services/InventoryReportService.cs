@@ -436,8 +436,10 @@ public class InventoryReportService : IInventoryReportService
             .Where(voucher => voucher.FarmingAreaId is Guid)
             .ToDictionary(voucher => voucher.Id, voucher => voucher.FarmingAreaId!.Value);
         return lots.Where(lot =>
-            lot.HarvestVoucherId is Guid voucherId
-            && voucherAreas.TryGetValue(voucherId, out var areaId)
-            && allowed.Contains(areaId));
+            (lot.FarmingAreaId is Guid directAreaId && allowed.Contains(directAreaId))
+            || (lot.FarmingAreaId is null
+                && lot.HarvestVoucherId is Guid voucherId
+                && voucherAreas.TryGetValue(voucherId, out var voucherAreaId)
+                && allowed.Contains(voucherAreaId)));
     }
 }

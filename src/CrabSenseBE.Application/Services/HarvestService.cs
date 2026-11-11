@@ -28,6 +28,7 @@ public class HarvestService : IHarvestService
 
     private readonly IUnitOfWork _uow;
     private readonly ICurrentUserService _currentUser;
+    private readonly FarmAreaScope _areas;
 
     public HarvestService(
         IUnitOfWork uow,
@@ -35,6 +36,7 @@ public class HarvestService : IHarvestService
     {
         _uow = uow;
         _currentUser = currentUser;
+        _areas = new FarmAreaScope(uow, currentUser);
     }
 
     public async Task<ApiResponse<HarvestVoucherDetailDto>> GetByIdAsync(
@@ -42,10 +44,12 @@ public class HarvestService : IHarvestService
     CancellationToken ct = default)
     {
         var voucher = await GetVoucherOrThrowAsync(id, ct);
+        await EnsureVoucherAreaAsync(voucher, ct);
 
         var lines = await _uow.HarvestLines.FindAsync(
             line => line.HarvestVoucherId == id,
             ct);
+        await EnsureVoucherLinesAreaAsync(voucher, lines, ct);
 
         return ApiResponse<HarvestVoucherDetailDto>.Ok(
             MapVoucherDetail(voucher, lines, await AreaNameAsync(voucher.FarmingAreaId, ct)));
@@ -59,11 +63,10 @@ public class HarvestService : IHarvestService
         Guid? farmingAreaId = null,
         CancellationToken ct = default)
     {
+        var allowedAreas = await _areas.SelectionAsync(farmingAreaId, ct);
         var vouchers = (await _uow.HarvestVouchers.GetAllAsync(ct))
-            .Where(voucher =>
-                farmingAreaId is null
-                || farmingAreaId == Guid.Empty
-                || voucher.FarmingAreaId == farmingAreaId)
+            .Where(voucher => allowedAreas is null
+                || (voucher.FarmingAreaId is Guid areaId && allowedAreas.Contains(areaId)))
             .OrderByDescending(voucher => voucher.HarvestDate)
             .ThenByDescending(voucher => voucher.CreatedAt)
             .ToList();
@@ -85,6 +88,11 @@ public class HarvestService : IHarvestService
             .ToDictionary(
                 group => group.Key,
                 group => group.ToList());
+        foreach (var voucher in vouchers)
+        {
+            var voucherLines = linesByVoucher.GetValueOrDefault(voucher.Id) ?? [];
+            await EnsureVoucherLinesAreaAsync(voucher, voucherLines, ct);
+        }
 
         var areaNames = await LoadAreaNamesAsync(
             vouchers.Select(v => v.FarmingAreaId),
@@ -113,7 +121,8 @@ public class HarvestService : IHarvestService
         Guid? farmingAreaId = null,
         CancellationToken ct = default)
     {
-        var boxIdsInArea = await BoxIdsInAreaAsync(farmingAreaId, ct);
+        var allowedAreas = await _areas.SelectionAsync(farmingAreaId, ct);
+        var boxIdsInArea = await BoxIdsInAreasAsync(allowedAreas, ct);
         var crabs = (await _uow.Crabs.GetAllAsync(ct)).ToList();
         bool InArea(Crab c) =>
             boxIdsInArea is null
@@ -134,10 +143,8 @@ public class HarvestService : IHarvestService
         var today = DateTime.UtcNow.Date;
         var tomorrow = today.AddDays(1);
         var areaVouchers = (await _uow.HarvestVouchers.GetAllAsync(ct))
-            .Where(v =>
-                farmingAreaId is null
-                || farmingAreaId == Guid.Empty
-                || v.FarmingAreaId == farmingAreaId)
+            .Where(v => allowedAreas is null
+                || (v.FarmingAreaId is Guid areaId && allowedAreas.Contains(areaId)))
             .ToList();
         var todayCompleted = areaVouchers
             .Where(v =>
@@ -201,55 +208,25 @@ public class HarvestService : IHarvestService
             .Select(line => line.CrabId!.Value)
             .ToList();
 
-        var statusSpecified = !string.IsNullOrWhiteSpace(request.Status);
-        HarvestStatus status;
-        if (statusSpecified)
-        {
-            if (!Enum.TryParse<HarvestStatus>(
-                    request.Status!.Trim(),
-                    ignoreCase: true,
-                    out status))
-            {
-                var allowed = string.Join(", ", Enum.GetNames<HarvestStatus>());
-                throw AppException.BadRequest(
-                    $"Invalid harvest status. Allowed values: {allowed}.");
-            }
-        }
-        else
-        {
-            // Clients cũ: tạo phiếu kèm cua = hoàn tất ngay.
-            status = suppliedCrabIds.Count > 0
-                ? HarvestStatus.Completed
-                : HarvestStatus.Planned;
-        }
-
-        var completeNow = status == HarvestStatus.Completed;
-        var requireWeights = status is HarvestStatus.InProgress
-            or HarvestStatus.Completed;
-
-        if (requireWeights && requestLines.Count == 0)
-        {
-            throw AppException.BadRequest(
-                "At least one harvest line is required.");
-        }
-
-        if (status == HarvestStatus.Planned
-            && request.FarmingAreaId is null
+        if (request.FarmingAreaId is null
             && suppliedCrabIds.Count == 0)
         {
             throw AppException.BadRequest(
-                "FarmingAreaId is required when saving a draft without crabs.");
+                "FarmingAreaId is required when creating a harvest request without crabs.");
         }
 
         if (requestLines.Count > 0)
         {
-            ValidateHarvestLines(requestLines, requirePositiveWeight: requireWeights);
-            await ValidateCrabsAsync(suppliedCrabIds, ct);
+            ValidateHarvestLines(requestLines, requirePositiveWeight: false);
         }
 
         var areaId = request.FarmingAreaId;
         if (areaId is null && suppliedCrabIds.Count > 0)
             areaId = await InferAreaFromCrabAsync(suppliedCrabIds[0], ct);
+        if (areaId is not Guid assignedAreaId || assignedAreaId == Guid.Empty)
+            throw AppException.BadRequest("Không xác định được khu của phiếu thu hoạch.");
+        await _areas.EnsureAsync(assignedAreaId, manage: false, ct);
+        await ValidateCrabsAsync(suppliedCrabIds, assignedAreaId, checkAlreadyHarvested: true, ct);
 
         var performer = NormalizeNullable(request.PerformedByName)
             ?? await ResolveUserNameAsync(ct);
@@ -259,7 +236,7 @@ public class HarvestService : IHarvestService
             VoucherCode = await GenerateVoucherCodeAsync(ct),
             // CropBatchId = request.CropBatchId,
             HarvestDate = NormalizeUtc(request.HarvestDate),
-            Status = status,
+            Status = HarvestStatus.PendingApproval,
             Notes = NormalizeNullable(request.Notes),
             CreatedBy = _currentUser.UserId,
             FarmingAreaId = areaId,
@@ -295,9 +272,6 @@ public class HarvestService : IHarvestService
 
         await _uow.HarvestVouchers.AddAsync(voucher, ct);
 
-        if (completeNow)
-            await ApplyHarvestToCrabsAsync(voucher, ct);
-
         await _uow.SaveChangesAsync(ct);
 
         return ApiResponse<HarvestVoucherDetailDto>.Ok(
@@ -306,58 +280,136 @@ public class HarvestService : IHarvestService
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // Status
+    // Approval and execution workflow
     // ─────────────────────────────────────────────────────────────────────────
 
-    public async Task<ApiResponse<HarvestVoucherDetailDto>> UpdateStatusAsync(
-        Guid id,
-        UpdateHarvestStatusRequest request,
-        CancellationToken ct = default)
+    public Task<ApiResponse<HarvestVoucherDetailDto>> ApproveAsync(
+        Guid id, ApproveHarvestRequest request, CancellationToken ct = default)
+        => DecideAsync(id, approved: true, request.Notes, ct);
+
+    public Task<ApiResponse<HarvestVoucherDetailDto>> RejectAsync(
+        Guid id, RejectHarvestRequest request, CancellationToken ct = default)
+        => DecideAsync(id, approved: false, request.Reason, ct);
+
+    private async Task<ApiResponse<HarvestVoucherDetailDto>> DecideAsync(
+        Guid id, bool approved, string? note, CancellationToken ct)
     {
         var voucher = await GetVoucherOrThrowAsync(id, ct);
-
-        if (string.IsNullOrWhiteSpace(request.Status))
-        {
-            throw AppException.BadRequest(
-                "Status is required.");
-        }
-
-        if (!Enum.TryParse<HarvestStatus>(
-                request.Status.Trim(),
-                ignoreCase: true,
-                out var targetStatus))
-        {
-            var allowed = string.Join(
-                ", ",
-                Enum.GetNames<HarvestStatus>());
-
-            throw AppException.BadRequest(
-                $"Invalid harvest status. Allowed values: {allowed}.");
-        }
-
-        ValidateStatusTransition(voucher.Status, targetStatus);
-
-        voucher.Status = targetStatus;
-        _uow.HarvestVouchers.Update(voucher);
-
-        if (targetStatus == HarvestStatus.Completed)
-        {
-            var pendingLines = await _uow.HarvestLines.FindAsync(
-                line => line.HarvestVoucherId == voucher.Id,
-                ct);
-            voucher.Lines = pendingLines.ToList();
-            await ApplyHarvestToCrabsAsync(voucher, ct);
-        }
-
-        await _uow.SaveChangesAsync(ct);
-
-        var lines = await _uow.HarvestLines.FindAsync(
-            line => line.HarvestVoucherId == voucher.Id,
+        await EnsureVoucherAreaAsync(voucher, ct);
+        await EnsureVoucherLinesAreaAsync(
+            voucher,
+            await _uow.HarvestLines.FindAsync(line => line.HarvestVoucherId == id, ct),
             ct);
+        if (voucher.Status is not HarvestStatus.PendingApproval and not HarvestStatus.Planned)
+            throw AppException.Conflict(
+                $"Chỉ phiếu đang chờ duyệt mới có thể duyệt hoặc từ chối. Trạng thái hiện tại: '{voucher.Status}'.");
+        if (voucher.CreatedBy == _currentUser.UserId)
+            throw AppException.Forbidden("Người tạo yêu cầu không được tự duyệt hoặc từ chối phiếu thu hoạch.");
+        var normalized = NormalizeNullable(note);
+        if (!approved && normalized is null)
+            throw AppException.BadRequest("Cần ghi lý do từ chối thu hoạch.");
 
-        return ApiResponse<HarvestVoucherDetailDto>.Ok(
-            MapVoucherDetail(voucher, lines, await AreaNameAsync(voucher.FarmingAreaId, ct)),
-            $"Harvest voucher status updated to '{targetStatus}'.");
+        voucher.Status = approved ? HarvestStatus.Approved : HarvestStatus.Rejected;
+        voucher.ApprovedByUserId = _currentUser.UserId;
+        voucher.ApprovedAt = DateTime.UtcNow;
+        voucher.RejectionReason = approved ? null : normalized;
+        if (approved && normalized is not null)
+            voucher.Notes = AppendNote(voucher.Notes, normalized);
+        _uow.HarvestVouchers.Update(voucher);
+        await _uow.SaveChangesAsync(ct);
+        return await DetailResponseAsync(
+            voucher,
+            approved ? "Harvest request approved." : "Harvest request rejected.",
+            ct);
+    }
+
+    public async Task<ApiResponse<HarvestVoucherDetailDto>> ExecuteAsync(
+        Guid id, ExecuteHarvestRequest request, CancellationToken ct = default)
+    {
+        var voucher = await GetVoucherOrThrowAsync(id, ct);
+        await EnsureVoucherAreaAsync(voucher, ct);
+        await EnsureVoucherLinesAreaAsync(
+            voucher,
+            await _uow.HarvestLines.FindAsync(line => line.HarvestVoucherId == id, ct),
+            ct);
+        if (voucher.Status is not HarvestStatus.Approved and not HarvestStatus.InProgress)
+            throw AppException.Conflict(
+                $"Chỉ phiếu đã duyệt mới được thực hiện. Trạng thái hiện tại: '{voucher.Status}'.");
+
+        var requestLines = request.Lines?.ToList() ?? [];
+        if (requestLines.Count == 0)
+            throw AppException.BadRequest("Cần nhập ít nhất một kết quả thu hoạch.");
+        ValidateHarvestLines(requestLines, requirePositiveWeight: true);
+        var crabIds = requestLines
+            .Where(line => line.CrabId.HasValue)
+            .Select(line => line.CrabId!.Value)
+            .ToList();
+        if (voucher.FarmingAreaId is not Guid areaId)
+            throw AppException.Conflict("Phiếu thu hoạch chưa gắn khu.");
+        await ValidateCrabsAsync(crabIds, areaId, checkAlreadyHarvested: false, ct);
+
+        var oldLines = (await _uow.HarvestLines.FindAsync(
+            line => line.HarvestVoucherId == voucher.Id, ct)).ToList();
+        foreach (var line in oldLines)
+            _uow.HarvestLines.Remove(line);
+        voucher.Lines.Clear();
+        foreach (var requestLine in requestLines)
+        {
+            var snap = await SnapshotCrabAsync(requestLine.CrabId, ct);
+            var line = new HarvestLine
+            {
+                HarvestVoucherId = voucher.Id,
+                CrabId = requestLine.CrabId,
+                BoxId = snap.BoxId,
+                WeightGram = requestLine.WeightGram,
+                Grade = NormalizeGrade(requestLine.Grade),
+                IsSoftshell = requestLine.IsSoftshell,
+                Notes = NormalizeNullable(requestLine.Notes),
+                ConditionLabel = NormalizeNullable(requestLine.ConditionLabel),
+                PhotoUrlsJson = JsonStringList.Serialize(requestLine.PhotoUrls),
+                CrabCode = snap.CrabCode,
+                AreaName = snap.AreaName,
+                RowName = snap.RowName,
+                BoxCode = snap.BoxCode,
+                LotCode = snap.LotCode,
+                Result = NormalizeResult(requestLine.Result)
+            };
+            voucher.Lines.Add(line);
+        }
+
+        voucher.TotalQuantity = voucher.Lines.Count;
+        voucher.TotalWeightKg = CalculateTotalWeightKg(voucher.Lines);
+        voucher.Status = HarvestStatus.InProgress;
+        voucher.PerformedByUserId = _currentUser.UserId;
+        voucher.PerformedByName = await ResolveUserNameAsync(ct);
+        voucher.ExecutionCompletedAt = DateTime.UtcNow;
+        voucher.Notes = AppendNote(voucher.Notes, NormalizeNullable(request.Notes));
+        if (request.PhotoUrls is not null)
+            voucher.PhotoUrlsJson = JsonStringList.Serialize(request.PhotoUrls);
+        _uow.HarvestVouchers.Update(voucher);
+        await ApplyHarvestToCrabsAsync(voucher, ct);
+        await _uow.SaveChangesAsync(ct);
+        return await DetailResponseAsync(voucher, "Harvest execution recorded; waiting for manager confirmation.", ct);
+    }
+
+    public async Task<ApiResponse<HarvestVoucherDetailDto>> ConfirmAsync(
+        Guid id, ConfirmHarvestRequest request, CancellationToken ct = default)
+    {
+        var voucher = await GetVoucherOrThrowAsync(id, ct);
+        await EnsureVoucherAreaAsync(voucher, ct);
+        await EnsureVoucherLinesAreaAsync(
+            voucher,
+            await _uow.HarvestLines.FindAsync(line => line.HarvestVoucherId == id, ct),
+            ct);
+        if (voucher.Status != HarvestStatus.InProgress || voucher.ExecutionCompletedAt is null)
+            throw AppException.Conflict("Chỉ kết quả do Farm Staff đã thực hiện mới được xác nhận.");
+        voucher.Status = HarvestStatus.Completed;
+        voucher.ConfirmedByUserId = _currentUser.UserId;
+        voucher.ConfirmedAt = DateTime.UtcNow;
+        voucher.Notes = AppendNote(voucher.Notes, NormalizeNullable(request.Notes));
+        _uow.HarvestVouchers.Update(voucher);
+        await _uow.SaveChangesAsync(ct);
+        return await DetailResponseAsync(voucher, "Harvest result confirmed.", ct);
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -369,12 +421,19 @@ public class HarvestService : IHarvestService
         CancellationToken ct = default)
     {
         var voucher = await GetVoucherOrThrowAsync(id, ct);
+        await EnsureVoucherAreaAsync(voucher, ct);
+        await EnsureVoucherLinesAreaAsync(
+            voucher,
+            await _uow.HarvestLines.FindAsync(line => line.HarvestVoucherId == id, ct),
+            ct);
 
-        if (voucher.Status is not HarvestStatus.Planned
+        if (voucher.Status is not HarvestStatus.PendingApproval
+            and not HarvestStatus.Planned
+            and not HarvestStatus.Rejected
             and not HarvestStatus.Cancelled)
         {
             throw AppException.Conflict(
-                "Only Planned or Cancelled harvest vouchers can be deleted.");
+                "Only pending, rejected, planned or cancelled harvest vouchers can be deleted.");
         }
 
         var hasFrozenLots = await _uow.FrozenLots.AnyAsync(
@@ -430,6 +489,7 @@ public class HarvestService : IHarvestService
                 "'to' must be later than 'from'.");
         }
 
+        var allowedAreas = await _areas.AreaIdsAsync(ct);
         var vouchers = (
             await _uow.HarvestVouchers.FindAsync(
                 voucher =>
@@ -437,6 +497,8 @@ public class HarvestService : IHarvestService
                     && voucher.HarvestDate >= fromUtc
                     && voucher.HarvestDate < toUtc,
                 ct))
+            .Where(voucher => allowedAreas is null
+                || (voucher.FarmingAreaId is Guid areaId && allowedAreas.Contains(areaId)))
             .ToList();
 
         var voucherIds = vouchers
@@ -523,7 +585,8 @@ public class HarvestService : IHarvestService
         CancellationToken ct = default)
     {
         // Đảm bảo phiếu thu hoạch tồn tại
-        await GetVoucherOrThrowAsync(voucherId, ct);
+        var voucher = await GetVoucherOrThrowAsync(voucherId, ct);
+        await EnsureVoucherAreaAsync(voucher, ct);
 
         var lines = await _uow.HarvestLines
             .Query()
@@ -553,6 +616,7 @@ public class HarvestService : IHarvestService
         // Đảm bảo box tồn tại
         _ = await _uow.Boxes.GetByIdAsync(boxId, ct)
             ?? throw AppException.NotFound("Box");
+        await _areas.EnsureBoxAsync(boxId, manage: false, ct);
 
         var lines = await _uow.HarvestLines
             .Query()
@@ -636,7 +700,8 @@ public class HarvestService : IHarvestService
 
     private async Task ValidateCrabsAsync(
         IReadOnlyCollection<Guid> crabIds,
-        // Guid? cropBatchId,
+        Guid farmingAreaId,
+        bool checkAlreadyHarvested,
         CancellationToken ct)
     {
         foreach (var crabId in crabIds)
@@ -651,17 +716,15 @@ public class HarvestService : IHarvestService
                     $"Crab '{crabId}' is not alive and cannot be harvested.");
             }
 
-            // if (cropBatchId.HasValue
-            //     && crab.CropBatchId != cropBatchId.Value)
-            // {
-            //     throw AppException.Conflict(
-            //         $"Crab '{crabId}' does not belong to crop batch " +
-            //         $"'{cropBatchId.Value}'.");
-            // }
+            var crabAreaId = await AreaOfCrabAsync(crab, ct);
+            if (crabAreaId != farmingAreaId)
+                throw AppException.Forbidden(
+                    $"Cua '{crabId}' không thuộc khu của phiếu thu hoạch.");
 
-            var alreadyHarvested = await _uow.HarvestLines.AnyAsync(
-                line => line.CrabId == crabId,
-                ct);
+            var alreadyHarvested = checkAlreadyHarvested
+                && await _uow.HarvestLines.AnyAsync(
+                    line => line.CrabId == crabId,
+                    ct);
 
             if (alreadyHarvested)
             {
@@ -669,38 +732,6 @@ public class HarvestService : IHarvestService
                     $"Crab '{crabId}' has already been recorded " +
                     "in another harvest voucher.");
             }
-        }
-    }
-
-    private static void ValidateStatusTransition(
-        HarvestStatus current,
-        HarvestStatus target)
-    {
-        if (current == target)
-        {
-            throw AppException.Conflict(
-                $"Harvest voucher is already in status '{current}'.");
-        }
-
-        var allowed = current switch
-        {
-            HarvestStatus.Planned =>
-                target is HarvestStatus.InProgress
-                    or HarvestStatus.Cancelled,
-
-            HarvestStatus.InProgress =>
-                target is HarvestStatus.Completed
-                    or HarvestStatus.Cancelled,
-
-            HarvestStatus.Completed => false,
-            HarvestStatus.Cancelled => false,
-            _ => false
-        };
-
-        if (!allowed)
-        {
-            throw AppException.Conflict(
-                $"Cannot change harvest status from '{current}' to '{target}'.");
         }
     }
 
@@ -745,7 +776,14 @@ public class HarvestService : IHarvestService
             FailedCount: failed,
             AverageWeightGram: avg,
             PhotoUrls: JsonStringList.Parse(voucher.PhotoUrlsJson),
-            Lines: lineDtos);
+            Lines: lineDtos,
+            ApprovedByUserId: voucher.ApprovedByUserId,
+            ApprovedAt: voucher.ApprovedAt,
+            RejectionReason: voucher.RejectionReason,
+            PerformedByUserId: voucher.PerformedByUserId,
+            ExecutionCompletedAt: voucher.ExecutionCompletedAt,
+            ConfirmedByUserId: voucher.ConfirmedByUserId,
+            ConfirmedAt: voucher.ConfirmedAt);
     }
 
     private static HarvestVoucherDetailDto MapVoucherDetail(
@@ -788,7 +826,14 @@ public class HarvestService : IHarvestService
             PassedCount: passed,
             FailedCount: failed,
             AverageWeightGram: avg,
-            PhotoUrls: JsonStringList.Parse(voucher.PhotoUrlsJson));
+            PhotoUrls: JsonStringList.Parse(voucher.PhotoUrlsJson),
+            ApprovedByUserId: voucher.ApprovedByUserId,
+            ApprovedAt: voucher.ApprovedAt,
+            RejectionReason: voucher.RejectionReason,
+            PerformedByUserId: voucher.PerformedByUserId,
+            ExecutionCompletedAt: voucher.ExecutionCompletedAt,
+            ConfirmedByUserId: voucher.ConfirmedByUserId,
+            ConfirmedAt: voucher.ConfirmedAt);
     }
 
     private static HarvestLineDto MapLine(
@@ -822,6 +867,57 @@ public class HarvestService : IHarvestService
     {
         return await _uow.HarvestVouchers.GetByIdAsync(id, ct)
             ?? throw AppException.NotFound("HarvestVoucher");
+    }
+
+    private async Task EnsureVoucherAreaAsync(HarvestVoucher voucher, CancellationToken ct)
+    {
+        if (voucher.FarmingAreaId is not Guid areaId || areaId == Guid.Empty)
+            throw AppException.Forbidden("Phiếu thu hoạch chưa gắn khu được phân công.");
+        await _areas.EnsureAsync(areaId, manage: false, ct);
+    }
+
+    private async Task EnsureVoucherLinesAreaAsync(
+        HarvestVoucher voucher,
+        IEnumerable<HarvestLine> lines,
+        CancellationToken ct)
+    {
+        if (voucher.FarmingAreaId is not Guid voucherAreaId)
+            throw AppException.Forbidden("Phiếu thu hoạch chưa gắn khu được phân công.");
+        foreach (var line in lines.Where(item => item.CrabId.HasValue))
+        {
+            Guid? lineAreaId = null;
+            if (line.BoxId is Guid boxId)
+            {
+                var box = await _uow.Boxes.GetByIdAsync(boxId, ct);
+                if (box is not null)
+                {
+                    var row = await _uow.FarmingRows.GetByIdAsync(box.FarmingRowId, ct);
+                    lineAreaId = row?.FarmingAreaId;
+                }
+            }
+            if (lineAreaId is null && line.CrabId is Guid crabId)
+            {
+                var crab = await _uow.Crabs.GetByIdAsync(crabId, ct);
+                if (crab is not null)
+                    lineAreaId = await AreaOfCrabAsync(crab, ct);
+            }
+            if (lineAreaId != voucherAreaId)
+                throw AppException.Forbidden(
+                    $"Cua '{line.CrabId}' không thuộc khu của phiếu thu hoạch.");
+        }
+    }
+
+    private async Task<ApiResponse<HarvestVoucherDetailDto>> DetailResponseAsync(
+        HarvestVoucher voucher, string message, CancellationToken ct)
+    {
+        var lines = await _uow.HarvestLines.FindAsync(
+            line => line.HarvestVoucherId == voucher.Id, ct);
+        var lineList = lines.ToList();
+        if (lineList.Count == 0 && voucher.Lines.Count > 0)
+            lineList = voucher.Lines.ToList();
+        return ApiResponse<HarvestVoucherDetailDto>.Ok(
+            MapVoucherDetail(voucher, lineList, await AreaNameAsync(voucher.FarmingAreaId, ct)),
+            message);
     }
 
     private async Task<string> GenerateVoucherCodeAsync(
@@ -1126,6 +1222,15 @@ public class HarvestService : IHarvestService
         return row?.FarmingAreaId;
     }
 
+    private async Task<Guid?> AreaOfCrabAsync(Crab crab, CancellationToken ct)
+    {
+        if (crab.BoxId is not Guid boxId) return null;
+        var box = await _uow.Boxes.GetByIdAsync(boxId, ct);
+        if (box is null) return null;
+        var row = await _uow.FarmingRows.GetByIdAsync(box.FarmingRowId, ct);
+        return row?.FarmingAreaId;
+    }
+
     private async Task<string?> AreaNameAsync(Guid? areaId, CancellationToken ct)
     {
         if (areaId is not Guid id || id == Guid.Empty) return null;
@@ -1150,17 +1255,26 @@ public class HarvestService : IHarvestService
                 a => string.IsNullOrWhiteSpace(a.Name) ? a.Code : a.Name);
     }
 
-    private async Task<HashSet<Guid>?> BoxIdsInAreaAsync(Guid? farmingAreaId, CancellationToken ct)
+    private async Task<HashSet<Guid>?> BoxIdsInAreasAsync(
+        HashSet<Guid>? farmingAreaIds, CancellationToken ct)
     {
-        if (farmingAreaId is not Guid areaId || areaId == Guid.Empty)
-            return null;
-        var rowIds = (await _uow.FarmingRows.FindAsync(r => r.FarmingAreaId == areaId, ct))
+        if (farmingAreaIds is null) return null;
+        var rowIds = (await _uow.FarmingRows.GetAllAsync(ct))
+            .Where(row => farmingAreaIds.Contains(row.FarmingAreaId))
             .Select(r => r.Id)
             .ToHashSet();
         return (await _uow.Boxes.GetAllAsync(ct))
             .Where(b => rowIds.Contains(b.FarmingRowId))
             .Select(b => b.Id)
             .ToHashSet();
+    }
+
+    private static string? AppendNote(string? current, string? addition)
+    {
+        if (addition is null) return current;
+        return string.IsNullOrWhiteSpace(current)
+            ? addition
+            : $"{current}{Environment.NewLine}{addition}";
     }
 
     private async Task<string> ResolveUserNameAsync(CancellationToken ct)

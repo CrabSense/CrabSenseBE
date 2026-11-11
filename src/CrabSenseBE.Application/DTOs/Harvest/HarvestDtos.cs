@@ -24,7 +24,14 @@ public record HarvestVoucherDto(
     int FailedCount = 0,
     decimal AverageWeightGram = 0,
     IReadOnlyList<string>? PhotoUrls = null,
-    IReadOnlyCollection<HarvestLineDto>? Lines = null
+    IReadOnlyCollection<HarvestLineDto>? Lines = null,
+    Guid? ApprovedByUserId = null,
+    DateTime? ApprovedAt = null,
+    string? RejectionReason = null,
+    Guid? PerformedByUserId = null,
+    DateTime? ExecutionCompletedAt = null,
+    Guid? ConfirmedByUserId = null,
+    DateTime? ConfirmedAt = null
 );
 
 public record HarvestVoucherDetailDto(
@@ -47,7 +54,14 @@ public record HarvestVoucherDetailDto(
     int PassedCount = 0,
     int FailedCount = 0,
     decimal AverageWeightGram = 0,
-    IReadOnlyList<string>? PhotoUrls = null
+    IReadOnlyList<string>? PhotoUrls = null,
+    Guid? ApprovedByUserId = null,
+    DateTime? ApprovedAt = null,
+    string? RejectionReason = null,
+    Guid? PerformedByUserId = null,
+    DateTime? ExecutionCompletedAt = null,
+    Guid? ConfirmedByUserId = null,
+    DateTime? ConfirmedAt = null
 );
 
 public record HarvestLineDto(
@@ -102,6 +116,17 @@ public record UpdateHarvestStatusRequest(
     string Status
 );
 
+public record ApproveHarvestRequest(string? Notes = null);
+
+public record RejectHarvestRequest(string Reason);
+
+public record ExecuteHarvestRequest(
+    IEnumerable<HarvestLineRequest> Lines,
+    string? Notes = null,
+    IEnumerable<string>? PhotoUrls = null);
+
+public record ConfirmHarvestRequest(string? Notes = null);
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Harvest Statistics
 // ─────────────────────────────────────────────────────────────────────────────
@@ -138,8 +163,15 @@ public record QrCodeDto(
     string Code,
     Guid? FrozenLotId,
     int ScanCount,
-    DateTime? ExpiresAt
+    DateTime? ExpiresAt,
+    string ApprovalStatus = "Approved",
+    Guid? ProposedByUserId = null,
+    Guid? ApprovedByUserId = null,
+    DateTime? ApprovedAt = null,
+    string? RejectionReason = null
 );
+
+public record RejectQrAssignmentRequest(string Reason);
 
 public record GenerateQrRequest(
     Guid? FrozenLotId,

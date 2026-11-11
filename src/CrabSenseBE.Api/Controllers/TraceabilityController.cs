@@ -27,7 +27,7 @@ public class TraceabilityController : ControllerBase
 
     /// <summary>[CREATE] Tạo / đảm bảo QR code cho lô cấp đông.</summary>
     [HttpPost("api/frozen-lots/{frozenLotId:guid}/qr")]
-    [Authorize(Roles = AppRoles.FarmWrite)]
+    [Authorize(Roles = AppRoles.FarmStaff)]
     [ProducesResponseType(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> EnsureFrozenLotQr(
@@ -36,7 +36,7 @@ public class TraceabilityController : ControllerBase
 
     /// <summary>[READ] Lấy QR data của lô cấp đông.</summary>
     [HttpGet("api/frozen-lots/{frozenLotId:guid}/qr")]
-    [Authorize]
+    [Authorize(Roles = AppRoles.FarmPortal)]
     [ProducesResponseType(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> GetFrozenLotQr(
@@ -45,7 +45,7 @@ public class TraceabilityController : ControllerBase
 
     /// <summary>[READ] Ảnh PNG QR cho lô cấp đông (dán tem / in).</summary>
     [HttpGet("api/frozen-lots/{frozenLotId:guid}/qr.png")]
-    [Authorize]
+    [Authorize(Roles = AppRoles.FarmPortal)]
     [Produces("image/png")]
     [ProducesResponseType(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
@@ -64,7 +64,7 @@ public class TraceabilityController : ControllerBase
 
     /// <summary>[CREATE] Tạo / đảm bảo QR code cho phiếu thu hoạch.</summary>
     [HttpPost("api/harvest-vouchers/{voucherId:guid}/qr")]
-    [Authorize(Roles = AppRoles.FarmWrite)]
+    [Authorize(Roles = AppRoles.FarmStaff)]
     [ProducesResponseType(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> EnsureHarvestVoucherQr(
@@ -73,7 +73,7 @@ public class TraceabilityController : ControllerBase
 
     /// <summary>[READ] Lấy QR data của phiếu thu hoạch.</summary>
     [HttpGet("api/harvest-vouchers/{voucherId:guid}/qr")]
-    [Authorize]
+    [Authorize(Roles = AppRoles.FarmPortal)]
     [ProducesResponseType(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> GetHarvestVoucherQr(
@@ -82,7 +82,7 @@ public class TraceabilityController : ControllerBase
 
     /// <summary>[READ] Ảnh PNG QR cho phiếu thu hoạch (dán tem / in).</summary>
     [HttpGet("api/harvest-vouchers/{voucherId:guid}/qr.png")]
-    [Authorize]
+    [Authorize(Roles = AppRoles.FarmPortal)]
     [Produces("image/png")]
     [ProducesResponseType(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
@@ -94,6 +94,21 @@ public class TraceabilityController : ControllerBase
         var bytes = await _service.GetHarvestVoucherQrPngAsync(voucherId, size, ct);
         return File(bytes, "image/png", $"harvest-{voucherId:N}-qr.png");
     }
+
+    /// <summary>[DECISION] FM phê duyệt gán QR sản phẩm/lô đông.</summary>
+    [HttpPost("api/traceability-qrs/{qrId:guid}/approve")]
+    [Authorize(Roles = AppRoles.FarmManager)]
+    public async Task<IActionResult> ApproveQr(Guid qrId, CancellationToken ct)
+        => Ok(await _service.ApproveQrAsync(qrId, ct));
+
+    /// <summary>[DECISION] FM từ chối gán QR sản phẩm/lô đông.</summary>
+    [HttpPost("api/traceability-qrs/{qrId:guid}/reject")]
+    [Authorize(Roles = AppRoles.FarmManager)]
+    public async Task<IActionResult> RejectQr(
+        Guid qrId,
+        [FromBody] RejectQrAssignmentRequest request,
+        CancellationToken ct)
+        => Ok(await _service.RejectQrAsync(qrId, request, ct));
 
     // ─────────────────────────────────────────────────────────────────────────
     // Traceability (public)

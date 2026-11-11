@@ -10,6 +10,13 @@ public static class DependencyInjection
 {
     public static IServiceCollection AddApplication(this IServiceCollection services, IConfiguration configuration)
     {
+        if (!services.Any(descriptor => descriptor.ServiceType == typeof(ICurrentUserService)))
+        {
+            throw new InvalidOperationException(
+                "ICurrentUserService must be registered before AddApplication. "
+                + "Area-scoped services must not run without an authenticated user context.");
+        }
+
         services.Configure<FcmOptions>(configuration.GetSection(FcmOptions.SectionName));
         services.Configure<WaterAnalysisOptions>(configuration.GetSection(WaterAnalysisOptions.SectionName));
         services.Configure<NotificationOptions>(configuration.GetSection(NotificationOptions.SectionName));
@@ -20,6 +27,7 @@ public static class DependencyInjection
         services.AddScoped<IHarvestService, HarvestService>();
         services.AddScoped<IFrozenStorageService, FrozenStorageService>();
         services.AddScoped<IFarmHistoryService, FarmHistoryService>();
+        services.AddScoped<IMortalityService, MortalityService>();
         services.AddScoped<IBoxQrService, BoxQrService>();
         services.AddScoped<ITraceabilityService, TraceabilityService>();
         services.AddScoped<IIotService, IotService>();

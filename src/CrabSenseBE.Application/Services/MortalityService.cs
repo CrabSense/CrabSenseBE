@@ -4,6 +4,7 @@ using CrabSenseBE.Application.Interfaces;
 using CrabSenseBE.Domain.Entities;
 using CrabSenseBE.Domain.Enums;
 using CrabSenseBE.Domain.Interfaces;
+using System.Text.Json;
 
 namespace CrabSenseBE.Application.Services;
 
@@ -15,10 +16,14 @@ namespace CrabSenseBE.Application.Services;
 public class MortalityService : IMortalityService
 {
     private readonly IUnitOfWork _uow;
+    private readonly ICurrentUserService? _currentUser;
+    private readonly FarmAreaScope _areas;
 
-    public MortalityService(IUnitOfWork uow)
+    public MortalityService(IUnitOfWork uow, ICurrentUserService? currentUser)
     {
         _uow = uow;
+        _currentUser = currentUser;
+        _areas = new FarmAreaScope(uow, currentUser);
     }
 
     /// <summary>
@@ -39,6 +44,13 @@ public class MortalityService : IMortalityService
             throw AppException.BadRequest("Cá thể cua này đã được ghi nhận là đã chết trước đó.");
 
         var boxId = ResolveBoxId(crab);
+        if (boxId == Guid.Empty)
+        {
+            if (await _areas.CurrentUserAsync(cancellationToken) is not null)
+                throw AppException.Forbidden("Không xác định được khu của cua.");
+        }
+        if (boxId != Guid.Empty)
+            await _areas.EnsureBoxAsync(boxId, manage: false, cancellationToken);
 
         // 2. Tạo bản ghi mortality kèm snapshot lúc chết.
         //    Client không gửi thì lấy số đo hiện tại của cua.
@@ -122,8 +134,13 @@ public class MortalityService : IMortalityService
         CancellationToken cancellationToken = default)
     {
         var records = await _uow.GetMortalityRecordsWithDetailsAsync(cancellationToken);
+        var allowedAreas = await _areas.AreaIdsAsync(cancellationToken);
 
-        return records.Select(x =>
+        return records
+        .Where(record => allowedAreas is null
+            || (record.Box?.FarmingRow is { } row
+                && allowedAreas.Contains(row.FarmingAreaId)))
+        .Select(x =>
         {
             var box = x.Box;
             var row = box?.FarmingRow;
@@ -145,6 +162,64 @@ public class MortalityService : IMortalityService
                 CarapaceWidthMm: x.CarapaceWidthMm,
                 CarapaceLengthMm: x.CarapaceLengthMm);
         }).ToList();
+    }
+
+    public async Task<MortalityRecordDto> CorrectMortalityAsync(
+        Guid id,
+        Guid correctedBy,
+        CorrectMortalityRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        var record = await _uow.CrabMortalityRecords.GetByIdAsync(id, cancellationToken)
+            ?? throw AppException.NotFound("Mortality record");
+        if (record.BoxId is not Guid boxId)
+            throw AppException.Forbidden("Bản ghi tử vong chưa xác định khu.");
+        await _areas.EnsureBoxAsync(boxId, manage: false, cancellationToken);
+        var reason = string.IsNullOrWhiteSpace(request.Reason)
+            ? null
+            : request.Reason.Trim();
+        if (reason is null)
+            throw AppException.BadRequest("Cần ghi lý do chỉnh sửa sự kiện tử vong.");
+        var previous = JsonSerializer.Serialize(record);
+
+        if (request.MortalityDate.HasValue) record.MortalityDate = request.MortalityDate.Value;
+        if (request.Cause.HasValue) record.Cause = request.Cause.Value;
+        if (request.Notes is not null) record.Notes = request.Notes;
+        if (request.WeightGram.HasValue) record.WeightGram = request.WeightGram;
+        if (request.CarapaceWidthMm.HasValue) record.CarapaceWidthMm = request.CarapaceWidthMm;
+        if (request.CarapaceLengthMm.HasValue) record.CarapaceLengthMm = request.CarapaceLengthMm;
+
+        _uow.CrabMortalityRecords.Update(record);
+        if (_uow.CrabEventCorrections is not null)
+        {
+            await _uow.CrabEventCorrections.AddAsync(new CrabEventCorrection
+            {
+                CrabId = record.CrabId,
+                EventType = "mortality",
+                EventId = record.Id,
+                Action = "update",
+                PreviousDataJson = previous,
+                NewDataJson = JsonSerializer.Serialize(record),
+                Reason = reason,
+                CorrectedByUserId = correctedBy,
+                CorrectedAt = DateTime.UtcNow
+            }, cancellationToken);
+        }
+        await _uow.SaveChangesAsync(cancellationToken);
+
+        var box = await _uow.Boxes.GetByIdAsync(boxId, cancellationToken);
+        var row = box is null
+            ? null
+            : await _uow.FarmingRows.GetByIdAsync(box.FarmingRowId, cancellationToken);
+        var area = row is null
+            ? null
+            : await _uow.FarmingAreas.GetByIdAsync(row.FarmingAreaId, cancellationToken);
+        return new MortalityRecordDto(
+            record.Id, record.CrabId, null, boxId, box?.Code ?? string.Empty,
+            box?.FarmingRowId ?? Guid.Empty, row?.Name ?? string.Empty,
+            row?.FarmingAreaId ?? Guid.Empty, area?.Name ?? string.Empty,
+            record.MortalityDate, record.Cause, record.Notes, record.RecordedBy,
+            record.WeightGram, record.CarapaceWidthMm, record.CarapaceLengthMm);
     }
 
     private static Guid ResolveBoxId(Crab crab)

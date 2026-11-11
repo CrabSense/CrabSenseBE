@@ -12,6 +12,7 @@ public interface IUnitOfWork : IDisposable
     IRepository<Box> Boxes { get; }
     IRepository<Crab> Crabs { get; }
     IRepository<CrabLot> CrabLots { get; }
+    IRepository<CrabLotArea> CrabLotAreas { get; }
     // IRepository<CropBatch> CropBatches { get; }
     IRepository<CrabMortalityRecord> CrabMortalityRecords { get; }
     IRepository<OperationLog> OperationLogs { get; }
@@ -19,6 +20,7 @@ public interface IUnitOfWork : IDisposable
     IRepository<MoltingRecord> MoltingRecords { get; }
     IRepository<BoxStatusHistory> BoxStatusHistories { get; }
     IRepository<CrabStatusHistory> CrabStatusHistories { get; }
+    IRepository<CrabEventCorrection> CrabEventCorrections { get; }
     IRepository<CrabWeightHistory> CrabWeightHistories { get; }
     IRepository<CrabAiAnalysis> CrabAiAnalyses { get; }
     IRepository<CrabHarvestHistory> CrabHarvestHistories { get; }
@@ -41,6 +43,8 @@ public interface IUnitOfWork : IDisposable
     IRepository<HarvestVoucher> HarvestVouchers { get; }
     IRepository<HarvestLine> HarvestLines { get; }
     IRepository<FrozenLot> FrozenLots { get; }
+    IRepository<FrozenStorageTransaction> FrozenStorageTransactions { get; }
+    IRepository<FrozenInventoryAdjustment> FrozenInventoryAdjustments { get; }
     IRepository<QrCode> QrCodes { get; }
     IRepository<TraceabilityLink> TraceabilityLinks { get; }
     IRepository<Customer> Customers { get; }

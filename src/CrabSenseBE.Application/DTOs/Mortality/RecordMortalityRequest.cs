@@ -43,3 +43,12 @@ public record RecordMortalityRequest
     /// </summary>
     decimal? CarapaceLengthMm = null
 );
+
+public record CorrectMortalityRequest(
+    DateTime? MortalityDate,
+    MortalityCause? Cause,
+    string? Notes,
+    decimal? WeightGram,
+    decimal? CarapaceWidthMm,
+    decimal? CarapaceLengthMm,
+    string Reason);

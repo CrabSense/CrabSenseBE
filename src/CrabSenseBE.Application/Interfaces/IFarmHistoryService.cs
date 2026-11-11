@@ -24,7 +24,8 @@ public interface IFarmHistoryService
         Guid boxId, DateTime? from = null, DateTime? to = null, CancellationToken ct = default);
     Task<ApiResponse<MoltingRecordDto>> UpdateMoltingAsync(
         Guid id, UpdateMoltingRecordRequest req, CancellationToken ct = default);
-    Task<ApiResponse> DeleteMoltingAsync(Guid id, CancellationToken ct = default);
+    Task<ApiResponse<MoltingRecordDto>> VoidMoltingAsync(
+        Guid id, VoidCrabEventRequest req, CancellationToken ct = default);
     Task<ApiResponse<IReadOnlyList<CrabImageDto>>> UploadMoltingImagesAsync(
         Guid moltingId, IReadOnlyList<CrabImageFile> files, Guid? uploadedBy, CancellationToken ct = default);
     Task<CrabImageContent?> GetMoltingPhotoAsync(Guid moltingId, int index, CancellationToken ct = default);

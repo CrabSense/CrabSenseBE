@@ -44,6 +44,15 @@ public interface ITraceabilityService
         int pixelsPerModule = 8,
         CancellationToken ct = default);
 
+    Task<ApiResponse<QrCodeDto>> ApproveQrAsync(
+        Guid qrId,
+        CancellationToken ct = default);
+
+    Task<ApiResponse<QrCodeDto>> RejectQrAsync(
+        Guid qrId,
+        RejectQrAssignmentRequest request,
+        CancellationToken ct = default);
+
     // ── Traceability (public) ─────────────────────────────────────────────
 
     /// <summary>

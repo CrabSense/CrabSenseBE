@@ -13,6 +13,7 @@ public interface IFarmLotService
     Task<ApiResponse<CrabLotDto>> CreateLotAsync(CreateCrabLotRequest req, CancellationToken ct = default);
     Task<ApiResponse<CrabLotDto>> UpdateLotAsync(Guid id, UpdateCrabLotRequest req, CancellationToken ct = default);
     Task<ApiResponse> DeleteLotAsync(Guid id, CancellationToken ct = default);
+    Task<ApiResponse<CrabLotDto>> CloseLotAsync(Guid id, CloseCrabLotRequest req, CancellationToken ct = default);
     Task<ApiResponse<IReadOnlyList<CrabImageDto>>> UploadImagesAsync(
         Guid lotId,
         IReadOnlyList<CrabImageFile> files,

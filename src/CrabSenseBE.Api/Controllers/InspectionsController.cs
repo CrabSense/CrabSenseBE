@@ -9,7 +9,7 @@ namespace CrabSenseBE.Api.Controllers;
 
 [ApiController]
 [Route("api/inspections")]
-[Authorize]
+[Authorize(Roles = AppRoles.FarmPortal)]
 [Tags("35. Manual Inspections")]
 [Produces("application/json")]
 public class InspectionsController : ControllerBase
@@ -20,14 +20,14 @@ public class InspectionsController : ControllerBase
 
     /// <summary>[CREATE] Submit manual inspection (Mobile)</summary>
     [HttpPost("submit")]
-    [Authorize(Roles = AppRoles.FarmWrite)]
+    [Authorize(Roles = AppRoles.FarmStaff)]
     public async Task<IActionResult> Submit(
         [FromBody] SubmitManualInspectionRequest req, CancellationToken ct = default)
         => Ok(await _service.SubmitAsync(req, ct));
 
     /// <summary>[CREATE] Alias POST /api/inspections</summary>
     [HttpPost]
-    [Authorize(Roles = AppRoles.FarmWrite)]
+    [Authorize(Roles = AppRoles.FarmStaff)]
     public async Task<IActionResult> Create(
         [FromBody] SubmitManualInspectionRequest req, CancellationToken ct = default)
         => Ok(await _service.SubmitAsync(req, ct));

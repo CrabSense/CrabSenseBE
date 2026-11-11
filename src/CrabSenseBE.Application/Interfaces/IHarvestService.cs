@@ -43,13 +43,17 @@ public interface IHarvestService
         CreateHarvestVoucherRequest request,
         CancellationToken ct = default);
 
-    /// <summary>
-    /// Updates harvest voucher status.
-    /// </summary>
-    Task<ApiResponse<HarvestVoucherDetailDto>> UpdateStatusAsync(
-        Guid id,
-        UpdateHarvestStatusRequest request,
-        CancellationToken ct = default);
+    Task<ApiResponse<HarvestVoucherDetailDto>> ApproveAsync(
+        Guid id, ApproveHarvestRequest request, CancellationToken ct = default);
+
+    Task<ApiResponse<HarvestVoucherDetailDto>> RejectAsync(
+        Guid id, RejectHarvestRequest request, CancellationToken ct = default);
+
+    Task<ApiResponse<HarvestVoucherDetailDto>> ExecuteAsync(
+        Guid id, ExecuteHarvestRequest request, CancellationToken ct = default);
+
+    Task<ApiResponse<HarvestVoucherDetailDto>> ConfirmAsync(
+        Guid id, ConfirmHarvestRequest request, CancellationToken ct = default);
 
     /// <summary>
     /// Deletes a harvest voucher.

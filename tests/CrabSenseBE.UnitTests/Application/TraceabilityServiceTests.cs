@@ -3,6 +3,7 @@ using CrabSenseBE.Application.Common;
 using CrabSenseBE.Application.DTOs.Harvest;
 using CrabSenseBE.Application.Services;
 using CrabSenseBE.Domain.Entities;
+using CrabSenseBE.Domain.Enums;
 using CrabSenseBE.Domain.Interfaces;
 using FluentAssertions;
 using Moq;
@@ -14,7 +15,157 @@ public class TraceabilityServiceTests
 {
     private readonly Mock<IUnitOfWork> _uow = new();
 
-    private TraceabilityService Create() => new(_uow.Object);
+    private TraceabilityService Create() => new(_uow.Object, currentUser: null);
+
+    [Fact]
+    public async Task Product_qr_workflow_enforces_two_area_scope_self_approval_and_transitions()
+    {
+        var areaA = Guid.NewGuid();
+        var areaB = Guid.NewGuid();
+        var managerA = Guid.NewGuid();
+        var staffA = Guid.NewGuid();
+        var lotA = new FrozenLot
+        {
+            Id = Guid.NewGuid(), LotCode = "FZ-A", FarmingAreaId = areaA,
+            Quantity = 8, WeightKg = 2
+        };
+        var lotB = new FrozenLot
+        {
+            Id = Guid.NewGuid(), LotCode = "FZ-B", FarmingAreaId = areaB,
+            Quantity = 5, WeightKg = 1
+        };
+        var activeUser = staffA;
+        var current = new Mock<CrabSenseBE.Application.Interfaces.ICurrentUserService>();
+        current.SetupGet(service => service.IsAuthenticated).Returns(true);
+        current.SetupGet(service => service.UserId).Returns(() => activeUser);
+        var usersById = new Dictionary<Guid, AppUser>
+        {
+            [managerA] = new()
+            {
+                Id = managerA, Username = "manager-a",
+                Role = UserRole.FarmManager, IsActive = true
+            },
+            [staffA] = new()
+            {
+                Id = staffA, Username = "staff-a",
+                Role = UserRole.FarmStaff, IsActive = true
+            }
+        };
+        var users = new Mock<IRepository<AppUser>>();
+        users.Setup(repo => repo.GetByIdAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((Guid id, CancellationToken _) => usersById.GetValueOrDefault(id));
+        var managerAssignments = new Mock<IRepository<FarmManagerAssignment>>();
+        managerAssignments.Setup(repo => repo.FirstOrDefaultAsync(
+                It.IsAny<System.Linq.Expressions.Expression<Func<FarmManagerAssignment, bool>>>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new FarmManagerAssignment { ManagerUserId = managerA, FarmingAreaId = areaA });
+        var staffAssignments = new Mock<IRepository<FarmStaffAssignment>>();
+        staffAssignments.Setup(repo => repo.FirstOrDefaultAsync(
+                It.IsAny<System.Linq.Expressions.Expression<Func<FarmStaffAssignment, bool>>>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new FarmStaffAssignment
+            {
+                StaffUserId = staffA, ManagerUserId = managerA, FarmingAreaId = areaA
+            });
+        var lots = new List<FrozenLot> { lotA, lotB };
+        var lotRepo = new Mock<IRepository<FrozenLot>>();
+        lotRepo.Setup(repo => repo.GetByIdAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((Guid id, CancellationToken _) => lots.SingleOrDefault(item => item.Id == id));
+        var qrCodes = new List<QrCode>();
+        var qrRepo = new Mock<IRepository<QrCode>>();
+        qrRepo.Setup(repo => repo.GetByIdAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((Guid id, CancellationToken _) => qrCodes.SingleOrDefault(item => item.Id == id));
+        qrRepo.Setup(repo => repo.FirstOrDefaultAsync(
+                It.IsAny<System.Linq.Expressions.Expression<Func<QrCode, bool>>>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync((
+                System.Linq.Expressions.Expression<Func<QrCode, bool>> predicate,
+                CancellationToken _) => qrCodes.FirstOrDefault(predicate.Compile()));
+        qrRepo.Setup(repo => repo.AnyAsync(
+                It.IsAny<System.Linq.Expressions.Expression<Func<QrCode, bool>>>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync((
+                System.Linq.Expressions.Expression<Func<QrCode, bool>> predicate,
+                CancellationToken _) => qrCodes.Any(predicate.Compile()));
+        qrRepo.Setup(repo => repo.AddAsync(It.IsAny<QrCode>(), It.IsAny<CancellationToken>()))
+            .Callback<QrCode, CancellationToken>((item, _) => qrCodes.Add(item))
+            .Returns(Task.CompletedTask);
+        qrRepo.Setup(repo => repo.Update(It.IsAny<QrCode>()));
+        var uow = new Mock<IUnitOfWork>();
+        uow.Setup(unit => unit.Users).Returns(users.Object);
+        uow.Setup(unit => unit.FarmManagerAssignments).Returns(managerAssignments.Object);
+        uow.Setup(unit => unit.FarmStaffAssignments).Returns(staffAssignments.Object);
+        uow.Setup(unit => unit.FrozenLots).Returns(lotRepo.Object);
+        uow.Setup(unit => unit.QrCodes).Returns(qrRepo.Object);
+        var saves = 0;
+        uow.Setup(unit => unit.SaveChangesAsync(It.IsAny<CancellationToken>()))
+            .Callback(() => saves++)
+            .ReturnsAsync(1);
+        var service = new TraceabilityService(uow.Object, current.Object);
+
+        var proposal = await service.EnsureFrozenLotQrAsync(lotA.Id);
+        proposal.Data!.ApprovalStatus.Should().Be("Pending");
+        var qrA = qrCodes.Single();
+        qrA.ProposedByUserId.Should().Be(staffA);
+
+        var foreignProposal = () => service.EnsureFrozenLotQrAsync(lotB.Id);
+        (await foreignProposal.Should().ThrowAsync<AppException>()).Which.StatusCode.Should().Be(403);
+        qrCodes.Should().ContainSingle();
+
+        var pendingPublic = () => service.GetTraceabilityAsync(qrA.Code);
+        (await pendingPublic.Should().ThrowAsync<AppException>()).Which.StatusCode.Should().Be(404);
+        qrA.ScanCount.Should().Be(0);
+
+        activeUser = managerA;
+        await service.ApproveQrAsync(qrA.Id);
+        qrA.ApprovalStatus.Should().Be(QrApprovalStatus.Approved);
+        var savesAfterApproval = saves;
+        var approveTwice = () => service.ApproveQrAsync(qrA.Id);
+        (await approveTwice.Should().ThrowAsync<AppException>()).Which.StatusCode.Should().Be(409);
+        saves.Should().Be(savesAfterApproval);
+
+        var publicResult = await service.GetTraceabilityAsync(qrA.Code);
+        publicResult.Data!.FrozenLotCode.Should().Be(lotA.LotCode);
+        qrA.ScanCount.Should().Be(1);
+
+        var selfQr = new QrCode
+        {
+            Id = Guid.NewGuid(), Code = "SELF-QR", EntityType = "frozen_lot",
+            FrozenLotId = lotA.Id, IsActive = true,
+            ApprovalStatus = QrApprovalStatus.Pending, ProposedByUserId = managerA
+        };
+        qrCodes.Add(selfQr);
+        var savesBeforeSelfApproval = saves;
+        var selfApprove = () => service.ApproveQrAsync(selfQr.Id);
+        (await selfApprove.Should().ThrowAsync<AppException>()).Which.StatusCode.Should().Be(403);
+        selfQr.ApprovalStatus.Should().Be(QrApprovalStatus.Pending);
+        saves.Should().Be(savesBeforeSelfApproval);
+
+        var foreignQr = new QrCode
+        {
+            Id = Guid.NewGuid(), Code = "FOREIGN-QR", EntityType = "frozen_lot",
+            FrozenLotId = lotB.Id, IsActive = true,
+            ApprovalStatus = QrApprovalStatus.Pending, ProposedByUserId = Guid.NewGuid()
+        };
+        qrCodes.Add(foreignQr);
+        var foreignApprove = () => service.ApproveQrAsync(foreignQr.Id);
+        (await foreignApprove.Should().ThrowAsync<AppException>()).Which.StatusCode.Should().Be(403);
+        foreignQr.ApprovalStatus.Should().Be(QrApprovalStatus.Pending);
+
+        var rejectedQr = new QrCode
+        {
+            Id = Guid.NewGuid(), Code = "REJECT-QR", EntityType = "frozen_lot",
+            FrozenLotId = lotA.Id, IsActive = true,
+            ApprovalStatus = QrApprovalStatus.Pending, ProposedByUserId = staffA
+        };
+        qrCodes.Add(rejectedQr);
+        var lotQuantity = lotA.Quantity;
+        var lotWeight = lotA.WeightKg;
+        await service.RejectQrAsync(rejectedQr.Id, new RejectQrAssignmentRequest("Sai nhãn"));
+        rejectedQr.ApprovalStatus.Should().Be(QrApprovalStatus.Rejected);
+        lotA.Quantity.Should().Be(lotQuantity);
+        lotA.WeightKg.Should().Be(lotWeight);
+    }
 
     // ─────────────────────────────────────────────────────────────────────────
     // EnsureFrozenLotQrAsync
@@ -54,6 +205,7 @@ public class TraceabilityServiceTests
 
         result.Success.Should().BeTrue();
         result.Data!.Code.Should().StartWith("FL-FL-001-");
+        result.Data.ApprovalStatus.Should().Be("Pending");
     }
 
     [Fact]
@@ -121,6 +273,7 @@ public class TraceabilityServiceTests
 
         result.Success.Should().BeTrue();
         result.Data!.Code.Should().StartWith("HV-HV-20260101-ABC-");
+        result.Data.ApprovalStatus.Should().Be("Pending");
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -275,5 +428,26 @@ public class TraceabilityServiceTests
     {
         await Assert.ThrowsAsync<AppException>(() =>
             Create().GetTraceabilityAsync(""));
+    }
+
+    [Fact]
+    public async Task GetTraceability_PendingProductQr_IsNotPublished()
+    {
+        var qrRepo = new Mock<IRepository<QrCode>>();
+        qrRepo.Setup(r => r.FirstOrDefaultAsync(
+                It.IsAny<System.Linq.Expressions.Expression<Func<QrCode, bool>>>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new QrCode
+            {
+                Code = "FL-PENDING",
+                EntityType = "frozen_lot",
+                FrozenLotId = Guid.NewGuid(),
+                IsActive = true,
+                ApprovalStatus = Domain.Enums.QrApprovalStatus.Pending
+            });
+        _uow.Setup(u => u.QrCodes).Returns(qrRepo.Object);
+
+        await Assert.ThrowsAsync<AppException>(() =>
+            Create().GetTraceabilityAsync("FL-PENDING"));
     }
 }

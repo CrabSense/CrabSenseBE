@@ -1,4 +1,5 @@
 using CrabSenseBE.Domain.Common;
+using CrabSenseBE.Domain.Enums;
 
 namespace CrabSenseBE.Domain.Entities;
 
@@ -37,6 +38,11 @@ public class QrCode : BaseEntity
     public int ScanCount { get; set; }
 
     public bool IsActive { get; set; } = true;
+    public QrApprovalStatus ApprovalStatus { get; set; } = QrApprovalStatus.Approved;
+    public Guid? ProposedByUserId { get; set; }
+    public Guid? ApprovedByUserId { get; set; }
+    public DateTime? ApprovedAt { get; set; }
+    public string? RejectionReason { get; set; }
 
     // Navigation
     public Box? Box { get; set; }

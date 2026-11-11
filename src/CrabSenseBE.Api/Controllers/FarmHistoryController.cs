@@ -9,7 +9,7 @@ using System.Security.Claims;
 namespace CrabSenseBE.Api.Controllers;
 
 [ApiController]
-[Authorize]
+[Authorize(Roles = AppRoles.FarmPortal)]
 [Tags("04b. History — Allocation & Molting")]
 [Produces("application/json")]
 public class FarmHistoryController : ControllerBase
@@ -19,26 +19,26 @@ public class FarmHistoryController : ControllerBase
 
     /// <summary>[CREATE] Allocate / move crab into a box (closes previous allocation)</summary>
     [HttpPost("api/allocations")]
-    [Authorize(Roles = AppRoles.FarmWrite)]
+    [Authorize(Roles = AppRoles.FarmStaff)]
     public async Task<IActionResult> Allocate([FromBody] AllocateCrabRequest req, CancellationToken ct)
         => Ok(await _service.AllocateCrabAsync(req, ct));
 
     /// <summary>[CREATE] Mobile transfer alias — crabId + destinationBoxId (+ sourceBoxId)</summary>
     [HttpPost("api/allocations/transfer")]
-    [Authorize(Roles = AppRoles.FarmWrite)]
+    [Authorize(Roles = AppRoles.FarmStaff)]
     public async Task<IActionResult> Transfer([FromBody] MobileTransferCrabRequest req, CancellationToken ct)
         => Ok(await _service.TransferCrabAsync(req, ct));
 
     /// <summary>[UPDATE] Fix allocation notes / times (mistake correction)</summary>
     [HttpPut("api/allocations/{id:guid}")]
-    [Authorize(Roles = AppRoles.FarmWrite)]
+    [Authorize(Roles = AppRoles.FarmManager)]
     public async Task<IActionResult> UpdateAllocation(
         Guid id, [FromBody] UpdateAllocationRequest req, CancellationToken ct)
         => Ok(await _service.UpdateAllocationAsync(id, req, ct));
 
     /// <summary>[DELETE] Delete a closed allocation record</summary>
     [HttpDelete("api/allocations/{id:guid}")]
-    [Authorize(Roles = AppRoles.FarmWrite)]
+    [Authorize(Roles = AppRoles.FarmManager)]
     public async Task<IActionResult> DeleteAllocation(Guid id, CancellationToken ct)
         => Ok(await _service.DeleteAllocationAsync(id, ct));
 
@@ -56,14 +56,14 @@ public class FarmHistoryController : ControllerBase
 
     /// <summary>[CREATE] Record molting event (lịch sử lột xác)</summary>
     [HttpPost("api/crabs/{crabId:guid}/moltings")]
-    [Authorize(Roles = AppRoles.FarmWrite)]
+    [Authorize(Roles = AppRoles.FarmStaff)]
     public async Task<IActionResult> CreateMolting(
         Guid crabId, [FromBody] CreateMoltingRecordRequest req, CancellationToken ct)
         => Ok(await _service.CreateMoltingAsync(req with { CrabId = crabId }, ct));
 
     /// <summary>[CREATE] Upload ảnh lột xác lên Drive — {khu}/{dãy}/{hộp}/{cua}/LotXac/{yyyyMMdd}/. URL ghi PhotoUrlsJson.</summary>
     [HttpPost("api/moltings/{id:guid}/images")]
-    [Authorize(Roles = AppRoles.FarmWrite)]
+    [Authorize(Roles = AppRoles.FarmStaff)]
     [RequestSizeLimit(30_000_000)]
     [Consumes("multipart/form-data")]
     public async Task<IActionResult> UploadMoltingImages(
@@ -84,16 +84,17 @@ public class FarmHistoryController : ControllerBase
 
     /// <summary>[UPDATE] Fix a molting record (mistake correction)</summary>
     [HttpPut("api/moltings/{id:guid}")]
-    [Authorize(Roles = AppRoles.FarmWrite)]
+    [Authorize(Roles = AppRoles.FarmManager)]
     public async Task<IActionResult> UpdateMolting(
         Guid id, [FromBody] UpdateMoltingRecordRequest req, CancellationToken ct)
         => Ok(await _service.UpdateMoltingAsync(id, req, ct));
 
-    /// <summary>[DELETE] Delete a molting record (resync crab stage/weight from remaining)</summary>
-    [HttpDelete("api/moltings/{id:guid}")]
-    [Authorize(Roles = AppRoles.FarmWrite)]
-    public async Task<IActionResult> DeleteMolting(Guid id, CancellationToken ct)
-        => Ok(await _service.DeleteMoltingAsync(id, ct));
+    /// <summary>[CORRECTION] Vô hiệu hóa bản ghi lột xác; giữ nguyên lịch sử audit.</summary>
+    [HttpPost("api/moltings/{id:guid}/void")]
+    [Authorize(Roles = AppRoles.FarmManager)]
+    public async Task<IActionResult> VoidMolting(
+        Guid id, [FromBody] VoidCrabEventRequest req, CancellationToken ct)
+        => Ok(await _service.VoidMoltingAsync(id, req, ct));
 
     /// <summary>[READ] Molting history by crab (optional from/to)</summary>
     [HttpGet("api/crabs/{crabId:guid}/moltings")]
@@ -141,14 +142,14 @@ public class FarmHistoryController : ControllerBase
 
     /// <summary>[UPDATE] Fix a box status history row</summary>
     [HttpPut("api/box-status-histories/{id:guid}")]
-    [Authorize(Roles = AppRoles.FarmWrite)]
+    [Authorize(Roles = AppRoles.FarmManager)]
     public async Task<IActionResult> UpdateBoxStatusHistory(
         Guid id, [FromBody] UpdateBoxStatusHistoryRequest req, CancellationToken ct)
         => Ok(await _service.UpdateBoxStatusHistoryAsync(id, req, ct));
 
     /// <summary>[DELETE] Delete a box status history row (does not revert live box status)</summary>
     [HttpDelete("api/box-status-histories/{id:guid}")]
-    [Authorize(Roles = AppRoles.FarmWrite)]
+    [Authorize(Roles = AppRoles.FarmManager)]
     public async Task<IActionResult> DeleteBoxStatusHistory(Guid id, CancellationToken ct)
         => Ok(await _service.DeleteBoxStatusHistoryAsync(id, ct));
 

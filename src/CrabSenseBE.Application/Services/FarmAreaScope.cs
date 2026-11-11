@@ -22,7 +22,10 @@ public sealed class FarmAreaScope
         _currentUser = currentUser;
     }
 
-    /// <summary>null = không có người đăng nhập (unit test). Tập rỗng = không có khu nào.</summary>
+    /// <summary>
+    /// null chỉ dành cho unit test khi chủ động không truyền ICurrentUserService.
+    /// Tập rỗng = người dùng đã xác thực nhưng không được phân công khu nào.
+    /// </summary>
     public async Task<HashSet<Guid>?> AreaIdsAsync(CancellationToken ct)
     {
         var user = await CurrentUserAsync(ct);
@@ -42,7 +45,7 @@ public sealed class FarmAreaScope
     }
 
     /// <summary>
-    /// null = không đăng nhập, giữ toàn bộ dữ liệu cho unit test.
+    /// null = unit test chủ động không truyền ICurrentUserService.
     /// Có khu trên query thì chỉ khu đó, sau khi kiểm tra phân công.
     /// Không truyền khu thì toàn bộ khu được phân công.
     /// </summary>
@@ -73,8 +76,10 @@ public sealed class FarmAreaScope
 
     public async Task<AppUser?> CurrentUserAsync(CancellationToken ct)
     {
-        if (_currentUser is not { IsAuthenticated: true })
+        if (_currentUser is null)
             return null;
+        if (!_currentUser.IsAuthenticated)
+            throw AppException.Unauthorized("Người dùng chưa được xác thực.");
         return await _uow.Users.GetByIdAsync(_currentUser.UserId, ct)
             ?? throw AppException.Unauthorized("Không xác định được người dùng.");
     }
@@ -88,8 +93,9 @@ public sealed class FarmAreaScope
 
     public async Task EnsureBoxAsync(Guid boxId, bool manage, CancellationToken ct)
     {
-        if (_currentUser is not { IsAuthenticated: true })
+        if (_currentUser is null)
             return;
+        _ = await CurrentUserAsync(ct);
         var box = await _uow.Boxes.GetByIdAsync(boxId, ct)
             ?? throw AppException.NotFound("Box");
         await EnsureAsync(await AreaIdOfBoxAsync(box, ct), manage, ct);
@@ -97,8 +103,9 @@ public sealed class FarmAreaScope
 
     public async Task EnsureRowAsync(Guid rowId, bool manage, CancellationToken ct)
     {
-        if (_currentUser is not { IsAuthenticated: true })
+        if (_currentUser is null)
             return;
+        _ = await CurrentUserAsync(ct);
         var row = await _uow.FarmingRows.GetByIdAsync(rowId, ct)
             ?? throw AppException.NotFound("FarmingRow");
         await EnsureAsync(row.FarmingAreaId, manage, ct);

@@ -6,7 +6,7 @@ using Microsoft.AspNetCore.Mvc;
 namespace CrabSenseBE.Api.Controllers;
 
 [ApiController]
-[Authorize]
+[Authorize(Roles = AppRoles.FarmPortal)]
 [Route("api/frozen-lots")]
 [Tags("Frozen Storage")]
 public class FrozenStorageController : ControllerBase
@@ -36,7 +36,7 @@ public class FrozenStorageController : ControllerBase
 
     /// <summary>Tạo một lô cua cấp đông.</summary>
     [HttpPost]
-    [Authorize(Roles = AppRoles.FarmWriteWithPlatform)]
+    [Authorize(Roles = AppRoles.FarmManager)]
     public async Task<IActionResult> Create(
         [FromBody] CreateFrozenLotRequest request,
         CancellationToken ct)
@@ -51,7 +51,7 @@ public class FrozenStorageController : ControllerBase
 
     /// <summary>Cập nhật một lô cua cấp đông.</summary>
     [HttpPut("{id:guid}")]
-    [Authorize(Roles = AppRoles.FarmWriteWithPlatform)]
+    [Authorize(Roles = AppRoles.FarmManager)]
     public async Task<IActionResult> Update(
         Guid id,
         [FromBody] UpdateFrozenLotRequest request,
@@ -62,7 +62,7 @@ public class FrozenStorageController : ControllerBase
 
     /// <summary>Xóa một lô cua cấp đông.</summary>
     [HttpDelete("{id:guid}")]
-    [Authorize(Roles = AppRoles.FarmManageWithPlatform)]
+    [Authorize(Roles = AppRoles.FarmManager)]
     public async Task<IActionResult> Delete(
         Guid id,
         CancellationToken ct)
@@ -105,7 +105,7 @@ public class FrozenStorageController : ControllerBase
     /// Ghi nhận từng cua trong lô và tạo một barcode riêng cho mỗi cua.
     /// </summary>
     [HttpPost("{lotId:guid}/crab-items")]
-    [Authorize(Roles = AppRoles.FarmWrite)]
+    [Authorize(Roles = AppRoles.FarmStaff)]
     public async Task<IActionResult> RegisterCrabItems(
         Guid lotId,
         [FromBody] RegisterFrozenCrabItemsRequest request,
@@ -139,5 +139,49 @@ public async Task<IActionResult> GetCrabItemBarcodePng(
     // Trình duyệt tải về ảnh PNG để người dùng in tem.
     return File(bytes, "image/png", $"crab-{barcodeValue}.png");
 }
+
+    /// <summary>Danh sách phiếu nhập/xuất kho trong khu được phân công.</summary>
+    [HttpGet("~/api/frozen-storage-transactions")]
+    public async Task<IActionResult> GetTransactions(CancellationToken ct)
+        => Ok(await _service.GetTransactionsAsync(ct));
+
+    /// <summary>FS lập phiếu nhập hoặc xuất kho; chưa cập nhật số tồn.</summary>
+    [HttpPost("~/api/frozen-storage-transactions")]
+    [Authorize(Roles = AppRoles.FarmStaff)]
+    public async Task<IActionResult> CreateTransaction(
+        [FromBody] CreateFrozenStorageTransactionRequest request,
+        CancellationToken ct)
+        => Ok(await _service.CreateTransactionAsync(request, ct));
+
+    /// <summary>FM duyệt phiếu nhập/xuất; chưa cập nhật số tồn.</summary>
+    [HttpPost("~/api/frozen-storage-transactions/{id:guid}/approve")]
+    [Authorize(Roles = AppRoles.FarmManager)]
+    public async Task<IActionResult> ApproveTransaction(Guid id, CancellationToken ct)
+        => Ok(await _service.ApproveTransactionAsync(id, ct));
+
+    /// <summary>FM từ chối phiếu nhập/xuất.</summary>
+    [HttpPost("~/api/frozen-storage-transactions/{id:guid}/reject")]
+    [Authorize(Roles = AppRoles.FarmManager)]
+    public async Task<IActionResult> RejectTransaction(
+        Guid id,
+        [FromBody] RejectFrozenStorageTransactionRequest request,
+        CancellationToken ct)
+        => Ok(await _service.RejectTransactionAsync(id, request, ct));
+
+    /// <summary>FS ghi số lượng/trọng lượng thực tế và cập nhật tồn kho đúng một lần.</summary>
+    [HttpPost("~/api/frozen-storage-transactions/{id:guid}/execute")]
+    [Authorize(Roles = AppRoles.FarmStaff)]
+    public async Task<IActionResult> ExecuteTransaction(
+        Guid id,
+        [FromBody] ExecuteFrozenStorageTransactionRequest request,
+        CancellationToken ct)
+        => Ok(await _service.ExecuteTransactionAsync(id, request, ct));
+
+    /// <summary>Nhật ký biến động tồn kho trong khu được phân công.</summary>
+    [HttpGet("~/api/frozen-inventory-adjustments")]
+    public async Task<IActionResult> GetAdjustments(
+        [FromQuery] Guid? frozenLotId,
+        CancellationToken ct)
+        => Ok(await _service.GetAdjustmentsAsync(frozenLotId, ct));
 
 }

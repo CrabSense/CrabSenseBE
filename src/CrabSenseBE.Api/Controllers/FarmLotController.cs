@@ -11,7 +11,7 @@ namespace CrabSenseBE.Api.Controllers;
 
 [ApiController]
 [Route("api/crab-lots")]
-[Authorize]
+[Authorize(Roles = AppRoles.FarmPortal)]
 [Tags("05. CRUD — Crab Lots")]
 [Produces("application/json")]
 public class CrabLotsController : ControllerBase
@@ -34,21 +34,21 @@ public class CrabLotsController : ControllerBase
     public async Task<IActionResult> GetById(Guid id, CancellationToken ct)
         => Ok(await _service.GetLotByIdAsync(id, ct));
 
-    /// <summary>[CREATE] Create crab lot</summary>
+    /// <summary>[CREATE] Tạo lô cua — Farm Manager, trong khu được phân công.</summary>
     [HttpPost]
-    [Authorize(Roles = AppRoles.FarmWrite)]
+    [Authorize(Roles = AppRoles.FarmManager)]
     public async Task<IActionResult> Create([FromBody] CreateCrabLotRequest req, CancellationToken ct)
         => Ok(await _service.CreateLotAsync(req, ct));
 
-    /// <summary>[UPDATE] Update crab lot</summary>
+    /// <summary>[UPDATE] Sửa thông tin lô — Farm Manager, trong khu được phân công.</summary>
     [HttpPut("{id:guid}")]
-    [Authorize(Roles = AppRoles.FarmWrite)]
+    [Authorize(Roles = AppRoles.FarmManager)]
     public async Task<IActionResult> Update(Guid id, [FromBody] UpdateCrabLotRequest req, CancellationToken ct)
         => Ok(await _service.UpdateLotAsync(id, req, ct));
 
     /// <summary>[CREATE] Upload ảnh lô nhập lên Google Drive — CrabLots/{mã lô}/. URL ghi vào ImageUrlsJson.</summary>
     [HttpPost("{id:guid}/images")]
-    [Authorize(Roles = AppRoles.FarmWrite)]
+    [Authorize(Roles = AppRoles.FarmManager)]
     [RequestSizeLimit(30_000_000)]
     [Consumes("multipart/form-data")]
     public async Task<IActionResult> UploadImages(
@@ -67,9 +67,15 @@ public class CrabLotsController : ControllerBase
         return File(photo.Data, photo.ContentType);
     }
 
-    /// <summary>[DELETE] Delete crab lot (no crabs referencing it)</summary>
+    /// <summary>[ACTION] Kết thúc vòng đời lô. Còn cua chưa lột thì phải ghi phương án xử lý.</summary>
+    [HttpPost("{id:guid}/close")]
+    [Authorize(Roles = AppRoles.FarmManager)]
+    public async Task<IActionResult> Close(Guid id, [FromBody] CloseCrabLotRequest? req, CancellationToken ct)
+        => Ok(await _service.CloseLotAsync(id, req ?? new CloseCrabLotRequest(), ct));
+
+    /// <summary>[DELETE] Xóa hoặc hủy lô theo quy định — Farm Manager.</summary>
     [HttpDelete("{id:guid}")]
-    [Authorize(Roles = AppRoles.FarmWrite)]
+    [Authorize(Roles = AppRoles.FarmManager)]
     public async Task<IActionResult> Delete(Guid id, CancellationToken ct)
         => Ok(await _service.DeleteLotAsync(id, ct));
 

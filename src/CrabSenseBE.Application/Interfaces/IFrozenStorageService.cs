@@ -48,4 +48,29 @@ public interface IFrozenStorageService
     Task<byte[]> GetCrabItemBarcodePngAsync(
     string barcodeValue,
     CancellationToken ct = default);
+
+    Task<ApiResponse<IEnumerable<FrozenStorageTransactionDto>>> GetTransactionsAsync(
+        CancellationToken ct = default);
+
+    Task<ApiResponse<FrozenStorageTransactionDto>> CreateTransactionAsync(
+        CreateFrozenStorageTransactionRequest request,
+        CancellationToken ct = default);
+
+    Task<ApiResponse<FrozenStorageTransactionDto>> ApproveTransactionAsync(
+        Guid id,
+        CancellationToken ct = default);
+
+    Task<ApiResponse<FrozenStorageTransactionDto>> RejectTransactionAsync(
+        Guid id,
+        RejectFrozenStorageTransactionRequest request,
+        CancellationToken ct = default);
+
+    Task<ApiResponse<FrozenStorageTransactionDto>> ExecuteTransactionAsync(
+        Guid id,
+        ExecuteFrozenStorageTransactionRequest request,
+        CancellationToken ct = default);
+
+    Task<ApiResponse<IEnumerable<FrozenInventoryAdjustmentDto>>> GetAdjustmentsAsync(
+        Guid? frozenLotId = null,
+        CancellationToken ct = default);
 }

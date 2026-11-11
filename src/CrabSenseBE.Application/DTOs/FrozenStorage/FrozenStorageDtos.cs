@@ -13,7 +13,8 @@ public record FrozenLotDto(
     string Status,
     string? StorageLocation,
     DateTime CreatedAt,
-    DateTime? UpdatedAt
+    DateTime? UpdatedAt,
+    Guid? FarmingAreaId = null
 );
 
 /// <summary>Yêu cầu tạo lô cua cấp đông.</summary>
@@ -25,7 +26,8 @@ public record CreateFrozenLotRequest(
     decimal WeightKg,
     string? Grade,
     int Quantity,
-    string? StorageLocation
+    string? StorageLocation,
+    Guid? FarmingAreaId = null
 );
 
 /// <summary>Yêu cầu cập nhật lô cua cấp đông.</summary>
@@ -142,3 +144,52 @@ public record FrozenCrabItemDto(
     DateTime ExpiryDate,
     decimal WeightGram,
     string Grade);
+
+public record CreateFrozenStorageTransactionRequest(
+    Guid FrozenLotId,
+    string Type,
+    int RequestedQuantity,
+    decimal RequestedWeightKg,
+    string? Notes = null);
+
+public record RejectFrozenStorageTransactionRequest(string Reason);
+
+public record ExecuteFrozenStorageTransactionRequest(
+    int ActualQuantity,
+    decimal ActualWeightKg,
+    string? Notes = null);
+
+public record FrozenStorageTransactionDto(
+    Guid Id,
+    string TransactionCode,
+    Guid FrozenLotId,
+    Guid FarmingAreaId,
+    string Type,
+    string Status,
+    int RequestedQuantity,
+    decimal RequestedWeightKg,
+    int? ActualQuantity,
+    decimal? ActualWeightKg,
+    Guid CreatedByUserId,
+    Guid? ApprovedByUserId,
+    DateTime? ApprovedAt,
+    string? RejectionReason,
+    Guid? PerformedByUserId,
+    DateTime? PerformedAt,
+    string? Notes,
+    DateTime CreatedAt);
+
+public record FrozenInventoryAdjustmentDto(
+    Guid Id,
+    Guid FrozenLotId,
+    Guid FrozenStorageTransactionId,
+    Guid FarmingAreaId,
+    int QuantityDelta,
+    decimal WeightDeltaKg,
+    int QuantityBefore,
+    int QuantityAfter,
+    decimal WeightBeforeKg,
+    decimal WeightAfterKg,
+    Guid PerformedByUserId,
+    string? Reason,
+    DateTime CreatedAt);

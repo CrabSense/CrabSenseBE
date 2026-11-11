@@ -10,9 +10,16 @@ namespace CrabSenseBE.Application.Services;
 public class ManualInspectionService : IManualInspectionService
 {
     private readonly IUnitOfWork _uow;
+    private readonly ICurrentUserService? _currentUser;
+    private readonly FarmAreaScope _areas;
     private static readonly JsonSerializerOptions JsonOpts = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
 
-    public ManualInspectionService(IUnitOfWork uow) => _uow = uow;
+    public ManualInspectionService(IUnitOfWork uow, ICurrentUserService? currentUser = null)
+    {
+        _uow = uow;
+        _currentUser = currentUser;
+        _areas = new FarmAreaScope(uow, currentUser);
+    }
 
     public async Task<ApiResponse<ManualInspectionDto>> SubmitAsync(
         SubmitManualInspectionRequest req, CancellationToken ct = default)
@@ -20,19 +27,14 @@ public class ManualInspectionService : IManualInspectionService
         if (req.BoxId == Guid.Empty)
             throw AppException.BadRequest("BoxId is required.");
         _ = await _uow.Boxes.GetByIdAsync(req.BoxId, ct) ?? throw AppException.NotFound("Box");
+        await _areas.EnsureBoxAsync(req.BoxId, manage: false, ct);
 
-        Inspection entity;
         var isUpdate = Guid.TryParse(req.Id, out var existingId) && existingId != Guid.Empty;
         if (isUpdate)
-        {
-            entity = await _uow.Inspections.GetByIdAsync(existingId, ct)
-                ?? throw AppException.NotFound("Inspection");
-        }
-        else
-        {
-            entity = new Inspection { Id = Guid.NewGuid() };
-            await _uow.Inspections.AddAsync(entity, ct);
-        }
+            throw AppException.Conflict(
+                "Bản kiểm tra đã ghi nhận không được sửa trực tiếp. Hãy tạo bản ghi bổ sung.");
+        var entity = new Inspection { Id = Guid.NewGuid() };
+        await _uow.Inspections.AddAsync(entity, ct);
 
         entity.BoxId = req.BoxId;
         entity.RelatedMediaId = req.RelatedVideoId;
@@ -42,16 +44,15 @@ public class ManualInspectionService : IManualInspectionService
         entity.Notes = req.Notes;
         entity.PhotoUrlsJson = JsonSerializer.Serialize(req.PhotoUrls ?? Array.Empty<string>(), JsonOpts);
         entity.InspectedAt = req.Timestamp ?? DateTime.UtcNow;
-        entity.InspectorId = req.OperatorId ?? Guid.Empty;
+        entity.InspectorId = _currentUser is { IsAuthenticated: true }
+            ? _currentUser.UserId
+            : req.OperatorId ?? Guid.Empty;
         entity.OperatorName = req.OperatorName ?? "Operator";
         entity.AiAgreement = req.AiAgreement;
         entity.InspectionType = "manual";
         entity.Result = req.HealthStatus ?? "unknown";
         entity.Score = req.Weight;
         entity.UpdatedAt = DateTime.UtcNow;
-
-        if (isUpdate)
-            _uow.Inspections.Update(entity);
 
         await _uow.SaveChangesAsync(ct);
         return ApiResponse<ManualInspectionDto>.Ok(Map(entity), "Submitted.");
@@ -60,6 +61,7 @@ public class ManualInspectionService : IManualInspectionService
     public async Task<ApiResponse<IEnumerable<ManualInspectionDto>>> ListByBoxAsync(
         Guid boxId, CancellationToken ct = default)
     {
+        await _areas.EnsureBoxAsync(boxId, manage: false, ct);
         var list = (await _uow.Inspections.FindAsync(i => i.BoxId == boxId, ct))
             .OrderByDescending(i => i.InspectedAt)
             .Select(Map)
@@ -71,6 +73,9 @@ public class ManualInspectionService : IManualInspectionService
     {
         var entity = await _uow.Inspections.GetByIdAsync(id, ct)
             ?? throw AppException.NotFound("Inspection");
+        if (entity.BoxId is not Guid boxId)
+            throw AppException.Forbidden("Bản kiểm tra chưa xác định hộp.");
+        await _areas.EnsureBoxAsync(boxId, manage: false, ct);
         return ApiResponse<ManualInspectionDto>.Ok(Map(entity));
     }
 

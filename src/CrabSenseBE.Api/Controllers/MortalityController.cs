@@ -12,7 +12,7 @@ namespace CrabSenseBE.Api.Controllers;
 /// </summary>
 [ApiController]
 [Route("api/mortality")]
-[Authorize]
+[Authorize(Roles = AppRoles.FarmPortal)]
 public class MortalityController : ControllerBase
 {
     private readonly IMortalityService _service;
@@ -27,7 +27,7 @@ public class MortalityController : ControllerBase
     /// Ghi nhận một cá thể cua chết.
     /// </summary>
     [HttpPost]
-    [Authorize(Roles = AppRoles.FarmWriteWithPlatform)]
+    [Authorize(Roles = AppRoles.FarmStaff)]
     public async Task<IActionResult> RecordMortality(
         [FromBody] RecordMortalityRequest request,
         CancellationToken cancellationToken)
@@ -74,6 +74,25 @@ public class MortalityController : ControllerBase
         {
             success = true,
             data = result
+        });
+    }
+
+    /// <summary>FM sửa sai bản ghi tử vong; thay đổi được lưu vào lịch sử correction.</summary>
+    [HttpPost("{id:guid}/correct")]
+    [Authorize(Roles = AppRoles.FarmManager)]
+    public async Task<IActionResult> CorrectMortality(
+        Guid id,
+        [FromBody] CorrectMortalityRequest request,
+        CancellationToken cancellationToken)
+    {
+        var userIdClaim = User.FindFirstValue(ClaimTypes.NameIdentifier);
+        if (!Guid.TryParse(userIdClaim, out var userId))
+            return Unauthorized();
+        return Ok(new
+        {
+            success = true,
+            data = await _service.CorrectMortalityAsync(
+                id, userId, request, cancellationToken)
         });
     }
 }
