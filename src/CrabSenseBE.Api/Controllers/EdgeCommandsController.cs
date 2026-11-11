@@ -2,6 +2,7 @@ using CrabSenseBE.Api.Services;
 using CrabSenseBE.Application.DTOs.IoT;
 using CrabSenseBE.Application.Interfaces;
 using CrabSenseBE.Domain.Enums;
+using CrabSenseBE.Domain.Interfaces;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -14,13 +15,16 @@ public sealed class EdgeCommandsController : ControllerBase
 {
     private readonly IEdgeCommandService _service;
     private readonly IConfiguration _configuration;
+    private readonly IUnitOfWork _uow;
 
     public EdgeCommandsController(
         IEdgeCommandService service,
-        IConfiguration configuration)
+        IConfiguration configuration,
+        IUnitOfWork uow)
     {
         _service = service;
         _configuration = configuration;
+        _uow = uow;
     }
 
     [HttpPost]
@@ -41,9 +45,10 @@ public sealed class EdgeCommandsController : ControllerBase
     public Task<IActionResult> Pending([FromQuery] string deviceCode, CancellationToken ct)
         => Execute(async () =>
         {
-            var denied = RequireEdgeKey();
+            var (denied, leaseHolder) = await EdgeKeyGuard.CheckDeviceAsync(
+                Request, _configuration, _uow, deviceCode, ct);
             if (denied is not null) return denied;
-            return Ok(await _service.GetPendingAsync(deviceCode, ct));
+            return Ok(await _service.GetPendingAsync(deviceCode, leaseHolder!, ct));
         });
 
     [HttpPost("{id:guid}/ack")]
@@ -54,13 +59,14 @@ public sealed class EdgeCommandsController : ControllerBase
         CancellationToken ct)
         => Execute(async () =>
         {
-            var denied = RequireEdgeKey();
+            var command = await _uow.EdgeCommands.GetByIdAsync(id, ct);
+            if (command is null)
+                throw CrabSenseBE.Application.Common.AppException.NotFound("EdgeCommand");
+            var (denied, _) = await EdgeKeyGuard.CheckDeviceAsync(
+                Request, _configuration, _uow, command.DeviceCode, ct);
             if (denied is not null) return denied;
-            return Ok(await _service.AcknowledgeAsync(id, request, ct));
+            return Ok(await _service.AcknowledgeAsync(id, request, command.DeviceCode, ct));
         });
-
-    private IActionResult? RequireEdgeKey() =>
-        CrabSenseBE.Api.Services.EdgeKeyGuard.Check(Request, _configuration);
 
     private static async Task<IActionResult> Execute(
         Func<Task<IActionResult>> action)

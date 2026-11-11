@@ -7,6 +7,10 @@ using CrabSenseBE.Domain.Interfaces;
 
 namespace CrabSenseBE.Application.Services;
 
+/// <summary>
+/// Luồng bán tổng hợp legacy cho mobile; không thay đổi tồn từng Crab.
+/// SalesOrderService là nguồn sự thật cho bán cua có truy xuất và doanh thu theo đơn.
+/// </summary>
 public class SalesService : ISalesService
 {
     private readonly IUnitOfWork _uow;
@@ -49,7 +53,8 @@ public class SalesService : ISalesService
         }
         await _areas.EnsureAsync(areaId, manage: false, ct);
 
-        var total = req.TotalAmount ?? Math.Round(req.Quantity * req.UnitPrice, 2);
+        // TotalAmount từ client chỉ phục vụ tương thích DTO; backend là nguồn sự thật.
+        var total = Math.Round(req.Quantity * req.UnitPrice, 2);
         var sale = new SaleTransaction
         {
             BuyerName = req.BuyerName.Trim(),
@@ -69,7 +74,8 @@ public class SalesService : ISalesService
 
         await _uow.SaleTransactions.AddAsync(sale, ct);
         await _uow.SaveChangesAsync(ct);
-        return ApiResponse<SaleDto>.Ok(Map(sale), "Created.");
+        return ApiResponse<SaleDto>.Ok(
+            Map(sale), "Đã ghi giao dịch tổng hợp legacy; không thay đổi tồn từng Crab.");
     }
 
     public async Task<ApiResponse<IEnumerable<SaleDto>>> GetHistoryAsync(

@@ -200,6 +200,57 @@ public class NotificationServiceTests
     }
 
     [Fact]
+    public async Task Notify_ScopedByArea_SendsOnlyToAssignedManagerAndStaff()
+    {
+        var areaA = Guid.NewGuid();
+        var areaB = Guid.NewGuid();
+        var managerA = new AppUser { Id = Guid.NewGuid(), Role = UserRole.FarmManager, IsActive = true };
+        var managerB = new AppUser { Id = Guid.NewGuid(), Role = UserRole.FarmManager, IsActive = true };
+        var staffA = new AppUser { Id = Guid.NewGuid(), Role = UserRole.FarmStaff, IsActive = true };
+        var staffB = new AppUser { Id = Guid.NewGuid(), Role = UserRole.FarmStaff, IsActive = true };
+        var h = new Harness();
+        var service = WithRule(h, new NotificationRule
+        {
+            TypeCode = NotificationTypeCodes.SensorThreshold,
+            IsEnabled = true,
+            ScopeByArea = true,
+            RecipientRoles = "FarmManager,FarmStaff",
+            ChannelCodes = "in_app"
+        }, managerA, managerB, staffA, staffB);
+
+        var areas = new Mock<IRepository<FarmingArea>>();
+        areas.Setup(r => r.Query()).Returns(Array.Empty<FarmingArea>().AsQueryable());
+        var managers = new Mock<IRepository<FarmManagerAssignment>>();
+        managers.Setup(r => r.FindAsync(
+                It.IsAny<System.Linq.Expressions.Expression<Func<FarmManagerAssignment, bool>>>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync((System.Linq.Expressions.Expression<Func<FarmManagerAssignment, bool>> p, CancellationToken _) =>
+                new[]
+                {
+                    new FarmManagerAssignment { ManagerUserId = managerA.Id, FarmingAreaId = areaA },
+                    new FarmManagerAssignment { ManagerUserId = managerB.Id, FarmingAreaId = areaB }
+                }.AsQueryable().Where(p).ToList());
+        var staff = new Mock<IRepository<FarmStaffAssignment>>();
+        staff.Setup(r => r.FindAsync(
+                It.IsAny<System.Linq.Expressions.Expression<Func<FarmStaffAssignment, bool>>>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync((System.Linq.Expressions.Expression<Func<FarmStaffAssignment, bool>> p, CancellationToken _) =>
+                new[]
+                {
+                    new FarmStaffAssignment { StaffUserId = staffA.Id, FarmingAreaId = areaA },
+                    new FarmStaffAssignment { StaffUserId = staffB.Id, FarmingAreaId = areaB }
+                }.AsQueryable().Where(p).ToList());
+        _uow.Setup(u => u.FarmingAreas).Returns(areas.Object);
+        _uow.Setup(u => u.FarmManagerAssignments).Returns(managers.Object);
+        _uow.Setup(u => u.FarmStaffAssignments).Returns(staff.Object);
+
+        await service.NotifyAsync(
+            NotificationTypeCodes.SensorThreshold, "NO2 vượt ngưỡng", areaId: areaA);
+
+        h.Created.Select(n => n.UserId).Should().BeEquivalentTo([managerA.Id, staffA.Id]);
+    }
+
+    [Fact]
     public async Task Notify_WhenRuleDisabled_SendsNothing()
     {
         var h = new Harness();

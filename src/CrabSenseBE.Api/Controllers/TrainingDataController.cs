@@ -9,7 +9,7 @@ namespace CrabSenseBE.Api.Controllers;
 
 [ApiController]
 [Route("api/training-data")]
-[Authorize(Roles = AppRoles.Platform)]
+[Authorize(Roles = AppRoles.FarmPortal)]
 [Produces("application/json")]
 public class TrainingDataController : ControllerBase
 {

@@ -640,9 +640,24 @@ public class FrozenStorageService : IFrozenStorageService
     {
         await EnsureOpeningBalanceManagerAsync(ct);
         var allowed = await _areas.AreaIdsAsync(ct);
-        var balances = (await _uow.FrozenInventoryOpeningBalances.GetAllAsync(ct))
-            .Where(item => item.FarmingAreaId is Guid areaId
-                && (allowed is null || allowed.Contains(areaId)))
+        var candidates = await _uow.FrozenInventoryOpeningBalances.GetAllAsync(ct);
+        var balances = new List<FrozenInventoryOpeningBalance>();
+        foreach (var item in candidates)
+        {
+            Guid? evidenceAreaId = item.FarmingAreaId;
+            if (!evidenceAreaId.HasValue)
+            {
+                var lot = await _uow.FrozenLots.GetByIdAsync(item.FrozenLotId, ct);
+                evidenceAreaId = lot?.FarmingAreaId;
+                if (!evidenceAreaId.HasValue && lot?.HarvestVoucherId is Guid voucherId)
+                    evidenceAreaId =
+                        (await _uow.HarvestVouchers.GetByIdAsync(voucherId, ct))?.FarmingAreaId;
+            }
+            if (evidenceAreaId.HasValue
+                && (allowed is null || allowed.Contains(evidenceAreaId.Value)))
+                balances.Add(item);
+        }
+        balances = balances
             .OrderBy(item => item.VerificationStatus)
             .ThenBy(item => item.OpeningDate)
             .ToList();
@@ -652,6 +667,63 @@ public class FrozenStorageService : IFrozenStorageService
             result.Add(await MapOpeningBalanceAsync(balance, ct));
 
         return ApiResponse<IEnumerable<FrozenInventoryOpeningBalanceDto>>.Ok(result);
+    }
+
+    public async Task<ApiResponse<FrozenInventoryOpeningBalanceDto>>
+        AssignOpeningBalanceAreaAsync(
+            Guid id,
+            AssignFrozenOpeningBalanceAreaRequest request,
+            CancellationToken ct = default)
+    {
+        var user = await _areas.CurrentUserAsync(ct);
+        if (user is not null
+            && user.Role is not (UserRole.FarmAdministrator or UserRole.FarmManager))
+            throw AppException.Forbidden(
+                "Chỉ Farm Administrator hoặc Farm Manager được rà soát khu của số dư.");
+        if (request.FarmingAreaId == Guid.Empty)
+            throw AppException.BadRequest("FarmingAreaId is required.");
+        await _areas.EnsureAsync(request.FarmingAreaId, manage: false, ct);
+
+        var reason = NormalizeOptionalText(request.Reason);
+        if (reason is null)
+            throw AppException.BadRequest("Cần ghi lý do và bằng chứng gán khu.");
+        var balance = await _uow.FrozenInventoryOpeningBalances.GetByIdAsync(id, ct)
+            ?? throw AppException.NotFound("Frozen inventory opening balance");
+        if (balance.VerificationStatus == FrozenOpeningBalanceVerificationStatus.Verified)
+            throw AppException.Conflict("Số dư đã xác nhận là bất biến.");
+        if (balance.FarmingAreaId.HasValue)
+            throw AppException.Conflict("Số dư đã được gán khu; không được chuyển khu trực tiếp.");
+
+        var lot = await _uow.FrozenLots.GetByIdAsync(balance.FrozenLotId, ct)
+            ?? throw AppException.NotFound("Frozen lot");
+        Guid? evidenceAreaId = lot.FarmingAreaId;
+        var evidence = lot.FarmingAreaId.HasValue ? "FrozenLot" : null;
+        if (!evidenceAreaId.HasValue && lot.HarvestVoucherId is Guid voucherId)
+        {
+            var voucher = await _uow.HarvestVouchers.GetByIdAsync(voucherId, ct);
+            evidenceAreaId = voucher?.FarmingAreaId;
+            evidence = evidenceAreaId.HasValue ? "HarvestVoucher" : null;
+        }
+        if (evidenceAreaId != request.FarmingAreaId)
+            throw AppException.Conflict(
+                "Không có bằng chứng FrozenLot/HarvestVoucher xác nhận khu được chọn.");
+
+        balance.FarmingAreaId = request.FarmingAreaId;
+        balance.VerificationNote =
+            $"AreaEvidence={evidence}; ReviewReason={reason}";
+        _uow.FrozenInventoryOpeningBalances.Update(balance);
+        await ConfigAudit.WriteAsync(
+            _uow,
+            _currentUser.UserId,
+            "AssignFrozenOpeningBalanceArea",
+            nameof(FrozenInventoryOpeningBalance),
+            balance.Id,
+            $"Area={request.FarmingAreaId}; Evidence={evidence}; Reason={reason}",
+            ct);
+        await SaveInventoryChangesAsync(ct);
+        return ApiResponse<FrozenInventoryOpeningBalanceDto>.Ok(
+            await MapOpeningBalanceAsync(balance, ct),
+            "Đã gán khu theo bằng chứng lịch sử; số dư vẫn chờ Farm Manager xác nhận.");
     }
 
     public async Task<ApiResponse<FrozenInventoryOpeningBalanceDto>>
@@ -682,7 +754,7 @@ public class FrozenStorageService : IFrozenStorageService
 
         var lot = await _uow.FrozenLots.GetByIdAsync(balance.FrozenLotId, ct)
             ?? throw AppException.NotFound("Frozen lot");
-        if (lot.FarmingAreaId != areaId)
+        if (lot.FarmingAreaId.HasValue && lot.FarmingAreaId != areaId)
             throw AppException.Conflict("Khu của số dư đầu kỳ không khớp lô đông.");
 
         var adjustments = await _uow.FrozenInventoryAdjustments.FindAsync(

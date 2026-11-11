@@ -12,10 +12,12 @@ public interface IEdgeCommandService
 
     Task<ApiResponse<IReadOnlyList<EdgeCommandDto>>> GetPendingAsync(
         string deviceCode,
+        string leaseHolder,
         CancellationToken ct = default);
 
     Task<ApiResponse<EdgeCommandDto>> AcknowledgeAsync(
         Guid id,
         EdgeCommandAckRequest request,
+        string authenticatedDeviceCode,
         CancellationToken ct = default);
 }

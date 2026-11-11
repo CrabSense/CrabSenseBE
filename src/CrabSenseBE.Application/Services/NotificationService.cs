@@ -437,7 +437,7 @@ public class NotificationService : INotificationService
         }
 
         // Telegram / Zalo / Email: một đích chung toàn hệ thống (ConfigJson), gắn vào notification đầu tiên.
-        if (anchor is not null)
+        if (anchor is not null && rule?.ScopeByArea != true)
         {
             foreach (var ch in channels.Where(c => c.ChannelCode is "telegram" or "zalo_oa" or "email"))
             {
@@ -481,10 +481,23 @@ public class NotificationService : INotificationService
     private async Task<List<AppUser>> FilterByAreaAsync(
         List<AppUser> users, bool scopeByArea, Guid? areaId, CancellationToken ct)
     {
-        if (!scopeByArea || areaId is not Guid id || id == Guid.Empty) return users;
+        if (!scopeByArea) return users;
+        if (areaId is not Guid id || id == Guid.Empty)
+            return users.Where(user => user.Role == UserRole.SystemAdministrator).ToList();
+
         var administratorId = await AreaAdministratorQuery.IdAsync(_uow.FarmingAreas.Query(), id, ct);
+        var managerIds = (await _uow.FarmManagerAssignments.FindAsync(
+            a => a.FarmingAreaId == id, ct)).Select(a => a.ManagerUserId).ToHashSet();
+        var staffIds = (await _uow.FarmStaffAssignments.FindAsync(
+            a => a.FarmingAreaId == id, ct)).Select(a => a.StaffUserId).ToHashSet();
         return users.Where(user =>
-            user.Role != UserRole.FarmAdministrator || user.Id == administratorId).ToList();
+            user.Role switch
+            {
+                UserRole.FarmAdministrator => user.Id == administratorId,
+                UserRole.FarmManager => managerIds.Contains(user.Id),
+                UserRole.FarmStaff => staffIds.Contains(user.Id),
+                _ => true
+            }).ToList();
     }
 
     private static bool PrefsAllow(string? prefsJson, string typeCode, string? severity)

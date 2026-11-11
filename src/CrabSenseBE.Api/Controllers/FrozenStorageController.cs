@@ -199,4 +199,13 @@ public async Task<IActionResult> GetCrabItemBarcodePng(
         CancellationToken ct)
         => Ok(await _service.VerifyOpeningBalanceAsync(id, request, ct));
 
+    /// <summary>FA/FM gán khu cho số dư legacy khi có bằng chứng lịch sử hợp lệ.</summary>
+    [HttpPost("~/api/frozen-opening-balances/{id:guid}/assign-area")]
+    [Authorize(Roles = AppRoles.FarmAdministrator + "," + AppRoles.FarmManager)]
+    public async Task<IActionResult> AssignOpeningBalanceArea(
+        Guid id,
+        [FromBody] AssignFrozenOpeningBalanceAreaRequest request,
+        CancellationToken ct)
+        => Ok(await _service.AssignOpeningBalanceAreaAsync(id, request, ct));
+
 }

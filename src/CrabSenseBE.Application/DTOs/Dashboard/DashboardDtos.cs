@@ -11,14 +11,14 @@ public record DashboardOverviewDto(
 );
 
 public record DashboardMetricsDto(
-    int Score,
+    int? Score,
     string StatusLevel,
     string StatusLabel,
-    double DeltaVsYesterday,
+    double? DeltaVsYesterday,
     DateTime LastAiUpdated,
-    int WaterQualityScore,
-    int CrabHealthScore,
-    int DeviceStatusScore,
+    int? WaterQualityScore,
+    int? CrabHealthScore,
+    int? DeviceStatusScore,
     string Explanation
 );
 
@@ -28,7 +28,7 @@ public record AiRecommendationDto(
     string Title,
     string Description,
     string TargetBoxOrArea,
-    int ConfidencePercentage,
+    int? ConfidencePercentage,
     string Priority,
     string Reason,
     string OptimalTimeframe,

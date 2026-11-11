@@ -5,6 +5,7 @@ using CrabSenseBE.Application.Interfaces;
 using CrabSenseBE.Domain.Entities;
 using CrabSenseBE.Domain.Enums;
 using CrabSenseBE.Domain.Interfaces;
+using Microsoft.EntityFrameworkCore;
 
 namespace CrabSenseBE.Application.Services;
 
@@ -147,6 +148,11 @@ public class FarmLotService : IFarmLotService
                 throw AppException.BadRequest("DeadOnArrival must be between 0 and Quantity.");
             lot.DeadOnArrival = dead;
         }
+        var registeredCount = await _uow.Crabs.CountAsync(
+            crab => crab.CrabLotId == lot.Id, ct);
+        if (lot.Quantity < registeredCount + lot.DeadOnArrival)
+            throw AppException.Conflict(
+                $"Quantity không được nhỏ hơn RegisteredCount ({registeredCount}) + DeadOnArrival ({lot.DeadOnArrival}).");
         if (req.Notes is not null) lot.Notes = TrimOrNull(req.Notes);
         if (req.StockedAt is { } stocked && stocked != default) lot.StockedAt = stocked;
         if (req.Status is not null)
@@ -159,11 +165,19 @@ public class FarmLotService : IFarmLotService
         if (replacementAreas is not null)
             await ReplaceAreaLinksAsync(lot.Id, replacementAreas, ct);
         RecalcDerived(lot);
+        lot.ConcurrencyVersion++;
         _uow.CrabLots.Update(lot);
         await ConfigAudit.WriteAsync(
             _uow, (await _areas.CurrentUserAsync(ct))?.Id,
             "UpdateCrabLot", "CrabLot", lot.Id, lot.LotCode, ct);
-        await _uow.SaveChangesAsync(ct);
+        try
+        {
+            await _uow.SaveChangesAsync(ct);
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            throw AppException.Conflict("Crab Lot đã thay đổi bởi request khác. Hãy tải lại dữ liệu.");
+        }
 
         links = await LoadLinksAsync(ct);
         var placed = await LoadPlacedCountsAsync(ct);
@@ -246,6 +260,7 @@ public class FarmLotService : IFarmLotService
         lot.DeadCountAtClose = dead;
         lot.UnstockedCountAtClose = unstocked;
         lot.CloseDisposition = disposition;
+        lot.ConcurrencyVersion++;
         _uow.CrabLots.Update(lot);
         await ConfigAudit.WriteAsync(
             _uow, (await _areas.CurrentUserAsync(ct))?.Id,
@@ -253,7 +268,14 @@ public class FarmLotService : IFarmLotService
             $"{lot.LotCode}|registered={registered}|alive={alive}|unmolted={unmolted}"
             + $"|molted={molted}|harvested={harvested}|dead={dead}|unstocked={unstocked}",
             ct);
-        await _uow.SaveChangesAsync(ct);
+        try
+        {
+            await _uow.SaveChangesAsync(ct);
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            throw AppException.Conflict("Crab Lot đã được sửa hoặc đóng bởi request khác.");
+        }
 
         var placed = await LoadPlacedCountsAsync(ct);
         return ApiResponse<CrabLotDto>.Ok(MapLot(lot, placed, links), "Lot closed.");
@@ -414,9 +436,11 @@ public class FarmLotService : IFarmLotService
             string.IsNullOrWhiteSpace(l.Condition) ? "Good" : l.Condition,
             partial ? 0 : l.DeadOnArrival,
             partial ? null : l.Notes,
-            partial
-                ? IsCancelled(l.Status) ? "Cancelled" : count > 0 ? "Allocating" : "Pending"
-                : ResolveWorkflowStatus(l.Status, displayedCount, l.Quantity),
+            l.ClosedAt is not null
+                ? "Closed"
+                : partial
+                    ? IsCancelled(l.Status) ? "Cancelled" : count > 0 ? "Allocating" : "Pending"
+                    : ResolveWorkflowStatus(l.Status, displayedCount, l.Quantity),
             partial ? Array.Empty<string>() : JsonStringList.Parse(l.ImageUrlsJson),
             l.StockedAt,
             l.ClosedAt,

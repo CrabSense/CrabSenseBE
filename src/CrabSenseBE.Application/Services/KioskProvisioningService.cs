@@ -258,16 +258,32 @@ public sealed class KioskProvisioningService : IKioskProvisioningService
                 DeviceCode = code,
                 EdgeState = "Pending",
                 KioskId = kiosk.Id,
+                FarmingAreaId = kiosk.FarmingAreaId,
                 Status = DeviceStatus.Offline
             };
             await _uow.Devices.AddAsync(device, ct);
         }
+        else if (device.KioskId is Guid ownerKioskId && ownerKioskId != kiosk.Id)
+        {
+            throw AppException.Conflict(
+                "Controller đang thuộc Kiosk khác. Phải dùng workflow thu hồi/chuyển quyền.");
+        }
+        else if (device.FarmingAreaId is Guid ownerAreaId && ownerAreaId != kiosk.FarmingAreaId)
+        {
+            throw AppException.Conflict(
+                "Controller đang thuộc khu khác. Không được tự chuyển quyền sở hữu.");
+        }
         else if (device.EdgeState is "Rejected" or "Revoked" or "Unprovisioned" || device.KioskId is null)
         {
             device.KioskId = kiosk.Id;
+            device.FarmingAreaId = kiosk.FarmingAreaId;
             device.EdgeState = "Pending";
             device.CredentialHash = null;
             device.PendingSecret = null;
+        }
+        else
+        {
+            device.FarmingAreaId ??= kiosk.FarmingAreaId;
         }
 
         if (!string.IsNullOrWhiteSpace(request.Mac))

@@ -4,14 +4,25 @@ using CrabSenseBE.Application.DTOs.Ops;
 using CrabSenseBE.Application.Interfaces;
 using CrabSenseBE.Domain.Entities;
 using CrabSenseBE.Domain.Interfaces;
+using Microsoft.Extensions.Configuration;
 
 namespace CrabSenseBE.Application.Services;
 
 public sealed class ScheduledTaskService : IScheduledTaskService
 {
     private readonly IUnitOfWork _uow;
+    private readonly TimeProvider _clock;
+    private readonly TimeZoneInfo _farmTimeZone;
 
-    public ScheduledTaskService(IUnitOfWork uow) => _uow = uow;
+    public ScheduledTaskService(
+        IUnitOfWork uow,
+        IConfiguration? configuration = null,
+        TimeProvider? clock = null)
+    {
+        _uow = uow;
+        _clock = clock ?? TimeProvider.System;
+        _farmTimeZone = ResolveFarmTimeZone(configuration?["Farm:TimeZone"]);
+    }
 
     public async Task<ApiResponse<IEnumerable<ScheduledTaskDto>>> ListAsync(
         Guid ownerId, Guid? farmingAreaId, CancellationToken ct = default)
@@ -37,13 +48,13 @@ public sealed class ScheduledTaskService : IScheduledTaskService
                      task.FarmingAreaId == farmingAreaId ||
                      task.FarmingAreaId == null),
             ct);
-        var today = DateTime.UtcNow.Date;
+        var today = LocalNow().Date;
         return ApiResponse<IEnumerable<ScheduledTaskDto>>.Ok(
             tasks
                 .Where(task => IsDueOnDate(task, today))
                 .Select(task => Map(task) with
                 {
-                    NextRunAt = today.AddMinutes(task.ReminderMinuteOfDay)
+                    NextRunAt = ToUtc(today.AddMinutes(task.ReminderMinuteOfDay))
                 }));
     }
 
@@ -61,12 +72,12 @@ public sealed class ScheduledTaskService : IScheduledTaskService
             Description = request.Description?.Trim(),
             RecurrenceType = request.RecurrenceType.Trim().ToLowerInvariant(),
             DaysOfWeekJson = JsonSerializer.Serialize(days),
-            StartDate = (request.StartDate ?? DateTime.UtcNow.Date).Date,
+            StartDate = (request.StartDate ?? LocalNow().Date).Date,
             EndDate = request.EndDate?.Date,
             ReminderMinuteOfDay = request.ReminderMinuteOfDay,
             IsEnabled = request.IsEnabled,
         };
-        task.NextRunAt = NextRun(task, DateTime.UtcNow);
+        task.NextRunAt = NextRun(task, _clock.GetUtcNow().UtcDateTime);
         await _uow.ScheduledFarmTasks.AddAsync(task, ct);
         await _uow.SaveChangesAsync(ct);
         return ApiResponse<ScheduledTaskDto>.Ok(Map(task), "Scheduled task created.");
@@ -90,8 +101,8 @@ public sealed class ScheduledTaskService : IScheduledTaskService
         if (request.IsEnabled.HasValue) task.IsEnabled = request.IsEnabled.Value;
         Validate(task.Title, task.RecurrenceType, ParseDays(task.DaysOfWeekJson),
             task.ReminderMinuteOfDay, task.StartDate, task.EndDate);
-        task.NextRunAt = task.IsEnabled ? NextRun(task, DateTime.UtcNow) : null;
-        task.UpdatedAt = DateTime.UtcNow;
+        task.NextRunAt = task.IsEnabled ? NextRun(task, _clock.GetUtcNow().UtcDateTime) : null;
+        task.UpdatedAt = _clock.GetUtcNow().UtcDateTime;
         _uow.ScheduledFarmTasks.Update(task);
         await _uow.SaveChangesAsync(ct);
         return ApiResponse<ScheduledTaskDto>.Ok(Map(task), "Scheduled task updated.");
@@ -110,8 +121,8 @@ public sealed class ScheduledTaskService : IScheduledTaskService
     {
         var task = await FindOwnedAsync(ownerId, id, ct);
         task.IsEnabled = enabled;
-        task.NextRunAt = enabled ? NextRun(task, DateTime.UtcNow) : null;
-        task.UpdatedAt = DateTime.UtcNow;
+        task.NextRunAt = enabled ? NextRun(task, _clock.GetUtcNow().UtcDateTime) : null;
+        task.UpdatedAt = _clock.GetUtcNow().UtcDateTime;
         _uow.ScheduledFarmTasks.Update(task);
         await _uow.SaveChangesAsync(ct);
         return ApiResponse<ScheduledTaskDto>.Ok(Map(task), "Scheduled task toggled.");
@@ -144,8 +155,10 @@ public sealed class ScheduledTaskService : IScheduledTaskService
     private static List<int> ParseDays(string json) =>
         JsonSerializer.Deserialize<List<int>>(json) ?? [];
 
-    private static DateTime? NextRun(ScheduledFarmTask task, DateTime now)
+    private DateTime? NextRun(ScheduledFarmTask task, DateTime nowUtc)
     {
+        var now = TimeZoneInfo.ConvertTimeFromUtc(
+            DateTime.SpecifyKind(nowUtc, DateTimeKind.Utc), _farmTimeZone);
         var start = task.StartDate.Date;
         var baseDate = now.Date < start ? start : now.Date;
         var minute = TimeSpan.FromMinutes(task.ReminderMinuteOfDay);
@@ -153,7 +166,7 @@ public sealed class ScheduledTaskService : IScheduledTaskService
         {
             var once = baseDate + minute;
             return once >= now && (!task.EndDate.HasValue || once.Date <= task.EndDate.Value.Date)
-                ? once
+                ? ToUtc(once)
                 : null;
         }
 
@@ -164,7 +177,7 @@ public sealed class ScheduledTaskService : IScheduledTaskService
             if (task.EndDate.HasValue && candidate.Date > task.EndDate.Value.Date) return null;
             if (task.RecurrenceType == "daily" ||
                 ParseDays(task.DaysOfWeekJson).Contains(IsoDay(candidate.DayOfWeek)))
-                return candidate;
+                return ToUtc(candidate);
         }
         return null;
     }
@@ -185,4 +198,27 @@ public sealed class ScheduledTaskService : IScheduledTaskService
         new(task.Id, task.OwnerId, task.FarmingAreaId, task.Title, task.Description,
             task.RecurrenceType, ParseDays(task.DaysOfWeekJson), task.StartDate,
             task.EndDate, task.ReminderMinuteOfDay, task.IsEnabled, task.NextRunAt);
+
+    private DateTime LocalNow() => TimeZoneInfo.ConvertTime(
+        _clock.GetUtcNow(), _farmTimeZone).DateTime;
+
+    private DateTime ToUtc(DateTime local) => TimeZoneInfo.ConvertTimeToUtc(
+        DateTime.SpecifyKind(local, DateTimeKind.Unspecified), _farmTimeZone);
+
+    private static TimeZoneInfo ResolveFarmTimeZone(string? configuredId)
+    {
+        foreach (var id in new[]
+                 {
+                     configuredId,
+                     "Asia/Ho_Chi_Minh",
+                     "SE Asia Standard Time"
+                 }.Where(id => !string.IsNullOrWhiteSpace(id)))
+        {
+            try { return TimeZoneInfo.FindSystemTimeZoneById(id!); }
+            catch (TimeZoneNotFoundException) { }
+            catch (InvalidTimeZoneException) { }
+        }
+        throw new InvalidOperationException(
+            "Farm timezone Asia/Ho_Chi_Minh is not available on this host.");
+    }
 }

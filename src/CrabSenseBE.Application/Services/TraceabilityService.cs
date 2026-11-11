@@ -330,7 +330,8 @@ public class TraceabilityService : ITraceabilityService
             ct)
             ?? throw AppException.NotFound("QrCode");
         if (qr.ApprovalStatus != QrApprovalStatus.Approved
-            || qr.EntityType == "box")
+            || qr.EntityType == "box"
+            || (qr.ExpiresAt.HasValue && qr.ExpiresAt.Value <= DateTime.UtcNow))
             throw AppException.NotFound("QrCode");
 
         // Tăng scan count

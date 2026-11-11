@@ -205,6 +205,10 @@ public record VerifyFrozenOpeningBalanceRequest(
     decimal OpeningWeightKg,
     string Reason);
 
+public record AssignFrozenOpeningBalanceAreaRequest(
+    Guid FarmingAreaId,
+    string Reason);
+
 public record FrozenInventoryOpeningBalanceDto(
     Guid Id,
     Guid FrozenLotId,

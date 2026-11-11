@@ -61,8 +61,8 @@ public class DashboardService : IDashboardService
         var sensors = scope.Sensors;
         var activeAlerts = await FilterAlertsAsync(scope, ct);
 
-        var deviceScore = devices.Count == 0
-            ? 80
+        int? deviceScore = devices.Count == 0
+            ? null
             : (int)Math.Round(devices.Count(d => d.Status == DeviceStatus.Online) * 100.0 / devices.Count);
 
         var occupied = boxes.Count(b => b.IsOccupied
@@ -70,35 +70,47 @@ public class DashboardService : IDashboardService
         var healthyBoxes = boxes.Count(b =>
             string.Equals(b.Status, BoxStatuses.Active, StringComparison.OrdinalIgnoreCase)
             || string.Equals(b.Status, BoxStatuses.Molting, StringComparison.OrdinalIgnoreCase));
-        var crabScore = occupied == 0
-            ? 85
+        int? crabScore = occupied == 0
+            ? null
             : (int)Math.Round(healthyBoxes * 100.0 / Math.Max(occupied, 1));
 
         var quarantine = boxes.Count(b =>
             string.Equals(b.Status, BoxStatuses.Quarantine, StringComparison.OrdinalIgnoreCase));
-        crabScore = Math.Clamp(crabScore - quarantine * 5 - activeAlerts.Count(a => a.Severity == AlertSeverity.Critical) * 8, 0, 100);
+        if (crabScore.HasValue)
+            crabScore = Math.Clamp(crabScore.Value - quarantine * 5
+                - activeAlerts.Count(a => a.Severity == AlertSeverity.Critical) * 8, 0, 100);
 
         var activeSensors = sensors.Count(s => s.IsActive);
         var staleCutoff = DateTime.UtcNow.AddHours(-2);
         var freshSensors = sensors.Count(s => s.IsActive && s.LastSeenAt != null && s.LastSeenAt > staleCutoff);
-        var waterScore = activeSensors == 0
-            ? 82
+        int? waterScore = activeSensors == 0
+            ? null
             : (int)Math.Round(Math.Max(freshSensors, activeSensors * 0.7) * 100.0 / activeSensors);
-        waterScore = Math.Clamp(waterScore - activeAlerts.Count(a => a.Severity >= AlertSeverity.Warning) * 4, 0, 100);
+        if (waterScore.HasValue)
+            waterScore = Math.Clamp(waterScore.Value
+                - activeAlerts.Count(a => a.Severity >= AlertSeverity.Warning) * 4, 0, 100);
 
-        var score = (int)Math.Round(waterScore * 0.35 + crabScore * 0.40 + deviceScore * 0.25);
-        score = Math.Clamp(score, 0, 100);
+        var components = new[] { waterScore, crabScore, deviceScore }
+            .Where(value => value.HasValue)
+            .Select(value => value!.Value)
+            .ToArray();
+        int? score = components.Length == 0
+            ? null
+            : Math.Clamp((int)Math.Round(components.Average()), 0, 100);
 
         var (level, label) = score switch
         {
             >= 85 => ("excellent", "Excellent"),
             >= 70 => ("good", "Good"),
             >= 50 => ("warning", "Warning"),
-            _ => ("danger", "Critical")
+            not null => ("danger", "Critical"),
+            _ => ("no_data", "No data")
         };
 
         var areaLabel = farmingAreaId.HasValue ? "khu đang chọn" : "trang trại";
-        var explanation = activeAlerts.Count > 0
+        var explanation = score is null
+            ? $"Chưa có dữ liệu thiết bị, cảm biến hoặc cua cho {areaLabel}."
+            : activeAlerts.Count > 0
             ? $"Có {activeAlerts.Count} cảnh báo đang mở trên {areaLabel}; điểm thiết bị {deviceScore}%, nước {waterScore}%, cua {crabScore}%."
             : $"{(farmingAreaId.HasValue ? "Khu" : "Trang trại")} ổn định — nước {waterScore}%, cua {crabScore}%, thiết bị {deviceScore}%.";
 
@@ -106,7 +118,7 @@ public class DashboardService : IDashboardService
             score,
             level,
             label,
-            DeltaVsYesterday: 0,
+            DeltaVsYesterday: null,
             DateTime.UtcNow,
             waterScore,
             crabScore,
@@ -131,7 +143,7 @@ public class DashboardService : IDashboardService
                 Title: $"Thu hoạch box {box.Code}",
                 Description: $"Box {box.Code} đang ở trạng thái lột — nên kiểm tra cửa sổ softshell và thu hoạch khi đạt.",
                 TargetBoxOrArea: box.Code,
-                ConfidencePercentage: 88,
+                ConfidencePercentage: null,
                 Priority: "high",
                 Reason: "Box status = molting",
                 OptimalTimeframe: "Trong 6 giờ",
@@ -149,7 +161,7 @@ public class DashboardService : IDashboardService
                     ? "Cần kiểm tra thông số môi trường / thiết bị."
                     : alert.Message,
                 TargetBoxOrArea: farmingAreaId.HasValue ? "Khu đang chọn" : "Trang trại",
-                ConfidencePercentage: alert.Severity == AlertSeverity.Critical ? 95 : 80,
+                ConfidencePercentage: null,
                 Priority: alert.Severity == AlertSeverity.Critical ? "high" : "medium",
                 Reason: $"Cảnh báo {alert.Severity}",
                 OptimalTimeframe: "Ngay khi có thể",
@@ -162,12 +174,12 @@ public class DashboardService : IDashboardService
             list.Add(new AiRecommendationDto(
                 Id: "none",
                 Type: "observe",
-                Title: "Không có hành động khẩn cấp",
-                Description: "Hệ thống đang hoạt động ổn định",
+                Title: "Chưa có khuyến nghị theo quy tắc",
+                Description: "Không có đủ tín hiệu để sinh khuyến nghị; tiếp tục theo dõi dữ liệu vận hành.",
                 TargetBoxOrArea: farmingAreaId.HasValue ? "Khu đang chọn" : "Toàn trang trại",
-                ConfidencePercentage: 99,
+                ConfidencePercentage: null,
                 Priority: "low",
-                Reason: "Không có box lột hoặc cảnh báo ưu tiên",
+                Reason: "NoDataOrNoRuleMatch",
                 OptimalTimeframe: "Duy trì giám sát",
                 ExpectedImpact: "Ổn định vận hành",
                 HasActiveRecommendation: false));

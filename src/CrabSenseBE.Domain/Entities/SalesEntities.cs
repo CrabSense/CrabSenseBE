@@ -72,6 +72,8 @@ public class SalesOrderLine : BaseEntity
     public decimal QuantityKg { get; set; }
     public decimal UnitPricePerKg { get; set; }
     public decimal TotalAmount { get; set; }
+    /// <summary>Null = reservation/sale vẫn giữ cua; chỉ set khi đơn bị hủy.</summary>
+    public DateTime? ReleasedAt { get; set; }
 
     // Navigation
     public SalesOrder? SalesOrder { get; set; }

@@ -1,6 +1,8 @@
 using CrabSenseBE.Application.DTOs.IoT;
 using CrabSenseBE.Application.Interfaces;
+using CrabSenseBE.Api.Services;
 using CrabSenseBE.Domain.Enums;
+using CrabSenseBE.Domain.Interfaces;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -14,7 +16,15 @@ namespace CrabSenseBE.Api.Controllers;
 public class WaterAnalysisController : ControllerBase
 {
     private readonly IWaterAnalysisService _service;
-    public WaterAnalysisController(IWaterAnalysisService service) => _service = service;
+    private readonly IConfiguration _configuration;
+    private readonly IUnitOfWork _uow;
+    public WaterAnalysisController(
+        IWaterAnalysisService service, IConfiguration configuration, IUnitOfWork uow)
+    {
+        _service = service;
+        _configuration = configuration;
+        _uow = uow;
+    }
 
     /// <summary>[READ] Kết quả phân tích hóa học mới nhất + trạng thái trạm + lần đang chạy.</summary>
     [HttpGet("{areaId:guid}/water-analysis")]
@@ -45,4 +55,16 @@ public class WaterAnalysisController : ControllerBase
     public async Task<IActionResult> UpdateSample(
         Guid areaId, [FromBody] UpdateWaterAnalysisSampleRequest req, CancellationToken ct)
         => Ok(await _service.UpdateSampleAsync(areaId, req, ct));
+
+    /// <summary>Controller đã xác thực ACK bước hardware; timer không thể gọi endpoint này.</summary>
+    [HttpPost("water-analysis/runs/{runId:guid}/events")]
+    [AllowAnonymous]
+    public async Task<IActionResult> RecordHardwareEvent(
+        Guid runId, [FromBody] WaterAnalysisHardwareEventRequest req, CancellationToken ct)
+    {
+        var (denied, _) = await EdgeKeyGuard.CheckDeviceAsync(
+            Request, _configuration, _uow, req.DeviceCode, ct);
+        if (denied is not null) return denied;
+        return Ok(await _service.RecordHardwareEventAsync(runId, req, ct));
+    }
 }

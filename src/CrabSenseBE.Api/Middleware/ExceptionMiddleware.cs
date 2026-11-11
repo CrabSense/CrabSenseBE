@@ -1,6 +1,7 @@
 using CrabSenseBE.Application.Common;
 using System.Net;
 using System.Text.Json;
+using Microsoft.EntityFrameworkCore;
 
 namespace CrabSenseBE.Api.Middleware;
 
@@ -31,6 +32,18 @@ public class ExceptionMiddleware
             var mapped = CrabSenseBE.Infrastructure.Services.GoogleDriveMediaStorageService.TranslateDriveError(ex);
             _logger.LogWarning(ex, "Google Drive API error");
             await WriteResponse(context, mapped.StatusCode, mapped.Message);
+        }
+        catch (DbUpdateConcurrencyException ex)
+        {
+            _logger.LogWarning(ex, "Concurrent data update rejected");
+            await WriteResponse(context, StatusCodes.Status409Conflict,
+                "Dữ liệu đã thay đổi bởi request khác. Hãy tải lại và thử lại.");
+        }
+        catch (DbUpdateException ex)
+        {
+            _logger.LogWarning(ex, "Database integrity constraint rejected the request");
+            await WriteResponse(context, StatusCodes.Status409Conflict,
+                "Thao tác xung đột với dữ liệu hiện tại hoặc một request đồng thời.");
         }
         catch (Exception ex)
         {

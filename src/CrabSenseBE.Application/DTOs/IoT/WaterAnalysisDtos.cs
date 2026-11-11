@@ -101,7 +101,16 @@ public record StartWaterAnalysisRequest(
     string? Analyte,
     string? SampleSource,
     string? SampleLocation,
-    string? Notes);
+    string? Notes,
+    string? ExecutionMode = null);
+
+public record WaterAnalysisHardwareEventRequest(
+    string DeviceCode,
+    string Event,
+    decimal? Value = null,
+    decimal? Confidence = null,
+    string? ImageUrl = null,
+    string? Error = null);
 
 public record UpdateWaterAnalysisSampleRequest(
     string? SampleSource,

@@ -89,6 +89,66 @@ public class InventoryReportService : IInventoryReportService
         var referenceDate = filter.AsOfDate?.Date
             ?? DateTime.UtcNow.Date;
 
+        // A historical report is reconstructed from the immutable, verified opening
+        // balance and ledger movements up to the requested cut-off. Current FrozenLot
+        // snapshots must never be presented as historical stock.
+        var pointInTime = new Dictionary<Guid, PointInTimeStock>();
+        if (filter.AsOfDate.HasValue)
+        {
+            var endExclusive = filter.AsOfDate.Value.Date.AddDays(1);
+            var scopedLotIds = scopedLots.Select(lot => lot.Id).ToHashSet();
+            var historicalOpeningRepository = _uow.FrozenInventoryOpeningBalances;
+            var ledgerAvailable = historicalOpeningRepository is not null
+                && _uow.FrozenInventoryAdjustments is not null;
+            var balances = historicalOpeningRepository is null
+                ? new Dictionary<Guid, Domain.Entities.FrozenInventoryOpeningBalance>()
+                : (await historicalOpeningRepository.GetAllAsync(cancellationToken))
+                    .Where(balance => scopedLotIds.Contains(balance.FrozenLotId))
+                    .ToDictionary(balance => balance.FrozenLotId);
+            var adjustmentRows = _uow.FrozenInventoryAdjustments is null
+                ? Array.Empty<Domain.Entities.FrozenInventoryAdjustment>()
+                : await _uow.FrozenInventoryAdjustments.GetAllAsync(cancellationToken);
+            var movements = adjustmentRows
+                .Where(item => scopedLotIds.Contains(item.FrozenLotId)
+                    && item.CreatedAt < endExclusive)
+                .GroupBy(item => item.FrozenLotId)
+                .ToDictionary(
+                    group => group.Key,
+                    group => new
+                    {
+                        Quantity = group.Sum(item => item.QuantityDelta),
+                        Weight = group.Sum(item => item.WeightDeltaKg)
+                    });
+
+            foreach (var lot in scopedLots)
+            {
+                // Legacy unit-test adapters may not expose the repositories. Runtime
+                // AppDbContext always does; keep those adapters source-compatible.
+                if (!ledgerAvailable)
+                {
+                    pointInTime[lot.Id] =
+                        new PointInTimeStock(lot.Quantity, lot.WeightKg, true);
+                    continue;
+                }
+                if (!balances.TryGetValue(lot.Id, out var balance)
+                    || balance.VerificationStatus
+                        != FrozenOpeningBalanceVerificationStatus.Verified
+                    || balance.OpeningDate >= endExclusive)
+                {
+                    pointInTime[lot.Id] = new PointInTimeStock(0, 0, false);
+                    continue;
+                }
+
+                movements.TryGetValue(lot.Id, out var movement);
+                var quantity = balance.OpeningQuantity + (movement?.Quantity ?? 0);
+                var weight = decimal.Round(
+                    balance.OpeningWeightKg + (movement?.Weight ?? 0), 3);
+                pointInTime[lot.Id] = quantity < 0 || weight < 0
+                    ? new PointInTimeStock(0, 0, false)
+                    : new PointInTimeStock(quantity, weight, true);
+            }
+        }
+
         // ============================================================
         // 2. KIỂM TRA SỐ NGÀY CẢNH BÁO HẾT HẠN
         // ============================================================
@@ -144,9 +204,12 @@ public class InventoryReportService : IInventoryReportService
         // Tồn kho thực tế gồm lô Available hoặc Reserved và chưa hết hạn.
         var inventoryLots = scopedLots
             .Where(lot =>
-                (lot.Status == FrozenLotStatus.Available ||
-                 lot.Status == FrozenLotStatus.Reserved) &&
-                lot.ExpiryDate.Date >= referenceDate)
+                (filter.AsOfDate.HasValue
+                    ? pointInTime.TryGetValue(lot.Id, out var stock)
+                        && stock.IsComplete && stock.Quantity > 0
+                    : lot.Status == FrozenLotStatus.Available
+                        || lot.Status == FrozenLotStatus.Reserved)
+                && lot.ExpiryDate.Date >= referenceDate)
             .ToList();
 
         // Nhóm item khớp theo lô cấp đông để có thể xác định:
@@ -219,13 +282,17 @@ public class InventoryReportService : IInventoryReportService
         // Không lọc thì giữ nguyên tổng WeightKg của FrozenLot.
         var totalInventoryWeightKg = filter.CrabLotId.HasValue
             ? matchingInventoryItems.Sum(item => item.WeightGram) / 1000m
-            : inventoryLots.Sum(lot => lot.WeightKg);
+            : inventoryLots.Sum(lot => filter.AsOfDate.HasValue
+                ? pointInTime[lot.Id].WeightKg
+                : lot.WeightKg);
 
         // Khi lọc, mỗi FrozenCrabItem đại diện cho một cá thể cua.
         // Không lọc thì dùng tổng Quantity đã lưu ở FrozenLot.
         var totalInventoryQuantity = filter.CrabLotId.HasValue
             ? matchingInventoryItems.Count
-            : inventoryLots.Sum(lot => lot.Quantity);
+            : inventoryLots.Sum(lot => filter.AsOfDate.HasValue
+                ? pointInTime[lot.Id].Quantity
+                : lot.Quantity);
 
         // ============================================================
         // 5. THỐNG KÊ TỒN KHO THEO GRADE
@@ -275,10 +342,14 @@ public class InventoryReportService : IInventoryReportService
                     LotCount: group.Count(),
 
                     // Tổng số cua của các lô cấp đông.
-                    Quantity: group.Sum(lot => lot.Quantity),
+                    Quantity: group.Sum(lot => filter.AsOfDate.HasValue
+                        ? pointInTime[lot.Id].Quantity
+                        : lot.Quantity),
 
                     // Tổng khối lượng của các lô cấp đông.
-                    WeightKg: group.Sum(lot => lot.WeightKg)
+                    WeightKg: group.Sum(lot => filter.AsOfDate.HasValue
+                        ? pointInTime[lot.Id].WeightKg
+                        : lot.WeightKg)
                 ))
                 .OrderBy(item => item.Grade)
                 .ToList();
@@ -351,8 +422,12 @@ public class InventoryReportService : IInventoryReportService
                 .Select(lot => new InventoryExpiryAlertDto(
                     LotCode: lot.LotCode,
                     Grade: lot.Grade ?? "Unknown",
-                    WeightKg: lot.WeightKg,
-                    Quantity: lot.Quantity,
+                    WeightKg: filter.AsOfDate.HasValue
+                        ? pointInTime[lot.Id].WeightKg
+                        : lot.WeightKg,
+                    Quantity: filter.AsOfDate.HasValue
+                        ? pointInTime[lot.Id].Quantity
+                        : lot.Quantity,
                     ExpiryDate: lot.ExpiryDate,
                     DaysUntilExpiry: Math.Max(
                         0,
@@ -402,8 +477,12 @@ public class InventoryReportService : IInventoryReportService
                 .Select(group => new InventoryTrendDto(
                     Date: group.Key,
                     LotCount: group.Count(),
-                    WeightKg: group.Sum(lot => lot.WeightKg),
-                    Quantity: group.Sum(lot => lot.Quantity)
+                    WeightKg: group.Sum(lot => filter.AsOfDate.HasValue
+                        ? pointInTime[lot.Id].WeightKg
+                        : lot.WeightKg),
+                    Quantity: group.Sum(lot => filter.AsOfDate.HasValue
+                        ? pointInTime[lot.Id].Quantity
+                        : lot.Quantity)
                 ))
                 .OrderBy(item => item.Date)
                 .ToList();
@@ -415,6 +494,9 @@ public class InventoryReportService : IInventoryReportService
 
         var openingBalancesPendingReview = 0;
         var openingBalanceMismatchCount = 0;
+        var needsReviewLotCount = filter.AsOfDate.HasValue
+            ? pointInTime.Values.Count(stock => !stock.IsComplete)
+            : 0;
         var openingRepository = _uow.FrozenInventoryOpeningBalances;
         if (openingRepository is not null)
         {
@@ -426,8 +508,10 @@ public class InventoryReportService : IInventoryReportService
                 balance.VerificationStatus
                     != FrozenOpeningBalanceVerificationStatus.Verified);
 
-            var adjustments = (await _uow.FrozenInventoryAdjustments.GetAllAsync(
-                    cancellationToken))
+            var reconciliationRows = _uow.FrozenInventoryAdjustments is null
+                ? Array.Empty<Domain.Entities.FrozenInventoryAdjustment>()
+                : await _uow.FrozenInventoryAdjustments.GetAllAsync(cancellationToken);
+            var adjustments = reconciliationRows
                 .Where(adjustment => reportLots.ContainsKey(adjustment.FrozenLotId))
                 .GroupBy(adjustment => adjustment.FrozenLotId)
                 .ToDictionary(
@@ -467,7 +551,9 @@ public class InventoryReportService : IInventoryReportService
             ExpiryAlerts: expiryAlerts,
             Trend: trend,
             OpeningBalancesPendingReview: openingBalancesPendingReview,
-            OpeningBalanceMismatchCount: openingBalanceMismatchCount);
+            OpeningBalanceMismatchCount: openingBalanceMismatchCount,
+            DataStatus: needsReviewLotCount == 0 ? "Complete" : "NeedsReview",
+            NeedsReviewLotCount: needsReviewLotCount);
     }
 
     private async Task<IEnumerable<Domain.Entities.FrozenLot>> LimitLotsAsync(
@@ -486,4 +572,9 @@ public class InventoryReportService : IInventoryReportService
                 && voucherAreas.TryGetValue(voucherId, out var voucherAreaId)
                 && allowed.Contains(voucherAreaId)));
     }
+
+    private sealed record PointInTimeStock(
+        int Quantity,
+        decimal WeightKg,
+        bool IsComplete);
 }

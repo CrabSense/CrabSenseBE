@@ -13,4 +13,6 @@ public interface IWaterAnalysisService
         Guid areaId, UpdateWaterAnalysisSampleRequest req, CancellationToken ct = default);
     Task<ApiResponse<WaterAnalysisDetailDto>> GetDetailAsync(
         Guid areaId, Guid runId, CancellationToken ct = default);
+    Task<ApiResponse> RecordHardwareEventAsync(
+        Guid runId, WaterAnalysisHardwareEventRequest request, CancellationToken ct = default);
 }

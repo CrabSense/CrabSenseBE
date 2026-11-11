@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
+using CrabSenseBE.Domain.Interfaces;
 using Microsoft.AspNetCore.Mvc;
 
 namespace CrabSenseBE.Api.Services;
@@ -12,6 +13,7 @@ namespace CrabSenseBE.Api.Services;
 public static class EdgeKeyGuard
 {
     public const string HeaderName = "X-Edge-Key";
+    public const string DeviceHeaderName = "X-Device-Key";
     public const string ConfigKey = "EdgeSync:ApiKey";
 
     /// <returns>null nếu request hợp lệ; ngược lại là response cần trả về.</returns>
@@ -35,6 +37,46 @@ public static class EdgeKeyGuard
             return new UnauthorizedObjectResult(new { success = false, message = "X-Edge-Key không hợp lệ." });
 
         return null;
+    }
+
+    public static async Task<(IActionResult? Denied, string? LeaseHolder)> CheckDeviceAsync(
+        HttpRequest request,
+        IConfiguration configuration,
+        IUnitOfWork uow,
+        string deviceCode,
+        CancellationToken ct)
+    {
+        var code = deviceCode?.Trim();
+        var device = string.IsNullOrWhiteSpace(code)
+            ? null
+            : await uow.Devices.FirstOrDefaultAsync(
+                d => d.DeviceCode == code, ct);
+        if (device is null)
+            return (new NotFoundObjectResult(new { success = false, message = "Device không tồn tại." }), null);
+        if (device.EdgeState is "Revoked" or "Rejected" or "Unprovisioned"
+            || device.Status == Domain.Enums.DeviceStatus.Maintenance)
+            return (new UnauthorizedObjectResult(new { success = false, message = "Device credential đã bị vô hiệu hóa." }), null);
+
+        var suppliedDeviceKey = request.Headers[DeviceHeaderName].FirstOrDefault()?.Trim();
+        if (!string.IsNullOrWhiteSpace(device.CredentialHash))
+        {
+            if (string.IsNullOrWhiteSpace(suppliedDeviceKey))
+                return (new UnauthorizedObjectResult(new { success = false, message = "X-Device-Key là bắt buộc." }), null);
+            var suppliedHash = Convert.ToHexString(
+                SHA256.HashData(Encoding.UTF8.GetBytes(suppliedDeviceKey)));
+            if (!FixedTimeEquals(suppliedHash, device.CredentialHash))
+                return (new UnauthorizedObjectResult(new { success = false, message = "X-Device-Key không hợp lệ." }), null);
+            return (null, $"device:{device.Id:N}");
+        }
+
+        if (!configuration.GetValue("EdgeSync:AllowLegacySharedKey", true))
+            return (new UnauthorizedObjectResult(new
+            {
+                success = false,
+                message = "Legacy edge credential đã bị tắt; hãy provision credential riêng."
+            }), null);
+        var denied = Check(request, configuration);
+        return denied is null ? (null, $"legacy:{device.Id:N}") : (denied, null);
     }
 
     private static bool FixedTimeEquals(string supplied, string expected) =>

@@ -237,6 +237,51 @@ public class FarmLotServiceTests
         _uow.Verify(unit => unit.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Never);
     }
 
+    [Fact]
+    public async Task UpdateLot_QuantityCannotBeLowerThanRegisteredPlusDeadOnArrival()
+    {
+        var lotId = Guid.NewGuid();
+        var lot = new CrabLot
+        {
+            Id = lotId, LotCode = "LOT-Q", Name = "Lô", Quantity = 12, DeadOnArrival = 2
+        };
+        var lots = new Mock<IRepository<CrabLot>>();
+        lots.Setup(repo => repo.GetByIdAsync(lotId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(lot);
+        var crabs = new Mock<IRepository<Crab>>();
+        crabs.Setup(repo => repo.CountAsync(
+                It.IsAny<System.Linq.Expressions.Expression<Func<Crab, bool>>>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(8);
+        _uow.Setup(unit => unit.CrabLots).Returns(lots.Object);
+        _uow.Setup(unit => unit.CrabLotAreas).Returns(RepoWithAll<CrabLotArea>().Object);
+        _uow.Setup(unit => unit.Crabs).Returns(crabs.Object);
+
+        var act = () => Create().UpdateLotAsync(
+            lotId, new UpdateCrabLotRequest(Quantity: 9));
+
+        var error = await act.Should().ThrowAsync<AppException>();
+        error.Which.StatusCode.Should().Be(409);
+        _uow.Verify(unit => unit.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task GetLots_ClosedAtReturnsClosedLifecycleStatus()
+    {
+        var lotId = Guid.NewGuid();
+        _uow.Setup(unit => unit.CrabLots).Returns(RepoWithAll(new CrabLot
+        {
+            Id = lotId, LotCode = "LOT-CLOSED", Name = "Closed",
+            Quantity = 10, ClosedAt = DateTime.UtcNow, Status = "Completed"
+        }).Object);
+        _uow.Setup(unit => unit.CrabLotAreas).Returns(RepoWithAll<CrabLotArea>().Object);
+        _uow.Setup(unit => unit.Crabs).Returns(RepoWithAll<Crab>().Object);
+
+        var lot = (await Create().GetLotsAsync()).Data!.Single();
+
+        lot.Status.Should().Be("Closed");
+    }
+
     private static Mock<IRepository<T>> RepoWithAll<T>(params T[] items)
         where T : BaseEntity
     {

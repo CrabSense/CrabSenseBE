@@ -5,6 +5,7 @@ using CrabSenseBE.Application.Common;
 using CrabSenseBE.Application.DTOs.IoT;
 using CrabSenseBE.Application.Interfaces;
 using CrabSenseBE.Domain.Enums;
+using CrabSenseBE.Domain.Interfaces;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -18,10 +19,12 @@ public class IotController : ControllerBase
 {
     private readonly IIotService _service;
     private readonly IConfiguration _configuration;
-    public IotController(IIotService service, IConfiguration configuration)
+    private readonly IUnitOfWork _uow;
+    public IotController(IIotService service, IConfiguration configuration, IUnitOfWork uow)
     {
         _service = service;
         _configuration = configuration;
+        _uow = uow;
     }
 
     /// <summary>[CREATE] ESP32 / edge: ingest single reading (HTTP) — yêu cầu X-Edge-Key</summary>
@@ -29,7 +32,10 @@ public class IotController : ControllerBase
     [AllowAnonymous]
     public async Task<IActionResult> IngestSingle([FromBody] SensorDataRequest req, CancellationToken ct)
     {
-        var denied = EdgeKeyGuard.Check(Request, _configuration);
+        var denied = string.IsNullOrWhiteSpace(req.DeviceCode)
+            ? EdgeKeyGuard.Check(Request, _configuration)
+            : (await EdgeKeyGuard.CheckDeviceAsync(
+                Request, _configuration, _uow, req.DeviceCode, ct)).Denied;
         if (denied is not null) return denied;
         return Ok(await _service.IngestSensorDataAsync(req, ct));
     }
@@ -39,26 +45,31 @@ public class IotController : ControllerBase
     [AllowAnonymous]
     public async Task<IActionResult> IngestBatch([FromBody] SensorDataBatchRequest req, CancellationToken ct)
     {
-        var denied = EdgeKeyGuard.Check(Request, _configuration);
+        var deviceCodes = (req.Measurements ?? [])
+            .Select(item => item.DeviceCode?.Trim())
+            .Where(code => !string.IsNullOrWhiteSpace(code))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        if (deviceCodes.Length > 1)
+            return BadRequest(new { success = false, message = "Một batch chỉ được chứa dữ liệu từ một Device." });
+        var denied = deviceCodes.Length == 1
+            ? (await EdgeKeyGuard.CheckDeviceAsync(
+                Request, _configuration, _uow, deviceCodes[0]!, ct)).Denied
+            : EdgeKeyGuard.Check(Request, _configuration);
         if (denied is not null) return denied;
         return Ok(await _service.IngestSensorDataBatchAsync(req, ct));
     }
 
-    /// <summary>Desktop báo relay vừa bật hoặc tắt để đẩy thông báo mobile.</summary>
+    /// <summary>Controller đã xác thực báo trạng thái relay quan sát thực tế.</summary>
     [HttpPost("relay-state")]
-    [Authorize]
+    [AllowAnonymous]
     public async Task<IActionResult> ReportRelay([FromBody] RelayStateRequest req, CancellationToken ct)
     {
-        await _service.ReportRelayAsync(req.DeviceCode, req.Channel, req.On, TryGetUserId(), ct);
+        var (denied, _) = await EdgeKeyGuard.CheckDeviceAsync(
+            Request, _configuration, _uow, req.DeviceCode, ct);
+        if (denied is not null) return denied;
+        await _service.ReportRelayAsync(req.DeviceCode, req.Channel, req.On, null, ct);
         return Ok(ApiResponse.Ok("Relay state recorded."));
-    }
-
-    private Guid? TryGetUserId()
-    {
-        var raw = User.FindFirstValue(JwtRegisteredClaimNames.Sub)
-            ?? User.FindFirstValue(ClaimTypes.NameIdentifier)
-            ?? User.FindFirstValue("sub");
-        return raw is not null && Guid.TryParse(raw, out var id) && id != Guid.Empty ? id : null;
     }
 
     /// <summary>[READ] Sensor history (charts)</summary>

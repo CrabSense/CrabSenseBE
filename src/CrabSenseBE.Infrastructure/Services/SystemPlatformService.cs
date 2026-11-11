@@ -138,7 +138,7 @@ public class SystemPlatformService : ISystemPlatformService
             Component = request.Component.Trim(),
             Version = request.Version.Trim(),
             Environment = string.IsNullOrWhiteSpace(request.Environment) ? "Production" : request.Environment.Trim(),
-            Status = "Recorded",
+            Status = "DeployRequested",
             DeployedBy = actor,
             DeployedByUserId = userId,
             DeployedAt = DateTime.UtcNow,
@@ -146,7 +146,8 @@ public class SystemPlatformService : ISystemPlatformService
         _db.SystemDeployments.Add(row);
         await AuditAsync(userId, "Deploy", "SystemDeployment", row.Id, $"{row.Component} {row.Version}", null, ct);
         await _db.SaveChangesAsync(ct);
-        return ApiResponse<SystemDeploymentDto>.Ok(MapDeployment(row));
+        return ApiResponse<SystemDeploymentDto>.Ok(
+            MapDeployment(row), "Yêu cầu deploy đã được ghi nhận; chưa có worker xác nhận hoàn tất.");
     }
 
     public async Task<ApiResponse<SystemDeploymentDto>> RollbackAsync(
@@ -166,7 +167,7 @@ public class SystemPlatformService : ISystemPlatformService
             Component = previous.Component,
             Version = previous.Version,
             Environment = previous.Environment,
-            Status = "RolledBack",
+            Status = "RollbackRequested",
             DeployedBy = actor,
             DeployedByUserId = userId,
             DeployedAt = DateTime.UtcNow,
@@ -174,7 +175,8 @@ public class SystemPlatformService : ISystemPlatformService
         _db.SystemDeployments.Add(row);
         await AuditAsync(userId, "Rollback", "SystemDeployment", row.Id, $"{row.Component} {row.Version}", null, ct);
         await _db.SaveChangesAsync(ct);
-        return ApiResponse<SystemDeploymentDto>.Ok(MapDeployment(row));
+        return ApiResponse<SystemDeploymentDto>.Ok(
+            MapDeployment(row), "Yêu cầu rollback đã được ghi nhận; chưa có worker xác nhận hoàn tất.");
     }
 
     public async Task<ApiResponse<SystemDeploymentDto>> RequestRestartAsync(
@@ -217,10 +219,12 @@ public class SystemPlatformService : ISystemPlatformService
         if (string.IsNullOrWhiteSpace(request.FirmwareVersion))
             throw AppException.BadRequest("Firmware version là bắt buộc.");
         var device = await RequireDevice(deviceId, ct);
-        device.FirmwareVersion = request.FirmwareVersion.Trim();
-        await AuditAsync(userId, "UpdateFirmware", "Device", device.Id, device.FirmwareVersion, ip, ct);
+        var requestedVersion = request.FirmwareVersion.Trim();
+        await AuditAsync(userId, "FirmwareUpdateRequested", "Device", device.Id, requestedVersion, ip, ct);
         await _db.SaveChangesAsync(ct);
-        return ApiResponse<DeviceActionResultDto>.Ok(new DeviceActionResultDto(device.Id, device.Status.ToString(), device.FirmwareVersion));
+        return ApiResponse<DeviceActionResultDto>.Ok(
+            new DeviceActionResultDto(device.Id, "Requested", requestedVersion),
+            "Yêu cầu firmware đã được ghi nhận; FirmwareVersion chỉ đổi sau ACK từ thiết bị.");
     }
 
     public async Task<ApiResponse<DeviceActionResultDto>> DisableDeviceAsync(
@@ -408,20 +412,21 @@ public class SystemPlatformService : ISystemPlatformService
     public async Task<ApiResponse<AiServiceDto>> RestartAiServiceAsync(Guid id, Guid? userId, string? ip, CancellationToken ct = default)
     {
         var row = await RequireAi(id, ct);
-        row.Status = "Running";
-        row.StartedAt = DateTime.UtcNow;
+        row.Status = "RestartRequested";
         await AuditAsync(userId, "RestartAiService", "AiManagedService", row.Id, row.Name, ip, ct);
         await _db.SaveChangesAsync(ct);
-        return ApiResponse<AiServiceDto>.Ok(MapAi(row, 0));
+        return ApiResponse<AiServiceDto>.Ok(
+            MapAi(row, 0), "Yêu cầu restart đã được ghi nhận; chưa có worker xác nhận.");
     }
 
     public async Task<ApiResponse<AiServiceDto>> StopAiServiceAsync(Guid id, Guid? userId, string? ip, CancellationToken ct = default)
     {
         var row = await RequireAi(id, ct);
-        row.Status = "Stopped";
+        row.Status = "StopRequested";
         await AuditAsync(userId, "StopAiService", "AiManagedService", row.Id, row.Name, ip, ct);
         await _db.SaveChangesAsync(ct);
-        return ApiResponse<AiServiceDto>.Ok(MapAi(row, 0));
+        return ApiResponse<AiServiceDto>.Ok(
+            MapAi(row, 0), "Yêu cầu stop đã được ghi nhận; chưa có worker xác nhận.");
     }
 
     public async Task<ApiResponse<AiServiceDto>> DeployAiModelAsync(
@@ -430,13 +435,12 @@ public class SystemPlatformService : ISystemPlatformService
         if (string.IsNullOrWhiteSpace(request.Version))
             throw AppException.BadRequest("Version là bắt buộc.");
         var row = await RequireAi(id, ct);
-        row.PreviousVersion = row.Version;
-        row.Version = request.Version.Trim();
-        row.Status = "Running";
-        row.StartedAt = DateTime.UtcNow;
-        await AuditAsync(userId, "DeployAiModel", "AiManagedService", row.Id, row.Version, ip, ct);
+        var requestedVersion = request.Version.Trim();
+        row.Status = "DeployRequested";
+        await AuditAsync(userId, "DeployAiModelRequested", "AiManagedService", row.Id, requestedVersion, ip, ct);
         await _db.SaveChangesAsync(ct);
-        return ApiResponse<AiServiceDto>.Ok(MapAi(row, 0));
+        return ApiResponse<AiServiceDto>.Ok(
+            MapAi(row, 0), $"Đã ghi nhận yêu cầu deploy model {requestedVersion}; version hiện tại chưa đổi.");
     }
 
     public async Task<ApiResponse<AiServiceDto>> RollbackAiModelAsync(Guid id, Guid? userId, string? ip, CancellationToken ct = default)
@@ -444,10 +448,11 @@ public class SystemPlatformService : ISystemPlatformService
         var row = await RequireAi(id, ct);
         if (string.IsNullOrWhiteSpace(row.PreviousVersion))
             throw AppException.BadRequest("Không có version trước.");
-        (row.Version, row.PreviousVersion) = (row.PreviousVersion, row.Version);
-        await AuditAsync(userId, "RollbackAiModel", "AiManagedService", row.Id, row.Version, ip, ct);
+        row.Status = "RollbackRequested";
+        await AuditAsync(userId, "RollbackAiModelRequested", "AiManagedService", row.Id, row.PreviousVersion, ip, ct);
         await _db.SaveChangesAsync(ct);
-        return ApiResponse<AiServiceDto>.Ok(MapAi(row, 0));
+        return ApiResponse<AiServiceDto>.Ok(
+            MapAi(row, 0), $"Đã ghi nhận yêu cầu rollback về {row.PreviousVersion}; version hiện tại chưa đổi.");
     }
 
     public Task<ApiResponse<StorageCapacityDto>> GetStorageCapacityAsync(CancellationToken ct = default)
@@ -500,6 +505,13 @@ public class SystemPlatformService : ISystemPlatformService
     public async Task<ApiResponse<BackupScheduleDto>> UpdateBackupScheduleAsync(
         BackupScheduleDto request, Guid? userId, string? ip, CancellationToken ct = default)
     {
+        if (request.Enabled)
+            throw AppException.BadRequest(
+                "Backup scheduler chưa được triển khai. Không thể bật lịch để tránh hiển thị trạng thái sai.");
+        if (request.RetentionDays < 1)
+            throw AppException.BadRequest("RetentionDays phải lớn hơn 0.");
+        if (!TimeOnly.TryParse(request.BackupTime, out _))
+            throw AppException.BadRequest("BackupTime phải có định dạng HH:mm.");
         var row = await _db.BackupScheduleSettings.FirstOrDefaultAsync(ct);
         if (row is null)
         {
@@ -542,6 +554,7 @@ public class SystemPlatformService : ISystemPlatformService
             ?? throw AppException.NotFound("User");
         user.RefreshToken = null;
         user.RefreshTokenExpiry = null;
+        user.TokenVersion++;
         await AuditAsync(actorId, "TerminateSession", "AppUser", user.Id, user.Username, ip, ct);
         await _db.SaveChangesAsync(ct);
         return ApiResponse.Ok("Đã kết thúc phiên.");

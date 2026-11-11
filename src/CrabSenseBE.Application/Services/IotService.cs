@@ -150,13 +150,18 @@ public class IotService : IIotService
 
     public async Task ReportRelayAsync(string deviceCode, int channel, bool on, Guid? actorId = null, CancellationToken ct = default)
     {
-        if (string.IsNullOrWhiteSpace(deviceCode) || channel < 1) return;
+        if (string.IsNullOrWhiteSpace(deviceCode) || channel < 1)
+            throw AppException.BadRequest("DeviceCode và channel hợp lệ là bắt buộc.");
         var device = await _uow.Devices.FirstOrDefaultAsync(
             d => d.DeviceCode == deviceCode.Trim(), ct);
-        if (device is null) return;
+        if (device is null) throw AppException.NotFound("Device");
+        if (device.EdgeState is not ("Approved" or "Online"))
+            throw AppException.Forbidden("Controller chưa được phê duyệt.");
         var channelText = channel.ToString();
         var nodes = await _uow.RasComponents.FindAsync(
             c => c.RelayDeviceId == device.Id && c.RelayChannel == channelText, ct);
+        if (!nodes.Any())
+            throw AppException.BadRequest("Channel không thuộc controller này.");
         var logged = false;
         foreach (var node in nodes)
         {
@@ -323,17 +328,42 @@ public class IotService : IIotService
         return "Bình thường";
     }
 
-    public async Task<ApiResponse> IngestSensorDataBatchAsync(SensorDataBatchRequest req, CancellationToken ct = default)
+    public async Task<ApiResponse<IReadOnlyList<SensorDataBatchItemResult>>> IngestSensorDataBatchAsync(
+        SensorDataBatchRequest req, CancellationToken ct = default)
     {
         var list = req.Measurements?.ToList() ?? new List<SensorDataRequest>();
-        foreach (var item in list)
-            await IngestSensorDataAsync(item, ct);
-        return ApiResponse.Ok($"Batch of {list.Count} records ingested.");
+        var results = new List<SensorDataBatchItemResult>(list.Count);
+        for (var index = 0; index < list.Count; index++)
+        {
+            var item = list[index];
+            try
+            {
+                var result = await IngestSensorDataAsync(item, ct);
+                results.Add(new(item.SensorCode, item.EventId, true, result.Message ?? "Saved."));
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                results.Add(new(item.SensorCode, item.EventId, false, ex.Message));
+                foreach (var skipped in list.Skip(index + 1))
+                    results.Add(new(
+                        skipped.SensorCode, skipped.EventId, false,
+                        "Not processed because an earlier batch item failed."));
+                break;
+            }
+        }
+        var succeeded = results.Count(result => result.Success);
+        return ApiResponse<IReadOnlyList<SensorDataBatchItemResult>>.Ok(
+            results, $"Batch processed: {succeeded} succeeded, {results.Count - succeeded} failed.");
     }
 
     public async Task<ApiResponse<PagedResult<SensorDataDto>>> GetSensorDataAsync(
         Guid sensorId, DateTime? from, DateTime? to, int page, int pageSize, CancellationToken ct = default)
     {
+        await EnsureSensorReadAsync(sensorId, ct);
         var all = await _uow.WaterMeasurements.FindAsync(
             m => m.SensorId == sensorId
                  && (from == null || m.MeasuredAt >= from)
@@ -352,7 +382,7 @@ public class IotService : IIotService
 
     public async Task<ApiResponse<SensorDataDto?>> GetLatestSensorDataAsync(Guid sensorId, CancellationToken ct = default)
     {
-        _ = await _uow.Sensors.GetByIdAsync(sensorId, ct) ?? throw AppException.NotFound("Sensor");
+        await EnsureSensorReadAsync(sensorId, ct);
         var latest = (await _uow.WaterMeasurements.FindAsync(m => m.SensorId == sensorId, ct))
             .OrderByDescending(m => m.MeasuredAt)
             .FirstOrDefault();
@@ -368,6 +398,12 @@ public class IotService : IIotService
         CancellationToken ct = default)
     {
         var sensors = (await _uow.Sensors.GetAllAsync(ct)).AsEnumerable();
+        var selectedAreas = await TechnicalReadAreasAsync(farmingAreaId, ct);
+        if (selectedAreas is not null)
+        {
+            var allowedSensorIds = await SensorIdsInAreasAsync(selectedAreas, ct);
+            sensors = sensors.Where(s => allowedSensorIds.Contains(s.Id));
+        }
         if (deviceId.HasValue)
             sensors = sensors.Where(s => s.DeviceId == deviceId.Value);
 
@@ -451,10 +487,14 @@ public class IotService : IIotService
         };
 
         var sensors = (await _uow.Sensors.GetAllAsync(ct)).AsEnumerable();
-        string? farmIdStr = null;
+        var selectedAreas = await TechnicalReadAreasAsync(farmingAreaId, ct);
+        if (selectedAreas is not null)
+        {
+            var allowedSensorIds = await SensorIdsInAreasAsync(selectedAreas, ct);
+            sensors = sensors.Where(s => allowedSensorIds.Contains(s.Id));
+        }
         if (farmingAreaId is Guid areaId && areaId != Guid.Empty)
         {
-            farmIdStr = areaId.ToString();
             var wsIds = (await _uow.WaterSystems.FindAsync(w => w.FarmingAreaId == areaId, ct))
                 .Select(w => w.Id)
                 .ToHashSet();
@@ -466,63 +506,118 @@ public class IotService : IIotService
             return ApiResponse<IEnumerable<WaterQualitySnapshotDto>>.Ok(Array.Empty<WaterQualitySnapshotDto>());
 
         var sensorById = sensorList.ToDictionary(s => s.Id);
-        var sensorIds = sensorById.Keys.ToHashSet();
-
-        var measurements = (await _uow.WaterMeasurements.FindAsync(
-                m => sensorIds.Contains(m.SensorId) && m.MeasuredAt >= from && m.MeasuredAt <= utcNow,
-                ct))
+        var sensorIds = sensorById.Keys.ToList();
+        var measurements = await _uow.WaterMeasurements.Query()
+            .AsNoTracking()
+            .Where(m => sensorIds.Contains(m.SensorId)
+                && m.MeasuredAt >= from && m.MeasuredAt <= utcNow)
             .OrderBy(m => m.MeasuredAt)
-            .ToList();
+            .ToListAsync(ct);
 
-        // Bucket by minute so multi-sensor samples line up.
-        var buckets = new SortedDictionary<DateTime, Dictionary<string, decimal>>();
-        foreach (var m in measurements)
+        var waterSystemAreas = (await _uow.WaterSystems.GetAllAsync(ct))
+            .Where(item => item.FarmingAreaId.HasValue)
+            .ToDictionary(item => item.Id, item => item.FarmingAreaId!.Value);
+        var rows = (await _uow.FarmingRows.GetAllAsync(ct))
+            .ToDictionary(item => item.Id);
+        var devices = (await _uow.Devices.GetAllAsync(ct))
+            .ToDictionary(item => item.Id);
+
+        // One row is one physical sensor/metric/unit/minute. This deliberately avoids
+        // combining different sensors or units into a synthetic farm-wide reading.
+        var groups = measurements.GroupBy(m => new
         {
-            if (!sensorById.TryGetValue(m.SensorId, out var sensor))
-                continue;
-
-            var bucket = new DateTime(
-                m.MeasuredAt.Year, m.MeasuredAt.Month, m.MeasuredAt.Day,
-                m.MeasuredAt.Hour, m.MeasuredAt.Minute, 0,
-                DateTimeKind.Utc);
-
-            if (!buckets.TryGetValue(bucket, out var values))
-            {
-                values = new Dictionary<string, decimal>(StringComparer.OrdinalIgnoreCase);
-                buckets[bucket] = values;
-            }
-
-            var key = NormalizeSensorType(sensor.SensorType);
-            values[key] = m.Value;
-        }
-
-        var snapshots = new List<WaterQualitySnapshotDto>(buckets.Count);
-        foreach (var (at, values) in buckets)
+            m.SensorId,
+            Bucket = new DateTime(m.MeasuredAt.Year, m.MeasuredAt.Month,
+                m.MeasuredAt.Day, m.MeasuredAt.Hour, m.MeasuredAt.Minute, 0,
+                DateTimeKind.Utc)
+        });
+        var snapshots = new List<WaterQualitySnapshotDto>();
+        foreach (var group in groups)
         {
-            values.TryGetValue("temperature", out var temp);
-            values.TryGetValue("ph", out var ph);
-            values.TryGetValue("do", out var dio);
-            values.TryGetValue("salinity", out var sal);
-
-            // Field import has TDS/EC but often no Salinity — derive ppt ≈ TDS ppm / 1000.
-            if (sal == 0 && values.TryGetValue("tds", out var tds) && tds > 0)
-                sal = Math.Round(tds / 1000m, 2);
-            else if (sal == 0 && values.TryGetValue("ec", out var ec) && ec > 0)
-                sal = Math.Round(ec * 0.5m, 2);
-
+            var sensor = sensorById[group.Key.SensorId];
+            var metric = NormalizeSensorType(sensor.SensorType);
+            var value = group.OrderByDescending(item => item.MeasuredAt).First().Value;
+            var area = SensorArea(sensor, waterSystemAreas, rows, devices);
             snapshots.Add(new WaterQualitySnapshotDto(
-                Id: $"wq_{at:yyyyMMddHHmm}",
-                SensorId: sensorList[0].Id.ToString(),
-                FarmId: farmIdStr,
-                Temperature: temp,
-                Ph: ph,
-                DissolvedOxygen: dio,
-                Salinity: sal,
-                Timestamp: at,
+                Id: $"wq_{sensor.Id:N}_{group.Key.Bucket:yyyyMMddHHmm}",
+                SensorId: sensor.Id.ToString(),
+                FarmId: area?.ToString(),
+                Temperature: metric == "temperature" ? value : 0,
+                Ph: metric == "ph" ? value : 0,
+                DissolvedOxygen: metric == "do" ? value : 0,
+                Salinity: metric == "salinity" ? value : 0,
+                Timestamp: group.Key.Bucket,
                 IsAlertTriggered: false));
         }
 
         return ApiResponse<IEnumerable<WaterQualitySnapshotDto>>.Ok(snapshots);
+    }
+
+    private static Guid? SensorArea(
+        Sensor sensor,
+        IReadOnlyDictionary<Guid, Guid> waterSystemAreas,
+        IReadOnlyDictionary<Guid, FarmingRow> rows,
+        IReadOnlyDictionary<Guid, Device> devices)
+    {
+        if (sensor.WaterSystemId is Guid waterSystemId
+            && waterSystemAreas.TryGetValue(waterSystemId, out var waterArea))
+            return waterArea;
+        if (sensor.FarmingRowId is Guid rowId && rows.TryGetValue(rowId, out var row))
+            return row.FarmingAreaId;
+        if (sensor.DeviceId is not Guid deviceId
+            || !devices.TryGetValue(deviceId, out var device))
+            return null;
+        if (device.FarmingAreaId.HasValue) return device.FarmingAreaId;
+        return device.FarmingRowId is Guid deviceRowId
+            && rows.TryGetValue(deviceRowId, out var deviceRow)
+                ? deviceRow.FarmingAreaId
+                : null;
+    }
+
+    private async Task<HashSet<Guid>?> TechnicalReadAreasAsync(Guid? requestedAreaId, CancellationToken ct)
+    {
+        if (requestedAreaId is Guid areaId && areaId != Guid.Empty)
+        {
+            await _areas.EnsureReadAsync(areaId, ct);
+            return [areaId];
+        }
+
+        var user = await _areas.CurrentUserAsync(ct);
+        if (user is null || user.Role == UserRole.SystemAdministrator)
+            return null;
+        return await _areas.AreaIdsAsync(ct) ?? [];
+    }
+
+    private async Task EnsureSensorReadAsync(Guid sensorId, CancellationToken ct)
+    {
+        _ = await _uow.Sensors.GetByIdAsync(sensorId, ct) ?? throw AppException.NotFound("Sensor");
+        var user = await _areas.CurrentUserAsync(ct);
+        if (user is null || user.Role == UserRole.SystemAdministrator)
+            return;
+
+        var allowed = await _areas.AreaIdsAsync(ct) ?? [];
+        var matching = await SensorIdsInAreasAsync(allowed, ct);
+        if (!matching.Contains(sensorId))
+            throw AppException.Forbidden("Bạn không được phân công khu của cảm biến này.");
+    }
+
+    private async Task<HashSet<Guid>> SensorIdsInAreasAsync(HashSet<Guid> areaIds, CancellationToken ct)
+    {
+        if (areaIds.Count == 0) return [];
+        var waterSystemIds = (await _uow.WaterSystems.FindAsync(
+            w => w.FarmingAreaId != null && areaIds.Contains(w.FarmingAreaId.Value), ct))
+            .Select(w => w.Id).ToHashSet();
+        var rowIds = (await _uow.FarmingRows.FindAsync(
+            r => areaIds.Contains(r.FarmingAreaId), ct)).Select(r => r.Id).ToHashSet();
+        var deviceIds = (await _uow.Devices.FindAsync(
+            d => (d.FarmingAreaId != null && areaIds.Contains(d.FarmingAreaId.Value))
+                 || (d.FarmingRowId != null && rowIds.Contains(d.FarmingRowId.Value)), ct))
+            .Select(d => d.Id).ToHashSet();
+        return (await _uow.Sensors.FindAsync(
+            s => (s.WaterSystemId != null && waterSystemIds.Contains(s.WaterSystemId.Value))
+                 || (s.FarmingRowId != null && rowIds.Contains(s.FarmingRowId.Value))
+                 || (s.DeviceId != null && deviceIds.Contains(s.DeviceId.Value)), ct))
+            .Select(s => s.Id).ToHashSet();
     }
 
     private static string NormalizeSensorType(string sensorType)
@@ -616,6 +711,7 @@ public class IotService : IIotService
             MaxThreshold = req.MaxThreshold,
             IsActive = true
         };
+        await ValidateSensorLinksAsync(sensor, ct);
         await _uow.Sensors.AddAsync(sensor, ct);
         await _uow.SaveChangesAsync(ct);
         return ApiResponse<SensorDto>.Ok(MapSensor(sensor), "Sensor created.");
@@ -644,9 +740,42 @@ public class IotService : IIotService
         if (req.MinThreshold.HasValue) sensor.MinThreshold = req.MinThreshold;
         if (req.MaxThreshold.HasValue) sensor.MaxThreshold = req.MaxThreshold;
         if (req.IsActive.HasValue) sensor.IsActive = req.IsActive.Value;
+        await ValidateSensorLinksAsync(sensor, ct);
         _uow.Sensors.Update(sensor);
         await _uow.SaveChangesAsync(ct);
         return ApiResponse<SensorDto>.Ok(MapSensor(sensor), "Sensor updated.");
+    }
+
+    private async Task ValidateSensorLinksAsync(Sensor sensor, CancellationToken ct)
+    {
+        var areas = new HashSet<Guid>();
+        if (sensor.WaterSystemId is Guid waterSystemId)
+        {
+            var waterSystem = await _uow.WaterSystems.GetByIdAsync(waterSystemId, ct)
+                ?? throw AppException.NotFound("WaterSystem");
+            if (waterSystem.FarmingAreaId is Guid areaId) areas.Add(areaId);
+        }
+        if (sensor.FarmingRowId is Guid rowId)
+        {
+            var row = await _uow.FarmingRows.GetByIdAsync(rowId, ct)
+                ?? throw AppException.NotFound("FarmingRow");
+            areas.Add(row.FarmingAreaId);
+        }
+        if (sensor.DeviceId is Guid deviceId)
+        {
+            var device = await _uow.Devices.GetByIdAsync(deviceId, ct)
+                ?? throw AppException.NotFound("Device");
+            if (device.FarmingAreaId is Guid areaId) areas.Add(areaId);
+            if (device.FarmingRowId is Guid deviceRowId)
+            {
+                var row = await _uow.FarmingRows.GetByIdAsync(deviceRowId, ct)
+                    ?? throw AppException.NotFound("FarmingRow");
+                areas.Add(row.FarmingAreaId);
+            }
+        }
+        if (areas.Count > 1)
+            throw AppException.BadRequest(
+                "Sensor, Device, FarmingRow và WaterSystem phải thuộc cùng FarmingArea.");
     }
 
     public async Task<ApiResponse> DeleteSensorAsync(Guid id, CancellationToken ct = default)

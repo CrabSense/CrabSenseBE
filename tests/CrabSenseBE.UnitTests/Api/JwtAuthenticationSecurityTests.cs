@@ -72,7 +72,7 @@ public sealed class JwtAuthenticationSecurityTests : IAsyncLifetime
     [Fact]
     public async Task Database_state_revokes_old_access_tokens()
     {
-        var original = _jwt.GenerateAccessToken(_user);
+        var original = _jwt.GenerateAccessToken(_user).Token;
         (await Send(original)).ShouldBe(HttpStatusCode.OK);
         (await Send(null)).ShouldBe(HttpStatusCode.Unauthorized);
         (await Send(original[..^1] + (original[^1] == 'a' ? 'b' : 'a')))
@@ -96,10 +96,10 @@ public sealed class JwtAuthenticationSecurityTests : IAsyncLifetime
             Email = "deleted@example.test",
             Role = UserRole.FarmStaff,
             IsActive = true
-        });
+        }).Token;
         (await Send(deletedUserToken)).ShouldBe(HttpStatusCode.Unauthorized);
 
-        var afterUnlock = _jwt.GenerateAccessToken(_user);
+        var afterUnlock = _jwt.GenerateAccessToken(_user).Token;
         (await Send(afterUnlock)).ShouldBe(HttpStatusCode.OK);
 
         _user.TokenVersion++;
@@ -113,7 +113,7 @@ public sealed class JwtAuthenticationSecurityTests : IAsyncLifetime
         {
             _user.Role = role;
             _user.TokenVersion++;
-            (await Send(_jwt.GenerateAccessToken(_user)))
+            (await Send(_jwt.GenerateAccessToken(_user).Token))
                 .ShouldBe(HttpStatusCode.OK);
         }
     }

@@ -11,8 +11,15 @@ namespace CrabSenseBE.Application.Services;
 public class AiOpsService : IAiOpsService
 {
     private readonly IUnitOfWork _uow;
+    private readonly FarmAreaScope _areas;
+    private readonly MediaAssetAreaGuard _mediaAreas;
 
-    public AiOpsService(IUnitOfWork uow) => _uow = uow;
+    public AiOpsService(IUnitOfWork uow, ICurrentUserService? currentUser = null)
+    {
+        _uow = uow;
+        _areas = new FarmAreaScope(uow, currentUser);
+        _mediaAreas = new MediaAssetAreaGuard(uow, currentUser);
+    }
 
     public async Task<ApiResponse<AiDetectionDto>> AnalyzeAsync(
         AiAnalyzeRequest req, CancellationToken ct = default)
@@ -20,12 +27,21 @@ public class AiOpsService : IAiOpsService
         var mediaId = req.MediaId ?? req.VideoId;
         MediaAsset? media = null;
         if (mediaId is Guid mid && mid != Guid.Empty)
-            media = await _uow.MediaAssets.GetByIdAsync(mid, ct);
+        {
+            media = await _uow.MediaAssets.GetByIdAsync(mid, ct)
+                ?? throw AppException.NotFound("MediaAsset");
+            await _mediaAreas.EnsureAsync(media, ct);
+        }
 
         var boxId = req.BoxId ?? media?.BoxId;
         Box? box = null;
         if (boxId is Guid bid && bid != Guid.Empty)
-            box = await _uow.Boxes.GetByIdAsync(bid, ct);
+        {
+            box = await _uow.Boxes.GetByIdAsync(bid, ct) ?? throw AppException.NotFound("Box");
+            await _areas.EnsureBoxAsync(bid, manage: false, ct);
+        }
+        if (box is null && media is null)
+            throw AppException.BadRequest("BoxId hoặc MediaId có liên kết khu là bắt buộc.");
 
         // Build recommendation from live farm signals (not hardcoded stub copy).
         var (detectionType, confidence, note, health) =
@@ -50,7 +66,7 @@ public class AiOpsService : IAiOpsService
             BoxId = boxId,
             MediaId = media?.Id,
             DeviceId = deviceId,
-            ModelVersion = "crabsense-ai-v1-rules",
+            ModelVersion = "crabsense-heuristic-v1",
             DetectionType = detectionType,
             Confidence = confidence,
             Status = "completed",
@@ -178,6 +194,7 @@ public class AiOpsService : IAiOpsService
         var boxes = (await _uow.Boxes.GetAllAsync(ct)).ToDictionary(b => b.Id);
         var rows = (await _uow.FarmingRows.GetAllAsync(ct)).ToDictionary(r => r.Id);
         var devices = (await _uow.Devices.GetAllAsync(ct)).ToDictionary(d => d.Id);
+        var allowedAreas = await _areas.SelectionAsync(farmingAreaId, ct);
         // Cua đang ở trong hộp: để ghép mã cua cho phát hiện theo hộp (nếu detection không có CrabId).
         var crabInBox = (await _uow.Crabs.GetAllAsync(ct))
             .Where(c => c.BoxId != null && c.Status is CrabStatus.Alive or CrabStatus.Molting or CrabStatus.Quarantined)
@@ -191,12 +208,15 @@ public class AiOpsService : IAiOpsService
                 && rows.TryGetValue(b.FarmingRowId, out var r))
                 return r.FarmingAreaId;
             if (d.DeviceId is Guid did && devices.TryGetValue(did, out var dev))
-                return dev.FarmingAreaId;
+                return dev.FarmingAreaId
+                       ?? (dev.FarmingRowId is Guid rowId && rows.TryGetValue(rowId, out var deviceRow)
+                           ? deviceRow.FarmingAreaId
+                           : null);
             return null;
         }
 
-        if (farmingAreaId is Guid areaId && areaId != Guid.Empty)
-            q = q.Where(d => AreaOf(d) == areaId);
+        if (allowedAreas is not null)
+            q = q.Where(d => AreaOf(d) is Guid areaId && allowedAreas.Contains(areaId));
 
         IEnumerable<AiDetection> ordered = q.OrderByDescending(d => d.DetectedAt);
         if (take is > 0) ordered = ordered.Take(take.Value);
@@ -237,8 +257,18 @@ public class AiOpsService : IAiOpsService
         if (detectionId is null || detectionId == Guid.Empty)
             throw AppException.BadRequest("AiDetectionId is required.");
 
-        _ = await _uow.AiDetections.GetByIdAsync(detectionId.Value, ct)
+        var detection = await _uow.AiDetections.GetByIdAsync(detectionId.Value, ct)
             ?? throw AppException.NotFound("AI detection");
+        if (detection.BoxId is Guid boxId)
+            await _areas.EnsureBoxAsync(boxId, manage: false, ct);
+        else if (detection.MediaId is Guid mediaId)
+        {
+            var media = await _uow.MediaAssets.GetByIdAsync(mediaId, ct)
+                ?? throw AppException.NotFound("MediaAsset");
+            await _mediaAreas.EnsureAsync(media, ct);
+        }
+        else
+            throw AppException.Forbidden("Không xác định được khu của AI detection.");
 
         var feedback = new AiFeedback
         {

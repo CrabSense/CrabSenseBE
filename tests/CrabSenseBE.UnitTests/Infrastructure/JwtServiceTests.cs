@@ -9,8 +9,11 @@ namespace CrabSenseBE.UnitTests.Infrastructure;
 
 public sealed class JwtServiceTests
 {
-    [Fact]
-    public void Access_token_contains_version_and_uses_configured_short_lifetime()
+    [Theory]
+    [InlineData(15)]
+    [InlineData(30)]
+    public void Access_token_expiry_result_matches_jwt_exp_and_configuration(
+        int expiryMinutes)
     {
         var configuration = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
@@ -19,13 +22,13 @@ public sealed class JwtServiceTests
                     "CrabSense_Test_Secret_With_More_Than_32_Characters!",
                 ["Jwt:Issuer"] = "issuer",
                 ["Jwt:Audience"] = "audience",
-                ["Jwt:ExpiryMinutes"] = "20"
+                ["Jwt:ExpiryMinutes"] = expiryMinutes.ToString()
             })
             .Build();
         var service = new JwtService(configuration);
         var issuedAt = DateTime.UtcNow;
 
-        var raw = service.GenerateAccessToken(new AppUser
+        var result = service.GenerateAccessToken(new AppUser
         {
             Id = Guid.NewGuid(),
             Username = "staff",
@@ -34,11 +37,12 @@ public sealed class JwtServiceTests
             TokenVersion = 7
         });
 
-        var token = new JwtSecurityTokenHandler().ReadJwtToken(raw);
+        var token = new JwtSecurityTokenHandler().ReadJwtToken(result.Token);
         token.Claims.Single(claim => claim.Type == "token_version")
             .Value.Should().Be("7");
+        result.ExpiresAt.Should().Be(token.ValidTo);
         token.ValidTo.Should().BeCloseTo(
-            issuedAt.AddMinutes(20), TimeSpan.FromSeconds(5));
+            issuedAt.AddMinutes(expiryMinutes), TimeSpan.FromSeconds(5));
     }
 
     [Fact]

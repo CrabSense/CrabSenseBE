@@ -37,6 +37,12 @@ public class WaterAnalysisRun : BaseEntity
     public string? ControllerId { get; set; }
     public string? CameraId { get; set; }
     public string? HardwareJson { get; set; }
+    /// <summary>simulation | hardware. Hardware chỉ tiến bước khi controller ACK.</summary>
+    public string ExecutionMode { get; set; } = "simulation";
+    public string? AwaitingEvent { get; set; }
+    public DateTime? StepDeadlineAt { get; set; }
+    public DateTime? ResultRecordedAt { get; set; }
+    public DateTime? CleaningConfirmedAt { get; set; }
 
     public FarmingArea? FarmingArea { get; set; }
 }

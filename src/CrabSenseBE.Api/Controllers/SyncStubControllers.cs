@@ -56,7 +56,10 @@ public class SyncQueueStubController : ControllerBase
         foreach (var item in items)
         {
             if (string.IsNullOrWhiteSpace(item.IdempotencyKey))
+            {
+                failed.Add(item.IdempotencyKey ?? string.Empty);
                 continue;
+            }
 
             var existing = await _db.SyncInboxItems.FirstOrDefaultAsync(
                 stored => stored.IdempotencyKey == item.IdempotencyKey);
@@ -65,28 +68,64 @@ public class SyncQueueStubController : ControllerBase
                 accepted.Add(item.IdempotencyKey);
                 if (existing.Status == "processed")
                     processed.Add(item.IdempotencyKey);
+                else if (existing.Status == "failed")
+                    failed.Add(item.IdempotencyKey);
                 continue;
             }
 
-            var inboxItem = new CrabSenseBE.Domain.Entities.SyncInboxItem
-            {
-                Id = Guid.NewGuid(),
-                IdempotencyKey = item.IdempotencyKey,
-                EntityType = item.EntityType ?? "unknown",
-                EntityId = item.EntityId ?? string.Empty,
-                OperationType = item.OperationType ?? "unknown",
-                BaseVersion = item.BaseVersion,
-                ClientUpdatedAt = item.ClientUpdatedAt,
-                PayloadJson = JsonSerializer.Serialize(item.Payload ?? new Dictionary<string, object?>()),
-                ReceivedAt = DateTimeOffset.UtcNow
-            };
-            _db.SyncInboxItems.Add(inboxItem);
             accepted.Add(item.IdempotencyKey);
-
-            await ApplyMobileOp(item, inboxItem, processed, failed);
+            var inboxItem = NewInboxItem(item);
+            await using var transaction = await _db.Database.BeginTransactionAsync(
+                HttpContext.RequestAborted);
+            try
+            {
+                _db.SyncInboxItems.Add(inboxItem);
+                await ApplyMobileOp(item, inboxItem, processed, failed);
+                if (inboxItem.Status == "failed")
+                {
+                    var error = inboxItem.ErrorMessage;
+                    await transaction.RollbackAsync(HttpContext.RequestAborted);
+                    _db.ChangeTracker.Clear();
+                    _db.SyncInboxItems.Add(NewInboxItem(item, "failed", error));
+                    await _db.SaveChangesAsync(HttpContext.RequestAborted);
+                }
+                else
+                {
+                    await _db.SaveChangesAsync(HttpContext.RequestAborted);
+                    await transaction.CommitAsync(HttpContext.RequestAborted);
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                await transaction.RollbackAsync(CancellationToken.None);
+                _db.ChangeTracker.Clear();
+                throw;
+            }
+            catch (Exception ex)
+            {
+                await transaction.RollbackAsync(HttpContext.RequestAborted);
+                _db.ChangeTracker.Clear();
+                if (!failed.Contains(item.IdempotencyKey))
+                    failed.Add(item.IdempotencyKey);
+                processed.Remove(item.IdempotencyKey);
+                var concurrent = await _db.SyncInboxItems.AsNoTracking().FirstOrDefaultAsync(
+                    stored => stored.IdempotencyKey == item.IdempotencyKey,
+                    HttpContext.RequestAborted);
+                if (concurrent is not null)
+                {
+                    if (concurrent.Status == "processed")
+                    {
+                        failed.Remove(item.IdempotencyKey);
+                        processed.Add(item.IdempotencyKey);
+                    }
+                }
+                else
+                {
+                    _db.SyncInboxItems.Add(NewInboxItem(item, "failed", ex.Message));
+                    await _db.SaveChangesAsync(HttpContext.RequestAborted);
+                }
+            }
         }
-
-        await _db.SaveChangesAsync();
 
         return Ok(ApiResponse<object>.Ok(new
         {
@@ -100,6 +139,23 @@ public class SyncQueueStubController : ControllerBase
         }, "Batch accepted"));
     }
 
+    private static SyncInboxItem NewInboxItem(
+        SyncBatchItem item, string status = "pending", string? error = null) => new()
+    {
+        Id = Guid.NewGuid(),
+        IdempotencyKey = item.IdempotencyKey!,
+        EntityType = item.EntityType ?? "unknown",
+        EntityId = item.EntityId ?? string.Empty,
+        OperationType = item.OperationType ?? "unknown",
+        BaseVersion = item.BaseVersion,
+        ClientUpdatedAt = item.ClientUpdatedAt,
+        PayloadJson = JsonSerializer.Serialize(item.Payload ?? new Dictionary<string, object?>()),
+        Status = status,
+        ErrorMessage = error,
+        ReceivedAt = DateTimeOffset.UtcNow,
+        ProcessedAt = status == "processed" ? DateTimeOffset.UtcNow : null
+    };
+
     /// <summary>
     /// Incremental pull: only boxes/crabs changed after [since], optionally
     /// scoped to one farming area so other farms are not downloaded.
@@ -109,12 +165,16 @@ public class SyncQueueStubController : ControllerBase
     [ProducesResponseType(StatusCodes.Status200OK)]
     public async Task<IActionResult> PullEntities(
         [FromQuery] DateTimeOffset? since = null,
+        [FromQuery] string? cursor = null,
         [FromQuery] Guid? farmingAreaId = null,
         [FromQuery] int limit = 200,
         CancellationToken ct = default)
     {
         limit = Math.Clamp(limit, 1, 500);
-        var sinceUtc = since?.UtcDateTime;
+        var parsedCursor = SyncPullCursor.TryParse(cursor);
+        if (!string.IsNullOrWhiteSpace(cursor) && parsedCursor is null)
+            throw AppException.BadRequest("Sync cursor không hợp lệ.");
+        var sinceUtc = parsedCursor?.UpdatedAt.UtcDateTime ?? since?.UtcDateTime;
         var allowedAreas = await _areas.SelectionAsync(farmingAreaId, ct)
             ?? new HashSet<Guid>();
 
@@ -126,10 +186,23 @@ public class SyncQueueStubController : ControllerBase
             boxQuery = boxQuery.Where(
                 box => (box.UpdatedAt ?? box.CreatedAt) >= sinceUtc.Value);
         }
+        if (parsedCursor is not null)
+        {
+            var cursorAt = parsedCursor.UpdatedAt.UtcDateTime;
+            var cursorId = parsedCursor.Id;
+            var includeSameTimestamp = string.Compare(
+                "box", parsedCursor.EntityType, StringComparison.Ordinal) > 0;
+            boxQuery = boxQuery.Where(box =>
+                (box.UpdatedAt ?? box.CreatedAt) > cursorAt
+                || ((box.UpdatedAt ?? box.CreatedAt) == cursorAt
+                    && (includeSameTimestamp
+                        || parsedCursor.EntityType == "box" && box.Id.CompareTo(cursorId) > 0)));
+        }
 
         var boxes = await boxQuery
             .OrderBy(box => box.UpdatedAt ?? box.CreatedAt)
-            .Take(limit)
+            .ThenBy(box => box.Id)
+            .Take(limit + 1)
             .Select(box => new
             {
                 id = box.Id,
@@ -154,10 +227,23 @@ public class SyncQueueStubController : ControllerBase
             crabQuery = crabQuery.Where(
                 crab => (crab.UpdatedAt ?? crab.CreatedAt) >= sinceUtc.Value);
         }
+        if (parsedCursor is not null)
+        {
+            var cursorAt = parsedCursor.UpdatedAt.UtcDateTime;
+            var cursorId = parsedCursor.Id;
+            var includeSameTimestamp = string.Compare(
+                "crab", parsedCursor.EntityType, StringComparison.Ordinal) > 0;
+            crabQuery = crabQuery.Where(crab =>
+                (crab.UpdatedAt ?? crab.CreatedAt) > cursorAt
+                || ((crab.UpdatedAt ?? crab.CreatedAt) == cursorAt
+                    && (includeSameTimestamp
+                        || parsedCursor.EntityType == "crab" && crab.Id.CompareTo(cursorId) > 0)));
+        }
 
         var crabs = await crabQuery
             .OrderBy(crab => crab.UpdatedAt ?? crab.CreatedAt)
-            .Take(limit)
+            .ThenBy(crab => crab.Id)
+            .Take(limit + 1)
             .Select(crab => new
             {
                 id = crab.Id,
@@ -173,14 +259,68 @@ public class SyncQueueStubController : ControllerBase
             })
             .ToListAsync();
 
-        var cursor = DateTimeOffset.UtcNow;
+        var merged = boxes.Select(box => new SyncPullEnvelope(
+                box.updatedAt, "box", box.id, box))
+            .Concat(crabs.Select(crab => new SyncPullEnvelope(
+                crab.updatedAt, "crab", crab.id, crab)))
+            .Where(change => parsedCursor is null || change.IsAfter(parsedCursor))
+            .OrderBy(change => change.UpdatedAt)
+            .ThenBy(change => change.EntityType, StringComparer.Ordinal)
+            .ThenBy(change => change.Id)
+            .ToList();
+        var hasMore = merged.Count > limit;
+        var page = merged.Take(limit).ToList();
+        var last = page.LastOrDefault();
+        var nextCursor = last is null
+            ? cursor
+            : new SyncPullCursor(
+                new DateTimeOffset(DateTime.SpecifyKind(last.UpdatedAt, DateTimeKind.Utc)),
+                last.EntityType, last.Id).ToString();
         return Ok(ApiResponse<object>.Ok(new
         {
             since,
             farmingAreaId,
-            cursor = cursor.ToString("O"),
-            changes = new { box = boxes, crab = crabs }
+            cursor = nextCursor,
+            nextCursor,
+            hasMore,
+            changes = new
+            {
+                box = page.Where(change => change.EntityType == "box").Select(change => change.Payload),
+                crab = page.Where(change => change.EntityType == "crab").Select(change => change.Payload)
+            }
         }, "Sync pull"));
+    }
+
+    private sealed record SyncPullEnvelope(
+        DateTime UpdatedAt, string EntityType, Guid Id, object Payload)
+    {
+        public bool IsAfter(SyncPullCursor cursor)
+        {
+            var instant = new DateTimeOffset(DateTime.SpecifyKind(UpdatedAt, DateTimeKind.Utc));
+            var time = instant.CompareTo(cursor.UpdatedAt);
+            if (time != 0) return time > 0;
+            var type = string.Compare(EntityType, cursor.EntityType, StringComparison.Ordinal);
+            return type > 0 || type == 0 && Id.CompareTo(cursor.Id) > 0;
+        }
+    }
+
+    private sealed record SyncPullCursor(DateTimeOffset UpdatedAt, string EntityType, Guid Id)
+    {
+        public override string ToString() =>
+            $"{UpdatedAt.UtcTicks}|{EntityType}|{Id:N}";
+
+        public static SyncPullCursor? TryParse(string? raw)
+        {
+            if (string.IsNullOrWhiteSpace(raw)) return null;
+            var parts = raw.Split('|');
+            return parts.Length == 3
+                   && long.TryParse(parts[0], out var ticks)
+                   && ticks >= DateTimeOffset.MinValue.UtcTicks
+                   && ticks <= DateTimeOffset.MaxValue.UtcTicks
+                   && Guid.TryParse(parts[2], out var id)
+                ? new SyncPullCursor(new DateTimeOffset(ticks, TimeSpan.Zero), parts[1], id)
+                : null;
+        }
     }
 
     async Task ApplyMobileOp(
@@ -200,8 +340,21 @@ public class SyncQueueStubController : ControllerBase
                 await ApplyTransfer(item, inboxItem, processed, failed);
             else if (op.Equals("update_box", StringComparison.OrdinalIgnoreCase))
                 await ApplyUpdateBox(item, inboxItem, processed, failed);
+            else
+                Fail(inboxItem, failed, item, $"OperationType '{op}' không được hỗ trợ.");
         }
-        catch (AppException ex)
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (DbUpdateException)
+        {
+            inboxItem.Status = "failed";
+            inboxItem.ErrorMessage =
+                "Operation xung đột với dữ liệu hiện tại hoặc request đồng thời.";
+            failed.Add(item.IdempotencyKey!);
+        }
+        catch (Exception ex)
         {
             inboxItem.Status = "failed";
             inboxItem.ErrorMessage = ex.Message;
@@ -323,30 +476,50 @@ public class SyncQueueStubController : ControllerBase
                     HttpContext.RequestAborted))
                 .Select(link => link.CrabLotId)
                 .ToHashSet();
-            var lots = (await _uow.CrabLots.GetAllAsync(HttpContext.RequestAborted))
+            var lots = (await _uow.CrabLots.FindAsync(
+                    lot => linkedLotIds.Contains(lot.Id)
+                           && lot.ClosedAt == null,
+                    HttpContext.RequestAborted))
                 .Where(lot => linkedLotIds.Contains(lot.Id)
                     && lot.ClosedAt is null
                     && !string.Equals(lot.Status, "Cancelled", StringComparison.OrdinalIgnoreCase))
-                .OrderBy(lot => lot.CreatedAt)
                 .ToList();
-            CrabLot? selectedLot = null;
+            var requestedLotRaw = SyncPayload.Str(payload, "crabLotId")
+                ?? SyncPayload.Str(item.Payload ?? new(), "crabLotId");
+            if (!string.IsNullOrWhiteSpace(requestedLotRaw)
+                && (!Guid.TryParse(requestedLotRaw, out _) || Guid.Parse(requestedLotRaw) == Guid.Empty))
+            {
+                Fail(inbox, failed, item, "CrabLotId không hợp lệ.");
+                return;
+            }
+            Guid? requestedLotId = Guid.TryParse(requestedLotRaw, out var parsedLotId)
+                && parsedLotId != Guid.Empty
+                    ? parsedLotId
+                    : null;
+            var validLots = new List<CrabLot>();
             foreach (var candidate in lots)
             {
+                if (requestedLotId.HasValue && candidate.Id != requestedLotId.Value)
+                    continue;
                 var placed = await _uow.Crabs.CountAsync(
                     row => row.CrabLotId == candidate.Id,
                     HttpContext.RequestAborted);
                 if (placed < candidate.Quantity - candidate.DeadOnArrival)
-                {
-                    selectedLot = candidate;
-                    break;
-                }
+                    validLots.Add(candidate);
             }
-            if (selectedLot is null)
+            if (validLots.Count == 0)
             {
                 Fail(inbox, failed, item,
                     "Không có Crab Lot đang mở, thuộc khu hộp đích và còn sức chứa.");
                 return;
             }
+            if (!requestedLotId.HasValue && validLots.Count > 1)
+            {
+                Fail(inbox, failed, item,
+                    "Có nhiều Crab Lot hợp lệ; client phải truyền CrabLotId.");
+                return;
+            }
+            var selectedLot = validLots.Single();
             var lotId = selectedLot.Id;
             try
             {
@@ -391,7 +564,15 @@ public class SyncQueueStubController : ControllerBase
         var boxRaw = SyncPayload.Str(payload, "boxId") ?? SyncPayload.Str(item.Payload ?? new(), "boxId");
         if (Guid.TryParse(boxRaw, out var boxId) && boxId != Guid.Empty)
         {
-            await _farmHistory.TransferCrabAsync(new MobileTransferCrabRequest(crabId, boxId));
+            var currentBoxId = crab.BoxId
+                ?? (await _uow.CrabBoxAllocations.FindAsync(
+                        allocation => allocation.CrabId == crabId && allocation.EndTime == null,
+                        HttpContext.RequestAborted))
+                    .OrderByDescending(allocation => allocation.StartTime)
+                    .FirstOrDefault()?.BoxId;
+            if (currentBoxId != boxId)
+                await _farmHistory.TransferCrabAsync(new MobileTransferCrabRequest(
+                    crabId, boxId, currentBoxId));
         }
 
         Done(inbox, processed, item);

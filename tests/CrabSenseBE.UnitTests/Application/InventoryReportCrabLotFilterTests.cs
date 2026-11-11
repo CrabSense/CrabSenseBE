@@ -174,6 +174,58 @@ public class InventoryReportCrabLotFilterTests
         result.Trend.Single().WeightKg.Should().Be(6m);
     }
 
+    [Fact]
+    public async Task HistoricalReport_UsesVerifiedOpeningAndOnlyMovementsBeforeCutoff()
+    {
+        var asOf = new DateTime(2026, 10, 15);
+        var lot = new FrozenLot
+        {
+            Id = Guid.NewGuid(),
+            LotCode = "FROZEN-HISTORY",
+            FrozenDate = asOf.AddDays(-10),
+            ExpiryDate = asOf.AddMonths(2),
+            Quantity = 7,
+            WeightKg = 7m,
+            Grade = "L",
+            Status = FrozenLotStatus.Available
+        };
+        var uow = CreateUnitOfWork(new[] { lot });
+        var openingRepo = new Mock<IRepository<FrozenInventoryOpeningBalance>>();
+        openingRepo.Setup(r => r.GetAllAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new[]
+            {
+                new FrozenInventoryOpeningBalance
+                {
+                    FrozenLotId = lot.Id,
+                    OpeningDate = asOf.AddDays(-5),
+                    OpeningQuantity = 10,
+                    OpeningWeightKg = 10m,
+                    VerificationStatus = FrozenOpeningBalanceVerificationStatus.Verified
+                }
+            });
+        var adjustmentRepo = new Mock<IRepository<FrozenInventoryAdjustment>>();
+        adjustmentRepo.Setup(r => r.GetAllAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new[]
+            {
+                new FrozenInventoryAdjustment
+                {
+                    FrozenLotId = lot.Id,
+                    QuantityDelta = -3,
+                    WeightDeltaKg = -3m,
+                    CreatedAt = asOf.AddDays(1)
+                }
+            });
+        uow.Setup(x => x.FrozenInventoryOpeningBalances).Returns(openingRepo.Object);
+        uow.Setup(x => x.FrozenInventoryAdjustments).Returns(adjustmentRepo.Object);
+
+        var result = await new InventoryReportService(uow.Object)
+            .GetInventoryReportAsync(new InventoryReportFilterDto(asOf, 30));
+
+        result.TotalInventoryQuantity.Should().Be(10);
+        result.TotalInventoryWeightKg.Should().Be(10m);
+        result.DataStatus.Should().Be("Complete");
+    }
+
     private static Mock<IUnitOfWork> CreateUnitOfWork(
         IEnumerable<FrozenLot> frozenLots,
         IEnumerable<Crab>? crabs = null,

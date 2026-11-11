@@ -4,6 +4,7 @@ using CrabSenseBE.Application.Interfaces;
 using CrabSenseBE.Domain.Entities;
 using CrabSenseBE.Domain.Enums;
 using CrabSenseBE.Domain.Interfaces;
+using Microsoft.EntityFrameworkCore;
 
 namespace CrabSenseBE.Application.Services;
 
@@ -156,7 +157,15 @@ public class SalesOrderService : ISalesOrderService
             }, ct);
         }
 
-        await _uow.SaveChangesAsync(ct);
+        try
+        {
+            await _uow.SaveChangesAsync(ct);
+        }
+        catch (DbUpdateException)
+        {
+            throw AppException.Conflict(
+                "Đơn hàng xung đột với giao dịch đồng thời; có cua đã được giữ hoặc bán.");
+        }
         var message = orderStatus == OrderStatus.Draft
             ? $"Đơn '{order.OrderCode}' đã lưu nháp. Cua vẫn còn trong kho."
             : $"Đơn '{order.OrderCode}' đã xác nhận. Cua chuyển sang Đã bán.";
@@ -201,6 +210,20 @@ public class SalesOrderService : ISalesOrderService
         await LoadLinesAsync(order, ct);
         if (order.Status == OrderStatus.Completed)
             await RestoreLinesToInventoryAsync(order, ct);
+        var cancelledAt = DateTime.UtcNow;
+        foreach (var line in order.Lines)
+        {
+            line.ReleasedAt ??= cancelledAt;
+            _uow.SalesOrderLines.Update(line);
+        }
+        var payments = await _uow.Payments.FindAsync(
+            payment => payment.SalesOrderId == order.Id
+                       && payment.Status != PaymentStatus.Cancelled, ct);
+        foreach (var payment in payments)
+        {
+            payment.Status = PaymentStatus.Cancelled;
+            _uow.Payments.Update(payment);
+        }
 
         order.Status = OrderStatus.Cancelled;
         if (order.PaymentStatus is PaymentStatus.Paid or PaymentStatus.Partial)
@@ -421,7 +444,9 @@ public class SalesOrderService : ISalesOrderService
             if (line.CrabId is not Guid crabId) continue;
             var crab = await _uow.Crabs.GetByIdAsync(crabId, ct)
                 ?? throw AppException.BadRequest($"Cua '{line.CrabCode}' không tồn tại.");
-            if (crab.Status == CrabStatus.Sold) continue;
+            if (crab.Status == CrabStatus.Sold)
+                throw AppException.Conflict(
+                    $"Cua '{crab.Code}' đã được bán bởi giao dịch khác.");
             if (crab.Status != CrabStatus.Harvested)
                 throw AppException.Conflict(
                     $"Cua '{crab.Code}' không còn trong kho để xác nhận bán.");
@@ -489,7 +514,9 @@ public class SalesOrderService : ISalesOrderService
             .ToHashSet();
         if (activeIds.Count == 0) return [];
         return (await _uow.SalesOrderLines.FindAsync(
-                l => l.CrabId != null && activeIds.Contains(l.SalesOrderId), ct))
+                l => l.CrabId != null
+                     && l.ReleasedAt == null
+                     && activeIds.Contains(l.SalesOrderId), ct))
             .Select(l => l.CrabId!.Value)
             .ToHashSet();
     }

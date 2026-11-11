@@ -27,10 +27,13 @@ public class JwtService : IJwtService
                 "Jwt:ExpiryMinutes must be between 1 and 1440 minutes.");
     }
 
-    public string GenerateAccessToken(AppUser user)
+    public AccessTokenResult GenerateAccessToken(AppUser user)
     {
         var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(_secret));
         var creds = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);
+        var expiresAt = DateTimeOffset.FromUnixTimeSeconds(
+            DateTimeOffset.UtcNow.AddMinutes(_expiryMinutes).ToUnixTimeSeconds())
+            .UtcDateTime;
 
         var claims = new[]
         {
@@ -49,11 +52,13 @@ public class JwtService : IJwtService
             issuer: _issuer,
             audience: _audience,
             claims: claims,
-            expires: DateTime.UtcNow.AddMinutes(_expiryMinutes),
+            expires: expiresAt,
             signingCredentials: creds
         );
 
-        return new JwtSecurityTokenHandler().WriteToken(token);
+        return new AccessTokenResult(
+            new JwtSecurityTokenHandler().WriteToken(token),
+            expiresAt);
     }
 
     public string GenerateRefreshToken()

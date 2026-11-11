@@ -9,14 +9,20 @@ namespace CrabSenseBE.Application.Services;
 public class OperationLogService : IOperationLogService
 {
     private readonly IUnitOfWork _uow;
+    private readonly FarmAreaScope _areas;
 
-    public OperationLogService(IUnitOfWork uow) => _uow = uow;
+    public OperationLogService(IUnitOfWork uow, ICurrentUserService? currentUser = null)
+    {
+        _uow = uow;
+        _areas = new FarmAreaScope(uow, currentUser);
+    }
 
     public async Task<ApiResponse<List<OperationTaskDto>>> GetTodayTasksAsync(
         Guid? farmingAreaId = null, CancellationToken ct = default)
     {
         var tasks = new List<OperationTaskDto>();
-        var boxes = await GetBoxesForAreaAsync(farmingAreaId, ct);
+        var allowedAreas = await _areas.SelectionAsync(farmingAreaId, ct);
+        var boxes = await GetBoxesForAreasAsync(allowedAreas, ct);
         var endOfDay = DateTime.UtcNow.Date.AddDays(1).AddTicks(-1);
 
         foreach (var box in boxes.Where(b =>
@@ -43,10 +49,9 @@ public class OperationLogService : IOperationLogService
                 IsCompleted: false));
         }
 
-        var sensorIds = await GetSensorIdsForAreaAsync(farmingAreaId, ct);
+        var sensorIds = await GetSensorIdsForAreasAsync(allowedAreas, ct);
         var activeAlerts = (await _uow.Alerts.FindAsync(a => a.Status == AlertStatus.Active, ct))
-            .Where(a => !farmingAreaId.HasValue
-                        || farmingAreaId == Guid.Empty
+            .Where(a => allowedAreas is null
                         || (a.SensorId is Guid sid && sensorIds.Contains(sid)))
             .Take(5);
         foreach (var alert in activeAlerts)
@@ -80,16 +85,18 @@ public class OperationLogService : IOperationLogService
         int limit = 20, Guid? farmingAreaId = null, CancellationToken ct = default)
     {
         limit = Math.Clamp(limit, 1, 100);
-        var boxIds = (await GetBoxesForAreaAsync(farmingAreaId, ct)).Select(b => b.Id).ToHashSet();
+        var allowedAreas = await _areas.SelectionAsync(farmingAreaId, ct);
+        var boxIds = (await GetBoxesForAreasAsync(allowedAreas, ct)).Select(b => b.Id).ToHashSet();
         var logs = (await _uow.OperationLogs.GetAllAsync(ct))
             .OrderByDescending(l => l.CreatedAt)
             .Where(l =>
             {
-                if (farmingAreaId is null || farmingAreaId == Guid.Empty) return true;
+                if (allowedAreas is null) return true;
                 if (l.EntityId is Guid eid && boxIds.Contains(eid)) return true;
                 if (l.EntityType is "RasComponent" or "Device")
-                    return l.Details != null && l.Details.Contains(farmingAreaId.Value.ToString("N"));
-                return l.EntityId is null;
+                    return l.Details != null
+                           && allowedAreas.Any(id => l.Details.Contains(id.ToString("N")));
+                return false;
             })
             .Take(limit)
             .ToList();
@@ -107,11 +114,10 @@ public class OperationLogService : IOperationLogService
 
         if (items.Count == 0)
         {
-            var sensorIds = await GetSensorIdsForAreaAsync(farmingAreaId, ct);
+            var sensorIds = await GetSensorIdsForAreasAsync(allowedAreas, ct);
             var alerts = (await _uow.Alerts.GetAllAsync(ct))
-                .Where(a =>
-                    farmingAreaId is null || farmingAreaId == Guid.Empty
-                    || (a.SensorId is Guid sid && sensorIds.Contains(sid)))
+                .Where(a => allowedAreas is null
+                            || (a.SensorId is Guid sid && sensorIds.Contains(sid)))
                 .OrderByDescending(a => a.CreatedAt)
                 .Take(limit)
                 .ToList();
@@ -126,23 +132,26 @@ public class OperationLogService : IOperationLogService
         return ApiResponse<List<RecentActivityDto>>.Ok(items);
     }
 
-    private async Task<List<Domain.Entities.Box>> GetBoxesForAreaAsync(Guid? farmingAreaId, CancellationToken ct)
+    private async Task<List<Domain.Entities.Box>> GetBoxesForAreasAsync(
+        HashSet<Guid>? areaIds, CancellationToken ct)
     {
-        if (farmingAreaId is null || farmingAreaId == Guid.Empty)
+        if (areaIds is null)
             return (await _uow.Boxes.GetAllAsync(ct)).ToList();
 
-        var rowIds = (await _uow.FarmingRows.FindAsync(r => r.FarmingAreaId == farmingAreaId.Value, ct))
+        var rowIds = (await _uow.FarmingRows.FindAsync(r => areaIds.Contains(r.FarmingAreaId), ct))
             .Select(r => r.Id)
             .ToHashSet();
         return (await _uow.Boxes.FindAsync(b => rowIds.Contains(b.FarmingRowId), ct)).ToList();
     }
 
-    private async Task<HashSet<Guid>> GetSensorIdsForAreaAsync(Guid? farmingAreaId, CancellationToken ct)
+    private async Task<HashSet<Guid>> GetSensorIdsForAreasAsync(
+        HashSet<Guid>? areaIds, CancellationToken ct)
     {
-        if (farmingAreaId is null || farmingAreaId == Guid.Empty)
+        if (areaIds is null)
             return (await _uow.Sensors.GetAllAsync(ct)).Select(s => s.Id).ToHashSet();
 
-        var wsIds = (await _uow.WaterSystems.FindAsync(w => w.FarmingAreaId == farmingAreaId.Value, ct))
+        var wsIds = (await _uow.WaterSystems.FindAsync(
+                w => w.FarmingAreaId != null && areaIds.Contains(w.FarmingAreaId.Value), ct))
             .Select(w => w.Id)
             .ToHashSet();
         return (await _uow.Sensors.FindAsync(

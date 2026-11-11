@@ -84,6 +84,7 @@ public class WaterAnalysisService : IWaterAnalysisService
 
     private readonly IUnitOfWork _uow;
     private readonly ICurrentUserService _currentUser;
+    private readonly FarmAreaScope _areas;
 
     public WaterAnalysisService(
         IUnitOfWork uow,
@@ -92,6 +93,7 @@ public class WaterAnalysisService : IWaterAnalysisService
     {
         _uow = uow;
         _currentUser = currentUser;
+        _areas = new FarmAreaScope(uow, currentUser);
         ApplyOptions(options.Value);
     }
 
@@ -148,6 +150,7 @@ public class WaterAnalysisService : IWaterAnalysisService
     public async Task<ApiResponse<WaterAnalysisSnapshotDto>> GetSnapshotAsync(
         Guid areaId, CancellationToken ct = default)
     {
+        await _areas.EnsureReadAsync(areaId, ct);
         _ = await _uow.FarmingAreas.GetByIdAsync(areaId, ct)
             ?? throw AppException.NotFound("FarmingArea");
         await AdvanceActiveAsync(areaId, ct);
@@ -157,6 +160,7 @@ public class WaterAnalysisService : IWaterAnalysisService
     public async Task<ApiResponse<WaterAnalysisSnapshotDto>> StartAsync(
         Guid areaId, StartWaterAnalysisRequest? req, CancellationToken ct = default)
     {
+        await _areas.EnsureAsync(areaId, manage: false, ct);
         _ = await _uow.FarmingAreas.GetByIdAsync(areaId, ct)
             ?? throw AppException.NotFound("FarmingArea");
 
@@ -179,6 +183,9 @@ public class WaterAnalysisService : IWaterAnalysisService
         }
 
         var now = DateTime.UtcNow;
+        var executionMode = string.Equals(req?.ExecutionMode, "hardware", StringComparison.OrdinalIgnoreCase)
+            ? "hardware"
+            : "simulation";
         var source = NormalizeSource(req?.SampleSource) ?? snapshot.Sample?.SampleSource ?? "RAS_RETURN";
         var hardware = await ResolveHardwareAsync(areaId, ct);
         var actor = await ResolveUserNameAsync(ct);
@@ -203,6 +210,9 @@ public class WaterAnalysisService : IWaterAnalysisService
             ControllerId = hardware.ControllerCode,
             CameraId = hardware.CameraCode,
             HardwareJson = HardwareSnapshotJson(analyte, hardware),
+            ExecutionMode = executionMode,
+            AwaitingEvent = executionMode == "hardware" ? StepEvents[0] : null,
+            StepDeadlineAt = executionMode == "hardware" ? now.AddMinutes(2) : null,
             StepLogJson = WriteLogs(
             [
                 new WaterAnalysisStepLogDto(now, 0, "ANALYSIS_STARTED", $"Bắt đầu phân tích {analyte}")
@@ -219,6 +229,7 @@ public class WaterAnalysisService : IWaterAnalysisService
     public async Task<ApiResponse<WaterAnalysisSnapshotDto>> StopAsync(
         Guid areaId, CancellationToken ct = default)
     {
+        await _areas.EnsureAsync(areaId, manage: false, ct);
         _ = await _uow.FarmingAreas.GetByIdAsync(areaId, ct)
             ?? throw AppException.NotFound("FarmingArea");
 
@@ -227,6 +238,22 @@ public class WaterAnalysisService : IWaterAnalysisService
 
         var now = DateTime.UtcNow;
         var logs = ReadLogs(run.StepLogJson);
+        if (run.ExecutionMode == "hardware")
+        {
+            logs.Add(new WaterAnalysisStepLogDto(now, run.CurrentStep, "STOP_REQUESTED",
+                "Đã ghi nhận yêu cầu dừng; chờ controller xác nhận xả/làm sạch."));
+            run.Status = "stopping";
+            run.CurrentStep = TotalSteps;
+            run.LastStepAt = now;
+            run.AwaitingEvent = StepEvents[TotalSteps - 1];
+            run.StepDeadlineAt = now.AddMinutes(2);
+            run.StepLogJson = WriteLogs(logs);
+            _uow.WaterAnalysisRuns.Update(run);
+            await _uow.SaveChangesAsync(ct);
+            return ApiResponse<WaterAnalysisSnapshotDto>.Ok(
+                await BuildAsync(areaId, ct),
+                "Đã yêu cầu dừng; chưa xác nhận CleaningCompleted trước ACK.");
+        }
         logs.Add(new WaterAnalysisStepLogDto(now, run.CurrentStep, "ANALYSIS_CANCELLED",
             "Người vận hành dừng quy trình — chuyển sang xả/làm sạch an toàn."));
         logs.Add(new WaterAnalysisStepLogDto(now, TotalSteps, "CLEANING_COMPLETED",
@@ -248,6 +275,7 @@ public class WaterAnalysisService : IWaterAnalysisService
     public async Task<ApiResponse<WaterAnalysisSnapshotDto>> UpdateSampleAsync(
         Guid areaId, UpdateWaterAnalysisSampleRequest req, CancellationToken ct = default)
     {
+        await _areas.EnsureAsync(areaId, manage: false, ct);
         _ = await _uow.FarmingAreas.GetByIdAsync(areaId, ct)
             ?? throw AppException.NotFound("FarmingArea");
 
@@ -258,16 +286,20 @@ public class WaterAnalysisService : IWaterAnalysisService
         var latest = (await _uow.WaterAnalysisRuns.FindAsync(r => r.FarmingAreaId == areaId, ct))
             .OrderByDescending(r => r.StartedAt)
             .FirstOrDefault();
-        if (latest is not null)
-        {
-            latest.SampleSource = source;
-            latest.SampleLocation = string.IsNullOrWhiteSpace(req.SampleLocation)
-                ? null
-                : req.SampleLocation.Trim();
-            latest.Notes = string.IsNullOrWhiteSpace(req.Notes) ? null : req.Notes.Trim();
-            _uow.WaterAnalysisRuns.Update(latest);
-            await _uow.SaveChangesAsync(ct);
-        }
+        if (latest is null)
+            throw AppException.Conflict("Không có phiên phân tích đang hoạt động để cập nhật mẫu.");
+        if (!string.Equals(latest.Status, "running", StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(latest.Status, "pending", StringComparison.OrdinalIgnoreCase))
+            throw AppException.Conflict(
+                "Phiên phân tích đã kết thúc; dữ liệu lịch sử không thể sửa trực tiếp.");
+
+        latest.SampleSource = source;
+        latest.SampleLocation = string.IsNullOrWhiteSpace(req.SampleLocation)
+            ? null
+            : req.SampleLocation.Trim();
+        latest.Notes = string.IsNullOrWhiteSpace(req.Notes) ? null : req.Notes.Trim();
+        _uow.WaterAnalysisRuns.Update(latest);
+        await _uow.SaveChangesAsync(ct);
 
         return ApiResponse<WaterAnalysisSnapshotDto>.Ok(
             await BuildAsync(areaId, ct),
@@ -277,6 +309,7 @@ public class WaterAnalysisService : IWaterAnalysisService
     public async Task<ApiResponse<WaterAnalysisDetailDto>> GetDetailAsync(
         Guid areaId, Guid runId, CancellationToken ct = default)
     {
+        await _areas.EnsureReadAsync(areaId, ct);
         var area = await _uow.FarmingAreas.GetByIdAsync(areaId, ct)
             ?? throw AppException.NotFound("FarmingArea");
         var run = await _uow.WaterAnalysisRuns.GetByIdAsync(runId, ct)
@@ -397,6 +430,18 @@ public class WaterAnalysisService : IWaterAnalysisService
     {
         var run = await ActiveRunAsync(areaId, ct);
         if (run is null) return;
+        if (run.ExecutionMode == "hardware")
+        {
+            if (run.StepDeadlineAt is DateTime deadline && deadline <= DateTime.UtcNow)
+            {
+                run.Status = "failed";
+                run.Error = $"Timeout chờ hardware event {run.AwaitingEvent}. Cần manual recovery.";
+                run.CompletedAt = DateTime.UtcNow;
+                _uow.WaterAnalysisRuns.Update(run);
+                await _uow.SaveChangesAsync(ct);
+            }
+            return;
+        }
 
         var hardware = await ResolveHardwareAsync(areaId, ct);
         var now = DateTime.UtcNow;
@@ -430,7 +475,9 @@ public class WaterAnalysisService : IWaterAnalysisService
 
             if (run.CurrentStep >= TotalSteps)
             {
-                run.Status = "completed";
+                run.Status = HasResult(run) ? "completed" : "failed";
+                if (run.Status == "failed")
+                    run.Error = "Không có kết quả AI/camera hợp lệ; không đánh dấu hoàn tất.";
                 run.CompletedAt = now;
                 run.LastStepAt = now;
                 run.StepLogJson = WriteLogs(logs);
@@ -447,6 +494,93 @@ public class WaterAnalysisService : IWaterAnalysisService
         if (!changed) return;
         _uow.WaterAnalysisRuns.Update(run);
         await _uow.SaveChangesAsync(ct);
+    }
+
+    public async Task<ApiResponse> RecordHardwareEventAsync(
+        Guid runId, WaterAnalysisHardwareEventRequest request, CancellationToken ct = default)
+    {
+        var run = await _uow.WaterAnalysisRuns.GetByIdAsync(runId, ct)
+            ?? throw AppException.NotFound("WaterAnalysisRun");
+        if (run.ExecutionMode != "hardware")
+            throw AppException.Conflict("Run này không ở hardware mode.");
+        if (run.Status is not ("running" or "stopping"))
+            throw AppException.Conflict("Run không còn chờ hardware event.");
+        if (!string.Equals(run.ControllerId, request.DeviceCode?.Trim(), StringComparison.OrdinalIgnoreCase))
+            throw AppException.Forbidden("Controller không sở hữu run này.");
+
+        var eventName = request.Event?.Trim().ToUpperInvariant();
+        if (!string.Equals(eventName, run.AwaitingEvent, StringComparison.Ordinal))
+            throw AppException.Conflict($"Đang chờ event {run.AwaitingEvent}.");
+        var now = DateTime.UtcNow;
+        var logs = ReadLogs(run.StepLogJson);
+        if (!string.IsNullOrWhiteSpace(request.Error))
+        {
+            run.Status = "failed";
+            run.Error = request.Error.Trim();
+            run.CompletedAt = now;
+            logs.Add(new(now, run.CurrentStep, eventName!, run.Error));
+        }
+        else if (eventName == "ANALYSIS_RESULT_SAVED")
+        {
+            if (request.Value is null || request.Confidence is null || string.IsNullOrWhiteSpace(request.ImageUrl))
+                throw AppException.BadRequest("Kết quả hardware cần value, confidence và imageUrl.");
+            SetAnalyteValue(run, request.Value.Value);
+            run.Confidence = request.Confidence;
+            run.ImageUrl = request.ImageUrl.Trim();
+            run.ResultRecordedAt = now;
+            AdvanceHardware(run, now, logs, eventName!);
+        }
+        else if (eventName == "CLEANING_COMPLETED")
+        {
+            run.CleaningConfirmedAt = now;
+            logs.Add(new(now, TotalSteps, eventName!, "Controller xác nhận xả/làm sạch hoàn tất."));
+            run.Status = run.Status == "stopping"
+                ? "cancelled"
+                : HasResult(run) ? "completed" : "failed";
+            if (run.Status == "failed")
+                run.Error = "Không có kết quả hợp lệ trước khi hoàn tất cleaning.";
+            run.CompletedAt = now;
+            run.AwaitingEvent = null;
+            run.StepDeadlineAt = null;
+        }
+        else
+        {
+            AdvanceHardware(run, now, logs, eventName!);
+        }
+        run.StepLogJson = WriteLogs(logs);
+        _uow.WaterAnalysisRuns.Update(run);
+        await _uow.SaveChangesAsync(ct);
+        return ApiResponse.Ok("Hardware event recorded.");
+    }
+
+    private static void AdvanceHardware(
+        WaterAnalysisRun run, DateTime now, List<WaterAnalysisStepLogDto> logs, string eventName)
+    {
+        logs.Add(new(now, run.CurrentStep, eventName, "Controller ACK."));
+        run.LastStepAt = now;
+        run.CurrentStep++;
+        run.AwaitingEvent = run.CurrentStep <= TotalSteps ? StepEvents[run.CurrentStep - 1] : null;
+        run.StepDeadlineAt = run.AwaitingEvent is null ? null : now.AddMinutes(2);
+    }
+
+    private static bool HasResult(WaterAnalysisRun run) =>
+        NormalizeAnalyte(run.Analyte) switch
+        {
+            "PH" => run.Ph is not null,
+            "NH3" => run.Nh3 is not null,
+            "NO3" => run.No3 is not null,
+            _ => run.No2 is not null
+        };
+
+    private static void SetAnalyteValue(WaterAnalysisRun run, decimal value)
+    {
+        switch (NormalizeAnalyte(run.Analyte))
+        {
+            case "PH": run.Ph = value; break;
+            case "NH3": run.Nh3 = value; break;
+            case "NO3": run.No3 = value; break;
+            default: run.No2 = value; break;
+        }
     }
 
     private static void Fail(
@@ -476,7 +610,7 @@ public class WaterAnalysisService : IWaterAnalysisService
             .OrderByDescending(r => r.StartedAt)
             .ToList();
         var latestCompleted = runs.FirstOrDefault(r => r.Status == "completed");
-        var active = runs.FirstOrDefault(r => r.Status == "running");
+        var active = runs.FirstOrDefault(r => r.Status is "running" or "stopping");
         var hardware = await ResolveHardwareAsync(areaId, ct);
         var station = StationOf(hardware);
         var sample = SampleOf(area, runs.FirstOrDefault());
@@ -750,7 +884,7 @@ public class WaterAnalysisService : IWaterAnalysisService
 
     private async Task<WaterAnalysisRun?> ActiveRunAsync(Guid areaId, CancellationToken ct) =>
         (await _uow.WaterAnalysisRuns.FindAsync(
-                r => r.FarmingAreaId == areaId && r.Status == "running", ct))
+                r => r.FarmingAreaId == areaId && (r.Status == "running" || r.Status == "stopping"), ct))
             .OrderByDescending(r => r.StartedAt)
             .FirstOrDefault();
 

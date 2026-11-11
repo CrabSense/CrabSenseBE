@@ -7,12 +7,15 @@ public record EdgeCommandDto(
     string? Channel,
     string Status,
     DateTime CreatedAt,
-    string? CorrelationId);
+    string? CorrelationId,
+    DateTime? LeaseExpiresAt = null,
+    int AttemptCount = 0);
 
 public record EnqueueEdgeCommandRequest(
     string DeviceCode,
     string Command,
-    string? Channel = null);
+    string? Channel = null,
+    string? IdempotencyKey = null);
 
 public record EdgeCommandAckRequest(
     string Status,

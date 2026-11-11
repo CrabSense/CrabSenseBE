@@ -1,7 +1,9 @@
 name: Deploy VPS
 
 on:
-  push:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
     branches: [main]
   workflow_dispatch:
 
@@ -12,10 +14,13 @@ concurrency:
 jobs:
   deploy:
     name: Publish & Deploy to VPS
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
 
       - name: Setup .NET 8
         uses: actions/setup-dotnet@v4
@@ -27,6 +32,15 @@ jobs:
           dotnet publish src/CrabSenseBE.Api/CrabSenseBE.Api.csproj \
             -c Release -r linux-x64 --self-contained false \
             -o ./publish
+
+      - name: Build controlled EF migration bundle
+        run: |
+          dotnet tool install --global dotnet-ef --version 8.0.8
+          dotnet ef migrations bundle \
+            --project src/CrabSenseBE.Infrastructure/CrabSenseBE.Infrastructure.csproj \
+            --startup-project src/CrabSenseBE.Api/CrabSenseBE.Api.csproj \
+            --configuration Release --self-contained -r linux-x64 \
+            --output ./publish/efbundle
 
       - name: Inject runtime config (secrets)
         env:
@@ -68,7 +82,7 @@ jobs:
           source: "crabsense-api.tar.gz"
           target: "/tmp/"
 
-      - name: Extract & restart service
+      - name: Backup, migrate, deploy and health-check
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.VPS_HOST }}
@@ -85,12 +99,35 @@ jobs:
               apt-get install -y --no-install-recommends dotnet-runtime-8.0 aspnetcore-runtime-8.0
               dotnet --list-runtimes
             fi
+            rm -rf /opt/crabsense-api.next
+            mkdir -p /opt/crabsense-api.next
+            tar -xzf /tmp/crabsense-api.tar.gz -C /opt/crabsense-api.next
+            chmod 600 /opt/crabsense-api.next/secrets/google-drive-sa.json 2>/dev/null || true
+            DB_CONNECTION="$(python3 - <<'PY'
+            import json
+            d=json.load(open('/opt/crabsense-api.next/appsettings.Local.json', encoding='utf-8-sig'))
+            print(d.get('ConnectionStrings',{}).get('DefaultConnection',''))
+            PY
+            )"
+            if [ -z "$DB_CONNECTION" ]; then
+              echo "Missing production database connection" >&2
+              exit 1
+            fi
+            mkdir -p /var/lib/crabsense/backups
+            chmod 700 /var/lib/crabsense/backups
+            pg_dump "$DB_CONNECTION" \
+              --format=custom \
+              --file="/var/lib/crabsense/backups/predeploy-$(date -u +%Y%m%dT%H%M%SZ).dump"
+            chmod +x /opt/crabsense-api.next/efbundle
+            /opt/crabsense-api.next/efbundle --connection "$DB_CONNECTION"
+            unset DB_CONNECTION
             systemctl stop crabsense-api || true
-            rm -rf /opt/crabsense-api
-            mkdir -p /opt/crabsense-api
-            tar -xzf /tmp/crabsense-api.tar.gz -C /opt/crabsense-api
+            rm -rf /opt/crabsense-api.previous
+            if [ -d /opt/crabsense-api ]; then
+              mv /opt/crabsense-api /opt/crabsense-api.previous
+            fi
+            mv /opt/crabsense-api.next /opt/crabsense-api
             mkdir -p /opt/crabsense-api/logs /opt/crabsense-api/media-storage
-            chmod 600 /opt/crabsense-api/secrets/google-drive-sa.json 2>/dev/null || true
             printf '%s\n' \
               '[Unit]' \
               'Description=CrabSense BE API' \
@@ -101,7 +138,8 @@ jobs:
               'ExecStart=/usr/bin/dotnet /opt/crabsense-api/CrabSenseBE.Api.dll --urls http://0.0.0.0:5080' \
               'Restart=always' \
               'RestartSec=5' \
-              'Environment=ASPNETCORE_ENVIRONMENT=Development' \
+              'Environment=ASPNETCORE_ENVIRONMENT=Production' \
+              'Environment=DOTNET_ENVIRONMENT=Production' \
               'Environment=ASPNETCORE_URLS=http://0.0.0.0:5080' \
               'Environment=DOTNET_PRINT_TELEMETRY_MESSAGE=false' \
               '' \
@@ -118,9 +156,16 @@ jobs:
                 break
               fi
             done
-            if ! systemctl is-active --quiet crabsense-api; then
-              echo "Service khong chay duoc - 40 dong log cuoi de xem nguyen nhan:"
+            if ! systemctl is-active --quiet crabsense-api || ! curl -fsS http://127.0.0.1:5080/health >/dev/null; then
+              echo "Health check failed; restoring previous application package."
               journalctl -u crabsense-api -n 40 --no-pager
+              systemctl stop crabsense-api || true
+              rm -rf /opt/crabsense-api.failed
+              mv /opt/crabsense-api /opt/crabsense-api.failed
+              if [ -d /opt/crabsense-api.previous ]; then
+                mv /opt/crabsense-api.previous /opt/crabsense-api
+                systemctl restart crabsense-api
+              fi
               exit 1
             fi
             curl -fsS http://127.0.0.1:5080/health

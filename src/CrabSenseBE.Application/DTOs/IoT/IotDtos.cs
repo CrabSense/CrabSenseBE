@@ -184,6 +184,11 @@ public record SensorDataRequest(
     string? EventId = null
 );
 public record SensorDataBatchRequest(IEnumerable<SensorDataRequest> Measurements);
+public record SensorDataBatchItemResult(
+    string SensorCode,
+    string? EventId,
+    bool Success,
+    string Message);
 public record SensorDataDto(Guid Id, Guid SensorId, decimal Value, string? Unit, DateTime MeasuredAt, string? Source);
 
 /// Aggregated water-quality snapshot for mobile/history charts.

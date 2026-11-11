@@ -69,9 +69,9 @@ public class AuthService : IAuthService
         await _uow.SaveChangesAsync(ct);
 
         return ApiResponse<LoginResponse>.Ok(new LoginResponse(
-            accessToken,
+            accessToken.Token,
             refreshToken,
-            DateTime.UtcNow.AddDays(30),
+            accessToken.ExpiresAt,
             await ToDtoAsync(user, ct)
         ));
     }
@@ -98,7 +98,10 @@ public class AuthService : IAuthService
         await _uow.SaveChangesAsync(ct);
 
         return ApiResponse<LoginResponse>.Ok(new LoginResponse(
-            accessToken, newRefresh, DateTime.UtcNow.AddDays(30), await ToDtoAsync(user, ct)));
+            accessToken.Token,
+            newRefresh,
+            accessToken.ExpiresAt,
+            await ToDtoAsync(user, ct)));
     }
 
     public async Task<ApiResponse> LogoutAsync(Guid userId, CancellationToken ct = default)

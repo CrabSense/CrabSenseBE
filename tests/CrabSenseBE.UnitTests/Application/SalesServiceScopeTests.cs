@@ -41,12 +41,13 @@ public sealed class SalesServiceScopeTests
 
         var result = await service.CreateAsync(new CreateSaleRequest(
             "Buyer", 1, 100, FarmingAreaId: areaId, BoxId: boxId,
-            OperatorId: Guid.NewGuid()));
+            OperatorId: Guid.NewGuid(), TotalAmount: 999_999));
 
         result.Success.Should().BeTrue();
         saved.Should().NotBeNull();
         saved!.FarmingAreaId.Should().Be(areaId);
         saved.OperatorId.Should().Be(userId);
+        saved.TotalAmount.Should().Be(100);
     }
 
     [Fact]

@@ -26,7 +26,9 @@ public record InventoryReportDto
     IEnumerable<InventoryExpiryAlertDto> ExpiryAlerts,
     IEnumerable<InventoryTrendDto> Trend,
     int OpeningBalancesPendingReview = 0,
-    int OpeningBalanceMismatchCount = 0
+    int OpeningBalanceMismatchCount = 0,
+    string DataStatus = "Complete",
+    int NeedsReviewLotCount = 0
 );
 
 /// <summary>

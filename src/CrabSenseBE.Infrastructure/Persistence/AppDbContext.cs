@@ -117,6 +117,12 @@ public class AppDbContext : DbContext
             .HasColumnType("jsonb");
         modelBuilder.Entity<EdgeCommand>()
             .HasIndex(command => new { command.DeviceCode, command.Status, command.CreatedAt });
+        modelBuilder.Entity<EdgeCommand>()
+            .HasIndex(command => new { command.DeviceCode, command.CorrelationId })
+            .IsUnique();
+        modelBuilder.Entity<EdgeCommand>()
+            .Property(command => command.ConcurrencyVersion)
+            .IsConcurrencyToken();
         modelBuilder.Entity<FarmKiosk>()
             .HasIndex(kiosk => kiosk.Code)
             .IsUnique();
@@ -307,6 +313,7 @@ public class AppDbContext : DbContext
             entity.Property(x => x.WeightAfterKg).HasPrecision(12, 3);
             entity.HasIndex(x => x.FrozenStorageTransactionId).IsUnique();
             entity.HasIndex(x => new { x.FarmingAreaId, x.CreatedAt });
+            entity.HasIndex(x => new { x.FrozenLotId, x.CreatedAt });
             entity.HasOne(x => x.FrozenLot)
                 .WithMany()
                 .HasForeignKey(x => x.FrozenLotId)
@@ -481,6 +488,9 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<CrabLot>()
             .Property(l => l.CloseDisposition)
             .HasMaxLength(500);
+        modelBuilder.Entity<CrabLot>()
+            .Property(l => l.ConcurrencyVersion)
+            .IsConcurrencyToken();
 
         modelBuilder.Entity<CrabLotArea>()
             .HasIndex(link => new { link.CrabLotId, link.FarmingAreaId })
@@ -717,6 +727,10 @@ public class AppDbContext : DbContext
             .HasPrecision(6, 2);
         modelBuilder.Entity<ServiceApiKey>()
             .HasIndex(x => x.Prefix);
+        modelBuilder.Entity<SalesOrderLine>()
+            .HasIndex(line => line.CrabId)
+            .IsUnique()
+            .HasFilter("\"CrabId\" IS NOT NULL AND \"ReleasedAt\" IS NULL");
 
         foreach (var sequence in new[]
                  {
@@ -780,6 +794,40 @@ public class AppDbContext : DbContext
             .WithMany()
             .HasForeignKey(a => a.AssignedByUserId)
             .OnDelete(DeleteBehavior.Restrict);
+
+        modelBuilder.Entity<WaterMeasurement>()
+            .HasIndex(x => new { x.SensorId, x.MeasuredAt });
+        modelBuilder.Entity<FeedingEvent>(entity =>
+        {
+            entity.HasIndex(x => new { x.CrabId, x.FedAt });
+            entity.HasOne<Crab>().WithMany().HasForeignKey(x => x.CrabId)
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne<Box>().WithMany().HasForeignKey(x => x.BoxId)
+                .OnDelete(DeleteBehavior.Restrict);
+        });
+        modelBuilder.Entity<ObservationEvent>(entity =>
+        {
+            entity.HasIndex(x => new { x.CrabId, x.ObservedAt });
+            entity.HasIndex(x => x.FeedingEventId);
+            entity.HasOne<Crab>().WithMany().HasForeignKey(x => x.CrabId)
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne<Box>().WithMany().HasForeignKey(x => x.BoxId)
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne<FeedingEvent>().WithMany().HasForeignKey(x => x.FeedingEventId)
+                .OnDelete(DeleteBehavior.Restrict);
+        });
+        modelBuilder.Entity<TrainingLabel>(entity =>
+        {
+            entity.HasIndex(x => x.FeedingEventId);
+            entity.HasIndex(x => x.ObservationEventId);
+            entity.ToTable(table => table.HasCheckConstraint(
+                "CK_TrainingLabels_ExactlyOneSource",
+                "(\"FeedingEventId\" IS NULL) <> (\"ObservationEventId\" IS NULL)"));
+            entity.HasOne<FeedingEvent>().WithMany().HasForeignKey(x => x.FeedingEventId)
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne<ObservationEvent>().WithMany().HasForeignKey(x => x.ObservationEventId)
+                .OnDelete(DeleteBehavior.Restrict);
+        });
     }
 
     public override Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)

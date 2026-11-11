@@ -41,8 +41,7 @@ public class AlertService : IAlertService
     public async Task<ApiResponse<AlertThresholdDto>> CreateThresholdAsync(
         CreateAlertThresholdRequest req, CancellationToken ct = default)
     {
-        if (req.MinValue >= req.MaxValue)
-            throw AppException.BadRequest("MinValue must be less than MaxValue.");
+        ValidateThresholdRange(req.MinValue, req.MaxValue);
         var areaId = await RequireThresholdAreaAsync(req.FarmingAreaId, ct);
         var waterSystemId = await RequireWaterSystemAsync(req.WaterSystemId, areaId, ct);
 
@@ -68,6 +67,7 @@ public class AlertService : IAlertService
     public async Task<ApiResponse<AlertThresholdDto>> UpdateThresholdAsync(
         Guid id, UpdateAlertThresholdRequest req, CancellationToken ct = default)
     {
+        ValidateThresholdRange(req.MinValue, req.MaxValue);
         var entity = await _uow.AlertThresholds.GetByIdAsync(id, ct)
             ?? throw AppException.NotFound("AlertThreshold");
         await EnsureThresholdAreaAsync(entity, ct);
@@ -157,7 +157,9 @@ public class AlertService : IAlertService
 
     public async Task<ApiResponse<AlertUnreadCountDto>> GetUnreadCountAsync(CancellationToken ct = default)
     {
-        var count = (await _uow.Alerts.FindAsync(a => a.Status == AlertStatus.Active, ct)).Count();
+        var active = await _uow.Alerts.FindAsync(a => a.Status == AlertStatus.Active, ct);
+        active = await FilterToAssignedAreasAsync(active, ct);
+        var count = active.Count();
         return ApiResponse<AlertUnreadCountDto>.Ok(new AlertUnreadCountDto(count, count));
     }
 
@@ -167,10 +169,13 @@ public class AlertService : IAlertService
         var alert = await _uow.Alerts.GetByIdAsync(id, ct)
             ?? throw AppException.NotFound("Alert");
         await EnsureAlertAreaAsync(alert, ct);
+        var actorId = (await _areas.CurrentUserAsync(ct))?.Id;
         alert.Status = AlertStatus.Acknowledged;
         alert.AcknowledgedAt = DateTime.UtcNow;
-        alert.AcknowledgedBy = req.UserId;
+        alert.AcknowledgedBy = actorId;
         _uow.Alerts.Update(alert);
+        await ConfigAudit.WriteAsync(
+            _uow, actorId, "AcknowledgeAlert", "Alert", alert.Id, alert.Message, ct);
         await _uow.SaveChangesAsync(ct);
         var dto = (await MapAlertsAsync(new[] { alert }, ct)).First();
         return ApiResponse<AlertDto>.Ok(dto);
@@ -182,15 +187,18 @@ public class AlertService : IAlertService
         var alert = await _uow.Alerts.GetByIdAsync(id, ct)
             ?? throw AppException.NotFound("Alert");
         await EnsureAlertAreaAsync(alert, ct);
+        var actorId = (await _areas.CurrentUserAsync(ct))?.Id;
         alert.Status = AlertStatus.InProgress;
         alert.ProcessingStartedAt = DateTime.UtcNow;
-        alert.ProcessingBy = req?.UserId;
+        alert.ProcessingBy = actorId;
         if (alert.AcknowledgedAt is null)
         {
             alert.AcknowledgedAt = DateTime.UtcNow;
-            alert.AcknowledgedBy = req?.UserId;
+            alert.AcknowledgedBy = actorId;
         }
         _uow.Alerts.Update(alert);
+        await ConfigAudit.WriteAsync(
+            _uow, actorId, "StartProcessingAlert", "Alert", alert.Id, alert.Message, ct);
         await _uow.SaveChangesAsync(ct);
         var dto = (await MapAlertsAsync(new[] { alert }, ct)).First();
         return ApiResponse<AlertDto>.Ok(dto);
@@ -202,13 +210,16 @@ public class AlertService : IAlertService
         var alert = await _uow.Alerts.GetByIdAsync(id, ct)
             ?? throw AppException.NotFound("Alert");
         await EnsureAlertAreaAsync(alert, ct);
+        var actorId = (await _areas.CurrentUserAsync(ct))?.Id;
         alert.Status = req?.DeviceRecovered == true ? AlertStatus.Recovered : AlertStatus.Resolved;
         alert.ResolvedAt = DateTime.UtcNow;
-        alert.ResolvedBy = req?.UserId;
+        alert.ResolvedBy = actorId;
         alert.ResolutionReason = string.IsNullOrWhiteSpace(req?.Reason) ? null : req!.Reason!.Trim();
         alert.ResolutionAction = string.IsNullOrWhiteSpace(req?.Action) ? null : req!.Action!.Trim();
         alert.ResolutionNote = string.IsNullOrWhiteSpace(req?.Note) ? null : req!.Note!.Trim();
         _uow.Alerts.Update(alert);
+        await ConfigAudit.WriteAsync(
+            _uow, actorId, "ResolveAlert", "Alert", alert.Id, alert.Message, ct);
         await _uow.SaveChangesAsync(ct);
         var dto = (await MapAlertsAsync(new[] { alert }, ct)).First();
         return ApiResponse<AlertDto>.Ok(dto);
@@ -910,4 +921,10 @@ public class AlertService : IAlertService
     private static AlertThresholdDto MapThreshold(AlertThreshold t) =>
         new(t.Id, t.SensorType, t.MinValue, t.MaxValue, t.Severity.ToString(), t.IsActive,
             t.FarmingAreaId, t.WaterSystemId);
+
+    private static void ValidateThresholdRange(decimal minValue, decimal maxValue)
+    {
+        if (minValue >= maxValue)
+            throw AppException.BadRequest("MinValue must be less than MaxValue.");
+    }
 }

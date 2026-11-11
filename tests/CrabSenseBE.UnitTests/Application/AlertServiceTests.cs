@@ -86,6 +86,17 @@ public class AlertServiceTests
     }
 
     [Fact]
+    public async Task UpdateThreshold_WhenMinGteMax_ThrowsBeforePersisting()
+    {
+        await Assert.ThrowsAsync<CrabSenseBE.Application.Common.AppException>(() =>
+            Create().UpdateThresholdAsync(
+                Guid.NewGuid(),
+                new UpdateAlertThresholdRequest(10, 10, "Warning", true)));
+
+        _uow.Verify(u => u.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
     public async Task CheckDisconnects_CreatesAlertForStaleSensor()
     {
         var sensor = new Sensor

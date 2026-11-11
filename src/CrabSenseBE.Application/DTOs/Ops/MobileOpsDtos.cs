@@ -177,7 +177,8 @@ public record AiDetectionDto(
     string? CrabTag = null,
     Guid? FarmingRowId = null,
     string? RowName = null,
-    Guid? FarmingAreaId = null);
+    Guid? FarmingAreaId = null,
+    string AnalysisSource = "rules");
 
 public record AiFeedbackRequest(
     Guid? AiDetectionId = null,

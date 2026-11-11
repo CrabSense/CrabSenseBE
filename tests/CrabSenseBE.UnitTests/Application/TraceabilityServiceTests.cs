@@ -153,6 +153,11 @@ public class TraceabilityServiceTests
         var publicResult = await service.GetTraceabilityAsync(qrA.Code);
         publicResult.Data!.FrozenLotCode.Should().Be(lotA.LotCode);
         qrA.ScanCount.Should().Be(1);
+        qrA.ExpiresAt = DateTime.UtcNow.AddSeconds(-1);
+        var expiredPublic = () => service.GetTraceabilityAsync(qrA.Code);
+        (await expiredPublic.Should().ThrowAsync<AppException>()).Which.StatusCode.Should().Be(404);
+        qrA.ScanCount.Should().Be(1, "expired QR scans must not be counted");
+        qrA.ExpiresAt = null;
 
         var selfQr = new QrCode
         {

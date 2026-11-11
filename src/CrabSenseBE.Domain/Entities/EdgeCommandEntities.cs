@@ -8,9 +8,16 @@ public class EdgeCommand : BaseEntity
     public string DeviceCode { get; set; } = string.Empty;
     public string Command { get; set; } = string.Empty;
     public string? Channel { get; set; }
-    public string Status { get; set; } = "pending"; // pending, delivered, acknowledged, failed
+    public string Status { get; set; } = "pending"; // pending, delivered, acknowledged, failed, timedout
     public DateTime? DeliveredAt { get; set; }
+    public DateTime? LeaseExpiresAt { get; set; }
+    public string? LeaseHolder { get; set; }
+    public int AttemptCount { get; set; }
+    public DateTime? LastAttemptAt { get; set; }
     public DateTime? AcknowledgedAt { get; set; }
+    public DateTime? FailedAt { get; set; }
     public string? ResultMessage { get; set; }
     public string? CorrelationId { get; set; }
+    public Guid? RequestedByUserId { get; set; }
+    public uint ConcurrencyVersion { get; set; }
 }

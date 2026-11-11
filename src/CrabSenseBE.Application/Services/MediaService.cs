@@ -17,11 +17,16 @@ public class MediaService : IMediaService
 
     private readonly IUnitOfWork _uow;
     private readonly IMediaStorageService _storage;
+    private readonly MediaAssetAreaGuard _areaGuard;
 
-    public MediaService(IUnitOfWork uow, IMediaStorageService storage)
+    public MediaService(
+        IUnitOfWork uow,
+        IMediaStorageService storage,
+        ICurrentUserService? currentUser = null)
     {
         _uow = uow;
         _storage = storage;
+        _areaGuard = new MediaAssetAreaGuard(uow, currentUser);
     }
 
     public async Task<ApiResponse<MediaAssetDto>> UploadAsync(
@@ -45,6 +50,14 @@ public class MediaService : IMediaService
                 : meta.DeviceId is Guid ? "device"
                 : meta.Category);
         var entityId = meta.RelatedEntityId ?? meta.CrabId ?? meta.BoxId ?? meta.DeviceId;
+        await _areaGuard.EnsureAsync(new MediaAsset
+        {
+            BoxId = meta.BoxId,
+            CrabId = meta.CrabId,
+            DeviceId = meta.DeviceId,
+            RelatedEntityType = meta.RelatedEntityType,
+            RelatedEntityId = meta.RelatedEntityId
+        }, ct);
         var folder = await MediaFolderCodeResolver.ResolvePathAsync(_uow, entityType, entityId, ct);
         var uploaded = await _storage.UploadAsync(
             fileStream, fileName, contentType, folder, ct);
@@ -94,16 +107,21 @@ public class MediaService : IMediaService
         var filtered = all.Where(a =>
             (category is null || a.Category.Equals(category, StringComparison.OrdinalIgnoreCase))
             && (boxId is null || a.BoxId == boxId)
-            && (crabId is null || a.CrabId == crabId));
+            && (crabId is null || a.CrabId == crabId)).ToList();
+        var visible = new List<MediaAsset>();
+        foreach (var asset in filtered)
+            if (await _areaGuard.CanAccessAsync(asset, ct))
+                visible.Add(asset);
 
         return ApiResponse<IEnumerable<MediaAssetDto>>.Ok(
-            filtered.OrderByDescending(a => a.CreatedAt).Select(Map));
+            visible.OrderByDescending(a => a.CreatedAt).Select(Map));
     }
 
     public async Task<ApiResponse<MediaAssetDto>> GetByIdAsync(Guid id, CancellationToken ct = default)
     {
         var asset = await _uow.MediaAssets.GetByIdAsync(id, ct)
             ?? throw AppException.NotFound("MediaAsset");
+        await _areaGuard.EnsureAsync(asset, ct);
         return ApiResponse<MediaAssetDto>.Ok(Map(asset));
     }
 
@@ -111,6 +129,7 @@ public class MediaService : IMediaService
     {
         var asset = await _uow.MediaAssets.GetByIdAsync(id, ct)
             ?? throw AppException.NotFound("MediaAsset");
+        await _areaGuard.EnsureAsync(asset, ct);
 
         var link = await _storage.EnsureShareLinkAsync(asset.StorageKey, ct);
         asset.ShareLink = link;
@@ -127,6 +146,7 @@ public class MediaService : IMediaService
     {
         var asset = await _uow.MediaAssets.GetByIdAsync(id, ct)
             ?? throw AppException.NotFound("MediaAsset");
+        await _areaGuard.EnsureAsync(asset, ct);
 
         await _storage.DeleteAsync(asset.StorageKey, ct);
         _uow.MediaAssets.Remove(asset);

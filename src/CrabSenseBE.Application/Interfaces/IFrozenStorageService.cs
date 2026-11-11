@@ -81,4 +81,9 @@ public interface IFrozenStorageService
         Guid id,
         VerifyFrozenOpeningBalanceRequest request,
         CancellationToken ct = default);
+
+    Task<ApiResponse<FrozenInventoryOpeningBalanceDto>> AssignOpeningBalanceAreaAsync(
+        Guid id,
+        AssignFrozenOpeningBalanceAreaRequest request,
+        CancellationToken ct = default);
 }

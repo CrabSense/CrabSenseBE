@@ -183,6 +183,7 @@ public class CrabLot : BaseEntity
 
     /// <summary>Ngày kết thúc vòng đời lô. Không dùng UpdatedAt.</summary>
     public DateTime? ClosedAt { get; set; }
+    public uint ConcurrencyVersion { get; set; }
 
     /// <summary>Số cua còn sống chưa từng lột tại thời điểm kết thúc lô.</summary>
     public int? UnmoltedCountAtClose { get; set; }

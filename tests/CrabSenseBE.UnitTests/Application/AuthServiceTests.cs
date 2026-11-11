@@ -57,7 +57,9 @@ public class AuthServiceTests
         _uowMock.Setup(u => u.Users).Returns(userRepoMock.Object);
         _uowMock.Setup(u => u.OperationLogs).Returns(new Mock<IRepository<OperationLog>>().Object);
         _uowMock.Setup(u => u.SaveChangesAsync(It.IsAny<CancellationToken>())).ReturnsAsync(1);
-        _jwtMock.Setup(j => j.GenerateAccessToken(It.IsAny<AppUser>())).Returns("access_token");
+        var expiresAt = DateTime.UtcNow.AddMinutes(30);
+        _jwtMock.Setup(j => j.GenerateAccessToken(It.IsAny<AppUser>()))
+            .Returns(new AccessTokenResult("access_token", expiresAt));
         _jwtMock.Setup(j => j.GenerateRefreshToken()).Returns("refresh_token");
 
         var service = CreateService();
@@ -69,6 +71,7 @@ public class AuthServiceTests
         result.Success.Should().BeTrue();
         result.Data.Should().NotBeNull();
         result.Data!.AccessToken.Should().Be("access_token");
+        result.Data.ExpiresAt.Should().Be(expiresAt);
     }
 
     [Fact]
@@ -118,7 +121,9 @@ public class AuthServiceTests
         _uowMock.Setup(u => u.Users).Returns(userRepoMock.Object);
         _uowMock.Setup(u => u.OperationLogs).Returns(new Mock<IRepository<OperationLog>>().Object);
         _uowMock.Setup(u => u.SaveChangesAsync(It.IsAny<CancellationToken>())).ReturnsAsync(1);
-        _jwtMock.Setup(j => j.GenerateAccessToken(It.IsAny<AppUser>())).Returns("access_token");
+        _jwtMock.Setup(j => j.GenerateAccessToken(It.IsAny<AppUser>()))
+            .Returns(new AccessTokenResult(
+                "access_token", DateTime.UtcNow.AddMinutes(30)));
         _jwtMock.Setup(j => j.GenerateRefreshToken()).Returns("refresh_token");
 
         var result = await CreateService().LoginAsync(new LoginRequest("owner", "Owner@123"));
@@ -191,8 +196,9 @@ public class AuthServiceTests
         _uowMock.Setup(unit => unit.Users).Returns(users.Object);
         _uowMock.Setup(unit => unit.SaveChangesAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(1);
+        var accessExpiresAt = DateTime.UtcNow.AddMinutes(15);
         _jwtMock.Setup(jwt => jwt.GenerateAccessToken(user))
-            .Returns("access");
+            .Returns(new AccessTokenResult("access", accessExpiresAt));
         _jwtMock.SetupSequence(jwt => jwt.GenerateRefreshToken())
             .Returns("new-refresh")
             .Returns("another-refresh");
@@ -201,6 +207,7 @@ public class AuthServiceTests
         var result = await service.RefreshTokenAsync(
             new RefreshTokenRequest("old-refresh"));
         result.Data!.RefreshToken.Should().Be("new-refresh");
+        result.Data.ExpiresAt.Should().Be(accessExpiresAt);
 
         var reuse = () => service.RefreshTokenAsync(
             new RefreshTokenRequest("old-refresh"));
@@ -238,7 +245,9 @@ public class AuthServiceTests
         _uowMock.Setup(unit => unit.OperationLogs).Returns(logs.Object);
         _uowMock.Setup(unit => unit.SaveChangesAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(1);
-        _jwtMock.Setup(jwt => jwt.GenerateAccessToken(user)).Returns("access");
+        _jwtMock.Setup(jwt => jwt.GenerateAccessToken(user))
+            .Returns(new AccessTokenResult(
+                "access", DateTime.UtcNow.AddMinutes(30)));
         _jwtMock.Setup(jwt => jwt.GenerateRefreshToken()).Returns("refresh");
         var service = CreateService();
 
