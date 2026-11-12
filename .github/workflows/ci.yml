@@ -66,9 +66,19 @@ jobs:
             --results-directory ./TestResults \
             -- DataCollectionRunSettings.DataCollectors.DataCollector.Configuration.Format=opencover
 
+      - name: Install PostgreSQL and EF tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql postgresql-client
+          dotnet tool install --global dotnet-ef --version 8.0.22
+
       - name: PostgreSQL concurrency and integrity tests
         shell: pwsh
         run: ./tests/PostgresIntegration/run-hotfix-tests.ps1
+
+      - name: Full clean and legacy EF migration tests
+        shell: pwsh
+        run: ./tests/PostgresIntegration/run-migration-tests.ps1
 
       - name: Upload test and coverage artifacts
         if: always()

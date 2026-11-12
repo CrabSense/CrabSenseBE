@@ -258,7 +258,7 @@ public class WaterAnalysisService : IWaterAnalysisService
             run.StepDeadlineAt = now.AddMinutes(2);
             run.StepLogJson = WriteLogs(logs);
             _uow.WaterAnalysisRuns.Update(run);
-            await _uow.SaveChangesAsync(ct);
+            await SaveRunTransitionAsync(ct);
             return ApiResponse<WaterAnalysisSnapshotDto>.Ok(
                 await BuildAsync(areaId, ct),
                 "Đã yêu cầu dừng; chưa xác nhận CleaningCompleted trước ACK.");
@@ -274,7 +274,7 @@ public class WaterAnalysisService : IWaterAnalysisService
         run.StepLogJson = WriteLogs(logs);
         run.Error = "Đã dừng. Hệ thống đã chuyển sang bước xả/làm sạch an toàn.";
         _uow.WaterAnalysisRuns.Update(run);
-        await _uow.SaveChangesAsync(ct);
+        await SaveRunTransitionAsync(ct);
 
         return ApiResponse<WaterAnalysisSnapshotDto>.Ok(
             await BuildAsync(areaId, ct),
@@ -308,7 +308,7 @@ public class WaterAnalysisService : IWaterAnalysisService
             : req.SampleLocation.Trim();
         latest.Notes = string.IsNullOrWhiteSpace(req.Notes) ? null : req.Notes.Trim();
         _uow.WaterAnalysisRuns.Update(latest);
-        await _uow.SaveChangesAsync(ct);
+        await SaveRunTransitionAsync(ct);
 
         return ApiResponse<WaterAnalysisSnapshotDto>.Ok(
             await BuildAsync(areaId, ct),
@@ -447,7 +447,7 @@ public class WaterAnalysisService : IWaterAnalysisService
                 run.Error = $"Timeout chờ hardware event {run.AwaitingEvent}. Cần manual recovery.";
                 run.CompletedAt = DateTime.UtcNow;
                 _uow.WaterAnalysisRuns.Update(run);
-                await _uow.SaveChangesAsync(ct);
+                await SaveRunTransitionAsync(ct);
             }
             return;
         }
@@ -502,7 +502,7 @@ public class WaterAnalysisService : IWaterAnalysisService
 
         if (!changed) return;
         _uow.WaterAnalysisRuns.Update(run);
-        await _uow.SaveChangesAsync(ct);
+        await SaveRunTransitionAsync(ct);
     }
 
     public async Task<ApiResponse> RecordHardwareEventAsync(
@@ -521,6 +521,8 @@ public class WaterAnalysisService : IWaterAnalysisService
         if (!string.Equals(eventName, run.AwaitingEvent, StringComparison.Ordinal))
             throw AppException.Conflict($"Đang chờ event {run.AwaitingEvent}.");
         var now = DateTime.UtcNow;
+        if (run.StepDeadlineAt is DateTime deadline && deadline <= now)
+            throw AppException.Conflict("Hardware event đã quá hạn.");
         var logs = ReadLogs(run.StepLogJson);
         if (!string.IsNullOrWhiteSpace(request.Error))
         {
@@ -554,11 +556,13 @@ public class WaterAnalysisService : IWaterAnalysisService
             SetAnalyteValue(run, request.Value.Value);
             run.Confidence = request.Confidence;
             run.ImageUrl = imageUri.AbsoluteUri;
-            run.HardwareJson = JsonSerializer.Serialize(new
-            {
-                modelResultId = request.ModelResultId.Trim(),
-                receivedAt = now
-            });
+            var hardwareEvidence = string.IsNullOrWhiteSpace(run.HardwareJson)
+                ? new System.Text.Json.Nodes.JsonObject()
+                : System.Text.Json.Nodes.JsonNode.Parse(run.HardwareJson) as System.Text.Json.Nodes.JsonObject
+                    ?? throw AppException.Conflict("Hardware snapshot không hợp lệ.");
+            hardwareEvidence["modelResultId"] = request.ModelResultId.Trim();
+            hardwareEvidence["receivedAt"] = JsonSerializer.SerializeToNode(now);
+            run.HardwareJson = hardwareEvidence.ToJsonString();
             run.ResultRecordedAt = now;
             AdvanceHardware(run, now, logs, eventName!);
         }
@@ -581,8 +585,21 @@ public class WaterAnalysisService : IWaterAnalysisService
         }
         run.StepLogJson = WriteLogs(logs);
         _uow.WaterAnalysisRuns.Update(run);
-        await _uow.SaveChangesAsync(ct);
+        await SaveRunTransitionAsync(ct);
         return ApiResponse.Ok("Hardware event recorded.");
+    }
+
+    private async Task SaveRunTransitionAsync(CancellationToken ct)
+    {
+        try
+        {
+            await _uow.SaveChangesAsync(ct);
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            throw AppException.Conflict(
+                "Phiên phân tích đã thay đổi; tải lại trạng thái trước khi tiếp tục.");
+        }
     }
 
     private static void AdvanceHardware(

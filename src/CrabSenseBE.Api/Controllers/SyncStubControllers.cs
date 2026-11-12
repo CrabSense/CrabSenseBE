@@ -57,6 +57,7 @@ public class SyncQueueStubController : ControllerBase
         var accepted = new List<string>();
         var processed = new List<string>();
         var failed = new List<string>();
+        var conflicts = new List<string>();
         foreach (var item in items)
         {
             if (string.IsNullOrWhiteSpace(item.IdempotencyKey))
@@ -110,7 +111,7 @@ public class SyncQueueStubController : ControllerBase
                         requestHash,
                         StringComparison.Ordinal))
                 {
-                    failed.Add(key);
+                    conflicts.Add(key);
                     await transaction.RollbackAsync(HttpContext.RequestAborted);
                     continue;
                 }
@@ -144,26 +145,24 @@ public class SyncQueueStubController : ControllerBase
                     _db.SyncInboxItems.Update(inboxItem);
                     await _db.SaveChangesAsync(HttpContext.RequestAborted);
                 }
+                // Keep the inbox reservation/row lock while rolling back only domain changes.
+                await transaction.CreateSavepointAsync("sync_domain", HttpContext.RequestAborted);
                 await ApplyMobileOp(item, inboxItem, processed, failed);
                 if (inboxItem.Status == "failed")
                 {
                     var error = inboxItem.ErrorMessage;
-                    await transaction.RollbackAsync(HttpContext.RequestAborted);
+                    await transaction.RollbackToSavepointAsync("sync_domain", HttpContext.RequestAborted);
                     _db.ChangeTracker.Clear();
-                    var failedInbox = await _db.SyncInboxItems.FirstOrDefaultAsync(
+                    var failedInbox = await _db.SyncInboxItems.SingleAsync(
                         stored => stored.ActorUserId == actor.Id
                             && stored.IdempotencyKey == key,
                         HttpContext.RequestAborted);
-                    if (failedInbox is null)
-                        _db.SyncInboxItems.Add(NewInboxItem(
-                            item, actor.Id, requestHash, "failed", error));
-                    else
-                    {
-                        failedInbox.Status = "failed";
-                        failedInbox.ErrorMessage = error;
-                        failedInbox.ProcessedAt = null;
-                    }
+                    // The reservation is still locked by this transaction.
+                    failedInbox.Status = "failed";
+                    failedInbox.ErrorMessage = error;
+                    failedInbox.ProcessedAt = null;
                     await _db.SaveChangesAsync(HttpContext.RequestAborted);
+                    await transaction.CommitAsync(HttpContext.RequestAborted);
                 }
                 else
                 {
@@ -177,37 +176,25 @@ public class SyncQueueStubController : ControllerBase
                 _db.ChangeTracker.Clear();
                 throw;
             }
-            catch (Exception ex)
+            catch (Exception)
             {
                 await transaction.RollbackAsync(HttpContext.RequestAborted);
                 _db.ChangeTracker.Clear();
-                if (!failed.Contains(item.IdempotencyKey))
-                    failed.Add(item.IdempotencyKey);
-                processed.Remove(item.IdempotencyKey);
+                failed.Remove(key);
+                processed.Remove(key);
                 var concurrent = await _db.SyncInboxItems.AsNoTracking().FirstOrDefaultAsync(
                     stored => stored.ActorUserId == actor.Id
                         && stored.IdempotencyKey == key,
                     HttpContext.RequestAborted);
-                if (concurrent is not null)
-                {
-                    if (concurrent.Status == "processed")
-                    {
-                        failed.Remove(item.IdempotencyKey);
-                        processed.Add(item.IdempotencyKey);
-                    }
-                }
+                if (concurrent is not null && concurrent.RequestHash != requestHash)
+                    conflicts.Add(key);
+                else if (concurrent?.Status == "processed")
+                    processed.Add(key);
                 else
                 {
-                    try
-                    {
-                        _db.SyncInboxItems.Add(NewInboxItem(
-                            item, actor.Id, requestHash, "failed", ex.Message));
-                        await _db.SaveChangesAsync(HttpContext.RequestAborted);
-                    }
-                    catch (DbUpdateException)
-                    {
-                        _db.ChangeTracker.Clear();
-                    }
+                    // Do not write failure after releasing the reservation lock:
+                    // another request may already be retrying or have committed.
+                    failed.Add(key);
                 }
             }
         }
@@ -219,7 +206,7 @@ public class SyncQueueStubController : ControllerBase
             acceptedItemIds = accepted,
             processedItemIds = processed,
             failedItemIds = failed,
-            conflictItemIds = Array.Empty<string>(),
+            conflictItemIds = conflicts,
             conflicts = Array.Empty<object>()
         }, "Batch accepted"));
     }

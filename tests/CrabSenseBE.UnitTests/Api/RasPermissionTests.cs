@@ -26,6 +26,8 @@ public sealed class RasPermissionTests : IAsyncLifetime
 
     private PermissionApiFactory _api = null!;
     private int _saves;
+    private RasComponent _node = null!;
+    private Mock<IEdgeCommandService> _edge = null!;
 
     public Task InitializeAsync()
     {
@@ -51,6 +53,7 @@ public sealed class RasPermissionTests : IAsyncLifetime
             RelayChannel = "1",
             IsOn = false
         };
+        _node = node;
         var deviceA = new Device { Id = DeviceA, DeviceCode = "ESP-A", FarmingAreaId = AreaA };
         var deviceB = new Device { Id = DeviceB, DeviceCode = "ESP-B", FarmingAreaId = AreaB };
         var users = new Dictionary<Guid, AppUser>
@@ -118,16 +121,21 @@ public sealed class RasPermissionTests : IAsyncLifetime
         uow.Setup(u => u.Sensors).Returns(sensors.Object);
         uow.Setup(u => u.OperationLogs).Returns(logs.Object);
         uow.Setup(u => u.Devices).Returns(devices.Object);
+        var commands = new Mock<IRepository<EdgeCommand>>();
+        commands.Setup(r => r.FindAsync(It.IsAny<System.Linq.Expressions.Expression<Func<EdgeCommand, bool>>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Array.Empty<EdgeCommand>());
+        uow.Setup(u => u.EdgeCommands).Returns(commands.Object);
         uow.Setup(u => u.Users).Returns(userRepo.Object);
         uow.Setup(u => u.FarmStaffAssignments).Returns(staffRepo.Object);
         uow.Setup(u => u.SaveChangesAsync(It.IsAny<CancellationToken>()))
             .Callback(() => _saves++)
             .ReturnsAsync(1);
 
+        _edge = new Mock<IEdgeCommandService>();
         _api = PermissionApiFactory.Create(services =>
         {
             services.AddSingleton(uow.Object);
-            services.AddSingleton(new Mock<IEdgeCommandService>().Object);
+            services.AddSingleton(_edge.Object);
             services.AddScoped<IRasFlowService, RasFlowService>();
         });
         return Task.CompletedTask;
@@ -178,4 +186,40 @@ public sealed class RasPermissionTests : IAsyncLifetime
 
         Assert.True(failures.Count == 0, string.Join(Environment.NewLine, failures));
     }
+    [Fact]
+    public async Task ManualOn_QueuesWithoutChangingReportedState()
+    {
+        _saves = 0;
+        using var body = new StringContent("{\"command\":\"on\"}", Encoding.UTF8, "application/json");
+        using var response = await _api.SendAsync(
+            AppRoles.FarmStaff, StaffA, HttpMethod.Post,
+            $"/api/areas/{AreaA}/ras-flow/nodes/{NodeId}/command", body);
+        Assert.Equal(200, (int)response.StatusCode);
+        Assert.False(_node.IsOn);
+        Assert.Null(_node.RunStartedAt);
+        Assert.Equal(0, _saves);
+        _edge.Verify(x => x.EnqueueManualAsync(
+            It.Is<CrabSenseBE.Application.DTOs.IoT.EnqueueEdgeCommandRequest>(
+                req => req.Command == "on" && req.DeviceCode == "ESP-A"),
+            StaffA, It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task FailedEnqueue_DoesNotSaveReportedState()
+    {
+        _saves = 0;
+        _edge.Setup(x => x.EnqueueManualAsync(
+            It.IsAny<CrabSenseBE.Application.DTOs.IoT.EnqueueEdgeCommandRequest>(),
+            StaffA, It.IsAny<CancellationToken>()))
+            .ThrowsAsync(CrabSenseBE.Application.Common.AppException.Conflict("Device offline."));
+        using var body = new StringContent("{\"command\":\"on\"}", Encoding.UTF8, "application/json");
+        using var response = await _api.SendAsync(
+            AppRoles.FarmStaff, StaffA, HttpMethod.Post,
+            $"/api/areas/{AreaA}/ras-flow/nodes/{NodeId}/command", body);
+        Assert.Equal(409, (int)response.StatusCode);
+        Assert.False(_node.IsOn);
+        Assert.Null(_node.RunStartedAt);
+        Assert.Equal(0, _saves);
+    }
+
 }
