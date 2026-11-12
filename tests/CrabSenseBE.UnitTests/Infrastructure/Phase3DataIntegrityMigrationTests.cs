@@ -36,6 +36,38 @@ public sealed class Phase3DataIntegrityMigrationTests
     }
 
     [Fact]
+    public void Migration_checks_legacy_index_and_conflicting_rows_before_creating_unique_index()
+    {
+        var migration = new Phase3DataIntegrity();
+        var builder = new MigrationBuilder("Npgsql.EntityFrameworkCore.PostgreSQL");
+        typeof(Phase3DataIntegrity)
+            .GetMethod("Up", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .Invoke(migration, [builder]);
+
+        var operations = builder.Operations.ToList();
+        var guard = operations.OfType<SqlOperation>().Single(operation =>
+            operation.Sql.Contains("Phase3DataIntegrity: duplicate active sales lines"));
+        var index = operations.OfType<CreateIndexOperation>().Single(operation =>
+            operation.Name == "IX_SalesOrderLines_CrabId");
+
+        operations.IndexOf(guard).Should().BeLessThan(operations.IndexOf(index));
+        guard.SuppressTransaction.Should().BeFalse();
+        guard.Sql.Should().Contain("to_regclass");
+        guard.Sql.Should().Contain("NOT i.indisunique");
+        guard.Sql.Should().Contain("i.indrelid = 'be.\"SalesOrderLines\"'::regclass");
+        guard.Sql.Should().Contain("i.indkey[0] = a.attnum");
+        guard.Sql.Should().Contain("HAVING COUNT(*) > 1");
+        guard.Sql.Should().Contain("DROP INDEX be.\"IX_SalesOrderLines_CrabId\"");
+        guard.Sql.Should().NotContain("DELETE FROM");
+
+        index.IsUnique.Should().BeTrue();
+        index.Schema.Should().Be("be");
+        index.Table.Should().Be("SalesOrderLines");
+        index.Columns.Should().Equal("CrabId");
+        index.Filter.Should().Be("\"CrabId\" IS NOT NULL AND \"ReleasedAt\" IS NULL");
+    }
+
+    [Fact]
     public void Model_has_lot_concurrency_and_one_active_sales_line_per_crab()
     {
         var options = new DbContextOptionsBuilder<AppDbContext>()

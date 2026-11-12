@@ -136,6 +136,59 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                 FOR EACH ROW EXECUTE FUNCTION be.enforce_one_live_crab_per_box();
                 """);
 
+            // Older databases may contain the plain CrabId index created by
+            // DevDbBootstrap, although it was absent from the preceding EF model.
+            // Replace only that known legacy shape. Never discard an unrelated
+            // index or resolve conflicting active sales by deleting/releasing rows.
+            migrationBuilder.Sql("""
+                DO $migration$
+                DECLARE
+                    existing_index oid := to_regclass('be."IX_SalesOrderLines_CrabId"');
+                    is_legacy boolean;
+                BEGIN
+                    IF EXISTS (
+                        SELECT 1
+                        FROM be."SalesOrderLines"
+                        WHERE "CrabId" IS NOT NULL AND "ReleasedAt" IS NULL
+                        GROUP BY "CrabId"
+                        HAVING COUNT(*) > 1
+                    ) THEN
+                        RAISE EXCEPTION 'Phase3DataIntegrity: duplicate active sales lines require reconciliation before creating the unique CrabId index';
+                    END IF;
+
+                    IF existing_index IS NOT NULL THEN
+                        SELECT i.indrelid = 'be."SalesOrderLines"'::regclass
+                               AND c.relkind = 'i'
+                               AND am.amname = 'btree'
+                               AND i.indisvalid AND i.indisready
+                               AND NOT i.indisunique AND NOT i.indisprimary
+                               AND NOT i.indisexclusion
+                               AND i.indnatts = 1 AND i.indnkeyatts = 1
+                               AND i.indexprs IS NULL AND i.indpred IS NULL
+                               AND i.indkey[0] = a.attnum
+                               AND NOT EXISTS (
+                                   SELECT 1 FROM pg_constraint k
+                                   WHERE k.conindid = existing_index
+                               )
+                        INTO is_legacy
+                        FROM pg_index i
+                        JOIN pg_class c ON c.oid = i.indexrelid
+                        JOIN pg_am am ON am.oid = c.relam
+                        JOIN pg_attribute a ON a.attrelid = i.indrelid
+                                            AND a.attname = 'CrabId'
+                                            AND NOT a.attisdropped
+                        WHERE i.indexrelid = existing_index;
+
+                        IF NOT COALESCE(is_legacy, false) THEN
+                            RAISE EXCEPTION 'Phase3DataIntegrity: existing IX_SalesOrderLines_CrabId is not the expected legacy index; inspect its definition before migration';
+                        END IF;
+
+                        DROP INDEX be."IX_SalesOrderLines_CrabId";
+                    END IF;
+                END
+                $migration$;
+                """);
+
             migrationBuilder.CreateIndex(
                 name: "IX_SalesOrderLines_CrabId",
                 schema: "be",
