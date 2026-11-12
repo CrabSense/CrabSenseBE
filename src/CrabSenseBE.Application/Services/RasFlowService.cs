@@ -709,7 +709,7 @@ public class RasFlowService : IRasFlowService
             var wantOn = desired.Value;
             var pending = await LatestRelayCommandAsync(
                 device!.DeviceCode, pump.RelayChannel, ct);
-            if (pending?.Status == "acknowledged"
+            if (wantOn && pending?.Status == "acknowledged"
                 && (!pump.LastReportedAt.HasValue
                     || pump.LastReportedAt < pending.CreatedAt))
             {
