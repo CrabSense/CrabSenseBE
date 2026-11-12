@@ -445,6 +445,22 @@ public class NotificationServiceTests
     }
 
     [Fact]
+    public async Task RegisterPushToken_RejectsTokenActiveOnAnotherAccount()
+    {
+        var owner = Guid.NewGuid();
+        var token = new UserPushToken { UserId = owner, Token = "existing-token", IsActive = true };
+        var repo = new Mock<IRepository<UserPushToken>>();
+        repo.Setup(r => r.FindAsync(It.IsAny<System.Linq.Expressions.Expression<Func<UserPushToken, bool>>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((System.Linq.Expressions.Expression<Func<UserPushToken, bool>> predicate, CancellationToken _) =>
+                new[] { token }.Where(predicate.Compile()).ToList());
+        _uow.Setup(u => u.UserPushTokens).Returns(repo.Object);
+        Func<Task> act = () => Create().RegisterPushTokenAsync(Guid.NewGuid(), new RegisterPushTokenRequest(token.Token, "android", "device"));
+        (await act.Should().ThrowAsync<CrabSenseBE.Application.Common.AppException>()).Which.StatusCode.Should().Be(409);
+        Assert.True(token.IsActive);
+        _uow.Verify(x => x.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
     public async Task RegisterPushToken_CreatesNewToken()
     {
         var userId = Guid.NewGuid();

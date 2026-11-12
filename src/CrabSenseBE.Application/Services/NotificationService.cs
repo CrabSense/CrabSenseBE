@@ -1,3 +1,5 @@
+using Google.Apis.Auth.OAuth2;
+using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
@@ -113,6 +115,7 @@ public class NotificationService : INotificationService
         if (string.IsNullOrWhiteSpace(req.ChannelCode))
             throw AppException.BadRequest("channelCode is required.");
         var code = req.ChannelCode.Trim().ToLowerInvariant();
+        if (!KnownChannelCodes.Contains(code)) throw AppException.BadRequest("Unsupported notification channel.");
         if (await _uow.NotificationChannels.AnyAsync(c => c.ChannelCode == code, ct))
             throw AppException.Conflict($"Channel '{code}' already exists.");
 
@@ -162,7 +165,8 @@ public class NotificationService : INotificationService
             ? $"Test channel {ch.ChannelCode} at {DateTime.UtcNow:O}"
             : req.Body!;
 
-        var (ok, detail) = await DispatchChannelAsync(ch, title, body, null, ct);
+        var userId = ch.ChannelCode == "push" && _currentUser?.IsAuthenticated == true ? _currentUser.UserId : (Guid?)null;
+        var (ok, detail) = await DispatchChannelAsync(ch, title, body, userId, ct);
         return ok
             ? ApiResponse.Ok($"Test OK via {ch.ChannelCode}: {detail}")
             : throw AppException.BadRequest($"Test failed via {ch.ChannelCode}: {detail}");
@@ -175,6 +179,10 @@ public class NotificationService : INotificationService
             throw AppException.BadRequest("token is required.");
 
         var token = req.Token.Trim();
+        if (token.Length > 4096) throw AppException.BadRequest("Push token quá dài.");
+        var activeOwner = (await _uow.UserPushTokens.FindAsync(t => t.Token == token && t.IsActive && t.UserId != userId, ct)).FirstOrDefault();
+        if (activeOwner is not null)
+            throw AppException.Conflict("Push token đang thuộc tài khoản khác; hủy đăng ký hoặc làm mới token trên thiết bị.");
         var platform = string.IsNullOrWhiteSpace(req.Platform) ? "android" : req.Platform.Trim().ToLowerInvariant();
         var existing = (await _uow.UserPushTokens.FindAsync(
             t => t.UserId == userId && t.Token == token, ct)).FirstOrDefault();
@@ -660,13 +668,16 @@ public class NotificationService : INotificationService
                 "push" when userId is null => (false, "userId required for push"),
                 "push" => await SendPushAsync(userId!.Value, title, body, ct),
                 "email" => (false, "email provider not configured"),
-                _ => (true, "noop")
+                "in_app" => (true, "in-app"),
+                _ => (false, "unsupported notification channel")
             };
         }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Dispatch {Channel} failed", ch.ChannelCode);
-            return (false, ex.Message);
+            // Provider URLs or response bodies may contain credentials.
+            _logger.LogWarning("Dispatch {Channel} failed: {ErrorType}", ch.ChannelCode, ex.GetType().Name);
+            return (false, "Notification provider request failed.");
         }
     }
 
@@ -688,8 +699,10 @@ public class NotificationService : INotificationService
         using var res = await client.PostAsJsonAsync(url, payload, ct);
         var raw = await res.Content.ReadAsStringAsync(ct);
         if (!res.IsSuccessStatusCode)
-            return (false, $"HTTP {(int)res.StatusCode}: {raw}");
-        return (true, "telegram sent");
+            return (false, $"Telegram HTTP {(int)res.StatusCode}");
+        using var parsed = JsonDocument.Parse(raw);
+        return parsed.RootElement.TryGetProperty("ok", out var ok) && ok.ValueKind == JsonValueKind.True
+            ? (true, "telegram sent") : (false, "Telegram rejected message");
     }
 
     private async Task<(bool Ok, string Detail)> SendZaloAsync(
@@ -701,17 +714,21 @@ public class NotificationService : INotificationService
             return (false, "ConfigJson needs access_token + user_id");
 
         var client = _httpClientFactory.CreateClient("zalo");
-        var url = $"https://openapi.zalo.me/v3.0/oa/message/cs?access_token={Uri.EscapeDataString(accessToken)}";
+        const string url = "https://openapi.zalo.me/v3.0/oa/message/cs";
         var payload = new
         {
             recipient = new { user_id = userId },
             message = new { text = $"{title}\n{body}" }
         };
-        using var res = await client.PostAsJsonAsync(url, payload, ct);
+        using var request = new HttpRequestMessage(HttpMethod.Post, url) { Content = JsonContent.Create(payload) };
+        request.Headers.TryAddWithoutValidation("access_token", accessToken);
+        using var res = await client.SendAsync(request, ct);
         var raw = await res.Content.ReadAsStringAsync(ct);
         if (!res.IsSuccessStatusCode)
-            return (false, $"HTTP {(int)res.StatusCode}: {raw}");
-        return (true, "zalo sent");
+            return (false, $"Zalo HTTP {(int)res.StatusCode}");
+        using var parsed = JsonDocument.Parse(raw);
+        return parsed.RootElement.TryGetProperty("error", out var error) && error.TryGetInt32(out var code) && code == 0
+            ? (true, "zalo sent") : (false, "Zalo rejected message");
     }
 
     private async Task<(bool Ok, string Detail)> SendPushAsync(
@@ -719,43 +736,59 @@ public class NotificationService : INotificationService
     {
         var tokens = (await _uow.UserPushTokens.FindAsync(
             t => t.UserId == userId && t.IsActive, ct)).ToList();
-        if (tokens.Count == 0)
-            return (false, "no registered device tokens");
+        if (tokens.Count == 0) return (false, "no registered device tokens");
+        if (!_fcm.Enabled || string.IsNullOrWhiteSpace(_fcm.ProjectId)
+            || (string.IsNullOrWhiteSpace(_fcm.CredentialsJson) && string.IsNullOrWhiteSpace(_fcm.CredentialsPath)))
+            return (false, "FCM HTTP v1 not configured; push was not sent.");
+        var project = _fcm.ProjectId.Trim();
+        if (!System.Text.RegularExpressions.Regex.IsMatch(project, "^[a-zA-Z0-9-]+$"))
+            return (false, "Invalid FCM project ID.");
 
-        if (!_fcm.Enabled || string.IsNullOrWhiteSpace(_fcm.ServerKey))
-            return (false, "FCM not configured; push was not sent.");
-
+        var json = !string.IsNullOrWhiteSpace(_fcm.CredentialsJson)
+            ? _fcm.CredentialsJson : await File.ReadAllTextAsync(_fcm.CredentialsPath!, ct);
+        using var credentialDoc = JsonDocument.Parse(json!);
+        if (!credentialDoc.RootElement.TryGetProperty("type", out var type) || type.GetString() != "service_account")
+            return (false, "FCM requires service-account credentials.");
+        var credential = GoogleCredential.FromJson(json!)
+            .CreateScoped("https://www.googleapis.com/auth/firebase.messaging");
+        var bearer = await credential.UnderlyingCredential.GetAccessTokenForRequestAsync(null, ct);
         var client = _httpClientFactory.CreateClient("fcm");
-        client.DefaultRequestHeaders.TryAddWithoutValidation("Authorization", $"key={_fcm.ServerKey}");
-
+        var url = $"https://fcm.googleapis.com/v1/projects/{project}/messages:send";
         var sent = 0;
-        var errors = new List<string>();
         foreach (var token in tokens)
         {
-            var payload = new
+            var payload = new { message = new
             {
-                to = token.Token,
+                token = token.Token,
                 notification = new { title, body },
                 data = new { title, body, userId = userId.ToString() }
-            };
-            using var res = await client.PostAsJsonAsync("https://fcm.googleapis.com/fcm/send", payload, ct);
+            } };
+            using var req = new HttpRequestMessage(HttpMethod.Post, url) { Content = JsonContent.Create(payload) };
+            req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", bearer);
+            using var res = await client.SendAsync(req, ct);
             var raw = await res.Content.ReadAsStringAsync(ct);
             if (res.IsSuccessStatusCode)
             {
-                sent++;
-                token.LastSeenAt = DateTime.UtcNow;
-                _uow.UserPushTokens.Update(token);
+                using var parsed = JsonDocument.Parse(raw);
+                if (parsed.RootElement.TryGetProperty("name", out var name) && !string.IsNullOrWhiteSpace(name.GetString()))
+                {
+                    sent++;
+                    token.LastSeenAt = DateTime.UtcNow;
+                    _uow.UserPushTokens.Update(token);
+                }
             }
             else
             {
-                errors.Add($"{token.Platform}: HTTP {(int)res.StatusCode}");
-                _logger.LogWarning("FCM push failed for user {UserId}: {Raw}", userId, raw);
+                _logger.LogWarning("FCM HTTP {Status} for user {UserId}", (int)res.StatusCode, userId);
+                if (res.StatusCode == System.Net.HttpStatusCode.NotFound && raw.Contains("UNREGISTERED", StringComparison.Ordinal))
+                {
+                    token.IsActive = false;
+                    _uow.UserPushTokens.Update(token);
+                }
             }
         }
-
-        if (sent == 0)
-            return (false, string.Join("; ", errors));
-        return (true, $"push sent to {sent}/{tokens.Count} device(s)");
+        return sent == tokens.Count ? (true, $"push accepted for {sent} device(s)")
+            : (false, $"push accepted for {sent}/{tokens.Count} devices; partial or failed");
     }
 
     private async Task EnsureDefaultChannelsAsync(CancellationToken ct)

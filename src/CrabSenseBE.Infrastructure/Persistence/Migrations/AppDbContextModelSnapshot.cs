@@ -4058,6 +4058,8 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
 
                     b.HasKey("Id");
 
+                    b.HasIndex("Token").IsUnique().HasFilter("\"IsActive\" = true");
+
                     b.HasIndex("UserId", "Token")
                         .IsUnique();
 

@@ -642,6 +642,8 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<UserPushToken>()
             .HasIndex(t => new { t.UserId, t.Token })
             .IsUnique();
+        modelBuilder.Entity<UserPushToken>().HasIndex(t => t.Token).IsUnique()
+            .HasFilter("\"IsActive\" = true");
 
         modelBuilder.Entity<NotificationRule>(b =>
         {
