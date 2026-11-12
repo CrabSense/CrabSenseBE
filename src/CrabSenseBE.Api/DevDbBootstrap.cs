@@ -1070,7 +1070,7 @@ public static class DevDbBootstrap
     /// </summary>
     private static async Task EnsureNotificationRulesAsync(AppDbContext db, ILogger logger)
     {
-        var existing = await db.NotificationRules.Select(r => r.TypeCode).ToListAsync();
+        var existing = await db.NotificationRules.Where(r => r.FarmingAreaId == null).Select(r => r.TypeCode).ToListAsync();
         if (existing.Count > 0) return;
 
         static NotificationRule Rule(string code, string name, string title) => new()
