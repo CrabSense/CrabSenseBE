@@ -1137,6 +1137,7 @@ public class FarmingService : IFarmingService
             Condition = condition,
             ImageUrlsJson = JsonStringList.Serialize(req.ImageUrls)
         };
+        await MediaReferenceGuard.BindCrabAsync(_uow, _areas, crab, JsonStringList.Parse(crab.ImageUrlsJson), ct);
         await _uow.Crabs.AddAsync(crab, ct);
 
         await _uow.CrabStatusHistories.AddAsync(new CrabStatusHistory
@@ -1341,7 +1342,10 @@ public class FarmingService : IFarmingService
         if (req.CarapaceWidthMm is not null) crab.CarapaceWidthMm = req.CarapaceWidthMm;
         if (req.CarapaceLengthMm is not null) crab.CarapaceLengthMm = req.CarapaceLengthMm;
         if (req.ImageUrls is not null)
+        {
+            await MediaReferenceGuard.BindCrabAsync(_uow, _areas, crab, req.ImageUrls, ct);
             crab.ImageUrlsJson = JsonStringList.Serialize(req.ImageUrls);
+        }
 
         if (!string.IsNullOrWhiteSpace(req.Condition))
             crab.Condition = CrabConditions.Parse(req.Condition, crab.Condition);
@@ -3474,6 +3478,7 @@ public class FarmingService : IFarmingService
             Condition = condition,
             ImageUrlsJson = JsonStringList.Serialize(req.ImageUrls)
         };
+        await MediaReferenceGuard.BindCrabAsync(_uow, _areas, crab, JsonStringList.Parse(crab.ImageUrlsJson), ct);
         await _uow.Crabs.AddAsync(crab, ct);
 
         await _uow.CrabStatusHistories.AddAsync(new CrabStatusHistory
