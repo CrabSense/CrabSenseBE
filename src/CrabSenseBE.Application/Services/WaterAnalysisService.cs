@@ -154,7 +154,6 @@ public class WaterAnalysisService : IWaterAnalysisService
         await _areas.EnsureReadAsync(areaId, ct);
         _ = await _uow.FarmingAreas.GetByIdAsync(areaId, ct)
             ?? throw AppException.NotFound("FarmingArea");
-        await AdvanceActiveAsync(areaId, ct);
         return ApiResponse<WaterAnalysisSnapshotDto>.Ok(await BuildAsync(areaId, ct));
     }
 
@@ -333,9 +332,6 @@ public class WaterAnalysisService : IWaterAnalysisService
         if (run.FarmingAreaId != areaId)
             throw AppException.NotFound("WaterAnalysisRun");
 
-        await AdvanceActiveAsync(areaId, ct);
-        run = await _uow.WaterAnalysisRuns.GetByIdAsync(runId, ct)
-            ?? throw AppException.NotFound("WaterAnalysisRun");
 
         var hardware = await ResolveHardwareAsync(areaId, ct);
         var station = StationOf(hardware);
@@ -442,7 +438,7 @@ public class WaterAnalysisService : IWaterAnalysisService
             canRerun));
     }
 
-    private async Task AdvanceActiveAsync(Guid areaId, CancellationToken ct)
+    internal async Task AdvanceActiveAsync(Guid areaId, CancellationToken ct)
     {
         var run = await ActiveRunAsync(areaId, ct);
         if (run is null) return;
@@ -695,7 +691,9 @@ public class WaterAnalysisService : IWaterAnalysisService
     private IReadOnlyList<WaterAnalysisMetricDto> LatestMetrics(IReadOnlyList<WaterAnalysisRun> runs)
     {
         decimal? Last(Func<WaterAnalysisRun, decimal?> pick) =>
-            runs.Select(pick).FirstOrDefault(v => v is not null);
+            runs.Where(r => r.Status == "completed" && r.CompletedAt.HasValue)
+                .OrderByDescending(r => r.CompletedAt)
+                .Select(pick).FirstOrDefault(v => v is not null);
         return
         [
             Metric("ph", "pH", Last(r => r.Ph), ""),

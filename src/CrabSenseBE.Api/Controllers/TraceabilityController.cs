@@ -132,7 +132,7 @@ public class TraceabilityController : ControllerBase
     /// Endpoint này KHÔNG yêu cầu xác thực — dành cho người tiêu dùng cuối.
     ///
     /// Hỗ trợ 3 loại QR:
-    /// - **box**: Trả về thông tin box + phiếu thu hoạch + lô cấp đông liên quan
+    /// - QR hộp là nội bộ, không truy xuất công khai; dùng API box-qr có xác thực.
     /// - **frozen_lot**: Trả về thông tin lô cấp đông + phiếu thu hoạch
     /// - **harvest_voucher**: Trả về thông tin phiếu thu hoạch + lô cấp đông
     /// </remarks>

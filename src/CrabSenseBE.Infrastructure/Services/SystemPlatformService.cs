@@ -201,16 +201,11 @@ public class SystemPlatformService : ISystemPlatformService
     public async Task<ApiResponse<DeviceActionResultDto>> RestartDeviceAsync(
         Guid deviceId, Guid? userId, string? ip, CancellationToken ct = default)
     {
-        var device = await RequireDevice(deviceId, ct);
-        _db.EdgeCommands.Add(new EdgeCommand
-        {
-            DeviceCode = device.DeviceCode,
-            Command = "restart",
-            Status = "pending",
-        });
-        await AuditAsync(userId, "RestartDevice", "Device", device.Id, device.DeviceCode, ip, ct);
-        await _db.SaveChangesAsync(ct);
-        return ApiResponse<DeviceActionResultDto>.Ok(new DeviceActionResultDto(device.Id, device.Status.ToString(), "Đã xếp lệnh restart."));
+        _ = await RequireDevice(deviceId, ct);
+        // Protocol 2 defines relay desired-state commands, not safe device reboot.
+        throw new AppException(
+            "Restart thiết bị chưa được hỗ trợ an toàn bởi Edge Protocol 2; không xếp lệnh restart.",
+            501);
     }
 
     public async Task<ApiResponse<DeviceActionResultDto>> UpdateFirmwareAsync(
