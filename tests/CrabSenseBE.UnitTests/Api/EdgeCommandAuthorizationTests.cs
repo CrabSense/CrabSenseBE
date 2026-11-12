@@ -28,6 +28,7 @@ public sealed class EdgeCommandAuthorizationTests : IAsyncLifetime
     private readonly Guid _areaC = Guid.NewGuid();
     private readonly AppUser _staff = User(UserRole.FarmStaff, "staff");
     private readonly AppUser _manager = User(UserRole.FarmManager, "manager");
+    private readonly AppUser _admin = User(UserRole.FarmAdministrator, "fa");
     private readonly List<EdgeCommand> _commands = [];
     private WebApplication _app = null!;
     private HttpClient _client = null!;
@@ -49,7 +50,7 @@ public sealed class EdgeCommandAuthorizationTests : IAsyncLifetime
         var deviceA = Device("device-a", _areaA);
         var deviceB = Device("device-b", _areaB);
         var deviceC = Device("device-c", _areaC);
-        var users = Repository(_staff, _manager);
+        var users = Repository(_staff, _manager, _admin);
         var devices = Repository(deviceA, deviceB, deviceC);
         var managerAssignments = Repository(
             new FarmManagerAssignment
@@ -149,7 +150,7 @@ public sealed class EdgeCommandAuthorizationTests : IAsyncLifetime
     [Fact]
     public async Task FarmAdministrator_CannotBypassRasCommandRole()
     {
-        using var response = await Enqueue(User(UserRole.FarmAdministrator, "fa"), "device-a");
+        using var response = await Enqueue(_admin, "device-a");
         Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
         Assert.Empty(_commands);
     }
