@@ -1,4 +1,6 @@
 using CrabSenseBE.Application.DTOs.Alert;
+using CrabSenseBE.Application.Interfaces;
+using CrabSenseBE.Application.Common;
 using CrabSenseBE.Application.Options;
 using CrabSenseBE.Application.Services;
 using CrabSenseBE.Domain.Entities;
@@ -168,6 +170,8 @@ public class NotificationServiceTests
                 h.Rules.AsQueryable().Where(p).ToList());
 
         var userRepo = new Mock<IRepository<AppUser>>();
+        userRepo.Setup(r => r.GetByIdAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((Guid id, CancellationToken _) => h.Users.SingleOrDefault(u => u.Id == id));
         userRepo.Setup(r => r.FindAsync(It.IsAny<System.Linq.Expressions.Expression<Func<AppUser, bool>>>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((System.Linq.Expressions.Expression<Func<AppUser, bool>> p, CancellationToken _) =>
                 h.Users.AsQueryable().Where(p).ToList());
@@ -189,6 +193,9 @@ public class NotificationServiceTests
             .Callback<NotificationDelivery, CancellationToken>((d, _) => h.Deliveries.Add(d))
             .Returns(Task.CompletedTask);
 
+        ruleRepo.Setup(r => r.AddAsync(It.IsAny<NotificationRule>(), It.IsAny<CancellationToken>()))
+            .Callback<NotificationRule, CancellationToken>((r, _) => h.Rules.Add(r)).Returns(Task.CompletedTask);
+        ruleRepo.Setup(r => r.GetAllAsync(It.IsAny<CancellationToken>())).ReturnsAsync(() => h.Rules);
         _uow.Setup(u => u.NotificationRules).Returns(ruleRepo.Object);
         _uow.Setup(u => u.Users).Returns(userRepo.Object);
         _uow.Setup(u => u.NotificationChannels).Returns(channelRepo.Object);
@@ -285,8 +292,9 @@ public class NotificationServiceTests
             BodyTemplate = "{sensor} = {value}{unit} (ngưỡng {min}–{max})"
         }, admin, staff);
 
+        var area = SetupArea(admin);
         await service.NotifyAsync(
-            NotificationTypeCodes.SensorThreshold, "pH cao: 9 > 8.5", severity: "Warning",
+            NotificationTypeCodes.SensorThreshold, "pH cao: 9 > 8.5", areaId: area.Id, severity: "Warning",
             tokens: new Dictionary<string, string?>
             {
                 ["sensor"] = "pH", ["value"] = "9", ["unit"] = "", ["min"] = "7", ["max"] = "8.5"
@@ -320,11 +328,65 @@ public class NotificationServiceTests
             BodyTemplate = "{message}"
         }, user);
 
-        await service.NotifyAsync(NotificationTypeCodes.SensorThreshold, "pH cao", severity: "Warning");
+        var area = SetupArea(user);
+        await service.NotifyAsync(NotificationTypeCodes.SensorThreshold, "pH cao", areaId: area.Id, severity: "Warning");
         h.Created.Should().BeEmpty();
 
-        await service.NotifyAsync(NotificationTypeCodes.SensorThreshold, "pH cao", severity: "Critical");
+        await service.NotifyAsync(NotificationTypeCodes.SensorThreshold, "pH cao", areaId: area.Id, severity: "Critical");
         h.Created.Should().ContainSingle();
+    }
+
+    private FarmingArea SetupArea(AppUser owner, params FarmingArea[] otherAreas)
+    {
+        var area = new FarmingArea { Id = Guid.NewGuid(), Administrators = { owner } };
+        var areas = new Mock<IRepository<FarmingArea>>();
+        areas.Setup(r => r.Query()).Returns(new[] { area }.Concat(otherAreas).AsQueryable());
+        _uow.Setup(u => u.FarmingAreas).Returns(areas.Object);
+        var managers = new Mock<IRepository<FarmManagerAssignment>>();
+        managers.Setup(r => r.FindAsync(It.IsAny<System.Linq.Expressions.Expression<Func<FarmManagerAssignment, bool>>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Array.Empty<FarmManagerAssignment>());
+        _uow.Setup(u => u.FarmManagerAssignments).Returns(managers.Object);
+        var staff = new Mock<IRepository<FarmStaffAssignment>>();
+        staff.Setup(r => r.FindAsync(It.IsAny<System.Linq.Expressions.Expression<Func<FarmStaffAssignment, bool>>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Array.Empty<FarmStaffAssignment>());
+        _uow.Setup(u => u.FarmStaffAssignments).Returns(staff.Object);
+        return area;
+    }
+
+    [Fact]
+    public async Task EnvironmentalOverride_OnlyChangesAssignedArea()
+    {
+        var h = new Harness();
+        var a = new AppUser { Id = Guid.NewGuid(), Role = UserRole.FarmAdministrator, IsActive = true };
+        var b = new AppUser { Id = Guid.NewGuid(), Role = UserRole.FarmAdministrator, IsActive = true };
+        var global = new NotificationRule { TypeCode = NotificationTypeCodes.TankOverflow,
+            IsEnabled = true, RecipientRoles = "FarmAdministrator", ChannelCodes = "in_app" };
+        var engine = WithRule(h, global, a, b);
+        var areaB = new FarmingArea { Id = Guid.NewGuid(), Administrators = { b } };
+        var areaA = SetupArea(a, areaB);
+        var current = new Mock<ICurrentUserService>();
+        current.SetupGet(x => x.IsAuthenticated).Returns(true);
+        current.SetupGet(x => x.UserId).Returns(a.Id);
+        var admin = new NotificationService(_uow.Object, _httpClientFactory.Object,
+            _logger.Object, _fcm, _fallback, current.Object);
+        var denied = await Assert.ThrowsAsync<AppException>(() => admin.UpdateRuleAsync(global.TypeCode,
+            new UpdateNotificationRuleRequest(IsEnabled: false, FarmingAreaId: areaB.Id)));
+        Assert.Equal(403, denied.StatusCode);
+        var missing = await Assert.ThrowsAsync<AppException>(() => admin.UpdateRuleAsync(global.TypeCode,
+            new UpdateNotificationRuleRequest(IsEnabled: false)));
+        Assert.Equal(400, missing.StatusCode);
+        var scope = await Assert.ThrowsAsync<AppException>(() => admin.UpdateRuleAsync(global.TypeCode,
+            new UpdateNotificationRuleRequest(ScopeByArea: false, FarmingAreaId: areaA.Id)));
+        Assert.Equal(403, scope.StatusCode);
+        await admin.UpdateRuleAsync(global.TypeCode,
+            new UpdateNotificationRuleRequest(IsEnabled: false, FarmingAreaId: areaA.Id));
+        Assert.True(global.IsEnabled);
+        await engine.NotifyAsync(global.TypeCode, "A", areaId: areaA.Id);
+        Assert.Empty(h.Created);
+        await engine.NotifyAsync(global.TypeCode, "B", areaId: areaB.Id);
+        Assert.Equal(b.Id, Assert.Single(h.Created).UserId);
+        var result = await admin.GetRulesAsync();
+        Assert.All(result.Data!, r => Assert.True(r.FarmingAreaId == null || r.FarmingAreaId == areaA.Id));
     }
 
     [Fact]
