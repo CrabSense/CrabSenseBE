@@ -110,6 +110,8 @@ public class FrozenStorageService : IFrozenStorageService
                     "Ngày cấp đông không được trước ngày thu hoạch.");
             }
             voucherAreaId = harvestVoucher.FarmingAreaId;
+            if (voucherAreaId is null || voucherAreaId == Guid.Empty)
+                throw AppException.Conflict("Phiếu thu hoạch chưa xác định khu sở hữu; cần đối soát trước khi cấp đông.");
         }
 
         var areaId = request.FarmingAreaId ?? voucherAreaId;
@@ -159,7 +161,7 @@ public class FrozenStorageService : IFrozenStorageService
         if (!Enum.TryParse<FrozenLotStatus>(
                 request.Status,
                 ignoreCase: true,
-                out var requestedStatus))
+                out var requestedStatus) || !Enum.IsDefined(requestedStatus))
         {
             throw AppException.BadRequest(
                 $"Trạng thái lô cấp đông '{request.Status}' không hợp lệ.");
@@ -442,10 +444,11 @@ public class FrozenStorageService : IFrozenStorageService
         CreateFrozenStorageTransactionRequest request,
         CancellationToken ct = default)
     {
-        if (!Enum.TryParse<FrozenStorageTransactionType>(
-                request.Type, ignoreCase: true, out var type))
+        if (!string.Equals(request.Type, nameof(FrozenStorageTransactionType.Inbound), StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(request.Type, nameof(FrozenStorageTransactionType.Outbound), StringComparison.OrdinalIgnoreCase))
             throw AppException.BadRequest("Type phải là Inbound hoặc Outbound.");
-        if (request.RequestedQuantity <= 0 || request.RequestedWeightKg <= 0)
+        var type = Enum.Parse<FrozenStorageTransactionType>(request.Type, ignoreCase: true);
+        if (request.RequestedQuantity <= 0 || decimal.Round(request.RequestedWeightKg, 3) <= 0)
             throw AppException.BadRequest("Số lượng và trọng lượng dự kiến phải lớn hơn 0.");
 
         var lot = await _uow.FrozenLots.GetByIdAsync(request.FrozenLotId, ct)
@@ -526,7 +529,11 @@ public class FrozenStorageService : IFrozenStorageService
         if (request.ActualQuantity <= 0 || request.ActualWeightKg <= 0)
             throw AppException.BadRequest("Số lượng và trọng lượng thực tế phải lớn hơn 0.");
         var actualWeight = decimal.Round(request.ActualWeightKg, 3);
+        if (actualWeight <= 0)
+            throw AppException.BadRequest("Trọng lượng thực tế phải đạt độ chính xác 0.001 kg.");
         var transaction = await GetTransactionAsync(id, ct);
+        if (!Enum.IsDefined(transaction.Type))
+            throw AppException.Conflict("Loại giao dịch kho không hợp lệ; cần đối soát dữ liệu.");
         if (transaction.Status != FrozenStorageTransactionStatus.Approved)
             throw AppException.Conflict("Chỉ phiếu đã được duyệt mới được thực hiện.");
         if (transaction.PerformedAt is not null
@@ -557,6 +564,9 @@ public class FrozenStorageService : IFrozenStorageService
             && varianceReason is null)
             throw AppException.BadRequest(
                 "Cần ghi lý do khi số lượng hoặc trọng lượng thực tế thấp hơn mức đã duyệt.");
+
+        if (transaction.Type == FrozenStorageTransactionType.Inbound && lot.HarvestVoucherId is Guid sourceId)
+            await ReserveHarvestCapacityAsync(lot, sourceId, request.ActualQuantity, actualWeight, ct);
 
         var quantityDelta = transaction.Type == FrozenStorageTransactionType.Inbound
             ? request.ActualQuantity
@@ -613,6 +623,34 @@ public class FrozenStorageService : IFrozenStorageService
         await SaveInventoryChangesAsync(ct);
         return ApiResponse<FrozenStorageTransactionDto>.Ok(
             MapTransaction(transaction), "Đã thực hiện giao dịch và cập nhật tồn kho.");
+    }
+
+    // Serialize inbound against the shared completed harvest voucher, not only
+    // each individual frozen lot. Current stock + all recorded outbound is the
+    // cumulative received amount (including legacy opening stock).
+    private async Task ReserveHarvestCapacityAsync(FrozenLot lot, Guid voucherId,
+        int quantity, decimal weightKg, CancellationToken ct)
+    {
+        var voucher = await _uow.HarvestVouchers.GetByIdAsync(voucherId, ct)
+            ?? throw AppException.Conflict("Không tìm thấy nguồn thu hoạch.");
+        if (voucher.Status != HarvestStatus.Completed || voucher.FarmingAreaId != lot.FarmingAreaId
+            || voucher.FarmingAreaId is null)
+            throw AppException.Conflict("Nguồn thu hoạch chưa hoàn tất hoặc sai khu.");
+        var lots = (await _uow.FrozenLots.FindAsync(x => x.HarvestVoucherId == voucherId, ct)).ToList();
+        if (lots.Any(x => x.FarmingAreaId != voucher.FarmingAreaId))
+            throw AppException.Conflict("Nguồn thu hoạch có lô đông sai khu; cần đối soát.");
+        if (lots.All(x => x.Id != lot.Id)) lots.Add(lot);
+        var ids = lots.Select(x => x.Id).ToHashSet();
+        var outbound = await _uow.FrozenInventoryAdjustments.FindAsync(
+            x => ids.Contains(x.FrozenLotId) && x.QuantityDelta < 0, ct);
+        var receivedQuantity = lots.Sum(x => (long)x.Quantity) - outbound.Sum(x => (long)x.QuantityDelta);
+        var receivedWeight = lots.Sum(x => x.WeightKg) - outbound.Sum(x => x.WeightDeltaKg);
+        if (receivedQuantity + quantity > voucher.TotalQuantity ||
+            receivedWeight + weightKg > voucher.TotalWeightKg)
+            throw AppException.Conflict("Tổng nhập kho vượt số lượng hoặc trọng lượng thu hoạch đã xác nhận.");
+        // Existing EF concurrency token protects simultaneous receipt across lots.
+        voucher.ConcurrencyVersion++;
+        _uow.HarvestVouchers.Update(voucher);
     }
 
     public async Task<ApiResponse<IEnumerable<FrozenInventoryAdjustmentDto>>> GetAdjustmentsAsync(
@@ -879,6 +917,8 @@ public class FrozenStorageService : IFrozenStorageService
         if (voucher.Status != HarvestStatus.Completed)
             throw AppException.Conflict(
                 "Chỉ được đăng ký sản phẩm đông từ phiếu thu hoạch đã được xác nhận hoàn tất.");
+        if (voucher.FarmingAreaId is null || voucher.FarmingAreaId != lot.FarmingAreaId)
+            throw AppException.Conflict("Phiếu thu hoạch và lô đông phải thuộc cùng khu.");
 
         // Request đăng ký toàn bộ sản phẩm cua của lô trong một lần.
         if (request.Items.Count != lot.Quantity)
@@ -900,6 +940,8 @@ public class FrozenStorageService : IFrozenStorageService
                 "A HarvestLineId cannot be used more than once in the same request.");
 
         // Kiểm tra cân nặng riêng của từng con cua.
+        if (decimal.Round(inputs.Sum(x => x.WeightGram) / 1000m, 3) != lot.WeightKg)
+            throw AppException.BadRequest("Tổng trọng lượng barcode phải khớp trọng lượng tồn của lô.");
         if (inputs.Any(x => x.WeightGram <= 0))
             throw AppException.BadRequest("Every crab weight must be greater than zero.");
 
@@ -1008,8 +1050,10 @@ public class FrozenStorageService : IFrozenStorageService
         foreach (var item in createdItems)
             await _uow.FrozenCrabItems.AddAsync(item, ct);
 
-        // Lưu cả lô sản phẩm trong một lần.
-        await _uow.SaveChangesAsync(ct);
+        // Serialize registration with concurrent inventory transactions.
+        lot.ConcurrencyVersion++;
+        _uow.FrozenLots.Update(lot);
+        await SaveInventoryChangesAsync(ct);
 
         return ApiResponse<IEnumerable<FrozenCrabItemDto>>.Ok(
             createdItems.Select(MapToFrozenCrabItemDto).ToList(),

@@ -57,7 +57,7 @@ public class IotService : IIotService
             ? null
             : $"edge:{req.EventId.Trim()}:{req.SensorCode.Trim()}";
         if (eventKey is not null
-            && await _uow.WaterMeasurements.AnyAsync(m => m.Source == eventKey, ct))
+            && await _uow.WaterMeasurements.AnyAsync(m => m.SensorId == sensor.Id && m.Source == eventKey, ct))
             return ApiResponse.Ok("Sensor data already ingested.");
 
         device.LastSeenAt = DateTime.UtcNow;
@@ -1187,9 +1187,12 @@ public class IotService : IIotService
             device.InstallationLocation = Limit(Clean(req.InstallationLocation), 200);
         if (req.Note is not null || req.Notes is not null)
             device.Notes = Limit(Clean(req.Note ?? req.Notes), 500);
-        if (!string.IsNullOrWhiteSpace(req.Status)
-            && Enum.TryParse<DeviceStatus>(req.Status, true, out var st))
+        if (!string.IsNullOrWhiteSpace(req.Status))
+        {
+            if (!Enum.TryParse<DeviceStatus>(req.Status, true, out var st) || !Enum.IsDefined(st))
+                throw AppException.BadRequest("Trạng thái thiết bị không hợp lệ.");
             device.Status = st;
+        }
         _uow.Devices.Update(device);
         await WriteDeviceAuditAsync(actorId, "UpdateDevice", device.Id, device.DeviceCode, ip, ct);
         await _uow.SaveChangesAsync(ct);
@@ -1233,12 +1236,20 @@ public class IotService : IIotService
         Guid deviceId, UpdateDeviceStatusRequest req, CancellationToken ct = default)
     {
         var device = await _uow.Devices.GetByIdAsync(deviceId, ct) ?? throw AppException.NotFound("Device");
-        if (Enum.TryParse<DeviceStatus>(req.Status, true, out var status))
-            device.Status = status;
+        if (device.Status == DeviceStatus.Maintenance)
+            throw AppException.Forbidden("Thiết bị đang bảo trì; chỉ quản trị viên được thay đổi trạng thái.");
+        if (!Enum.TryParse<DeviceStatus>(req.Status, true, out var status)
+            || status is not (DeviceStatus.Online or DeviceStatus.Offline or DeviceStatus.Error))
+            throw AppException.BadRequest("Thiết bị chỉ được báo Online, Offline hoặc Error.");
+        if (req.BatteryLevel is < 0 or > 100)
+            throw AppException.BadRequest("BatteryLevel phải trong khoảng 0–100.");
+        if (!string.IsNullOrWhiteSpace(req.MacAddress)
+            && !string.Equals(req.MacAddress.Trim(), device.MacAddress, StringComparison.OrdinalIgnoreCase))
+            throw AppException.Forbidden("MAC là định danh cấu hình; thiết bị không được tự thay đổi.");
+        device.Status = status;
         device.BatteryLevel = req.BatteryLevel ?? device.BatteryLevel;
         device.RssiDbm = req.RssiDbm ?? device.RssiDbm;
         if (!string.IsNullOrWhiteSpace(req.IpAddress)) device.IpAddress = req.IpAddress.Trim();
-        if (!string.IsNullOrWhiteSpace(req.MacAddress)) device.MacAddress = req.MacAddress.Trim();
         device.LastSeenAt = DateTime.UtcNow;
         _uow.Devices.Update(device);
         await _uow.SaveChangesAsync(ct);
