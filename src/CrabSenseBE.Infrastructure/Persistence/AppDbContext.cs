@@ -224,7 +224,17 @@ public class AppDbContext : DbContext
             .OnDelete(DeleteBehavior.Cascade);
         modelBuilder.Entity<WaterAnalysisRun>()
             .Property(r => r.Status)
-            .HasMaxLength(32);
+            .HasMaxLength(32)
+            .IsConcurrencyToken();
+        modelBuilder.Entity<WaterAnalysisRun>()
+            .Property(r => r.CurrentStep)
+            .IsConcurrencyToken();
+        modelBuilder.Entity<WaterAnalysisRun>()
+            .Property(r => r.AwaitingEvent)
+            .IsConcurrencyToken();
+        modelBuilder.Entity<WaterAnalysisRun>()
+            .Property(r => r.LastStepAt)
+            .IsConcurrencyToken();
         modelBuilder.Entity<WaterAnalysisRun>()
             .Property(r => r.Source)
             .HasMaxLength(64);
