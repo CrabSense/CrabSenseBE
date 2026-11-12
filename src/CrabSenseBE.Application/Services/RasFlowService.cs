@@ -263,62 +263,46 @@ public class RasFlowService : IRasFlowService
             throw AppException.BadRequest("Node has no relay.");
 
         var cmd = (req.Command ?? "").Trim().ToLowerInvariant();
-        var now = DateTime.UtcNow;
-        var title = $"{node.Name}: {cmd}";
-        if (cmd is "auto")
+        bool? desired = cmd switch
         {
-            node.ControlMode = "auto";
-            title = $"Auto kích hoạt {node.Name}";
-        }
-        else if (cmd is "manual")
-        {
-            node.ControlMode = "manual";
-            title = $"Chuyển {node.Name} sang Manual";
-        }
-        else if (cmd is "on" or "start" or "open")
-        {
-            node.ControlMode = "manual";
-            if (!node.IsOn) node.RunStartedAt = now;
-            node.IsOn = true;
-            title = $"Bật {node.Name}";
-        }
-        else if (cmd is "off" or "stop" or "close")
-        {
-            node.ControlMode = "manual";
-            node.IsOn = false;
-            node.RunStartedAt = null;
-            title = $"Tắt {node.Name}";
-        }
-        else if (cmd == "toggle")
-        {
-            node.ControlMode = "manual";
-            node.IsOn = !node.IsOn;
-            node.RunStartedAt = node.IsOn ? now : null;
-            title = node.IsOn ? $"Bật {node.Name}" : $"Tắt {node.Name}";
-        }
-        else
+            "on" or "start" or "open" => true,
+            "off" or "stop" or "close" => false,
+            "toggle" => !node.IsOn,
+            _ => null
+        };
+        if (desired is null && cmd is not ("auto" or "manual"))
             throw AppException.BadRequest("Command must be auto, manual, on, off, start, stop, or toggle.");
 
-        node.LastCommandAt = now;
+        if (desired.HasValue && (node.RelayDeviceId is null || string.IsNullOrWhiteSpace(node.RelayChannel)))
+            throw AppException.Conflict("Node chưa được gán controller và channel.");
+
+        node.ControlMode = cmd == "auto" ? "auto" : "manual";
         _uow.RasComponents.Update(node);
-        if (actorId is Guid uid && uid != Guid.Empty)
+        var title = desired.HasValue
+            ? $"Yêu cầu {(desired.Value ? "bật" : "tắt")} {node.Name}"
+            : $"Chuyển {node.Name} sang {node.ControlMode}";
+        await _uow.OperationLogs.AddAsync(new OperationLog
         {
-            await _uow.OperationLogs.AddAsync(new OperationLog
-            {
-                UserId = uid,
-                Action = cmd,
-                EntityType = "RasComponent",
-                EntityId = node.Id,
-                Details = $"{area.Id:N}|{title}"
-            }, ct);
-        }
-        await _uow.SaveChangesAsync(ct);
-        if (node.RelayDeviceId is Guid deviceId
-            && cmd is ("on" or "off" or "start" or "stop" or "open" or "close" or "toggle"))
+            UserId = commandActorId,
+            Action = desired.HasValue ? $"ras_request_{(desired.Value ? "on" : "off")}" : cmd,
+            EntityType = "RasComponent",
+            EntityId = node.Id,
+            Details = $"{area.Id:N}|{title}"
+        }, ct);
+
+        if (desired.HasValue)
         {
-            await EnqueueRelayAsync(node, actorId, ct);
+            // The edge service uses the same scoped unit of work and saves the
+            // request, mode and audit together. Do not save before enqueue.
+            await EnqueueRelayAsync(node, desired.Value, actorId, ct);
         }
-        return ApiResponse<RasFlowDiagramDto>.Ok(await BuildDiagramAsync(area, ws, ct), "Command applied.");
+        else
+        {
+            await _uow.SaveChangesAsync(ct);
+        }
+        return ApiResponse<RasFlowDiagramDto>.Ok(
+            await BuildDiagramAsync(area, ws, ct),
+            desired.HasValue ? "Command queued; waiting for device relay-state." : "Control mode updated.");
     }
 
     public async Task<ApiResponse<IReadOnlyList<RasComponentDto>>> ListComponentsAsync(
@@ -455,7 +439,29 @@ public class RasFlowService : IRasFlowService
                 .GroupBy(m => m.SensorId)
                 .ToDictionary(g => g.Key, g => g.OrderByDescending(x => x.MeasuredAt).First());
 
-        var nodes = comps.Select(c => MapNode(c, sensors, latest, flows)).ToList();
+        var nodes = new List<RasFlowNodeDto>(comps.Count);
+        foreach (var component in comps)
+        {
+            var mapped = MapNode(component, sensors, latest, flows);
+            if (component.HasRelay && component.RelayDeviceId is Guid relayId)
+            {
+                var device = await _uow.Devices.GetByIdAsync(relayId, ct);
+                var command = device is null ? null
+                    : await LatestRelayCommandAsync(device.DeviceCode, component.RelayChannel, ct);
+                var online = device?.Status == DeviceStatus.Online
+                    && device.EdgeState is "Approved" or "Online";
+                mapped = mapped with
+                {
+                    IsOnline = online,
+                    ConnectionLabel = online ? "Online" : "Offline",
+                    IsOn = online ? mapped.IsOn : null,
+                    DesiredIsOn = command?.Command switch { "on" => true, "off" or "alloff" => false, _ => null },
+                    CommandStatus = command is null ? null : RelayCommandStatus(command, component),
+                    CommandId = command?.Id
+                };
+            }
+            nodes.Add(mapped);
+        }
         var ids = comps.Select(c => c.Id).ToHashSet();
         var logs = (await _uow.OperationLogs.FindAsync(
                 l => l.EntityType == "RasComponent" && l.EntityId != null && ids.Contains(l.EntityId.Value), ct))
@@ -480,7 +486,7 @@ public class RasFlowService : IRasFlowService
             nodes.Count(n => n.IsOn == true),
             nodes.Count(n => n.HasRelay),
             nodes.Count(n => n.IsOnline != false),
-            nodes.Count(n => n.HasRelay && n.IsOn != true),
+            nodes.Count(n => n.HasRelay && n.IsOn == false),
             nodes.Count(n => n.Status is "alarm" or "error" || n.IsOnline == false),
             logs);
     }
@@ -608,44 +614,74 @@ public class RasFlowService : IRasFlowService
                      && onVal == rule.OnValue)
                 wantOn = true;
 
-            if (wantOn == pump.IsOn)
+            var device = await _uow.Devices.GetByIdAsync(deviceId, ct);
+            if (device is null || device.Status != DeviceStatus.Online
+                || device.EdgeState is not ("Approved" or "Online"))
                 continue;
-
-            pump.IsOn = wantOn;
-            pump.RunStartedAt = wantOn ? DateTime.UtcNow : null;
-            pump.LastCommandAt = DateTime.UtcNow;
-            _uow.RasComponents.Update(pump);
-            await _uow.SaveChangesAsync(ct);
-            await EnqueueRelayAsync(pump, null, ct);
+            var pending = await LatestRelayCommandAsync(device.DeviceCode, pump.RelayChannel, ct);
+            // Avoid queue flooding while the same target is still in flight.
+            // A failed/expired request never changes the observed IsOn.
+            if (pending is not null && pending.ExpiresAt > DateTime.UtcNow
+                && pending.Status is "pending" or "delivered" or "acknowledged")
+            {
+                var pendingTarget = pending.Command == "on" ? true
+                    : pending.Command is "off" or "alloff" ? false : (bool?)null;
+                if (pendingTarget == wantOn) continue;
+            }
+            if (wantOn == pump.IsOn && pending is null) continue;
+            if (wantOn == pump.IsOn && pending is not null
+                && pending.Status is not ("pending" or "delivered")) continue;
+            await EnqueueRelayAsync(pump, wantOn, null, ct);
         }
     }
 
-    private async Task EnqueueRelayAsync(RasComponent node, Guid? actorId, CancellationToken ct)
+    private async Task<EdgeCommand?> LatestRelayCommandAsync(
+        string deviceCode, string? channel, CancellationToken ct)
+    {
+        return (await _uow.EdgeCommands.FindAsync(
+                command => command.DeviceCode == deviceCode
+                    && (command.Channel == channel || command.Command == "alloff"), ct))
+            .OrderByDescending(command => command.CreatedAt)
+            .ThenByDescending(command => command.Id)
+            .FirstOrDefault();
+    }
+
+    private static string RelayCommandStatus(EdgeCommand command, RasComponent component)
+    {
+        if (command.Status is "pending" or "delivered")
+            return command.ExpiresAt != default && command.ExpiresAt <= DateTime.UtcNow
+                ? "timedout" : "pending";
+        if (command.Status == "acknowledged")
+        {
+            bool? target = command.Command == "on" ? true
+                : command.Command is "off" or "alloff" ? false : null;
+            // LastCommandAt is updated by relay-state, not by requests.
+            return target.HasValue && target.Value == component.IsOn
+                && component.LastCommandAt >= command.CreatedAt
+                ? "confirmed" : "awaiting_report";
+        }
+        return command.Status;
+    }
+
+    private async Task EnqueueRelayAsync(
+        RasComponent node, bool desired, Guid? actorId, CancellationToken ct)
     {
         if (node.RelayDeviceId is not Guid deviceId)
-            return;
-        var device = await _uow.Devices.GetByIdAsync(deviceId, ct);
-        if (device is null)
-            return;
+            throw AppException.Conflict("Node chưa được gán controller.");
+        var device = await _uow.Devices.GetByIdAsync(deviceId, ct)
+            ?? throw AppException.NotFound("Controller");
         var request = new EnqueueEdgeCommandRequest(
-            device.DeviceCode,
-            node.IsOn ? "on" : "off",
-            node.RelayChannel);
+            device.DeviceCode, desired ? "on" : "off", node.RelayChannel);
         if (actorId is Guid userId && userId != Guid.Empty)
         {
             await _edgeCommands.EnqueueManualAsync(request, userId, ct);
             return;
         }
 
-        var waterSystemId = node.WaterSystemId;
-        if (waterSystemId == Guid.Empty)
-            throw AppException.Forbidden(
-                "Automation không xác định được hệ nước của relay.");
-        var waterSystem = await _uow.WaterSystems.GetByIdAsync(waterSystemId, ct)
+        var waterSystem = await _uow.WaterSystems.GetByIdAsync(node.WaterSystemId, ct)
             ?? throw AppException.NotFound("WaterSystem");
         if (waterSystem.FarmingAreaId is not Guid areaId || areaId == Guid.Empty)
-            throw AppException.Forbidden(
-                "Automation không xác định được khu của relay.");
+            throw AppException.Forbidden("Automation không xác định được khu của relay.");
         await _edgeCommands.EnqueueAutomationAsync(
             request, areaId, "ras-auto-relay", ct);
     }
