@@ -120,6 +120,7 @@ public sealed class PermissionSuiteTests : IAsyncLifetime
         uow.Setup(u => u.FarmingRows).Returns(Repo(rows, row => row.Id).Object);
         uow.Setup(u => u.Boxes).Returns(Repo(boxes, box => box.Id).Object);
         uow.Setup(u => u.Crabs).Returns(Repo(Array.Empty<Crab>(), crab => crab.Id).Object);
+        uow.Setup(u => u.CrabBoxAllocations).Returns(Repo(Array.Empty<CrabBoxAllocation>(), a => a.Id).Object);
         uow.Setup(u => u.Alerts).Returns(Repo(Array.Empty<Alert>(), alert => alert.Id).Object);
         uow.Setup(u => u.AlertThresholds).Returns(thresholdRepo.Object);
         uow.Setup(u => u.WaterSystems).Returns(Repo(Array.Empty<WaterSystem>(), item => item.Id).Object);
@@ -155,7 +156,7 @@ public sealed class PermissionSuiteTests : IAsyncLifetime
         var failures = new List<string>();
         var rename = "{\"name\":\"Khu bị sửa\"}";
         var rowCreate = $"{{\"farmingAreaId\":\"{AreaA}\",\"name\":\"Dãy mới\"}}";
-        var status = "{\"status\":\"active\",\"isOccupied\":true}";
+        var status = "{\"status\":\"maintenance\",\"isOccupied\":false}";
         var thresholdUpdate = "{\"minValue\":1,\"maxValue\":2,\"severity\":\"Warning\",\"isActive\":true}";
         var thresholdCreate = $"{{\"sensorType\":\"Temperature\",\"minValue\":24,\"maxValue\":30,\"severity\":\"Warning\",\"farmingAreaId\":\"{AreaA}\"}}";
         var setting = "{\"key\":\"feed-times\",\"value\":\"2\",\"category\":\"general\"}";
@@ -192,7 +193,9 @@ public sealed class PermissionSuiteTests : IAsyncLifetime
             failures.Add($"Dashboard của FM gồm hộp ngoài khu. {overviewBody}");
 
         await Expect(failures, "FS cập nhật trạng thái hộp", 200, AppRoles.FarmStaff, StaffA, HttpMethod.Patch, $"/api/boxes/{BoxA}/status", status);
-        if (_boxA.Status != "active")
+        await Expect(failures, "FS không tạo chiếm hộp giả", 409, AppRoles.FarmStaff, StaffA, HttpMethod.Patch,
+            $"/api/boxes/{BoxA}/status", "{\"status\":\"active\",\"isOccupied\":true}");
+        if (_boxA.Status != "maintenance" || _boxA.IsOccupied)
             failures.Add("Farm Staff không cập nhật được trạng thái vận hành hộp trong khu của mình.");
         if (_logs.Count != 0)
             failures.Add("Cập nhật trạng thái vận hành bị ghi nhầm thành audit cấu hình.");

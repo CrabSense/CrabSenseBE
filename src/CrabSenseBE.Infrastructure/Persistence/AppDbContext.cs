@@ -461,6 +461,7 @@ public class AppDbContext : DbContext
         });
         modelBuilder.Entity<Box>(b =>
         {
+            b.Property(x => x.ConcurrencyVersion).HasDefaultValue(0L).ValueGeneratedOnAddOrUpdate().IsConcurrencyToken();
             b.Property(x => x.MapX).HasPrecision(7, 4);
             b.Property(x => x.MapY).HasPrecision(7, 4);
         });
@@ -481,6 +482,8 @@ public class AppDbContext : DbContext
             .HasIndex(r => r.Code)
             .IsUnique();
 
+        modelBuilder.Entity<Crab>().Property(c => c.ConcurrencyVersion)
+            .HasDefaultValue(0L).ValueGeneratedOnAddOrUpdate().IsConcurrencyToken();
         modelBuilder.Entity<Crab>()
             .Property(c => c.Code)
             .HasMaxLength(32);

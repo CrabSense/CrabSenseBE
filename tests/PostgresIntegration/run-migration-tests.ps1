@@ -283,6 +283,29 @@ BEGIN
         THEN RAISE EXCEPTION 'Backup schedule execution history missing'; END IF;
 END $$;
 '@ | Out-Null
+    Invoke-Psql "clean_migration" @'
+DO $$
+DECLARE
+    row_id uuid := gen_random_uuid();
+    box_id uuid := gen_random_uuid();
+    version_after bigint;
+    affected integer;
+BEGIN
+    INSERT INTO be."FarmingRows" ("Id","FarmingAreaId","Code","Name","Capacity","SortOrder","Status","IsActive","CreatedAt")
+    VALUES (row_id,'70000000-0000-0000-0000-000000000010','VERSION-ROW','Version test',2,0,'Active',true,now());
+    INSERT INTO be."Boxes" ("Id","FarmingRowId","Code","Status","IsOccupied","CreatedAt")
+    VALUES (box_id,row_id,'VERSION-BOX','empty',false,now());
+    UPDATE be."Boxes" SET "Status"='maintenance' WHERE "Id"=box_id AND "ConcurrencyVersion"=0
+    RETURNING "ConcurrencyVersion" INTO version_after;
+    IF version_after <> 1 OR version_after IS NULL THEN RAISE EXCEPTION 'Box version did not advance'; END IF;
+    UPDATE be."Boxes" SET "Status"='empty' WHERE "Id"=box_id AND "ConcurrencyVersion"=0;
+    GET DIAGNOSTICS affected = ROW_COUNT;
+    IF affected <> 0 THEN RAISE EXCEPTION 'Stale box write accepted'; END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_crabs_state_version' AND NOT tgisinternal)
+        THEN RAISE EXCEPTION 'Crab version trigger missing'; END IF;
+END $$;
+'@ | Out-Null
+    Write-Output "FARM_STATE_VERSION_TESTS_PASSED=1"
     Write-Output "NON_SALES_SCHEMA_TESTS_PASSED=1"
     Write-Output "CUSTOMER_AREA_SCHEMA_TESTS_PASSED=1"
     Write-Output "AREA_AND_EDGE_SCHEMA_TESTS_PASSED=1"
