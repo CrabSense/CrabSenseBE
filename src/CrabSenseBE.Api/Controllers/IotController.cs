@@ -282,6 +282,7 @@ public class SyncController : ControllerBase
     /// <summary>[CREATE] Kiosk HDF5 upload — requires the device credential.</summary>
     [HttpPost("hdf5")]
     [AllowAnonymous]
+    [RequestSizeLimit(512L * 1024 * 1024)]
     public async Task<IActionResult> UploadHdf5(
         [FromForm] Hdf5UploadRequest req,
         IFormFile file,

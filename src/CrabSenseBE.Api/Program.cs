@@ -7,6 +7,7 @@ using Serilog;
 using CrabSenseBE.Api.Services;
 using CrabSenseBE.Application.Interfaces;
 using CrabSenseBE.Domain.Interfaces;
+using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 
 var builder = WebApplication.CreateBuilder(args);
 LoadDotEnv(builder.Environment.ContentRootPath);
@@ -149,7 +150,10 @@ builder.Services.AddCors(options =>
 });
 
 // ─── Health checks ──────────────────────────────────────────────────────────
-builder.Services.AddHealthChecks();
+builder.Services.AddHealthChecks()
+    .AddCheck<DatabaseReadinessHealthCheck>(
+        "postgresql",
+        tags: ["ready"]);
 
 var app = builder.Build();
 
@@ -193,7 +197,19 @@ if (builder.Configuration.GetValue("Https:Redirect", false))
 app.UseAuthentication();
 app.UseAuthorization();
 app.MapControllers();
-app.MapHealthChecks("/health");
+app.MapHealthChecks("/health/live", new HealthCheckOptions
+{
+    Predicate = _ => false
+});
+app.MapHealthChecks("/health/ready", new HealthCheckOptions
+{
+    Predicate = registration => registration.Tags.Contains("ready")
+});
+// Backward-compatible deployment endpoint; now represents readiness, not only liveness.
+app.MapHealthChecks("/health", new HealthCheckOptions
+{
+    Predicate = registration => registration.Tags.Contains("ready")
+});
 
 if (app.Environment.IsDevelopment())
     await DevDbBootstrap.InitializeAsync(app);

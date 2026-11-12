@@ -233,6 +233,38 @@ public sealed class Phase2HardwareSafetyTests
     }
 
     [Fact]
+    public async Task PendingDevice_IsRejectedEvenWithLegacyFleetKey()
+    {
+        const string fleetKey = "legacy-fleet-key";
+        var device = new Device
+        {
+            Id = Guid.NewGuid(),
+            DeviceCode = "esp-pending",
+            EdgeState = "Pending",
+            Status = DeviceStatus.Offline
+        };
+        var uow = new Mock<IUnitOfWork>();
+        uow.Setup(x => x.Devices).Returns(Repository(device).Object);
+        var context = new DefaultHttpContext();
+        context.Request.Headers[EdgeKeyGuard.HeaderName] = fleetKey;
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                [EdgeKeyGuard.ConfigKey] = fleetKey,
+                ["EdgeSync:AllowLegacySharedKey"] = "true"
+            })
+            .Build();
+
+        var result = await EdgeKeyGuard.CheckDeviceAsync(
+            context.Request, config, uow.Object, device.DeviceCode,
+            CancellationToken.None);
+
+        result.Identity.Should().BeNull();
+        result.Denied.Should()
+            .BeOfType<Microsoft.AspNetCore.Mvc.UnauthorizedObjectResult>();
+    }
+
+    [Fact]
     public async Task RevokedDevice_IsRejectedEvenWithItsPreviousCredential()
     {
         const string secret = "old-device-secret";
@@ -575,6 +607,94 @@ public sealed class Phase2HardwareSafetyTests
             It.IsAny<Stream>(),
             It.IsAny<string>(),
             It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task Hdf5Upload_WithFalseChecksum_IsRejectedBeforeStorage()
+    {
+        var device = new Device
+        {
+            Id = Guid.NewGuid(),
+            DeviceCode = "esp-a",
+            Status = DeviceStatus.Online,
+            EdgeState = "Approved"
+        };
+        var storage = new Mock<IStorageService>();
+        var uow = new Mock<IUnitOfWork>();
+        uow.Setup(x => x.Devices).Returns(Repository(device).Object);
+        var service = new IotService(
+            uow.Object,
+            storage.Object,
+            Mock.Of<IAlertService>(),
+            Mock.Of<IRasFlowService>(),
+            NullLogger<IotService>.Instance);
+        var request = new Hdf5UploadRequest(
+            device.DeviceCode,
+            "chunk.h5",
+            new string('0', 64),
+            3,
+            DateTime.UtcNow.AddMinutes(-1),
+            DateTime.UtcNow);
+
+        var act = () => service.ProcessHdf5UploadAsync(
+            request,
+            new MemoryStream([1, 2, 3]),
+            device.Id,
+            device.DeviceCode);
+
+        (await act.Should().ThrowAsync<AppException>())
+            .Which.StatusCode.Should().Be(400);
+        storage.Verify(x => x.UploadAsync(
+            It.IsAny<string>(),
+            It.IsAny<string>(),
+            It.IsAny<Stream>(),
+            It.IsAny<string>(),
+            It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task Manager_A_CannotRead_Device_B_Details()
+    {
+        var userId = Guid.NewGuid();
+        var areaA = Guid.NewGuid();
+        var areaB = Guid.NewGuid();
+        var deviceB = new Device
+        {
+            Id = Guid.NewGuid(),
+            DeviceCode = "esp-b",
+            FarmingAreaId = areaB,
+            Status = DeviceStatus.Online,
+            EdgeState = "Approved"
+        };
+        var uow = new Mock<IUnitOfWork>();
+        uow.Setup(x => x.Devices).Returns(Repository(deviceB).Object);
+        uow.Setup(x => x.Users).Returns(Repository(new AppUser
+        {
+            Id = userId,
+            Role = UserRole.FarmManager,
+            IsActive = true
+        }).Object);
+        uow.Setup(x => x.FarmManagerAssignments).Returns(Repository(
+            new FarmManagerAssignment
+            {
+                ManagerUserId = userId,
+                FarmingAreaId = areaA
+            }).Object);
+        var current = new Mock<ICurrentUserService>();
+        current.SetupGet(x => x.IsAuthenticated).Returns(true);
+        current.SetupGet(x => x.UserId).Returns(userId);
+        var service = new IotService(
+            uow.Object,
+            Mock.Of<IStorageService>(),
+            Mock.Of<IAlertService>(),
+            Mock.Of<IRasFlowService>(),
+            NullLogger<IotService>.Instance,
+            current.Object);
+
+        var act = () => service.GetDeviceAsync(deviceB.Id);
+
+        (await act.Should().ThrowAsync<AppException>())
+            .Which.StatusCode.Should().Be(403);
     }
 
     private static string Hash(string secret) =>

@@ -6,6 +6,7 @@ using CrabSenseBE.Domain.Enums;
 using CrabSenseBE.Domain.Interfaces;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
+using System.Security.Cryptography;
 
 namespace CrabSenseBE.Application.Services;
 
@@ -794,40 +795,65 @@ public class IotService : IIotService
         var actuators = (await _uow.RasComponents.FindAsync(c => c.RelayDeviceId != null, ct)).ToList();
         var areas = (await _uow.FarmingAreas.GetAllAsync(ct)).ToDictionary(a => a.Id);
         var rows = (await _uow.FarmingRows.GetAllAsync(ct)).ToDictionary(r => r.Id);
+        var waterSystems = (await _uow.WaterSystems.GetAllAsync(ct))
+            .ToDictionary(w => w.Id);
 
-        if (farmingAreaId is Guid areaId && areaId != Guid.Empty)
+        var currentUser = await _areas.CurrentUserAsync(ct);
+        if (currentUser is not null
+            && currentUser.Role != UserRole.SystemAdministrator)
         {
-            var wsIds = (await _uow.WaterSystems.FindAsync(w => w.FarmingAreaId == areaId, ct))
-                .Select(w => w.Id)
-                .ToHashSet();
-            var rowIds = rows.Values
-                .Where(r => r.FarmingAreaId == areaId)
-                .Select(r => r.Id)
-                .ToHashSet();
-            var deviceIds = sensors
-                .Where(s => s.DeviceId != null && (
-                    (s.WaterSystemId != null && wsIds.Contains(s.WaterSystemId.Value))
-                    || (s.FarmingRowId != null && rowIds.Contains(s.FarmingRowId.Value))))
-                .Select(s => s.DeviceId!.Value)
-                .ToHashSet();
-            foreach (var id in actuators
-                         .Where(c => c.RelayDeviceId != null)
-                         .Select(c => c.RelayDeviceId!.Value))
-                deviceIds.Add(id);
-            devices = devices.Where(d =>
-                d.FarmingAreaId == areaId
-                || (d.FarmingRowId != null && rowIds.Contains(d.FarmingRowId.Value))
-                || deviceIds.Contains(d.Id));
-            sensors = sensors
-                .Where(s => s.DeviceId != null && (
-                    (s.WaterSystemId != null && wsIds.Contains(s.WaterSystemId.Value))
-                    || (s.FarmingRowId != null && rowIds.Contains(s.FarmingRowId.Value))
-                    || deviceIds.Contains(s.DeviceId.Value)))
-                .ToList();
+            var assigned = await _areas.AreaIdsAsync(ct)
+                ?? throw AppException.Unauthorized();
+            var selected = assigned;
+            if (farmingAreaId is Guid requestedArea && requestedArea != Guid.Empty)
+            {
+                if (!assigned.Contains(requestedArea))
+                    throw AppException.Forbidden("Bạn không được phân công khu này.");
+                selected = [requestedArea];
+            }
+
+            HashSet<Guid> DeviceAreas(Device device)
+            {
+                var result = new HashSet<Guid>();
+                if (device.FarmingAreaId is Guid direct)
+                    result.Add(direct);
+                if (device.FarmingRowId is Guid rowId
+                    && rows.TryGetValue(rowId, out var row))
+                    result.Add(row.FarmingAreaId);
+                foreach (var sensor in sensors.Where(s => s.DeviceId == device.Id))
+                {
+                    if (sensor.FarmingRowId is Guid sensorRowId
+                        && rows.TryGetValue(sensorRowId, out var sensorRow))
+                        result.Add(sensorRow.FarmingAreaId);
+                    if (sensor.WaterSystemId is Guid waterSystemId
+                        && waterSystems.TryGetValue(waterSystemId, out var waterSystem)
+                        && waterSystem.FarmingAreaId is Guid waterArea)
+                        result.Add(waterArea);
+                }
+                foreach (var component in actuators.Where(c => c.RelayDeviceId == device.Id))
+                    if (waterSystems.TryGetValue(component.WaterSystemId, out var waterSystem)
+                        && waterSystem.FarmingAreaId is Guid waterArea)
+                        result.Add(waterArea);
+                return result;
+            }
+
+            devices = devices.Where(device =>
+            {
+                var linkedAreas = DeviceAreas(device);
+                return linkedAreas.Count > 0
+                    && linkedAreas.All(selected.Contains);
+            });
         }
 
         if (farmingRowId is Guid rid && rid != Guid.Empty)
+        {
+            if (!rows.TryGetValue(rid, out var requestedRow))
+                throw AppException.NotFound("FarmingRow");
+            if (currentUser is not null
+                && currentUser.Role != UserRole.SystemAdministrator)
+                await _areas.EnsureReadAsync(requestedRow.FarmingAreaId, ct);
             devices = devices.Where(d => d.FarmingRowId == rid);
+        }
 
         var keptIds = devices.Select(d => d.Id).ToHashSet();
         var countBy = allSensors.Where(s => s.DeviceId.HasValue && keptIds.Contains(s.DeviceId.Value))
@@ -879,6 +905,7 @@ public class IotService : IIotService
     public async Task<ApiResponse<DeviceDetailDto>> GetDeviceAsync(Guid id, CancellationToken ct = default)
     {
         var d = await _uow.Devices.GetByIdAsync(id, ct) ?? throw AppException.NotFound("Device");
+        await EnsureDeviceReadAsync(d, ct);
         var sensorEntities = (await _uow.Sensors.FindAsync(s => s.DeviceId == id, ct))
             .OrderBy(s => s.SensorCode)
             .ToList();
@@ -908,6 +935,60 @@ public class IotService : IIotService
             area = await _uow.FarmingAreas.GetByIdAsync(aid, ct);
         return ApiResponse<DeviceDetailDto>.Ok(
             MapDeviceDetail(d, sensors, actuators, area, await RowOfAsync(d, ct)));
+    }
+
+    private async Task EnsureDeviceReadAsync(Device device, CancellationToken ct)
+    {
+        var user = await _areas.CurrentUserAsync(ct);
+        if (user is null || user.Role == UserRole.SystemAdministrator)
+            return;
+
+        var linkedAreas = new HashSet<Guid>();
+        if (device.FarmingAreaId is Guid directArea)
+        {
+            await _areas.EnsureReadAsync(directArea, ct);
+            linkedAreas.Add(directArea);
+        }
+        if (device.FarmingRowId is Guid rowId)
+        {
+            var row = await _uow.FarmingRows.GetByIdAsync(rowId, ct);
+            if (row is not null)
+                linkedAreas.Add(row.FarmingAreaId);
+        }
+
+        var sensors = await _uow.Sensors.FindAsync(
+            sensor => sensor.DeviceId == device.Id, ct);
+        foreach (var sensor in sensors)
+        {
+            if (sensor.FarmingRowId is Guid sensorRowId)
+            {
+                var row = await _uow.FarmingRows.GetByIdAsync(sensorRowId, ct);
+                if (row is not null)
+                    linkedAreas.Add(row.FarmingAreaId);
+            }
+            if (sensor.WaterSystemId is Guid waterSystemId)
+            {
+                var waterSystem = await _uow.WaterSystems.GetByIdAsync(
+                    waterSystemId, ct);
+                if (waterSystem?.FarmingAreaId is Guid waterArea)
+                    linkedAreas.Add(waterArea);
+            }
+        }
+
+        var relays = await _uow.RasComponents.FindAsync(
+            component => component.RelayDeviceId == device.Id, ct);
+        foreach (var relay in relays)
+        {
+            var waterSystem = await _uow.WaterSystems.GetByIdAsync(
+                relay.WaterSystemId, ct);
+            if (waterSystem?.FarmingAreaId is Guid waterArea)
+                linkedAreas.Add(waterArea);
+        }
+
+        if (linkedAreas.Count == 0)
+            throw AppException.Forbidden(
+                "Thiết bị chưa có khu sở hữu được xác minh.");
+        await _areas.EnsureAllAssignedAsync(linkedAreas, ct);
     }
 
     public async Task<ApiResponse<DeviceDto>> CreateDeviceAsync(
@@ -1172,29 +1253,96 @@ public class IotService : IIotService
                 StringComparison.OrdinalIgnoreCase))
             throw AppException.Forbidden("Device credential không khớp dữ liệu upload.");
 
-        var objectName = $"hdf5/{device.DeviceCode}/{req.ChunkStartTime:yyyyMMddHHmmss}_{req.FileName}";
-        var storagePath = await _storage.UploadAsync(
-            "crabsense-hdf5", objectName, fileStream, "application/octet-stream", ct);
+        var safeFileName = Path.GetFileName(req.FileName);
+        if (string.IsNullOrWhiteSpace(safeFileName)
+            || !string.Equals(safeFileName, req.FileName, StringComparison.Ordinal)
+            || safeFileName.Any(char.IsControl)
+            || Path.GetExtension(safeFileName).ToLowerInvariant() is not (".h5" or ".hdf5"))
+            throw AppException.BadRequest("Tên file HDF5 không hợp lệ.");
+        if (req.FileSizeBytes <= 0 || req.FileSizeBytes > 512L * 1024 * 1024)
+            throw AppException.BadRequest("Kích thước HDF5 phải trong khoảng 1 byte đến 512 MiB.");
+        var expectedChecksum = req.Checksum?.Trim();
+        if (string.IsNullOrWhiteSpace(expectedChecksum)
+            || expectedChecksum.Length != 64
+            || expectedChecksum.Any(c => !Uri.IsHexDigit(c)))
+            throw AppException.BadRequest("Checksum phải là SHA-256 dạng hex 64 ký tự.");
 
-        var upload = new Hdf5Upload
+        Stream uploadStream = fileStream;
+        FileStream? temporary = null;
+        try
         {
-            DeviceId = device.Id,
-            FileName = req.FileName,
-            StoragePath = storagePath,
-            Checksum = req.Checksum,
-            FileSizeBytes = req.FileSizeBytes,
-            ChunkStartTime = req.ChunkStartTime,
-            ChunkEndTime = req.ChunkEndTime,
-            Status = "pending"
-        };
-        await _uow.Hdf5Uploads.AddAsync(upload, ct);
+            if (!fileStream.CanSeek)
+            {
+                temporary = new FileStream(
+                    Path.GetTempFileName(),
+                    FileMode.Create,
+                    FileAccess.ReadWrite,
+                    FileShare.None,
+                    81_920,
+                    FileOptions.Asynchronous | FileOptions.DeleteOnClose);
+                await fileStream.CopyToAsync(temporary, ct);
+                temporary.Position = 0;
+                uploadStream = temporary;
+            }
 
-        device.LastSeenAt = DateTime.UtcNow;
-        device.Status = DeviceStatus.Online;
-        _uow.Devices.Update(device);
+            var start = uploadStream.Position;
+            var actualChecksum = Convert.ToHexString(
+                await SHA256.HashDataAsync(uploadStream, ct));
+            var actualSize = uploadStream.Position - start;
+            uploadStream.Position = start;
+            if (actualSize != req.FileSizeBytes)
+                throw AppException.BadRequest(
+                    "Kích thước file thực tế không khớp metadata.");
+            if (!string.Equals(
+                    actualChecksum, expectedChecksum,
+                    StringComparison.OrdinalIgnoreCase))
+                throw AppException.BadRequest(
+                    "SHA-256 của file không khớp checksum khai báo.");
 
-        await _uow.SaveChangesAsync(ct);
-        return ApiResponse<string>.Ok(storagePath, "HDF5 uploaded successfully.");
+            var deviceSegment = Convert.ToHexString(
+                SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(device.DeviceCode)))
+                .ToLowerInvariant()[..16];
+            var objectName =
+                $"hdf5/{deviceSegment}/{req.ChunkStartTime:yyyyMMddHHmmss}_{Guid.NewGuid():N}{Path.GetExtension(safeFileName).ToLowerInvariant()}";
+            var storagePath = await _storage.UploadAsync(
+                "crabsense-hdf5", objectName, uploadStream,
+                "application/octet-stream", ct);
+
+            var upload = new Hdf5Upload
+            {
+                DeviceId = device.Id,
+                FileName = safeFileName,
+                StoragePath = storagePath,
+                Checksum = actualChecksum,
+                FileSizeBytes = actualSize,
+                ChunkStartTime = req.ChunkStartTime,
+                ChunkEndTime = req.ChunkEndTime,
+                Status = "pending"
+            };
+            await _uow.Hdf5Uploads.AddAsync(upload, ct);
+
+            device.LastSeenAt = DateTime.UtcNow;
+            device.Status = DeviceStatus.Online;
+            _uow.Devices.Update(device);
+
+            try
+            {
+                await _uow.SaveChangesAsync(ct);
+            }
+            catch
+            {
+                await _storage.DeleteAsync(
+                    "crabsense-hdf5", objectName, CancellationToken.None);
+                throw;
+            }
+            return ApiResponse<string>.Ok(
+                storagePath, "HDF5 uploaded successfully.");
+        }
+        finally
+        {
+            if (temporary is not null)
+                await temporary.DisposeAsync();
+        }
     }
 
     private static SensorDto MapSensor(Sensor s) =>

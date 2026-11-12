@@ -81,6 +81,9 @@ public class SalesOrderService : ISalesOrderService
     {
         var lines = request.Lines?.ToList() ?? [];
         var orderStatus = ParseOrderStatus(request.OrderStatus);
+        if (orderStatus == OrderStatus.Cancelled)
+            throw AppException.BadRequest(
+                "Không thể tạo mới đơn ở trạng thái đã hủy.");
         if (lines.Count == 0 && orderStatus != OrderStatus.Draft)
             throw AppException.BadRequest("Chọn ít nhất một con cua để bán.");
         if (string.IsNullOrWhiteSpace(request.CustomerName)
