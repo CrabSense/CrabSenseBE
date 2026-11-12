@@ -764,7 +764,8 @@ public class RasFlowService : IRasFlowService
         return (await _uow.EdgeCommands.FindAsync(
                 command => command.DeviceCode == deviceCode
                     && (command.Channel == channel || command.Command == "alloff"), ct))
-            .OrderByDescending(command => command.CreatedAt)
+            .OrderByDescending(command => command.CommandSequence)
+            .ThenByDescending(command => command.CreatedAt)
             .ThenByDescending(command => command.Id)
             .FirstOrDefault();
     }
