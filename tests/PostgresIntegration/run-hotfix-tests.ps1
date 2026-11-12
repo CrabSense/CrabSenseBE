@@ -33,23 +33,28 @@ if (!(Test-Path $initdb) -or !(Test-Path $pgctl) -or !(Test-Path $psql)) {
     throw "PostgreSQL binaries were not found in $PostgresBin"
 }
 
-if (Test-Path $data) {
-    if (Test-Path (Join-Path $data "postmaster.pid")) {
-        & $pgctl -D $data stop -m immediate | Out-Null
-    }
-    Remove-Item $data -Recurse -Force
+& $initdb -D $data --auth=trust --username=postgres --encoding=UTF8 | Out-Null
+if ($LASTEXITCODE -ne 0) { throw "initdb failed (exit $LASTEXITCODE)" }
+$serverLog = Join-Path $data "server.log"
+$serverOptions = "-p $Port -F -h 127.0.0.1"
+# Ubuntu packages default to /var/run/postgresql, which the runner may not own.
+# All test clients use TCP; do not create a system Unix-domain socket.
+if (!$runningOnWindows) { $serverOptions += " -c unix_socket_directories=" }
+& $pgctl -D $data -l $serverLog -o $serverOptions -w -t 60 start
+if ($LASTEXITCODE -ne 0) {
+    if (Test-Path $serverLog) { Get-Content $serverLog | Write-Host }
+    throw "PostgreSQL test server failed to start; see server.log above."
 }
-& $initdb -D $data --auth=trust --username=postgres --encoding=UTF8 |
-    Out-Null
-& $pgctl -D $data -l (Join-Path $data "server.log") `
-    -o "-p $Port -F" -w start
+$started = $true
+& $psql -X -q -v ON_ERROR_STOP=1 -h 127.0.0.1 -p $Port -U postgres -d postgres -c "SELECT 1"
+if ($LASTEXITCODE -ne 0) { throw "PostgreSQL TCP readiness check failed." }
 
 function Invoke-Psql([string]$Sql, [switch]$AllowFailure) {
     $previousPreference = $ErrorActionPreference
     if ($AllowFailure) {
         $ErrorActionPreference = "Continue"
     }
-    $result = & $psql -X -v ON_ERROR_STOP=1 -h 127.0.0.1 -p $Port `
+    $result = & $psql -X -q -v ON_ERROR_STOP=1 -h 127.0.0.1 -p $Port `
         -U postgres -d postgres -Atc $Sql 2>&1
     $exit = $LASTEXITCODE
     $ErrorActionPreference = $previousPreference
@@ -377,6 +382,6 @@ UPDATE be."SyncInboxItems" SET "Status"='failed' WHERE "ActorUserId"='$syncActor
     Write-Output "POSTGRES_HOTFIX_TESTS_PASSED=9"
 }
 finally {
-    & $pgctl -D $data stop -m fast -w
+    if ($started) { & $pgctl -D $data stop -m fast -w | Out-Null }
     if (Test-Path $data) { Remove-Item $data -Recurse -Force }
 }
