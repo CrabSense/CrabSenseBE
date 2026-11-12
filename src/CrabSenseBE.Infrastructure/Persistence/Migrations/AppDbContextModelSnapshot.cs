@@ -3329,6 +3329,9 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.Property<DateTime?>("LastCommandAt")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<DateTime?>("LastReportedAt")
+                        .HasColumnType("timestamp with time zone");
+
                     b.Property<string>("Name")
                         .IsRequired()
                         .HasMaxLength(128)
