@@ -107,11 +107,11 @@ public class IotService : IIotService
         var logged = false;
         foreach (var node in nodes)
         {
-            var wasOn = node.IsOn;
+            var wasOn = node.IsOn && node.LastReportedAt.HasValue;
             node.IsOn = on;
             node.RunStartedAt = on ? (wasOn ? node.RunStartedAt : DateTime.UtcNow) : null;
-            node.LastCommandAt = DateTime.UtcNow;
-            _uow.RasComponents.Update(node);
+            node.LastReportedAt = DateTime.UtcNow;
+            // This tracked entity only changes observed fields, not control mode.
             var offMessage = $"{node.Name} đã tắt";
             var onMessage = $"{node.Name} đã bật";
             if (wasOn && !on)

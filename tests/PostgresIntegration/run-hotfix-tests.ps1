@@ -24,7 +24,7 @@ if ([string]::IsNullOrWhiteSpace($PostgresBin)) {
 if ([string]::IsNullOrWhiteSpace($PostgresBin)) {
     throw "Could not locate PostgreSQL binaries. Pass -PostgresBin explicitly."
 }
-$data = Join-Path $env:TEMP "crabsense-hotfix-pg"
+$data = Join-Path ([System.IO.Path]::GetTempPath()) ("crabsense-hotfix-" + [Guid]::NewGuid().ToString("N"))
 $exe = if ($runningOnWindows) { ".exe" } else { "" }
 $initdb = Join-Path $PostgresBin "initdb$exe"
 $pgctl = Join-Path $PostgresBin "pg_ctl$exe"
@@ -33,23 +33,28 @@ if (!(Test-Path $initdb) -or !(Test-Path $pgctl) -or !(Test-Path $psql)) {
     throw "PostgreSQL binaries were not found in $PostgresBin"
 }
 
-if (Test-Path $data) {
-    if (Test-Path (Join-Path $data "postmaster.pid")) {
-        & $pgctl -D $data stop -m immediate | Out-Null
-    }
-    Remove-Item $data -Recurse -Force
+& $initdb -D $data --auth=trust --username=postgres --encoding=UTF8 | Out-Null
+if ($LASTEXITCODE -ne 0) { throw "initdb failed (exit $LASTEXITCODE)" }
+$serverLog = Join-Path $data "server.log"
+$serverOptions = "-p $Port -F -h 127.0.0.1"
+# Ubuntu packages default to /var/run/postgresql, which the runner may not own.
+# All test clients use TCP; do not create a system Unix-domain socket.
+if (!$runningOnWindows) { $serverOptions += " -c unix_socket_directories=" }
+& $pgctl -D $data -l $serverLog -o $serverOptions -w -t 60 start
+if ($LASTEXITCODE -ne 0) {
+    if (Test-Path $serverLog) { Get-Content $serverLog | Write-Host }
+    throw "PostgreSQL test server failed to start; see server.log above."
 }
-& $initdb -D $data --auth=trust --username=postgres --encoding=UTF8 |
-    Out-Null
-& $pgctl -D $data -l (Join-Path $data "server.log") `
-    -o "-p $Port -F" -w start
+$started = $true
+& $psql -X -q -v ON_ERROR_STOP=1 -h 127.0.0.1 -p $Port -U postgres -d postgres -c "SELECT 1"
+if ($LASTEXITCODE -ne 0) { throw "PostgreSQL TCP readiness check failed." }
 
 function Invoke-Psql([string]$Sql, [switch]$AllowFailure) {
     $previousPreference = $ErrorActionPreference
     if ($AllowFailure) {
         $ErrorActionPreference = "Continue"
     }
-    $result = & $psql -X -v ON_ERROR_STOP=1 -h 127.0.0.1 -p $Port `
+    $result = & $psql -X -q -v ON_ERROR_STOP=1 -h 127.0.0.1 -p $Port `
         -U postgres -d postgres -Atc $Sql 2>&1
     $exit = $LASTEXITCODE
     $ErrorActionPreference = $previousPreference
@@ -346,8 +351,37 @@ ADD COLUMN "RequestSource" text NOT NULL DEFAULT 'legacy';
     Assert-Equal "legacy" (Invoke-Psql "SELECT `"RequestSource`" FROM be.`"EdgeCommands`"").Output `
         "Hotfix migration did not preserve/backfill the legacy command."
 
-    Write-Output "POSTGRES_HOTFIX_TESTS_PASSED=8"
+    # Keep reservation locked while a failed domain mutation rolls back.
+    $retryKey = "retry-savepoint"
+    Invoke-Psql @"
+INSERT INTO be."SyncInboxItems" ("Id","ActorUserId","IdempotencyKey","RequestHash","Status")
+VALUES ('41000000-0000-0000-0000-000000000031','$syncActor','$retryKey','HASH-A','failed');
+BEGIN;
+SELECT "Id" FROM be."SyncInboxItems" WHERE "ActorUserId"='$syncActor' AND "IdempotencyKey"='$retryKey' FOR UPDATE;
+UPDATE be."SyncInboxItems" SET "Status"='pending' WHERE "ActorUserId"='$syncActor' AND "IdempotencyKey"='$retryKey';
+SAVEPOINT sync_domain;
+INSERT INTO be."SyncCrabs" VALUES ('41000000-0000-0000-0000-000000000032','SAVEPOINT-FAILED');
+ROLLBACK TO SAVEPOINT sync_domain;
+UPDATE be."SyncInboxItems" SET "Status"='failed' WHERE "ActorUserId"='$syncActor' AND "IdempotencyKey"='$retryKey';
+COMMIT;
+"@ | Out-Null
+    Assert-Equal 0 (Invoke-Psql "SELECT COUNT(*) FROM be.`"SyncCrabs`" WHERE `"Code`"='SAVEPOINT-FAILED'").Output `
+        "Failed retry left a domain mutation."
+    Invoke-Psql @"
+BEGIN;
+SELECT "Id" FROM be."SyncInboxItems" WHERE "ActorUserId"='$syncActor' AND "IdempotencyKey"='$retryKey' FOR UPDATE;
+UPDATE be."SyncInboxItems" SET "Status"='processed' WHERE "ActorUserId"='$syncActor' AND "IdempotencyKey"='$retryKey' AND "RequestHash"='HASH-A';
+COMMIT;
+UPDATE be."SyncInboxItems" SET "Status"='failed' WHERE "ActorUserId"='$syncActor' AND "IdempotencyKey"='$retryKey' AND "Status" <> 'processed';
+"@ | Out-Null
+    Assert-Equal "processed" (Invoke-Psql "SELECT `"Status`" FROM be.`"SyncInboxItems`" WHERE `"ActorUserId`"='$syncActor' AND `"IdempotencyKey`"='$retryKey'").Output `
+        "Terminal processed state was overwritten."
+    Assert-Equal "HASH-A" (Invoke-Psql "SELECT `"RequestHash`" FROM be.`"SyncInboxItems`" WHERE `"ActorUserId`"='$syncActor' AND `"IdempotencyKey`"='$retryKey'").Output `
+        "Retry changed the payload identity."
+
+    Write-Output "POSTGRES_HOTFIX_TESTS_PASSED=9"
 }
 finally {
-    & $pgctl -D $data stop -m fast -w
+    if ($started) { & $pgctl -D $data stop -m fast -w | Out-Null }
+    if (Test-Path $data) { Remove-Item $data -Recurse -Force }
 }

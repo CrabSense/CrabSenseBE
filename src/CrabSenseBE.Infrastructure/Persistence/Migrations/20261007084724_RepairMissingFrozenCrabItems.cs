@@ -1,130 +1,56 @@
-﻿using Microsoft.EntityFrameworkCore.Migrations;
+using Microsoft.EntityFrameworkCore.Migrations;
 
 #nullable disable
 
 namespace CrabSenseBE.Infrastructure.Persistence.Migrations
 {
-    /// <inheritdoc />
     public partial class RepairMissingFrozenCrabItems : Migration
     {
-        /// <inheritdoc />
         protected override void Up(MigrationBuilder migrationBuilder)
-{
-    // Tạo lại bảng sản phẩm cua cấp đông đang bị thiếu trong schema be.
-    migrationBuilder.CreateTable(
-        name: "FrozenCrabItems",
-        schema: "be",
-        columns: table => new
         {
-            Id = table.Column<Guid>(type: "uuid", nullable: false),
-            FrozenLotId = table.Column<Guid>(type: "uuid", nullable: false),
-            HarvestLineId = table.Column<Guid>(type: "uuid", nullable: false),
-            CrabId = table.Column<Guid>(type: "uuid", nullable: false),
-            BarcodeValue = table.Column<string>(
-                type: "character varying(40)",
-                maxLength: 40,
-                nullable: false),
-            LotCode = table.Column<string>(
-                type: "character varying(64)",
-                maxLength: 64,
-                nullable: false),
-            CrabCode = table.Column<string>(
-                type: "character varying(64)",
-                maxLength: 64,
-                nullable: false),
-            HarvestVoucherCode = table.Column<string>(
-                type: "character varying(64)",
-                maxLength: 64,
-                nullable: true),
-            HarvestDate = table.Column<DateTime>(
-                type: "timestamp with time zone",
-                nullable: false),
-            FrozenDate = table.Column<DateTime>(
-                type: "timestamp with time zone",
-                nullable: false),
-            ExpiryDate = table.Column<DateTime>(
-                type: "timestamp with time zone",
-                nullable: false),
-            WeightGram = table.Column<decimal>(
-                type: "numeric(10,2)",
-                precision: 10,
-                scale: 2,
-                nullable: false),
-            Grade = table.Column<string>(
-                type: "character varying(1)",
-                maxLength: 1,
-                nullable: false),
-            CreatedAt = table.Column<DateTime>(
-                type: "timestamp with time zone",
-                nullable: false),
-            UpdatedAt = table.Column<DateTime>(
-                type: "timestamp with time zone",
-                nullable: true)
-        },
-        constraints: table =>
-        {
-            table.PrimaryKey("PK_FrozenCrabItems", x => x.Id);
+            // The preceding AddFrozenCrabItems migration normally owns this table.
+            // Repair a genuinely missing legacy table without recreating or deleting
+            // an existing table or its data.
+            migrationBuilder.Sql("""
+                CREATE TABLE IF NOT EXISTS be."FrozenCrabItems" (
+                    "Id" uuid NOT NULL,
+                    "FrozenLotId" uuid NOT NULL,
+                    "HarvestLineId" uuid NOT NULL,
+                    "CrabId" uuid NOT NULL,
+                    "BarcodeValue" character varying(40) NOT NULL,
+                    "LotCode" character varying(64) NOT NULL,
+                    "CrabCode" character varying(64) NOT NULL,
+                    "HarvestVoucherCode" character varying(64) NULL,
+                    "HarvestDate" timestamp with time zone NOT NULL,
+                    "FrozenDate" timestamp with time zone NOT NULL,
+                    "ExpiryDate" timestamp with time zone NOT NULL,
+                    "WeightGram" numeric(10,2) NOT NULL,
+                    "Grade" character varying(1) NOT NULL,
+                    "CreatedAt" timestamp with time zone NOT NULL,
+                    "UpdatedAt" timestamp with time zone NULL,
+                    CONSTRAINT "PK_FrozenCrabItems" PRIMARY KEY ("Id"),
+                    CONSTRAINT "FK_FrozenCrabItems_Crabs_CrabId"
+                        FOREIGN KEY ("CrabId") REFERENCES be."Crabs" ("Id") ON DELETE RESTRICT,
+                    CONSTRAINT "FK_FrozenCrabItems_FrozenLots_FrozenLotId"
+                        FOREIGN KEY ("FrozenLotId") REFERENCES be."FrozenLots" ("Id") ON DELETE RESTRICT,
+                    CONSTRAINT "FK_FrozenCrabItems_HarvestLines_HarvestLineId"
+                        FOREIGN KEY ("HarvestLineId") REFERENCES be."HarvestLines" ("Id") ON DELETE RESTRICT
+                );
+                CREATE UNIQUE INDEX IF NOT EXISTS "IX_FrozenCrabItems_BarcodeValue"
+                    ON be."FrozenCrabItems" ("BarcodeValue");
+                CREATE INDEX IF NOT EXISTS "IX_FrozenCrabItems_CrabId"
+                    ON be."FrozenCrabItems" ("CrabId");
+                CREATE INDEX IF NOT EXISTS "IX_FrozenCrabItems_FrozenLotId"
+                    ON be."FrozenCrabItems" ("FrozenLotId");
+                CREATE UNIQUE INDEX IF NOT EXISTS "IX_FrozenCrabItems_HarvestLineId"
+                    ON be."FrozenCrabItems" ("HarvestLineId");
+                """);
+        }
 
-            table.ForeignKey(
-                name: "FK_FrozenCrabItems_Crabs_CrabId",
-                column: x => x.CrabId,
-                principalSchema: "be",
-                principalTable: "Crabs",
-                principalColumn: "Id",
-                onDelete: ReferentialAction.Restrict);
-
-            table.ForeignKey(
-                name: "FK_FrozenCrabItems_FrozenLots_FrozenLotId",
-                column: x => x.FrozenLotId,
-                principalSchema: "be",
-                principalTable: "FrozenLots",
-                principalColumn: "Id",
-                onDelete: ReferentialAction.Restrict);
-
-            table.ForeignKey(
-                name: "FK_FrozenCrabItems_HarvestLines_HarvestLineId",
-                column: x => x.HarvestLineId,
-                principalSchema: "be",
-                principalTable: "HarvestLines",
-                principalColumn: "Id",
-                onDelete: ReferentialAction.Restrict);
-        });
-
-    // Mỗi mã vạch phải duy nhất.
-    migrationBuilder.CreateIndex(
-        name: "IX_FrozenCrabItems_BarcodeValue",
-        schema: "be",
-        table: "FrozenCrabItems",
-        column: "BarcodeValue",
-        unique: true);
-
-    migrationBuilder.CreateIndex(
-        name: "IX_FrozenCrabItems_CrabId",
-        schema: "be",
-        table: "FrozenCrabItems",
-        column: "CrabId");
-
-    migrationBuilder.CreateIndex(
-        name: "IX_FrozenCrabItems_FrozenLotId",
-        schema: "be",
-        table: "FrozenCrabItems",
-        column: "FrozenLotId");
-
-    // Mỗi dòng thu hoạch chỉ được gắn với một sản phẩm cua cấp đông.
-    migrationBuilder.CreateIndex(
-        name: "IX_FrozenCrabItems_HarvestLineId",
-        schema: "be",
-        table: "FrozenCrabItems",
-        column: "HarvestLineId",
-        unique: true);
-}
-        /// <inheritdoc />
         protected override void Down(MigrationBuilder migrationBuilder)
-{
-    // Chỉ hoàn tác bảng được tạo bởi migration sửa chữa này.
-    migrationBuilder.DropTable(
-        name: "FrozenCrabItems",
-        schema: "be");
-}
+        {
+            // The previous migration owns FrozenCrabItems. A rollback of the repair
+            // must not remove the table or its inventory records.
+        }
     }
 }

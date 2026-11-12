@@ -16,8 +16,9 @@ public record RasComponentDto(
     string? RelayChannel,
     string? ParamDefaultsJson,
     bool HasRelay,
-    bool IsOn,
-    string? ControlMode);
+    bool? IsOn,
+    string? ControlMode,
+    DateTime? LastReportedAt = null);
 
 public record WaterFlowDto(
     Guid Id,
@@ -60,7 +61,8 @@ public record RasFlowNodeDto(
     DateTime? RunStartedAt = null,
     bool? DesiredIsOn = null,
     string? CommandStatus = null,
-    Guid? CommandId = null);
+    Guid? CommandId = null,
+    DateTime? LastReportedAt = null);
 
 public record RasFlowDiagramDto(
     Guid AreaId,

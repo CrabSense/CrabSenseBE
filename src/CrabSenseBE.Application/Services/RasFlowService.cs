@@ -108,6 +108,8 @@ public class RasFlowService : IRasFlowService
             node.RelayChannel = null;
             node.HasRelay = false;
             node.IsOn = false;
+            node.LastReportedAt = null;
+            node.RunStartedAt = null;
             node.ControlMode = null;
         }
         else
@@ -121,6 +123,8 @@ public class RasFlowService : IRasFlowService
             node.RelayChannel = req.RelayChannel.Trim();
             node.HasRelay = true;
             node.IsOn = false;
+            node.LastReportedAt = null;
+            node.RunStartedAt = null;
             node.ControlMode = "manual";
         }
         if (!string.IsNullOrWhiteSpace(req.ParamDefaultsJson))
@@ -263,6 +267,8 @@ public class RasFlowService : IRasFlowService
             throw AppException.BadRequest("Node has no relay.");
 
         var cmd = (req.Command ?? "").Trim().ToLowerInvariant();
+        if (cmd == "toggle" && !node.LastReportedAt.HasValue)
+            throw AppException.Conflict("Chưa biết trạng thái relay; hãy chọn bật hoặc tắt rõ ràng.");
         bool? desired = cmd switch
         {
             "on" or "start" or "open" => true,
@@ -276,8 +282,8 @@ public class RasFlowService : IRasFlowService
         if (desired.HasValue && (node.RelayDeviceId is null || string.IsNullOrWhiteSpace(node.RelayChannel)))
             throw AppException.Conflict("Node chưa được gán controller và channel.");
 
+        // Tracked by EF; write only the control-mode property, never a stale observation.
         node.ControlMode = cmd == "auto" ? "auto" : "manual";
-        _uow.RasComponents.Update(node);
         var title = desired.HasValue
             ? $"Yêu cầu {(desired.Value ? "bật" : "tắt")} {node.Name}"
             : $"Chuyển {node.Name} sang {node.ControlMode}";
@@ -454,7 +460,8 @@ public class RasFlowService : IRasFlowService
                 {
                     IsOnline = online,
                     ConnectionLabel = online ? "Online" : "Offline",
-                    IsOn = online ? mapped.IsOn : null,
+                    IsOn = online && component.LastReportedAt.HasValue ? mapped.IsOn : null,
+                    LastReportedAt = component.LastReportedAt,
                     DesiredIsOn = command?.Command switch { "on" => true, "off" or "alloff" => false, _ => null },
                     CommandStatus = command is null ? null : RelayCommandStatus(command, component),
                     CommandId = command?.Id
@@ -517,7 +524,7 @@ public class RasFlowService : IRasFlowService
             metric.label,
             metric.secondary,
             c.HasRelay,
-            c.HasRelay ? c.IsOn : null,
+            c.HasRelay && c.LastReportedAt.HasValue ? c.IsOn : null,
             online,
             online ? "Online" : "Offline",
             c.ControlMode,
@@ -604,16 +611,18 @@ public class RasFlowService : IRasFlowService
             if (rule is null)
                 continue;
 
-            var wantOn = pump.IsOn;
+            bool? desired = null;
             if (rule.OffSensor is not null
                 && latest.TryGetValue(rule.OffSensor, out var offVal)
                 && offVal == rule.OffValue)
-                wantOn = false;
+                desired = false;
             else if (rule.OnSensor is not null
                      && latest.TryGetValue(rule.OnSensor, out var onVal)
                      && onVal == rule.OnValue)
-                wantOn = true;
+                desired = true;
 
+            if (!desired.HasValue) continue;
+            var wantOn = desired.Value;
             var device = await _uow.Devices.GetByIdAsync(deviceId, ct);
             if (device is null || device.Status != DeviceStatus.Online
                 || device.EdgeState is not ("Approved" or "Online"))
@@ -628,8 +637,8 @@ public class RasFlowService : IRasFlowService
                     : pending.Command is "off" or "alloff" ? false : (bool?)null;
                 if (pendingTarget == wantOn) continue;
             }
-            if (wantOn == pump.IsOn && pending is null) continue;
-            if (wantOn == pump.IsOn && pending is not null
+            if (pump.LastReportedAt.HasValue && wantOn == pump.IsOn && pending is null) continue;
+            if (pump.LastReportedAt.HasValue && wantOn == pump.IsOn && pending is not null
                 && pending.Status is not ("pending" or "delivered")) continue;
             await EnqueueRelayAsync(pump, wantOn, null, ct);
         }
@@ -655,9 +664,8 @@ public class RasFlowService : IRasFlowService
         {
             bool? target = command.Command == "on" ? true
                 : command.Command is "off" or "alloff" ? false : null;
-            // LastCommandAt is updated by relay-state, not by requests.
             return target.HasValue && target.Value == component.IsOn
-                && component.LastCommandAt >= command.CreatedAt
+                && component.LastReportedAt >= command.CreatedAt
                 ? "confirmed" : "awaiting_report";
         }
         return command.Status;
@@ -730,7 +738,8 @@ public class RasFlowService : IRasFlowService
     private static RasComponentDto MapComponent(RasComponent c) =>
         new(c.Id, c.WaterSystemId, c.Code, c.Name, c.Type, c.Status, c.Position, c.Capacity,
             c.Description, c.NodeType, c.IconKey, c.RelayDeviceId, c.RelayChannel,
-            c.ParamDefaultsJson, c.HasRelay, c.IsOn, c.ControlMode);
+            c.ParamDefaultsJson, c.HasRelay,
+            c.LastReportedAt.HasValue ? c.IsOn : null, c.ControlMode, c.LastReportedAt);
 
     private static WaterFlowDto MapFlow(WaterFlow f) =>
         new(f.Id, f.WaterSystemId, f.FromComponentId, f.ToComponentId, f.FlowRate, f.Status, f.SortOrder);
