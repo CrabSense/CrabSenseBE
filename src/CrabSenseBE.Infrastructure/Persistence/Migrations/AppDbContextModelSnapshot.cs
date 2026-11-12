@@ -1251,6 +1251,9 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.Property<string>("Email")
                         .HasColumnType("text");
 
+                    b.Property<Guid?>("FarmingAreaId")
+                        .HasColumnType("uuid");
+
                     b.Property<bool>("IsActive")
                         .HasColumnType("boolean");
 
@@ -1268,6 +1271,8 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                         .HasColumnType("timestamp with time zone");
 
                     b.HasKey("Id");
+
+                    b.HasIndex("FarmingAreaId");
 
                     b.ToTable("Customers", "be");
                 });
@@ -5254,6 +5259,14 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.Navigation("Areas");
 
                     b.Navigation("Crabs");
+                });
+
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.Customer", b =>
+                {
+                    b.HasOne("CrabSenseBE.Domain.Entities.FarmingArea", null)
+                        .WithMany()
+                        .HasForeignKey("FarmingAreaId")
+                        .OnDelete(DeleteBehavior.Restrict);
                 });
 
             modelBuilder.Entity("CrabSenseBE.Domain.Entities.Customer", b =>

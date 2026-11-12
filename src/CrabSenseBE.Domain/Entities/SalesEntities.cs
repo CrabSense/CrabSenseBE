@@ -6,6 +6,8 @@ namespace CrabSenseBE.Domain.Entities;
 /// <summary>Khách hàng — MOD-SALES</summary>
 public class Customer : BaseEntity
 {
+    // Null only for legacy customers whose ownership cannot be established safely.
+    public Guid? FarmingAreaId { get; set; }
     public string Name { get; set; } = string.Empty;
     public string? Phone { get; set; }
     public string? Email { get; set; }

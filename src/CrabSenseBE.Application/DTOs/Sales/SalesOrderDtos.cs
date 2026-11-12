@@ -7,14 +7,17 @@ public record CustomerDto(
     string? Email,
     string? Address,
     string CustomerType,
-    bool IsActive);
+    bool IsActive,
+    Guid? FarmingAreaId = null);
 
 public record UpsertCustomerRequest(
     string Name,
     string? Phone = null,
     string? Email = null,
     string? Address = null,
-    string? CustomerType = null);
+    string? CustomerType = null,
+    Guid? FarmingAreaId = null,
+    Guid? CustomerId = null);
 
 public record SalesOrderLineDto(
     Guid Id,
