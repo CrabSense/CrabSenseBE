@@ -136,7 +136,9 @@ public record StorageUsageItemDto(string Category, long Bytes, int Files);
 
 public record StorageUsagePointDto(DateTime Day, long Bytes);
 
-public record BackupScheduleDto(bool Enabled, string Frequency, string BackupTime, int RetentionDays);
+public record BackupScheduleDto(bool Enabled, string Frequency, string BackupTime, int RetentionDays,
+    DateTime? LastAttemptSlotUtc = null, DateTime? LastCompletedAtUtc = null,
+    string? LastResult = null, string? LastBackupFile = null);
 
 public record SecurityOverviewDto(
     int FailedLogins,

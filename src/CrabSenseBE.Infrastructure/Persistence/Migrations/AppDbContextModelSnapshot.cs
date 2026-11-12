@@ -463,6 +463,11 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                         .IsRequired()
                         .HasColumnType("text");
 
+                    b.Property<DateTime?>("LastAttemptSlotUtc").HasColumnType("timestamp with time zone");
+                    b.Property<DateTime?>("LastCompletedAtUtc").HasColumnType("timestamp with time zone");
+                    b.Property<string>("LastResult").HasColumnType("text");
+                    b.Property<string>("LastBackupFile").HasColumnType("text");
+
                     b.Property<int>("RetentionDays")
                         .HasColumnType("integer");
 

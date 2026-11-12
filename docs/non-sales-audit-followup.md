@@ -19,3 +19,7 @@ FE/App must implement barcode selection, reconcile UI, and render 501 for media 
 ## Farm Settings ownership
 
 Migration 20261112130000_ScopeFarmSettingsToArea adds nullable FarmingAreaId, FK, and unique per-area key index. Existing global rows stay unassigned, preserved, and hidden from area-scoped APIs because no owner evidence exists. A Farm Admin assigned exactly one area may omit the area for backward compatibility; multi-area admins must specify farmingAreaId for single-key read/write/delete. List returns only assigned areas, optionally filtered. Technical settings remain excluded. Legacy values must be reviewed by the owner before recreating scoped settings; no automatic reassignment.
+
+## Scheduled backup
+
+Migration 20261112140000_TrackScheduledBackupRuns adds LastAttemptSlotUtc, LastCompletedAtUtc, LastResult and LastBackupFile. Legacy enabled schedules are disabled until SA explicitly enables. Daily/Weekly (Monday) at HH:mm in Farm:TimeZone; current-period catch-up once, persisted atomic claim prevents duplicate slot; failure is recorded, next slot retries. Backup uses existing pg_dump and validates with pg_restore; Linux directory must be 0700, files 0600; retention only removes API-owned crabsense_be_ archives, never predeploy backups. No automatic restore or scheduled hardware activity. An interrupted Started slot is not retried automatically; next scheduled slot can run. Test runtime backup with staging credentials before enabling in production.

@@ -18,8 +18,7 @@ namespace CrabSenseBE.Infrastructure.Services;
 /// nên máy/container cần pg_dump >= 17 (pg_dump cũ hơn sẽ báo version mismatch).
 /// Đặt thư mục chứa pg_dump qua cấu hình "Backup:PgBin" nếu không có trong PATH.
 ///
-/// ponytail: không chạy nền / không lên lịch. Đây là thao tác admin chủ động
-/// trước khi sửa dữ liệu — thêm scheduler khi thực sự cần.
+/// Manual and scheduled backup share one operation lock and archive validation.
 /// </summary>
 public class DatabaseBackupService : IDatabaseBackupService
 {
@@ -100,7 +99,7 @@ public class DatabaseBackupService : IDatabaseBackupService
         try
         {
             var result = await CreateCoreAsync(ct);
-            ApplyRetention(result.Info.FileName);
+            ApplyRetention(result.Info.FileName, _retentionDays);
             return result;
         }
         finally
@@ -109,9 +108,29 @@ public class DatabaseBackupService : IDatabaseBackupService
         }
     }
 
+    public async Task<DatabaseBackupResult> CreateScheduledAsync(int retentionDays, CancellationToken ct = default)
+    {
+        await _operationLock.WaitAsync(ct);
+        try
+        {
+            var result = await CreateCoreAsync(ct);
+            ApplyRetention(result.Info.FileName, Math.Clamp(retentionDays, 1, 3650));
+            return result;
+        }
+        finally { _operationLock.Release(); }
+    }
+
     private async Task<DatabaseBackupResult> CreateCoreAsync(CancellationToken ct)
     {
-        Directory.CreateDirectory(_directory);
+        if (OperatingSystem.IsWindows()) Directory.CreateDirectory(_directory);
+        else
+        {
+            Directory.CreateDirectory(_directory, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            var mode = File.GetUnixFileMode(_directory);
+            if ((mode & (UnixFileMode.GroupRead | UnixFileMode.GroupWrite | UnixFileMode.GroupExecute |
+                         UnixFileMode.OtherRead | UnixFileMode.OtherWrite | UnixFileMode.OtherExecute)) != 0)
+                throw new InvalidOperationException("Backup directory must be private (0700).");
+        }
         EnsureFreeSpace();
         var pgDump = ResolveTool("pg_dump");
 
@@ -134,7 +153,17 @@ public class DatabaseBackupService : IDatabaseBackupService
         };
 
         var sw = Stopwatch.StartNew();
-        var (exitCode, _, stdErr) = await RunAsync(pgDump, args, ct);
+        int exitCode; string stdErr;
+        try
+        {
+            if (!OperatingSystem.IsWindows())
+            {
+                using (File.Open(path, FileMode.CreateNew, FileAccess.Write, FileShare.None)) { }
+                File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+            }
+            (exitCode, _, stdErr) = await RunAsync(pgDump, args, ct);
+        }
+        catch { TryDelete(path); throw; }
         sw.Stop();
 
         if (exitCode != 0)
@@ -150,6 +179,8 @@ public class DatabaseBackupService : IDatabaseBackupService
             throw new InvalidOperationException("pg_dump báo hoàn tất nhưng file backup trống hoặc quá nhỏ.");
         }
 
+        try { await ValidateArchiveAsync(ResolveTool("pg_restore"), path, ct); }
+        catch { TryDelete(path); throw; }
         var info = Describe(path);
         _logger.LogInformation(
             "Đã tạo backup DB {FileName} ({SizeBytes} bytes) trong {Seconds:0.0}s",
@@ -454,13 +485,14 @@ public class DatabaseBackupService : IDatabaseBackupService
         }
     }
 
-    private void ApplyRetention(string newestFile)
+    private void ApplyRetention(string newestFile, int retentionDays)
     {
         if (!Directory.Exists(_directory)) return;
-        var cutoff = DateTime.UtcNow.AddDays(-_retentionDays);
+        var cutoff = DateTime.UtcNow.AddDays(-retentionDays);
         var files = Directory.EnumerateFiles(
                 _directory, $"*{BackupExtension}", SearchOption.TopDirectoryOnly)
-            .Where(path => SafeFileName.IsMatch(Path.GetFileName(path)))
+            .Where(path => SafeFileName.IsMatch(Path.GetFileName(path))
+                && Path.GetFileName(path).StartsWith("crabsense_be_", StringComparison.Ordinal))
             .Select(path => new FileInfo(path))
             .OrderByDescending(info => info.LastWriteTimeUtc)
             .ToList();

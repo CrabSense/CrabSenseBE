@@ -491,23 +491,24 @@ public class SystemPlatformService : ISystemPlatformService
 
     public async Task<ApiResponse<BackupScheduleDto>> GetBackupScheduleAsync(CancellationToken ct = default)
     {
-        var row = await _db.BackupScheduleSettings.AsNoTracking().FirstOrDefaultAsync(ct);
+        var row = await _db.BackupScheduleSettings.AsNoTracking().OrderBy(x => x.CreatedAt).ThenBy(x => x.Id).FirstOrDefaultAsync(ct);
         return ApiResponse<BackupScheduleDto>.Ok(row is null
             ? new BackupScheduleDto(false, "Daily", "02:00", 30)
-            : new BackupScheduleDto(row.Enabled, row.Frequency, row.BackupTime, row.RetentionDays));
+            : new BackupScheduleDto(row.Enabled, row.Frequency, row.BackupTime, row.RetentionDays,
+                row.LastAttemptSlotUtc, row.LastCompletedAtUtc, row.LastResult, row.LastBackupFile));
     }
 
     public async Task<ApiResponse<BackupScheduleDto>> UpdateBackupScheduleAsync(
         BackupScheduleDto request, Guid? userId, string? ip, CancellationToken ct = default)
     {
-        if (request.Enabled)
-            throw AppException.BadRequest(
-                "Backup scheduler chưa được triển khai. Không thể bật lịch để tránh hiển thị trạng thái sai.");
-        if (request.RetentionDays < 1)
-            throw AppException.BadRequest("RetentionDays phải lớn hơn 0.");
-        if (!TimeOnly.TryParse(request.BackupTime, out _))
+        if (request.RetentionDays is < 1 or > 3650)
+            throw AppException.BadRequest("RetentionDays phải trong khoảng 1–3650.");
+        if (!TimeOnly.TryParseExact(request.BackupTime, "HH:mm", System.Globalization.CultureInfo.InvariantCulture,
+                System.Globalization.DateTimeStyles.None, out _))
             throw AppException.BadRequest("BackupTime phải có định dạng HH:mm.");
-        var row = await _db.BackupScheduleSettings.FirstOrDefaultAsync(ct);
+        if (request.Frequency is not ("Daily" or "Weekly"))
+            throw AppException.BadRequest("Frequency phải là Daily hoặc Weekly (thứ Hai).");
+        var row = await _db.BackupScheduleSettings.OrderBy(x => x.CreatedAt).ThenBy(x => x.Id).FirstOrDefaultAsync(ct);
         if (row is null)
         {
             row = new BackupScheduleSetting();
@@ -519,7 +520,8 @@ public class SystemPlatformService : ISystemPlatformService
         row.RetentionDays = request.RetentionDays;
         await AuditAsync(userId, "UpdateBackupSchedule", "BackupSchedule", row.Id, request.BackupTime, ip, ct);
         await _db.SaveChangesAsync(ct);
-        return ApiResponse<BackupScheduleDto>.Ok(request);
+        return ApiResponse<BackupScheduleDto>.Ok(new BackupScheduleDto(row.Enabled, row.Frequency, row.BackupTime, row.RetentionDays,
+            row.LastAttemptSlotUtc, row.LastCompletedAtUtc, row.LastResult, row.LastBackupFile));
     }
 
     public async Task<ApiResponse<SecurityOverviewDto>> GetSecurityOverviewAsync(CancellationToken ct = default)
