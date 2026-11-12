@@ -135,7 +135,7 @@ VALUES ('60000000-0000-0000-0000-000000000003','legacy-esp','on','1','pending',n
     if ($cleanHistory -ne $legacyHistory) { throw "Clean and upgraded migration history differ." }
     # Test the actual migrated EF schema (not a handcrafted fixture schema).
     Invoke-Psql "clean_migration" @'
-DO $
+DO $$
 DECLARE
     admin_id uuid := '70000000-0000-0000-0000-000000000001';
     manager_id uuid := '70000000-0000-0000-0000-000000000002';
@@ -204,7 +204,7 @@ BEGIN
     IF EXISTS (SELECT 1 FROM be."EdgeCommands" WHERE "DeviceCode"='test-esp' AND "Id"<>cmd_alloff
         AND "Status" IN ('pending','delivered'))
         THEN RAISE EXCEPTION 'Alloff did not invalidate older commands'; END IF;
-END $;
+END $$;
 '@ | Out-Null
     Write-Output "AREA_AND_EDGE_SCHEMA_TESTS_PASSED=1"
     Write-Output "CLEAN_MIGRATION_PASSED=1"
