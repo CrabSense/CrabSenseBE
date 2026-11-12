@@ -236,9 +236,11 @@ public sealed class AlertThresholdPermissionTests : IAsyncLifetime
 
         var updated = await service.UpdateRuleAsync(
             "sensor_threshold",
-            new UpdateNotificationRuleRequest(IsEnabled: false));
-        Assert.False(rule.IsEnabled);
+            new UpdateNotificationRuleRequest(IsEnabled: false, FarmingAreaId: AreaA));
+        Assert.True(rule.IsEnabled);
         Assert.True(updated.Success);
+        Assert.False(updated.Data!.IsEnabled);
+        Assert.Equal(AreaA, updated.Data.FarmingAreaId);
     }
 
     private Task<HttpResponseMessage> Send(string role, Guid userId, HttpMethod method, string path, string? json)
