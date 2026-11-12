@@ -23,12 +23,14 @@ public class TrainingDataService : ITrainingDataService
             throw AppException.BadRequest("CrabId is required.");
         var crab = await _uow.Crabs.GetByIdAsync(request.CrabId, ct)
             ?? throw AppException.NotFound("Crab");
-        var boxId = await ValidateCrabBoxAsync(crab, request.BoxId, ct);
+        var fedAt = request.FedAt ?? DateTime.UtcNow;
+        var boxId = await ValidateCrabBoxAtAsync(
+            crab, request.BoxId, fedAt, ct);
 
         var entity = new FeedingEvent
         {
             CrabId = request.CrabId, BoxId = boxId,
-            FedAt = request.FedAt ?? DateTime.UtcNow,
+            FedAt = fedAt,
             FoodType = request.FoodType, InitialFoodGram = request.InitialFoodGram,
             Notes = request.Notes, CreatedBy = userId
         };
@@ -44,7 +46,9 @@ public class TrainingDataService : ITrainingDataService
             throw AppException.BadRequest("CrabId is required.");
         var crab = await _uow.Crabs.GetByIdAsync(request.CrabId, ct)
             ?? throw AppException.NotFound("Crab");
-        var boxId = await ValidateCrabBoxAsync(crab, request.BoxId, ct);
+        var observedAt = request.ObservedAt ?? DateTime.UtcNow;
+        var boxId = await ValidateCrabBoxAtAsync(
+            crab, request.BoxId, observedAt, ct);
         if (request.FeedingEventId is Guid feedingId)
         {
             var feeding = await _uow.FeedingEvents.GetByIdAsync(feedingId, ct)
@@ -58,7 +62,7 @@ public class TrainingDataService : ITrainingDataService
         {
             CrabId = request.CrabId, BoxId = boxId,
             FeedingEventId = request.FeedingEventId,
-            ObservedAt = request.ObservedAt ?? DateTime.UtcNow,
+            ObservedAt = observedAt,
             DurationSeconds = request.DurationSeconds,
             ObservationType = string.IsNullOrWhiteSpace(request.ObservationType)
                 ? "AFTER_FEEDING" : request.ObservationType.Trim().ToUpperInvariant(),
@@ -81,7 +85,8 @@ public class TrainingDataService : ITrainingDataService
                 ?? throw AppException.NotFound("FeedingEvent");
             var crab = await _uow.Crabs.GetByIdAsync(feeding.CrabId, ct)
                 ?? throw AppException.NotFound("Crab");
-            _ = await ValidateCrabBoxAsync(crab, feeding.BoxId, ct);
+            _ = await ValidateCrabBoxAtAsync(
+                crab, feeding.BoxId, feeding.FedAt, ct);
         }
         else if (request.ObservationEventId is Guid observationId)
         {
@@ -89,7 +94,8 @@ public class TrainingDataService : ITrainingDataService
                 ?? throw AppException.NotFound("ObservationEvent");
             var crab = await _uow.Crabs.GetByIdAsync(observation.CrabId, ct)
                 ?? throw AppException.NotFound("Crab");
-            _ = await ValidateCrabBoxAsync(crab, observation.BoxId, ct);
+            _ = await ValidateCrabBoxAtAsync(
+                crab, observation.BoxId, observation.ObservedAt, ct);
         }
         var entity = new TrainingLabel
         {
@@ -110,17 +116,37 @@ public class TrainingDataService : ITrainingDataService
     {
         var crab = await _uow.Crabs.GetByIdAsync(crabId, ct)
             ?? throw AppException.NotFound("Crab");
-        _ = await ValidateCrabBoxAsync(crab, crab.BoxId, ct);
         var feedings = (await _uow.FeedingEvents.FindAsync(x => x.CrabId == crabId, ct))
             .OrderByDescending(x => x.FedAt).ToList();
-        var observations = await _uow.ObservationEvents.FindAsync(x => x.CrabId == crabId, ct);
-        var labels = await _uow.TrainingLabels.GetAllAsync(ct);
+        var observations = (await _uow.ObservationEvents.FindAsync(
+                x => x.CrabId == crabId, ct))
+            .ToList();
+        foreach (var boxId in feedings.Select(item => item.BoxId)
+                     .Concat(observations.Select(item => item.BoxId))
+                     .Where(id => id.HasValue)
+                     .Select(id => id!.Value)
+                     .Distinct())
+            await _areas.EnsureBoxAsync(boxId, manage: false, ct);
+
+        var feedingIds = feedings.Select(item => item.Id).ToHashSet();
+        var observationIds = observations.Select(item => item.Id).ToHashSet();
+        var labels = feedingIds.Count == 0 && observationIds.Count == 0
+            ? []
+            : (await _uow.TrainingLabels.FindAsync(
+                label => (label.FeedingEventId != null
+                          && feedingIds.Contains(label.FeedingEventId.Value))
+                         || (label.ObservationEventId != null
+                             && observationIds.Contains(
+                                 label.ObservationEventId.Value)),
+                ct)).ToList();
         var result = feedings.Select(feed =>
         {
             var observation = observations.Where(x => x.FeedingEventId == feed.Id)
                 .OrderBy(x => x.ObservedAt).FirstOrDefault();
-            var label = labels.Where(x => x.FeedingEventId == feed.Id ||
-                    x.ObservationEventId == observation?.Id)
+            var label = labels.Where(x =>
+                    x.FeedingEventId == feed.Id
+                    || (observation is not null
+                        && x.ObservationEventId == observation.Id))
                 .OrderByDescending(x => x.LabeledAt).FirstOrDefault();
             return new TrainingDataDto(feed.Id, observation?.Id, feed.CrabId, feed.BoxId,
                 feed.InitialFoodGram, label?.ConsumptionLevel, label?.Ate,
@@ -130,16 +156,40 @@ public class TrainingDataService : ITrainingDataService
         return ApiResponse<IReadOnlyList<TrainingDataDto>>.Ok(result);
     }
 
-    private async Task<Guid> ValidateCrabBoxAsync(
+    private async Task<Guid> ValidateCrabBoxAtAsync(
         Crab crab,
         Guid? requestedBoxId,
+        DateTime eventAt,
         CancellationToken ct)
     {
-        if (crab.BoxId is not Guid currentBoxId || currentBoxId == Guid.Empty)
-            throw AppException.Conflict("Crab is not currently assigned to a box.");
-        if (requestedBoxId.HasValue && requestedBoxId.Value != currentBoxId)
-            throw AppException.Conflict("BoxId does not match the crab's current box.");
-        await _areas.EnsureBoxAsync(currentBoxId, manage: false, ct);
-        return currentBoxId;
+        var effectiveAt = eventAt.Kind == DateTimeKind.Unspecified
+            ? DateTime.SpecifyKind(eventAt, DateTimeKind.Utc)
+            : eventAt.ToUniversalTime();
+        Guid? evidenceBoxId;
+        if (effectiveAt >= DateTime.UtcNow.AddMinutes(-5))
+        {
+            evidenceBoxId = crab.BoxId;
+        }
+        else
+        {
+            var allocations = await _uow.CrabBoxAllocations.FindAsync(
+                allocation => allocation.CrabId == crab.Id
+                    && allocation.StartTime <= effectiveAt
+                    && (allocation.EndTime == null
+                        || allocation.EndTime >= effectiveAt),
+                ct) ?? [];
+            evidenceBoxId = allocations
+                .OrderByDescending(item => item.StartTime)
+                .Select(item => (Guid?)item.BoxId)
+                .FirstOrDefault();
+        }
+        if (evidenceBoxId is not Guid boxId || boxId == Guid.Empty)
+            throw AppException.Conflict(
+                "Không có lịch sử Box hợp lệ tại thời điểm sự kiện.");
+        if (requestedBoxId.HasValue && requestedBoxId.Value != boxId)
+            throw AppException.Conflict(
+                "BoxId không khớp lịch sử vị trí cua tại thời điểm sự kiện.");
+        await _areas.EnsureBoxAsync(boxId, manage: false, ct);
+        return boxId;
     }
 }

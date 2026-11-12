@@ -135,8 +135,7 @@ public class AlertService : IAlertService
         var cutoff = DateTime.UtcNow.AddDays(-days);
         var items = await _uow.Alerts.FindAsync(
             a => (a.Status == AlertStatus.Resolved
-                    || a.Status == AlertStatus.Recovered
-                    || a.Status == AlertStatus.Acknowledged)
+                    || a.Status == AlertStatus.Recovered)
                  && a.CreatedAt >= cutoff,
             ct);
         items = await FilterByFarmingAreaAsync(items, farmingAreaId, ct);
@@ -169,6 +168,11 @@ public class AlertService : IAlertService
         var alert = await _uow.Alerts.GetByIdAsync(id, ct)
             ?? throw AppException.NotFound("Alert");
         await EnsureAlertAreaAsync(alert, ct);
+        if (alert.Status is AlertStatus.Resolved or AlertStatus.Recovered)
+            throw AppException.Conflict("Không thể acknowledge sự cố đã đóng.");
+        if (alert.Status == AlertStatus.Acknowledged)
+            return ApiResponse<AlertDto>.Ok(
+                (await MapAlertsAsync(new[] { alert }, ct)).First());
         var actorId = (await _areas.CurrentUserAsync(ct))?.Id;
         alert.Status = AlertStatus.Acknowledged;
         alert.AcknowledgedAt = DateTime.UtcNow;
@@ -187,6 +191,8 @@ public class AlertService : IAlertService
         var alert = await _uow.Alerts.GetByIdAsync(id, ct)
             ?? throw AppException.NotFound("Alert");
         await EnsureAlertAreaAsync(alert, ct);
+        if (alert.Status is AlertStatus.Resolved or AlertStatus.Recovered)
+            throw AppException.Conflict("Không thể xử lý lại sự cố đã đóng.");
         var actorId = (await _areas.CurrentUserAsync(ct))?.Id;
         alert.Status = AlertStatus.InProgress;
         alert.ProcessingStartedAt = DateTime.UtcNow;
@@ -210,6 +216,12 @@ public class AlertService : IAlertService
         var alert = await _uow.Alerts.GetByIdAsync(id, ct)
             ?? throw AppException.NotFound("Alert");
         await EnsureAlertAreaAsync(alert, ct);
+        if (!IsOpen(alert.Status))
+            throw AppException.Conflict("Sự cố đã được đóng.");
+        if (req?.DeviceRecovered == true
+            && !await HasRecoveryEvidenceAsync(alert, ct))
+            throw AppException.Conflict(
+                "Không có bằng chứng telemetry phù hợp để xác nhận thiết bị đã phục hồi.");
         var actorId = (await _areas.CurrentUserAsync(ct))?.Id;
         alert.Status = req?.DeviceRecovered == true ? AlertStatus.Recovered : AlertStatus.Resolved;
         alert.ResolvedAt = DateTime.UtcNow;
@@ -247,10 +259,24 @@ public class AlertService : IAlertService
             thresholdId = thr.Id;
         }
 
-        if (value >= min && value <= max) return;
+        var areaSnapshot = await AreaOfWaterSystemAsync(
+            sensor.WaterSystemId, ct);
+        if (value >= min && value <= max)
+        {
+            await ClearAsync(
+                "threshold_violation",
+                "Sensor",
+                sensor.Id.ToString("N"),
+                ct);
+            return;
+        }
 
         var existing = (await _uow.Alerts.FindAsync(
-            a => a.SensorId == sensor.Id && a.Status == AlertStatus.Active, ct)).FirstOrDefault();
+            a => a.SensorId == sensor.Id
+                && a.IncidentType == "threshold_violation"
+                && (a.Status == AlertStatus.Active
+                    || a.Status == AlertStatus.Acknowledged
+                    || a.Status == AlertStatus.InProgress), ct)).FirstOrDefault();
         if (existing is not null)
         {
             existing.OccurrenceCount = Math.Max(1, existing.OccurrenceCount) + 1;
@@ -269,6 +295,13 @@ public class AlertService : IAlertService
         {
             SensorId = sensor.Id,
             AlertThresholdId = thresholdId,
+            FarmingAreaId = areaSnapshot,
+            IncidentType = "threshold_violation",
+            SourceType = "Sensor",
+            SourceId = sensor.Id.ToString("N"),
+            IncidentId = IncidentIdentity(
+                areaSnapshot, "threshold_violation", "Sensor",
+                sensor.Id.ToString("N")),
             Message = msg,
             Severity = severity,
             Status = AlertStatus.Active,
@@ -283,7 +316,7 @@ public class AlertService : IAlertService
             NotificationTypeCodes.SensorThreshold,
             alert.Message,
             alert.Id,
-            await AreaOfWaterSystemAsync(sensor.WaterSystemId, ct),
+            areaSnapshot,
             severity.ToString(),
             new Dictionary<string, string?>
             {
@@ -297,14 +330,24 @@ public class AlertService : IAlertService
     }
 
     public async Task RaiseOnceAsync(
+        string incidentType,
+        string sourceType,
+        string sourceId,
         string message,
         string? typeCode = null,
         Guid? areaId = null,
         IReadOnlyDictionary<string, string?>? tokens = null,
         CancellationToken ct = default)
     {
+        ValidateIncidentIdentity(incidentType, sourceType, sourceId);
         var existing = (await _uow.Alerts.FindAsync(
-            a => a.Status == AlertStatus.Active && a.Message == message, ct)).FirstOrDefault();
+            a => a.IncidentType == incidentType
+                && a.SourceType == sourceType
+                && a.SourceId == sourceId
+                && a.FarmingAreaId == areaId
+                && (a.Status == AlertStatus.Active
+                    || a.Status == AlertStatus.Acknowledged
+                    || a.Status == AlertStatus.InProgress), ct)).FirstOrDefault();
         if (existing is not null)
         {
             existing.OccurrenceCount = Math.Max(1, existing.OccurrenceCount) + 1;
@@ -316,6 +359,12 @@ public class AlertService : IAlertService
 
         var alert = new Alert
         {
+            FarmingAreaId = areaId,
+            IncidentType = incidentType,
+            SourceType = sourceType,
+            SourceId = sourceId,
+            IncidentId = IncidentIdentity(
+                areaId, incidentType, sourceType, sourceId),
             Message = message,
             Severity = AlertSeverity.Warning,
             Status = AlertStatus.Active,
@@ -329,13 +378,25 @@ public class AlertService : IAlertService
             nameof(AlertSeverity.Warning), tokens, ct);
     }
 
-    public async Task ClearAsync(string message, CancellationToken ct = default)
+    public async Task ClearAsync(
+        string incidentType,
+        string sourceType,
+        string sourceId,
+        CancellationToken ct = default)
     {
+        ValidateIncidentIdentity(incidentType, sourceType, sourceId);
         var existing = (await _uow.Alerts.FindAsync(
-            a => a.Status == AlertStatus.Active && a.Message == message, ct)).FirstOrDefault();
+            a => a.IncidentType == incidentType
+                && a.SourceType == sourceType
+                && a.SourceId == sourceId
+                && (a.Status == AlertStatus.Active
+                    || a.Status == AlertStatus.Acknowledged
+                    || a.Status == AlertStatus.InProgress), ct)
+            ?? []).FirstOrDefault();
         if (existing is null) return;
-        existing.Status = AlertStatus.Resolved;
+        existing.Status = AlertStatus.Recovered;
         existing.ResolvedAt = DateTime.UtcNow;
+        existing.ResolutionReason = "Telemetry returned to a safe state.";
         _uow.Alerts.Update(existing);
         await _uow.SaveChangesAsync(ct);
     }
@@ -350,9 +411,14 @@ public class AlertService : IAlertService
             s => s.IsActive && s.LastSeenAt != null && s.LastSeenAt < cutoff, ct);
         foreach (var sensor in sensors)
         {
+            var areaId = await AreaOfWaterSystemAsync(
+                sensor.WaterSystemId, ct);
             var existing = (await _uow.Alerts.FindAsync(
-                a => a.SensorId == sensor.Id && a.Status == AlertStatus.Active
-                     && a.Message.Contains("mất kết nối"), ct)).FirstOrDefault();
+                a => a.SensorId == sensor.Id
+                    && a.IncidentType == "sensor_disconnect"
+                    && (a.Status == AlertStatus.Active
+                        || a.Status == AlertStatus.Acknowledged
+                        || a.Status == AlertStatus.InProgress), ct)).FirstOrDefault();
             if (existing is not null)
             {
                 existing.OccurrenceCount = Math.Max(1, existing.OccurrenceCount) + 1;
@@ -364,17 +430,24 @@ public class AlertService : IAlertService
             var alert = new Alert
             {
                 SensorId = sensor.Id,
+                FarmingAreaId = areaId,
+                IncidentType = "sensor_disconnect",
+                SourceType = "Sensor",
+                SourceId = sensor.Id.ToString("N"),
                 Message = $"Cảm biến mất kết nối: {sensor.SensorCode} (>{timeoutMinutes} phút)",
                 Severity = AlertSeverity.Critical,
                 Status = AlertStatus.Active,
                 OccurrenceCount = 1,
-                LastOccurredAt = DateTime.UtcNow
+                LastOccurredAt = DateTime.UtcNow,
+                IncidentId = IncidentIdentity(
+                    areaId, "sensor_disconnect", "Sensor",
+                    sensor.Id.ToString("N"))
             };
             await _uow.Alerts.AddAsync(alert, ct);
             created++;
             await _notifications.NotifyAsync(
                 NotificationTypeCodes.SensorDisconnect, alert.Message, alert.Id,
-                await AreaOfWaterSystemAsync(sensor.WaterSystemId, ct),
+                areaId,
                 nameof(AlertSeverity.Critical),
                 new Dictionary<string, string?>
                 {
@@ -396,7 +469,12 @@ public class AlertService : IAlertService
             var kind = string.IsNullOrWhiteSpace(device.DeviceType) ? "thiết bị" : device.DeviceType;
             var msg = $"{kind} mất kết nối: {device.DeviceCode}";
             var existing = (await _uow.Alerts.FindAsync(
-                a => a.Status == AlertStatus.Active && a.Message == msg, ct)).FirstOrDefault();
+                a => a.IncidentType == "device_disconnect"
+                    && a.SourceType == "Device"
+                    && a.SourceId == device.Id.ToString("N")
+                    && (a.Status == AlertStatus.Active
+                        || a.Status == AlertStatus.Acknowledged
+                        || a.Status == AlertStatus.InProgress), ct)).FirstOrDefault();
             if (existing is not null)
             {
                 existing.OccurrenceCount = Math.Max(1, existing.OccurrenceCount) + 1;
@@ -407,12 +485,18 @@ public class AlertService : IAlertService
 
             var alert = new Alert
             {
+                FarmingAreaId = device.FarmingAreaId,
+                IncidentType = "device_disconnect",
+                SourceType = "Device",
+                SourceId = device.Id.ToString("N"),
                 Message = msg,
                 Severity = AlertSeverity.Critical,
                 Status = AlertStatus.Active,
                 OccurrenceCount = 1,
                 LastOccurredAt = DateTime.UtcNow,
-                IncidentId = $"INC-{DateTime.UtcNow:yyyyMMdd}-{device.DeviceCode}"
+                IncidentId = IncidentIdentity(
+                    device.FarmingAreaId, "device_disconnect", "Device",
+                    device.Id.ToString("N"))
             };
             await _uow.Alerts.AddAsync(alert, ct);
             created++;
@@ -436,15 +520,22 @@ public class AlertService : IAlertService
         {
             var message = $"Kiosk mất kết nối: {kiosk.Code} (>2 phút)";
             var active = (await _uow.Alerts.FindAsync(
-                a => a.Status == AlertStatus.Active && a.Message == message, ct))
+                a => a.IncidentType == "kiosk_disconnect"
+                    && a.SourceType == "Kiosk"
+                    && a.SourceId == kiosk.Id.ToString("N")
+                    && (a.Status == AlertStatus.Active
+                        || a.Status == AlertStatus.Acknowledged
+                        || a.Status == AlertStatus.InProgress), ct))
                 .FirstOrDefault();
 
             if (kiosk.LastSeenAt is not null && kiosk.LastSeenAt >= kioskCutoff)
             {
                 if (active is not null)
                 {
-                    active.Status = AlertStatus.Resolved;
+                    active.Status = AlertStatus.Recovered;
                     active.ResolvedAt = DateTime.UtcNow;
+                    active.ResolutionReason =
+                        "Kiosk heartbeat recovered.";
                     _uow.Alerts.Update(active);
                 }
                 continue;
@@ -456,12 +547,18 @@ public class AlertService : IAlertService
                 {
                     var alert = new Alert
                     {
+                        FarmingAreaId = kiosk.FarmingAreaId,
+                        IncidentType = "kiosk_disconnect",
+                        SourceType = "Kiosk",
+                        SourceId = kiosk.Id.ToString("N"),
                         Message = message,
                         Severity = AlertSeverity.Critical,
                         Status = AlertStatus.Active,
                         OccurrenceCount = 1,
                         LastOccurredAt = DateTime.UtcNow,
-                        IncidentId = $"INC-{DateTime.UtcNow:yyyyMMdd}-KIOSK-{kiosk.Code}"
+                        IncidentId = IncidentIdentity(
+                            kiosk.FarmingAreaId, "kiosk_disconnect",
+                            "Kiosk", kiosk.Id.ToString("N"))
                     };
                     await _uow.Alerts.AddAsync(alert, ct);
                     created++;
@@ -477,6 +574,23 @@ public class AlertService : IAlertService
                         }, ct);
                 }
             }
+        }
+
+        var openDisconnects = await _uow.Alerts.FindAsync(
+            alert => (alert.IncidentType == "sensor_disconnect"
+                      || alert.IncidentType == "device_disconnect")
+                     && (alert.Status == AlertStatus.Active
+                         || alert.Status == AlertStatus.Acknowledged
+                         || alert.Status == AlertStatus.InProgress),
+            ct);
+        foreach (var alert in openDisconnects)
+        {
+            if (!await HasRecoveryEvidenceAsync(alert, ct))
+                continue;
+            alert.Status = AlertStatus.Recovered;
+            alert.ResolvedAt = DateTime.UtcNow;
+            alert.ResolutionReason = "Heartbeat recovered.";
+            _uow.Alerts.Update(alert);
         }
 
         await _uow.SaveChangesAsync(ct);
@@ -514,10 +628,11 @@ public class AlertService : IAlertService
             .Select(s => s.Id)
             .ToHashSet();
 
-        // Keep sensor-scoped alerts for the area; also keep system/device alerts (no sensor).
         return items.Where(a =>
-            a.SensorId is null ||
-            (a.SensorId is Guid sid && sensorIds.Contains(sid)));
+            a.FarmingAreaId == areaId
+            || (a.FarmingAreaId is null
+                && a.SensorId is Guid sid
+                && sensorIds.Contains(sid)));
     }
 
     private async Task<List<AlertDto>> MapAlertsAsync(IEnumerable<Alert> alerts, CancellationToken ct)
@@ -543,6 +658,11 @@ public class AlertService : IAlertService
 
         var areaIds = waterSystems.Where(w => w.FarmingAreaId.HasValue)
             .Select(w => w.FarmingAreaId!.Value).Distinct().ToList();
+        areaIds.AddRange(list
+            .Where(alert => alert.FarmingAreaId.HasValue)
+            .Select(alert => alert.FarmingAreaId!.Value)
+            .Distinct()
+            .Where(id => !areaIds.Contains(id)));
         var areas = areaIds.Count == 0
             ? new List<FarmingArea>()
             : (await _uow.FarmingAreas.FindAsync(a => areaIds.Contains(a.Id), ct)).ToList();
@@ -553,10 +673,9 @@ public class AlertService : IAlertService
             : (await _uow.AlertThresholds.FindAsync(t => thresholdIds.Contains(t.Id), ct)).ToList();
         var thrMap = thresholds.ToDictionary(t => t.Id);
 
-        // Fallback thresholds by sensor type
-        var typeThresholds = (await _uow.AlertThresholds.FindAsync(t => t.IsActive, ct))
-            .GroupBy(t => t.SensorType, StringComparer.OrdinalIgnoreCase)
-            .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
+        var typeThresholds = (await _uow.AlertThresholds.FindAsync(
+                t => t.IsActive, ct))
+            .ToList();
 
         var result = new List<AlertDto>(list.Count);
         foreach (var a in list)
@@ -570,14 +689,22 @@ public class AlertService : IAlertService
                 wsMap.TryGetValue(wid, out ws);
 
             FarmingArea? area = null;
-            if (ws?.FarmingAreaId is Guid aid)
+            var snapshotAreaId = a.FarmingAreaId ?? ws?.FarmingAreaId;
+            if (snapshotAreaId is Guid aid)
                 areaMap.TryGetValue(aid, out area);
 
             AlertThreshold? thr = null;
             if (a.AlertThresholdId is Guid tid)
                 thrMap.TryGetValue(tid, out thr);
             if (thr is null && sensor is not null)
-                typeThresholds.TryGetValue(sensor.SensorType, out thr);
+                thr = PickThreshold(
+                    typeThresholds.Where(candidate =>
+                        string.Equals(
+                            candidate.SensorType,
+                            sensor.SensorType,
+                            StringComparison.OrdinalIgnoreCase)),
+                    snapshotAreaId,
+                    sensor.WaterSystemId);
 
             var min = sensor?.MinThreshold ?? thr?.MinValue;
             var max = sensor?.MaxThreshold ?? thr?.MaxValue;
@@ -605,7 +732,7 @@ public class AlertService : IAlertService
                 sensor?.SensorCode,
                 sensorType,
                 sensor?.Unit,
-                area?.Id,
+                snapshotAreaId,
                 area?.Name,
                 location,
                 min,
@@ -889,8 +1016,9 @@ public class AlertService : IAlertService
         var result = new Dictionary<Guid, Guid?>();
         foreach (var alert in alerts)
         {
-            Guid? area = null;
-            if (alert.SensorId is Guid sensorId
+            Guid? area = alert.FarmingAreaId;
+            if (area is null
+                && alert.SensorId is Guid sensorId
                 && sensorMap.TryGetValue(sensorId, out var sensor)
                 && sensor.WaterSystemId is Guid systemId
                 && areaBySystem.TryGetValue(systemId, out var found))
@@ -900,10 +1028,92 @@ public class AlertService : IAlertService
         return result;
     }
 
+    private async Task<bool> HasRecoveryEvidenceAsync(
+        Alert alert,
+        CancellationToken ct)
+    {
+        var cutoff = DateTime.UtcNow.AddMinutes(-5);
+        if (alert.IncidentType == "sensor_disconnect"
+            && alert.SensorId is Guid sensorId)
+        {
+            var sensor = await _uow.Sensors.GetByIdAsync(sensorId, ct);
+            return sensor?.IsActive == true
+                && sensor.LastSeenAt >= cutoff;
+        }
+        if (alert.IncidentType == "device_disconnect"
+            && Guid.TryParse(alert.SourceId, out var deviceId))
+        {
+            var device = await _uow.Devices.GetByIdAsync(deviceId, ct);
+            return device?.Status == DeviceStatus.Online
+                && device.LastSeenAt >= cutoff
+                && device.EdgeState is "Approved" or "Online";
+        }
+        if (alert.IncidentType == "kiosk_disconnect"
+            && Guid.TryParse(alert.SourceId, out var kioskId))
+        {
+            var kiosk = await _uow.FarmKiosks.GetByIdAsync(kioskId, ct);
+            return kiosk?.LastSeenAt >= DateTime.UtcNow.AddMinutes(-2);
+        }
+        if (alert.IncidentType == "threshold_violation"
+            && alert.SensorId is Guid thresholdSensorId)
+        {
+            var sensor = await _uow.Sensors.GetByIdAsync(
+                thresholdSensorId, ct);
+            if (sensor is null)
+                return false;
+            var threshold = alert.AlertThresholdId is Guid thresholdId
+                ? await _uow.AlertThresholds.GetByIdAsync(thresholdId, ct)
+                : null;
+            var min = sensor.MinThreshold ?? threshold?.MinValue;
+            var max = sensor.MaxThreshold ?? threshold?.MaxValue;
+            if (min is null || max is null)
+                return false;
+            var latest = (await _uow.WaterMeasurements.FindAsync(
+                    measurement => measurement.SensorId == sensor.Id, ct))
+                .OrderByDescending(measurement => measurement.MeasuredAt)
+                .FirstOrDefault();
+            return latest is not null
+                && latest.MeasuredAt >= cutoff
+                && latest.MeasuredAt <= DateTime.UtcNow.AddSeconds(5)
+                && latest.Value >= min
+                && latest.Value <= max;
+        }
+        return false;
+    }
+
+    private static bool IsOpen(AlertStatus status) =>
+        status is AlertStatus.Active
+            or AlertStatus.Acknowledged
+            or AlertStatus.InProgress;
+
+    private static void ValidateIncidentIdentity(
+        string incidentType,
+        string sourceType,
+        string sourceId)
+    {
+        if (string.IsNullOrWhiteSpace(incidentType)
+            || string.IsNullOrWhiteSpace(sourceType)
+            || string.IsNullOrWhiteSpace(sourceId))
+            throw AppException.BadRequest(
+                "IncidentType, SourceType và SourceId là bắt buộc.");
+    }
+
+    private static string IncidentIdentity(
+        Guid? areaId,
+        string incidentType,
+        string sourceType,
+        string sourceId) =>
+        $"INC:{areaId?.ToString("N") ?? "unknown"}:"
+        + $"{incidentType.Trim().ToLowerInvariant()}:"
+        + $"{sourceType.Trim().ToLowerInvariant()}:"
+        + sourceId.Trim().ToLowerInvariant();
+
     private static AlertThreshold? PickThreshold(
         IEnumerable<AlertThreshold> candidates, Guid? areaId, Guid? waterSystemId)
     {
-        var list = candidates.ToList();
+        var list = candidates
+            .Where(item => item.IsActive && item.MinValue < item.MaxValue)
+            .ToList();
         if (waterSystemId is Guid systemId)
         {
             var bySystem = list.FirstOrDefault(item => item.WaterSystemId == systemId);
@@ -914,8 +1124,9 @@ public class AlertService : IAlertService
             var byArea = list.FirstOrDefault(item => item.FarmingAreaId == area && item.WaterSystemId is null);
             if (byArea is not null) return byArea;
         }
-        return list.FirstOrDefault(item => item.FarmingAreaId is null && item.WaterSystemId is null)
-            ?? list.FirstOrDefault();
+        return list.FirstOrDefault(item =>
+            item.FarmingAreaId is null
+            && item.WaterSystemId is null);
     }
 
     private static AlertThresholdDto MapThreshold(AlertThreshold t) =>

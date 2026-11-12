@@ -6,6 +6,7 @@ using CrabSenseBE.Domain;
 using CrabSenseBE.Domain.Entities;
 using CrabSenseBE.Domain.Enums;
 using CrabSenseBE.Domain.Interfaces;
+using Microsoft.Extensions.Configuration;
 
 namespace CrabSenseBE.Application.Services;
 
@@ -14,12 +15,18 @@ public class RasFlowService : IRasFlowService
     private readonly IUnitOfWork _uow;
     private readonly IEdgeCommandService _edgeCommands;
     private readonly FarmAreaScope _areas;
+    private readonly IConfiguration? _configuration;
 
-    public RasFlowService(IUnitOfWork uow, IEdgeCommandService edgeCommands, ICurrentUserService? currentUser = null)
+    public RasFlowService(
+        IUnitOfWork uow,
+        IEdgeCommandService edgeCommands,
+        ICurrentUserService? currentUser = null,
+        IConfiguration? configuration = null)
     {
         _uow = uow;
         _edgeCommands = edgeCommands;
         _areas = new FarmAreaScope(uow, currentUser);
+        _configuration = configuration;
     }
 
     public async Task<ApiResponse<RasFlowDiagramDto>> GetDiagramByAreaAsync(Guid areaId, CancellationToken ct = default)
@@ -494,7 +501,8 @@ public class RasFlowService : IRasFlowService
             nodes.Count(n => n.HasRelay),
             nodes.Count(n => n.IsOnline != false),
             nodes.Count(n => n.HasRelay && n.IsOn == false),
-            nodes.Count(n => n.Status is "alarm" or "error" || n.IsOnline == false),
+            nodes.Count(n => n.Status is "alarm" or "error" or "unknown" or "unsafe"
+                || n.IsOnline == false),
             logs);
     }
 
@@ -582,6 +590,8 @@ public class RasFlowService : IRasFlowService
 
     public async Task ApplyAutoRelaysAsync(Guid deviceId, CancellationToken ct = default)
     {
+        var now = DateTime.UtcNow;
+        var device = await _uow.Devices.GetByIdAsync(deviceId, ct);
         var pumps = (await _uow.RasComponents.FindAsync(
             c => c.RelayDeviceId == deviceId
                  && c.HasRelay
@@ -591,43 +601,125 @@ public class RasFlowService : IRasFlowService
         if (pumps.Count == 0)
             return;
 
-        var sensors = (await _uow.Sensors.FindAsync(s => s.DeviceId == deviceId, ct)).ToList();
-        if (sensors.Count == 0)
-            return;
-
-        var latest = new Dictionary<string, decimal>(StringComparer.OrdinalIgnoreCase);
-        foreach (var sensor in sensors)
-        {
-            var reading = (await _uow.WaterMeasurements.FindAsync(m => m.SensorId == sensor.Id, ct))
-                .OrderByDescending(m => m.MeasuredAt)
-                .FirstOrDefault();
-            if (reading is not null)
-                latest[sensor.SensorCode] = reading.Value;
-        }
+        var controllerReady = device is not null
+            && device.Status == DeviceStatus.Online
+            && device.EdgeState is "Approved" or "Online";
+        var firmwareInterlockVerified = _configuration?.GetValue(
+            "RasAutomation:FirmwareInterlockVerified", false) ?? false;
+        var futureTolerance = TimeSpan.FromSeconds(Math.Clamp(
+            _configuration?.GetValue(
+                "RasAutomation:FutureTimestampToleranceSeconds", 5) ?? 5,
+            0,
+            60));
+        var relayReportTimeout = TimeSpan.FromSeconds(Math.Clamp(
+            _configuration?.GetValue(
+                "RasAutomation:RelayStateTimeoutSeconds", 30) ?? 30,
+            5,
+            300));
 
         foreach (var pump in pumps)
         {
             var rule = ReadAutoRule(pump.ParamDefaultsJson);
             if (rule is null)
+            {
+                SetAutomationStatus(pump, "unknown");
                 continue;
+            }
 
-            bool? desired = null;
-            if (rule.OffSensor is not null
-                && latest.TryGetValue(rule.OffSensor, out var offVal)
-                && offVal == rule.OffValue)
-                desired = false;
-            else if (rule.OnSensor is not null
-                     && latest.TryGetValue(rule.OnSensor, out var onVal)
-                     && onVal == rule.OnValue)
-                desired = true;
+            var waterSystem = await _uow.WaterSystems.GetByIdAsync(
+                pump.WaterSystemId, ct);
+            if (waterSystem?.FarmingAreaId is not Guid areaId
+                || device?.FarmingAreaId != areaId)
+            {
+                SetAutomationStatus(pump, "unsafe");
+                continue;
+            }
+            if (!controllerReady)
+            {
+                SetAutomationStatus(pump, "unsafe");
+                continue;
+            }
+            if (!firmwareInterlockVerified || !rule.FirmwareInterlock)
+            {
+                SetAutomationStatus(pump, "unsafe");
+                continue;
+            }
 
+            var requiredCodes = new[] { rule.OnSensor, rule.OffSensor }
+                .Where(code => !string.IsNullOrWhiteSpace(code))
+                .Select(code => code!)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            var sensors = (await _uow.Sensors.FindAsync(
+                    sensor => sensor.DeviceId == deviceId
+                        && sensor.IsActive
+                        && sensor.WaterSystemId == pump.WaterSystemId, ct))
+                .ToList();
+            var readings = new Dictionary<string, decimal>(
+                StringComparer.OrdinalIgnoreCase);
+            var evidenceInvalid = false;
+            foreach (var code in requiredCodes)
+            {
+                var sensor = sensors.FirstOrDefault(candidate =>
+                    string.Equals(
+                        candidate.SensorCode, code,
+                        StringComparison.OrdinalIgnoreCase));
+                if (sensor is null)
+                {
+                    evidenceInvalid = true;
+                    break;
+                }
+                var reading = (await _uow.WaterMeasurements.FindAsync(
+                        measurement => measurement.SensorId == sensor.Id, ct))
+                    .OrderByDescending(measurement => measurement.MeasuredAt)
+                    .FirstOrDefault();
+                var maxAge = SensorFreshness(sensor.SensorType);
+                if (reading is null
+                    || sensor.LastSeenAt is not DateTime sensorSeenAt
+                    || sensorSeenAt > now.Add(futureTolerance)
+                    || sensorSeenAt < now.Subtract(maxAge)
+                    || reading.MeasuredAt > now.Add(futureTolerance)
+                    || reading.MeasuredAt < now.Subtract(maxAge))
+                {
+                    evidenceInvalid = true;
+                    break;
+                }
+                readings[code] = reading.Value;
+            }
+            if (evidenceInvalid || readings.Count != requiredCodes.Length)
+            {
+                SetAutomationStatus(pump, "unknown");
+                continue;
+            }
+
+            var offTriggered = rule.OffSensor is not null
+                && readings.TryGetValue(rule.OffSensor, out var offVal)
+                && offVal == rule.OffValue;
+            var onTriggered = rule.OnSensor is not null
+                && readings.TryGetValue(rule.OnSensor, out var onVal)
+                && onVal == rule.OnValue;
+            if (offTriggered && onTriggered)
+            {
+                SetAutomationStatus(pump, "unsafe");
+                continue;
+            }
+
+            bool? desired = offTriggered ? false : onTriggered ? true : null;
             if (!desired.HasValue) continue;
             var wantOn = desired.Value;
-            var device = await _uow.Devices.GetByIdAsync(deviceId, ct);
-            if (device is null || device.Status != DeviceStatus.Online
-                || device.EdgeState is not ("Approved" or "Online"))
+            var pending = await LatestRelayCommandAsync(
+                device!.DeviceCode, pump.RelayChannel, ct);
+            if (pending?.Status == "acknowledged"
+                && (!pump.LastReportedAt.HasValue
+                    || pump.LastReportedAt < pending.CreatedAt))
+            {
+                SetAutomationStatus(
+                    pump,
+                    now - pending.CreatedAt >= relayReportTimeout
+                        ? "unsafe"
+                        : "unknown");
                 continue;
-            var pending = await LatestRelayCommandAsync(device.DeviceCode, pump.RelayChannel, ct);
+            }
             // Avoid queue flooding while the same target is still in flight.
             // A failed/expired request never changes the observed IsOn.
             if (pending is not null && pending.ExpiresAt > DateTime.UtcNow
@@ -640,8 +732,30 @@ public class RasFlowService : IRasFlowService
             if (pump.LastReportedAt.HasValue && wantOn == pump.IsOn && pending is null) continue;
             if (pump.LastReportedAt.HasValue && wantOn == pump.IsOn && pending is not null
                 && pending.Status is not ("pending" or "delivered")) continue;
+            SetAutomationStatus(pump, "active");
             await EnqueueRelayAsync(pump, wantOn, null, ct);
         }
+        await _uow.SaveChangesAsync(ct);
+    }
+
+    private TimeSpan SensorFreshness(string sensorType)
+    {
+        var configured = _configuration?.GetValue<int?>(
+            $"RasAutomation:SensorFreshnessSeconds:{sensorType}");
+        var fallback = _configuration?.GetValue(
+            "RasAutomation:DefaultSensorFreshnessSeconds", 30) ?? 30;
+        return TimeSpan.FromSeconds(Math.Clamp(
+            configured ?? fallback, 5, 3600));
+    }
+
+    private void SetAutomationStatus(
+        RasComponent component,
+        string status)
+    {
+        if (component.Status == status)
+            return;
+        component.Status = status;
+        _uow.RasComponents.Update(component);
     }
 
     private async Task<EdgeCommand?> LatestRelayCommandAsync(
@@ -694,7 +808,12 @@ public class RasFlowService : IRasFlowService
             request, areaId, "ras-auto-relay", ct);
     }
 
-    private sealed record AutoRule(string? OnSensor, decimal OnValue, string? OffSensor, decimal OffValue);
+    private sealed record AutoRule(
+        string? OnSensor,
+        decimal OnValue,
+        string? OffSensor,
+        decimal OffValue,
+        bool FirmwareInterlock);
 
     private static AutoRule? ReadAutoRule(string? json)
     {
@@ -710,7 +829,8 @@ public class RasFlowService : IRasFlowService
                 ReadString(root, "onSensor"),
                 ReadDecimal(root, "onValue", 1),
                 ReadString(root, "offSensor"),
-                ReadDecimal(root, "offValue", 1));
+                ReadDecimal(root, "offValue", 1),
+                ReadBool(root, "firmwareInterlock", false));
         }
         catch (JsonException)
         {
@@ -731,6 +851,20 @@ public class RasFlowService : IRasFlowService
         {
             JsonValueKind.Number => el.GetDecimal(),
             JsonValueKind.String when decimal.TryParse(el.GetString(), out var n) => n,
+            _ => fallback
+        };
+    }
+
+    private static bool ReadBool(JsonElement root, string name, bool fallback)
+    {
+        if (!root.TryGetProperty(name, out var el))
+            return fallback;
+        return el.ValueKind switch
+        {
+            JsonValueKind.True => true,
+            JsonValueKind.False => false,
+            JsonValueKind.String when bool.TryParse(el.GetString(), out var value)
+                => value,
             _ => fallback
         };
     }

@@ -169,6 +169,16 @@ public class WaterAnalysisService : IWaterAnalysisService
         var assay = Assays.FirstOrDefault(a => a.Analyte == analyte);
         if (assay is null || !assay.Configured)
             throw AppException.BadRequest($"Chỉ tiêu {analyte} chưa được cấu hình assay.");
+        var executionMode = string.Equals(
+            req?.ExecutionMode, "hardware",
+            StringComparison.OrdinalIgnoreCase)
+            ? "hardware"
+            : "simulation";
+        if (executionMode == "hardware")
+            throw new AppException(
+                "Hardware mode chưa được hỗ trợ: backend chưa có command dispatcher/outbox "
+                + "đã xác minh với firmware. Không tạo run hoặc giả lập Start thành công.",
+                501);
 
         var snapshot = await BuildAsync(areaId, ct);
         if (snapshot.Active is not null)
@@ -184,9 +194,6 @@ public class WaterAnalysisService : IWaterAnalysisService
         }
 
         var now = DateTime.UtcNow;
-        var executionMode = string.Equals(req?.ExecutionMode, "hardware", StringComparison.OrdinalIgnoreCase)
-            ? "hardware"
-            : "simulation";
         var source = NormalizeSource(req?.SampleSource) ?? snapshot.Sample?.SampleSource ?? "RAS_RETURN";
         var hardware = await ResolveHardwareAsync(areaId, ct);
         var actor = await ResolveUserNameAsync(ct);

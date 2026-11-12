@@ -24,6 +24,14 @@ public class Alert : BaseEntity
 {
     public Guid? SensorId { get; set; }
     public Guid? AlertThresholdId { get; set; }
+    /// <summary>Khu được chụp tại thời điểm phát sinh. Null = legacy chưa đủ bằng chứng.</summary>
+    public Guid? FarmingAreaId { get; set; }
+    /// <summary>threshold_violation | sensor_disconnect | device_disconnect | kiosk_disconnect | tank_overflow | ...</summary>
+    public string? IncidentType { get; set; }
+    /// <summary>Sensor | Device | Kiosk | RasComponent.</summary>
+    public string? SourceType { get; set; }
+    /// <summary>Identity bất biến của nguồn, thường là Guid dạng N.</summary>
+    public string? SourceId { get; set; }
     public string Message { get; set; } = string.Empty;
     public AlertSeverity Severity { get; set; } = AlertSeverity.Warning;
     public AlertStatus Status { get; set; } = AlertStatus.Active;

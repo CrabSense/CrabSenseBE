@@ -35,12 +35,19 @@ public interface IAlertService
 
     /// <summary>Tạo cảnh báo và đẩy thông báo một lần cho đến khi được xóa.</summary>
     Task RaiseOnceAsync(
+        string incidentType,
+        string sourceType,
+        string sourceId,
         string message,
         string? typeCode = null,
         Guid? areaId = null,
         IReadOnlyDictionary<string, string?>? tokens = null,
         CancellationToken ct = default);
 
-    /// <summary>Đóng cảnh báo đang mở cùng nội dung, không gửi thêm thông báo.</summary>
-    Task ClearAsync(string message, CancellationToken ct = default);
+    /// <summary>Đóng đúng sự cố đang mở theo source identity, không dựa vào message.</summary>
+    Task ClearAsync(
+        string incidentType,
+        string sourceType,
+        string sourceId,
+        CancellationToken ct = default);
 }
