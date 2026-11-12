@@ -6,6 +6,7 @@ using CrabSenseBE.Domain.Entities;
 using CrabSenseBE.Domain.Enums;
 using CrabSenseBE.Domain.Interfaces;
 using QRCoder;
+using Microsoft.EntityFrameworkCore;
 
 namespace CrabSenseBE.Application.Services;
 
@@ -247,7 +248,9 @@ public class TraceabilityService : ITraceabilityService
             qr.Id,
             $"Code={qr.Code}; EntityType={qr.EntityType}; PreviousStatus=Pending; NewStatus=Approved; Reason={reason}",
             ct);
-        await _uow.SaveChangesAsync(ct);
+        try { await _uow.SaveChangesAsync(ct); }
+        catch (DbUpdateConcurrencyException)
+        { throw AppException.Conflict("QR đã được xử lý bởi yêu cầu khác."); }
         return ApiResponse<QrCodeDto>.Ok(MapQrCodeDto(qr), "QR assignment approved.");
     }
 
@@ -280,7 +283,9 @@ public class TraceabilityService : ITraceabilityService
             qr.Id,
             $"Code={qr.Code}; EntityType={qr.EntityType}; PreviousStatus=Pending; NewStatus=Rejected; Reason={reason}",
             ct);
-        await _uow.SaveChangesAsync(ct);
+        try { await _uow.SaveChangesAsync(ct); }
+        catch (DbUpdateConcurrencyException)
+        { throw AppException.Conflict("QR đã được xử lý bởi yêu cầu khác."); }
         return ApiResponse<QrCodeDto>.Ok(MapQrCodeDto(qr), "QR assignment rejected.");
     }
 
@@ -334,10 +339,6 @@ public class TraceabilityService : ITraceabilityService
             || (qr.ExpiresAt.HasValue && qr.ExpiresAt.Value <= DateTime.UtcNow))
             throw AppException.NotFound("QrCode");
 
-        // Tăng scan count
-        qr.ScanCount += 1;
-        _uow.QrCodes.Update(qr);
-
         TraceabilityPublicDto result = qr.EntityType switch
         {
             "frozen_lot" => await BuildFrozenLotTraceabilityAsync(qr, ct),
@@ -345,7 +346,24 @@ public class TraceabilityService : ITraceabilityService
             _ => throw AppException.BadRequest($"Unsupported entity type: {qr.EntityType}")
         };
 
-        await _uow.SaveChangesAsync(ct);
+        // Atomic increment; never write a stale QR entity back after a scan.
+        var source = _uow.QrCodes.Query();
+        if (source?.Provider is Microsoft.EntityFrameworkCore.Query.IAsyncQueryProvider)
+        {
+            var now = DateTime.UtcNow;
+            var updated = await source.Where(q => q.Id == qr.Id && q.IsActive
+                && q.ApprovalStatus == QrApprovalStatus.Approved
+                && (!q.ExpiresAt.HasValue || q.ExpiresAt.Value > now))
+                .ExecuteUpdateAsync(set => set.SetProperty(q => q.ScanCount, q => q.ScanCount + 1), ct);
+            if (updated != 1) throw AppException.NotFound("QrCode");
+        }
+        else
+        {
+            // Non-relational test repositories.
+            qr.ScanCount++;
+            _uow.QrCodes.Update(qr);
+            await _uow.SaveChangesAsync(ct);
+        }
 
         return ApiResponse<TraceabilityPublicDto>.Ok(result);
     }
@@ -442,23 +460,22 @@ public class TraceabilityService : ITraceabilityService
         var voucher = await _uow.HarvestVouchers.GetByIdAsync(voucherId, ct)
             ?? throw AppException.NotFound("HarvestVoucher");
 
-        // Tìm frozen lot tham chiếu
-        var frozenLot = await _uow.FrozenLots.FirstOrDefaultAsync(
-            l => l.HarvestVoucherId == voucherId,
-            ct);
-
-        // Lấy grade từ dòng thu hoạch đầu tiên
-        var firstLine = await _uow.HarvestLines.FirstOrDefaultAsync(
-            l => l.HarvestVoucherId == voucherId,
-            ct);
-
+        var lots = (await _uow.FrozenLots.FindAsync(l => l.HarvestVoucherId == voucherId, ct))
+            .OrderBy(l => l.LotCode).ToList();
+        var lines = await _uow.HarvestLines.FindAsync(l => l.HarvestVoucherId == voucherId, ct);
+        var grades = lines.Select(l => l.Grade).Concat(lots.Select(l => l.Grade))
+            .Where(g => !string.IsNullOrWhiteSpace(g)).Select(g => g!)
+            .Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(g => g).ToList();
+        var single = lots.Count == 1 ? lots[0] : null;
         return new TraceabilityPublicDto(
             Code: qr.Code,
-            FrozenLotCode: frozenLot?.LotCode,
+            FrozenLotCode: single?.LotCode,
             HarvestVoucherCode: voucher.VoucherCode,
-            FrozenDate: frozenLot?.FrozenDate,
+            FrozenDate: single?.FrozenDate,
             HarvestDate: voucher.HarvestDate,
-            Grade: firstLine?.Grade);
+            Grade: grades.Count == 1 ? grades[0] : grades.Count > 1 ? "Mixed" : null,
+            FrozenLots: lots.Select(l => new TraceabilityFrozenLotDto(l.LotCode, l.FrozenDate, l.Grade)).ToList(),
+            Grades: grades);
     }
 
     // ─────────────────────────────────────────────────────────────────────────
