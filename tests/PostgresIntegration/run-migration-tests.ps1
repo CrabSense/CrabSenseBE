@@ -37,7 +37,10 @@ function Assert-Exit([string]$Message) {
 }
 function Invoke-Psql([string]$Database, [string]$Sql) {
     $output = $Sql | & $psql -X -q -v ON_ERROR_STOP=1 -h 127.0.0.1 -p $Port -U postgres -d $Database -At 2>&1
-    Assert-Exit "SQL assertion failed"
+    if ($LASTEXITCODE -ne 0) {
+        $exit = $LASTEXITCODE
+        throw "SQL assertion failed for $Database (exit $exit): $($output -join [Environment]::NewLine)"
+    }
     return ($output -join "`n").Trim()
 }
 function Update-Database([string]$Database, [string]$Target = "") {
