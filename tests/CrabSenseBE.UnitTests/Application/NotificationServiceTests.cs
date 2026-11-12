@@ -390,6 +390,38 @@ public class NotificationServiceTests
     }
 
     [Fact]
+    public async Task CriticalEnvironmentalWarning_IgnoresDisabledRule()
+    {
+        var h = new Harness();
+        var a = new AppUser { Id = Guid.NewGuid(), Role = UserRole.FarmAdministrator, IsActive = true };
+        var service = WithRule(h, new NotificationRule
+        {
+            TypeCode = NotificationTypeCodes.TankOverflow, IsEnabled = false,
+            RecipientRoles = "SystemAdministrator", ChannelCodes = "email"
+        }, a);
+        var area = SetupArea(a);
+        await service.NotifyAsync(NotificationTypeCodes.TankOverflow, "overflow", areaId: area.Id, severity: "Critical");
+        Assert.Equal(a.Id, Assert.Single(h.Created).UserId);
+        Assert.Equal("in_app", h.Created[0].Channel);
+    }
+
+    [Fact]
+    public async Task ChannelOnlyRule_CreatesDeliveryAuditWithoutInApp()
+    {
+        var h = new Harness();
+        var user = new AppUser { Id = Guid.NewGuid(), Role = UserRole.SystemAdministrator, IsActive = true };
+        var service = WithRule(h, new NotificationRule
+        {
+            TypeCode = NotificationTypeCodes.System, IsEnabled = true,
+            RecipientRoles = "SystemAdministrator", ChannelCodes = "email"
+        }, user);
+        h.Channels.Add(new NotificationChannel { ChannelCode = "email", IsEnabled = true });
+        await service.NotifyAsync(NotificationTypeCodes.System, "test");
+        Assert.Equal("delivery", Assert.Single(h.Created).Channel);
+        Assert.Equal("failed", Assert.Single(h.Deliveries).Status);
+    }
+
+    [Fact]
     public async Task Preview_RendersTokensWithoutSending()
     {
         var h = new Harness();
