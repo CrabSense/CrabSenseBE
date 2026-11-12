@@ -240,6 +240,11 @@ public class RasFlowService : IRasFlowService
         var actor = await _areas.CurrentUserAsync(ct);
         if (actor is not null && actor.Role is not (UserRole.FarmManager or UserRole.FarmStaff))
             throw AppException.Forbidden("Chỉ Farm Manager và Farm Staff được điều khiển vận hành RAS.");
+        if (actorId is not Guid commandActorId
+            || commandActorId == Guid.Empty
+            || actor is not null && actor.Id != commandActorId)
+            throw AppException.Unauthorized(
+                "Không xác định được người gửi lệnh RAS thủ công.");
         await _areas.EnsureAsync(areaId, manage: false, ct);
 
         var area = await RequireAreaAsync(areaId, ct);
@@ -622,13 +627,27 @@ public class RasFlowService : IRasFlowService
         var device = await _uow.Devices.GetByIdAsync(deviceId, ct);
         if (device is null)
             return;
-        await _edgeCommands.EnqueueAsync(
-            new EnqueueEdgeCommandRequest(
-                device.DeviceCode,
-                node.IsOn ? "on" : "off",
-                node.RelayChannel),
-            actorId,
-            ct);
+        var request = new EnqueueEdgeCommandRequest(
+            device.DeviceCode,
+            node.IsOn ? "on" : "off",
+            node.RelayChannel);
+        if (actorId is Guid userId && userId != Guid.Empty)
+        {
+            await _edgeCommands.EnqueueManualAsync(request, userId, ct);
+            return;
+        }
+
+        var waterSystemId = node.WaterSystemId;
+        if (waterSystemId == Guid.Empty)
+            throw AppException.Forbidden(
+                "Automation không xác định được hệ nước của relay.");
+        var waterSystem = await _uow.WaterSystems.GetByIdAsync(waterSystemId, ct)
+            ?? throw AppException.NotFound("WaterSystem");
+        if (waterSystem.FarmingAreaId is not Guid areaId || areaId == Guid.Empty)
+            throw AppException.Forbidden(
+                "Automation không xác định được khu của relay.");
+        await _edgeCommands.EnqueueAutomationAsync(
+            request, areaId, "ras-auto-relay", ct);
     }
 
     private sealed record AutoRule(string? OnSensor, decimal OnValue, string? OffSensor, decimal OffValue);

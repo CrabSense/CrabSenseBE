@@ -46,6 +46,9 @@ public class GoogleDriveMediaStorageService : IMediaStorageService
         }
     }
 
+    private string? PrivateFolderId
+        => First(_config, "GoogleDrive:PrivateFolderId", "GOOGLE_DRIVE_PRIVATE_FOLDER_ID");
+
     public GoogleDriveMediaStorageService(
         IConfiguration config,
         ILogger<GoogleDriveMediaStorageService> logger)
@@ -66,7 +69,8 @@ public class GoogleDriveMediaStorageService : IMediaStorageService
     }
 
     public async Task<MediaUploadResult> UploadAsync(
-        Stream data, string fileName, string contentType, string category, CancellationToken ct = default)
+        Stream data, string fileName, string contentType, string category,
+        CancellationToken ct = default, bool publicRead = false)
     {
         var relative = string.IsNullOrWhiteSpace(category) ? "Media/image" : category.Trim().Trim('/');
         if (!relative.Contains('/', StringComparison.Ordinal))
@@ -82,11 +86,22 @@ public class GoogleDriveMediaStorageService : IMediaStorageService
 
         try
         {
-            var viaScript = await TryWebhookUploadAsync(data, fileName, contentType, underProject, ct);
-            if (viaScript is not null)
-                return viaScript;
+            if (publicRead)
+            {
+                var viaScript = await TryWebhookUploadAsync(
+                    data, fileName, contentType, underProject, ct);
+                if (viaScript is not null)
+                    return viaScript;
+            }
 
-            var rootId = await ResolveRootIdAsync(ct);
+            var rootId = publicRead
+                ? await ResolveRootIdAsync(ct)
+                : PrivateFolderId;
+            if (string.IsNullOrWhiteSpace(rootId))
+                throw AppException.BadRequest(
+                    "Private media requires GoogleDrive:PrivateFolderId; refusing to store it in a shared folder.");
+            if (!publicRead)
+                await EnsureDriveRootAsync(rootId, ct);
             _logger.LogInformation("Drive upload path={Path} root={Root}", underProject, rootId);
             var targetFolderId = await EnsureSubFolderAsync(underProject, rootId, ct);
 
@@ -118,7 +133,7 @@ public class GoogleDriveMediaStorageService : IMediaStorageService
                 ?? throw AppException.BadRequest("Google Drive không trả về file sau khi upload.");
 
             string? shareLink = null;
-            if (_shareMode == "anyone")
+            if (publicRead && _shareMode == "anyone")
             {
                 try
                 {
@@ -133,14 +148,13 @@ public class GoogleDriveMediaStorageService : IMediaStorageService
                 }
             }
 
-            var direct = DirectViewUrl(file.Id);
             _logger.LogInformation("Uploaded {File} to Drive id={Id} path={Path}", fileName, file.Id, underProject);
 
             return new MediaUploadResult(
                 file.Id,
-                file.WebViewLink ?? direct,
-                file.WebContentLink ?? direct,
-                shareLink ?? direct,
+                publicRead ? file.WebViewLink : null,
+                publicRead ? file.WebContentLink : null,
+                publicRead ? shareLink : null,
                 size);
         }
         catch (AppException)

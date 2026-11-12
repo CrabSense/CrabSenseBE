@@ -167,6 +167,8 @@ public class InventoryReportService : IInventoryReportService
         // cách tính cũ dựa trên số liệu tổng của FrozenLot.
         var matchingItems =
             new List<Domain.Entities.FrozenCrabItem>();
+        var allScopedFrozenItems =
+            new List<Domain.Entities.FrozenCrabItem>();
 
         if (filter.CrabLotId.HasValue)
         {
@@ -189,10 +191,14 @@ public class InventoryReportService : IInventoryReportService
             var frozenItems = await _uow.FrozenCrabItems.FindAsync(
                 item => scopedLotIds.Contains(item.FrozenLotId),
                 cancellationToken);
+            allScopedFrozenItems = frozenItems
+                .Where(item => !filter.AsOfDate.HasValue
+                    || item.FrozenDate < filter.AsOfDate.Value.Date.AddDays(1))
+                .ToList();
 
             // Một lô cấp đông có thể chứa cua từ nhiều lô nhập.
             // Chỉ giữ item có CrabId thuộc lô nhập đang được lọc.
-            matchingItems = frozenItems
+            matchingItems = allScopedFrozenItems
                 .Where(item => selectedCrabIds.Contains(item.CrabId))
                 .ToList();
         }
@@ -220,10 +226,51 @@ public class InventoryReportService : IInventoryReportService
                 group => group.Key,
                 group => group.ToList());
 
+        var filteredPointInTime = new Dictionary<Guid, PointInTimeStock>();
+        var historicalFilterNeedsReview = new HashSet<Guid>();
+        if (filter.AsOfDate.HasValue && filter.CrabLotId.HasValue)
+        {
+            var allItemsByLot = allScopedFrozenItems
+                .GroupBy(item => item.FrozenLotId)
+                .ToDictionary(group => group.Key, group => group.ToList());
+            foreach (var (lotId, selectedItems) in itemsByLotId)
+            {
+                if (!pointInTime.TryGetValue(lotId, out var stock)
+                    || !stock.IsComplete
+                    || !allItemsByLot.TryGetValue(lotId, out var allItems))
+                {
+                    historicalFilterNeedsReview.Add(lotId);
+                    continue;
+                }
+
+                if (selectedItems.Count == allItems.Count)
+                {
+                    filteredPointInTime[lotId] = stock;
+                    if (stock.Quantity != selectedItems.Count)
+                        historicalFilterNeedsReview.Add(lotId);
+                }
+                else if (stock.Quantity == allItems.Count)
+                {
+                    filteredPointInTime[lotId] = new PointInTimeStock(
+                        selectedItems.Count,
+                        decimal.Round(selectedItems.Sum(item => item.WeightGram) / 1000m, 3),
+                        true);
+                }
+                else
+                {
+                    // The ledger records quantity/weight at FrozenLot level and cannot
+                    // prove which source CrabLot was shipped from a mixed lot.
+                    historicalFilterNeedsReview.Add(lotId);
+                }
+            }
+        }
+
         // Khi có lọc lô nhập, chỉ giữ lô cấp đông đang tồn kho
         // có chứa ít nhất một item phù hợp.
         var filteredInventoryLots = inventoryLots
-            .Where(lot => itemsByLotId.ContainsKey(lot.Id))
+            .Where(lot => itemsByLotId.ContainsKey(lot.Id)
+                && (!filter.AsOfDate.HasValue
+                    || filteredPointInTime.ContainsKey(lot.Id)))
             .ToList();
 
         // Các item thuộc những lô cấp đông đang tồn kho và khớp filter.
@@ -246,24 +293,36 @@ public class InventoryReportService : IInventoryReportService
 
         // Đếm số lô cấp đông đã xuất kho.
         // Khi lọc lô nhập, chỉ đếm lô có item thuộc lô đó.
-        var shippedLots = matchingScopedLots.Count(lot =>
-            lot.Status == FrozenLotStatus.Shipped);
+        var shippedLots = filter.AsOfDate.HasValue
+            ? matchingScopedLots.Count(lot =>
+                pointInTime.TryGetValue(lot.Id, out var stock)
+                && stock.IsComplete
+                && stock.Quantity == 0)
+            : matchingScopedLots.Count(lot =>
+                lot.Status == FrozenLotStatus.Shipped);
 
         // Đếm lô đã được đánh dấu hết hạn hoặc có ngày hết hạn
         // trước ngày tham chiếu.
         var expiredLots = matchingScopedLots.Count(lot =>
-            lot.Status == FrozenLotStatus.Expired ||
-            lot.ExpiryDate.Date < referenceDate);
+            lot.ExpiryDate.Date < referenceDate
+            || (!filter.AsOfDate.HasValue
+                && lot.Status == FrozenLotStatus.Expired));
 
         // Đếm lô có trạng thái Available.
-        var availableLots = filter.CrabLotId.HasValue
+        var availableLots = filter.AsOfDate.HasValue
+            ? (filter.CrabLotId.HasValue
+                ? filteredInventoryLots.Count
+                : inventoryLots.Count)
+            : filter.CrabLotId.HasValue
             ? filteredInventoryLots.Count(lot =>
                 lot.Status == FrozenLotStatus.Available)
             : inventoryLots.Count(lot =>
                 lot.Status == FrozenLotStatus.Available);
 
         // Đếm lô có trạng thái Reserved.
-        var reservedLots = filter.CrabLotId.HasValue
+        var reservedLots = filter.AsOfDate.HasValue
+            ? 0
+            : filter.CrabLotId.HasValue
             ? filteredInventoryLots.Count(lot =>
                 lot.Status == FrozenLotStatus.Reserved)
             : inventoryLots.Count(lot =>
@@ -280,7 +339,9 @@ public class InventoryReportService : IInventoryReportService
 
         // Khi lọc lô cua nhập, cộng cân nặng từng item (gram -> kg).
         // Không lọc thì giữ nguyên tổng WeightKg của FrozenLot.
-        var totalInventoryWeightKg = filter.CrabLotId.HasValue
+        var totalInventoryWeightKg = filter.AsOfDate.HasValue && filter.CrabLotId.HasValue
+            ? filteredInventoryLots.Sum(lot => filteredPointInTime[lot.Id].WeightKg)
+            : filter.CrabLotId.HasValue
             ? matchingInventoryItems.Sum(item => item.WeightGram) / 1000m
             : inventoryLots.Sum(lot => filter.AsOfDate.HasValue
                 ? pointInTime[lot.Id].WeightKg
@@ -288,7 +349,9 @@ public class InventoryReportService : IInventoryReportService
 
         // Khi lọc, mỗi FrozenCrabItem đại diện cho một cá thể cua.
         // Không lọc thì dùng tổng Quantity đã lưu ở FrozenLot.
-        var totalInventoryQuantity = filter.CrabLotId.HasValue
+        var totalInventoryQuantity = filter.AsOfDate.HasValue && filter.CrabLotId.HasValue
+            ? filteredInventoryLots.Sum(lot => filteredPointInTime[lot.Id].Quantity)
+            : filter.CrabLotId.HasValue
             ? matchingInventoryItems.Count
             : inventoryLots.Sum(lot => filter.AsOfDate.HasValue
                 ? pointInTime[lot.Id].Quantity
@@ -300,7 +363,21 @@ public class InventoryReportService : IInventoryReportService
 
         List<InventoryByGradeDto> byGrade;
 
-        if (filter.CrabLotId.HasValue)
+        if (filter.AsOfDate.HasValue
+            && filter.CrabLotId.HasValue
+            && historicalFilterNeedsReview.Overlaps(
+                filteredInventoryLots.Select(lot => lot.Id)))
+        {
+            byGrade =
+            [
+                new InventoryByGradeDto(
+                    "NeedsReview",
+                    totalInventoryLots,
+                    totalInventoryQuantity,
+                    totalInventoryWeightKg)
+            ];
+        }
+        else if (filter.CrabLotId.HasValue)
         {
             // Khi lọc lô nhập, dùng grade và trọng lượng snapshot
             // của từng item để không cộng nhầm cua từ lô khác.
@@ -368,7 +445,30 @@ public class InventoryReportService : IInventoryReportService
 
         List<InventoryExpiryAlertDto> expiryAlerts;
 
-        if (filter.CrabLotId.HasValue)
+        if (filter.AsOfDate.HasValue && filter.CrabLotId.HasValue)
+        {
+            expiryAlerts = filteredInventoryLots
+                .Where(lot => lot.ExpiryDate.Date <= expiryCutoff)
+                .Select(lot =>
+                {
+                    var stock = filteredPointInTime[lot.Id];
+                    return new InventoryExpiryAlertDto(
+                        lot.LotCode,
+                        historicalFilterNeedsReview.Contains(lot.Id)
+                            ? "NeedsReview"
+                            : lot.Grade ?? "Unknown",
+                        stock.WeightKg,
+                        stock.Quantity,
+                        lot.ExpiryDate,
+                        Math.Max(0, (lot.ExpiryDate.Date - referenceDate).Days),
+                        lot.ExpiryDate.Date < referenceDate
+                            ? "expired"
+                            : "expiring_soon");
+                })
+                .OrderBy(alert => alert.DaysUntilExpiry)
+                .ToList();
+        }
+        else if (filter.CrabLotId.HasValue)
         {
             // Chỉ giữ lô cấp đông liên quan đến lô cua nguồn
             // và đang Available hoặc Reserved.
@@ -445,7 +545,19 @@ public class InventoryReportService : IInventoryReportService
 
         List<InventoryTrendDto> trend;
 
-        if (filter.CrabLotId.HasValue)
+        if (filter.AsOfDate.HasValue && filter.CrabLotId.HasValue)
+        {
+            trend = filteredInventoryLots
+                .GroupBy(lot => lot.FrozenDate.Date)
+                .Select(group => new InventoryTrendDto(
+                    group.Key,
+                    group.Count(),
+                    group.Sum(lot => filteredPointInTime[lot.Id].WeightKg),
+                    group.Sum(lot => filteredPointInTime[lot.Id].Quantity)))
+                .OrderBy(item => item.Date)
+                .ToList();
+        }
+        else if (filter.CrabLotId.HasValue)
         {
             // Nhóm item theo ngày FrozenLot được cấp đông.
             // Số lượng và khối lượng chỉ tính cua thuộc lô nhập đã chọn.
@@ -495,7 +607,12 @@ public class InventoryReportService : IInventoryReportService
         var openingBalancesPendingReview = 0;
         var openingBalanceMismatchCount = 0;
         var needsReviewLotCount = filter.AsOfDate.HasValue
-            ? pointInTime.Values.Count(stock => !stock.IsComplete)
+            ? pointInTime
+                .Where(pair => !pair.Value.IsComplete)
+                .Select(pair => pair.Key)
+                .Concat(historicalFilterNeedsReview)
+                .Distinct()
+                .Count()
             : 0;
         var openingRepository = _uow.FrozenInventoryOpeningBalances;
         if (openingRepository is not null)

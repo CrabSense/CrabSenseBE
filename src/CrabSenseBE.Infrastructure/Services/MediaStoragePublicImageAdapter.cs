@@ -13,7 +13,13 @@ public sealed class MediaStoragePublicImageAdapter : IPublicImageStorage
 
     public Task<MediaUploadResult> UploadAsync(
         Stream data, string fileName, string contentType, string folder, CancellationToken ct = default)
-        => _inner.UploadAsync(data, fileName, contentType, string.IsNullOrWhiteSpace(folder) ? "image" : folder, ct);
+        => _inner.UploadAsync(
+            data,
+            fileName,
+            contentType,
+            string.IsNullOrWhiteSpace(folder) ? "image" : folder,
+            ct,
+            publicRead: true);
 
     public Task<Stream> DownloadAsync(string storageKey, CancellationToken ct = default)
         => _inner.DownloadAsync(storageKey, ct);

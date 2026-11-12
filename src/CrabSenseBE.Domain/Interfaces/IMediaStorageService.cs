@@ -24,7 +24,8 @@ public interface IMediaStorageService
         string fileName,
         string contentType,
         string category,
-        CancellationToken ct = default);
+        CancellationToken ct = default,
+        bool publicRead = false);
 
     Task<Stream> DownloadAsync(string storageKey, CancellationToken ct = default);
 

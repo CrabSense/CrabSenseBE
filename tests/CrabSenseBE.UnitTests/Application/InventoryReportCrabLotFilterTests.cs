@@ -226,6 +226,72 @@ public class InventoryReportCrabLotFilterTests
         result.DataStatus.Should().Be("Complete");
     }
 
+    [Fact]
+    public async Task HistoricalCrabLotFilter_UsesLedgerTotal_NotCurrentItemSnapshots()
+    {
+        var asOf = new DateTime(2026, 10, 15);
+        var sourceLotId = Guid.NewGuid();
+        var frozenLot = new FrozenLot
+        {
+            Id = Guid.NewGuid(),
+            LotCode = "FROZEN-SOURCE-A",
+            FrozenDate = asOf.AddDays(-10),
+            ExpiryDate = asOf.AddMonths(1),
+            Quantity = 1,
+            WeightKg = 2m,
+            Status = FrozenLotStatus.Available
+        };
+        var crabs = Enumerable.Range(0, 3)
+            .Select(_ => new Crab
+            {
+                Id = Guid.NewGuid(),
+                CrabLotId = sourceLotId
+            })
+            .ToArray();
+        var items = crabs.Select(crab => new FrozenCrabItem
+        {
+            Id = Guid.NewGuid(),
+            FrozenLotId = frozenLot.Id,
+            CrabId = crab.Id,
+            FrozenDate = asOf.AddDays(-10),
+            ExpiryDate = frozenLot.ExpiryDate,
+            WeightGram = 2000m,
+            Grade = "L",
+            LotCode = frozenLot.LotCode
+        }).ToArray();
+        var uow = CreateUnitOfWork(
+            new[] { frozenLot }, crabs, items, crabLotExists: true);
+        var opening = new Mock<IRepository<FrozenInventoryOpeningBalance>>();
+        opening.Setup(x => x.GetAllAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new[]
+            {
+                new FrozenInventoryOpeningBalance
+                {
+                    FrozenLotId = frozenLot.Id,
+                    OpeningDate = asOf.AddDays(-5),
+                    OpeningQuantity = 2,
+                    OpeningWeightKg = 4m,
+                    VerificationStatus = FrozenOpeningBalanceVerificationStatus.Verified
+                }
+            });
+        var adjustments = new Mock<IRepository<FrozenInventoryAdjustment>>();
+        adjustments.Setup(x => x.GetAllAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Array.Empty<FrozenInventoryAdjustment>());
+        uow.Setup(x => x.FrozenInventoryOpeningBalances).Returns(opening.Object);
+        uow.Setup(x => x.FrozenInventoryAdjustments).Returns(adjustments.Object);
+
+        var result = await new InventoryReportService(uow.Object)
+            .GetInventoryReportAsync(new InventoryReportFilterDto(
+                asOf, 30, sourceLotId));
+
+        result.TotalInventoryQuantity.Should().Be(2);
+        result.TotalInventoryWeightKg.Should().Be(4m);
+        result.AvailableLots.Should().Be(1);
+        result.ShippedLots.Should().Be(0);
+        result.DataStatus.Should().Be("NeedsReview");
+        result.ByGrade.Should().ContainSingle(x => x.Grade == "NeedsReview");
+    }
+
     private static Mock<IUnitOfWork> CreateUnitOfWork(
         IEnumerable<FrozenLot> frozenLots,
         IEnumerable<Crab>? crabs = null,

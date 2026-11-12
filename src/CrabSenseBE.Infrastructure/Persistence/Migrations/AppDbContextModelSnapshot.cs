@@ -1425,6 +1425,10 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.Property<string>("LeaseHolder")
                         .HasColumnType("text");
 
+                    b.Property<string>("RequestSource")
+                        .IsRequired()
+                        .HasColumnType("text");
+
                     b.Property<Guid?>("RequestedByUserId")
                         .HasColumnType("uuid");
 

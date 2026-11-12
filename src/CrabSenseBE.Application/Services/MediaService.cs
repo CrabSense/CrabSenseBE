@@ -60,10 +60,10 @@ public class MediaService : IMediaService
         }, ct);
         var folder = await MediaFolderCodeResolver.ResolvePathAsync(_uow, entityType, entityId, ct);
         var uploaded = await _storage.UploadAsync(
-            fileStream, fileName, contentType, folder, ct);
+            fileStream, fileName, contentType, folder, ct, publicRead: meta.SharePublic);
 
-        string? shareLink = uploaded.ShareLink;
-        var isShared = !string.IsNullOrWhiteSpace(shareLink);
+        string? shareLink = meta.SharePublic ? uploaded.ShareLink : null;
+        var isShared = meta.SharePublic && !string.IsNullOrWhiteSpace(shareLink);
 
         if (meta.SharePublic && !isShared)
         {
@@ -79,10 +79,10 @@ public class MediaService : IMediaService
             SizeBytes = uploaded.SizeBytes,
             Provider = _storage.ProviderName,
             StorageKey = uploaded.StorageKey,
-            WebViewLink = uploaded.WebViewLink,
-            WebContentLink = uploaded.WebContentLink,
-            ShareLink = shareLink ?? uploaded.WebViewLink,
-            IsShared = isShared || meta.SharePublic,
+            WebViewLink = meta.SharePublic ? uploaded.WebViewLink : null,
+            WebContentLink = meta.SharePublic ? uploaded.WebContentLink : null,
+            ShareLink = shareLink,
+            IsShared = isShared,
             BoxId = meta.BoxId,
             CrabId = meta.CrabId,
             DeviceId = meta.DeviceId,

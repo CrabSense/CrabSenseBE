@@ -39,6 +39,19 @@ public class AiOpsService : IAiOpsService
         {
             box = await _uow.Boxes.GetByIdAsync(bid, ct) ?? throw AppException.NotFound("Box");
             await _areas.EnsureBoxAsync(bid, manage: false, ct);
+            if (media?.BoxId is Guid mediaBoxId && mediaBoxId != bid)
+                throw AppException.BadRequest("MediaId không thuộc BoxId được yêu cầu.");
+            if (media is not null)
+            {
+                await _mediaAreas.EnsureAsync(new MediaAsset
+                {
+                    BoxId = bid,
+                    CrabId = media.CrabId,
+                    DeviceId = media.DeviceId,
+                    RelatedEntityType = media.RelatedEntityType,
+                    RelatedEntityId = media.RelatedEntityId
+                }, ct);
+            }
         }
         if (box is null && media is null)
             throw AppException.BadRequest("BoxId hoặc MediaId có liên kết khu là bắt buộc.");

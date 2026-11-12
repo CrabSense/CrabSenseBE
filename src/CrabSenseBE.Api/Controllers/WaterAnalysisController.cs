@@ -62,9 +62,10 @@ public class WaterAnalysisController : ControllerBase
     public async Task<IActionResult> RecordHardwareEvent(
         Guid runId, [FromBody] WaterAnalysisHardwareEventRequest req, CancellationToken ct)
     {
-        var (denied, _) = await EdgeKeyGuard.CheckDeviceAsync(
+        var (denied, identity) = await EdgeKeyGuard.CheckDeviceAsync(
             Request, _configuration, _uow, req.DeviceCode, ct);
         if (denied is not null) return denied;
-        return Ok(await _service.RecordHardwareEventAsync(runId, req, ct));
+        return Ok(await _service.RecordHardwareEventAsync(
+            runId, req with { DeviceCode = identity!.DeviceCode }, ct));
     }
 }

@@ -110,7 +110,8 @@ public record WaterAnalysisHardwareEventRequest(
     decimal? Value = null,
     decimal? Confidence = null,
     string? ImageUrl = null,
-    string? Error = null);
+    string? Error = null,
+    string? ModelResultId = null);
 
 public record UpdateWaterAnalysisSampleRequest(
     string? SampleSource,

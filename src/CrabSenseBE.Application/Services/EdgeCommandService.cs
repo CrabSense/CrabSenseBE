@@ -11,17 +11,55 @@ public sealed class EdgeCommandService : IEdgeCommandService
 {
     private readonly IUnitOfWork _uow;
     private readonly FarmAreaScope _areas;
+    private readonly ICurrentUserService? _currentUser;
 
     public EdgeCommandService(IUnitOfWork uow, ICurrentUserService? currentUser = null)
     {
         _uow = uow;
+        _currentUser = currentUser;
         _areas = new FarmAreaScope(uow, currentUser);
     }
 
-    public async Task<ApiResponse<EdgeCommandDto>> EnqueueAsync(
+    public async Task<ApiResponse<EdgeCommandDto>> EnqueueManualAsync(
         EnqueueEdgeCommandRequest request,
-        Guid? actorId = null,
+        Guid actorId,
         CancellationToken ct = default)
+    {
+        if (actorId == Guid.Empty
+            || _currentUser is null
+            || !_currentUser.IsAuthenticated
+            || _currentUser.UserId != actorId)
+            throw AppException.Unauthorized("Không xác định được người gửi lệnh.");
+
+        return await EnqueueCoreAsync(
+            request, actorId, "manual", requiredAreaId: null, ct);
+    }
+
+    public async Task<ApiResponse<EdgeCommandDto>> EnqueueAutomationAsync(
+        EnqueueEdgeCommandRequest request,
+        Guid farmingAreaId,
+        string automationSource,
+        CancellationToken ct = default)
+    {
+        if (farmingAreaId == Guid.Empty)
+            throw AppException.Forbidden("Automation phải xác định FarmingArea.");
+        if (string.IsNullOrWhiteSpace(automationSource))
+            throw AppException.BadRequest("Automation source is required.");
+
+        return await EnqueueCoreAsync(
+            request,
+            actorId: null,
+            $"automation:{automationSource.Trim()}",
+            farmingAreaId,
+            ct);
+    }
+
+    private async Task<ApiResponse<EdgeCommandDto>> EnqueueCoreAsync(
+        EnqueueEdgeCommandRequest request,
+        Guid? actorId,
+        string requestSource,
+        Guid? requiredAreaId,
+        CancellationToken ct)
     {
         var deviceCode = request.DeviceCode?.Trim();
         var command = request.Command?.Trim().ToLowerInvariant();
@@ -32,11 +70,16 @@ public sealed class EdgeCommandService : IEdgeCommandService
 
         var device = await _uow.Devices.FirstOrDefaultAsync(d => d.DeviceCode == deviceCode, ct)
             ?? throw AppException.NotFound($"Device '{deviceCode}'");
-        if (actorId is Guid)
+        var deviceAreaId = await ResolveDeviceAreaAsync(device, ct);
+        if (actorId is Guid userId)
         {
-            var areaId = await ResolveDeviceAreaAsync(device, ct);
-            await _areas.EnsureAsync(areaId, manage: false, ct);
+            if (userId == Guid.Empty)
+                throw AppException.Unauthorized("UserId không hợp lệ.");
+            await _areas.EnsureAsync(deviceAreaId, manage: false, ct);
         }
+        else if (requiredAreaId != deviceAreaId)
+            throw AppException.Forbidden(
+                "Automation không được điều khiển thiết bị ngoài khu nguồn.");
         if (device.Status != DeviceStatus.Online
             || device.EdgeState is not ("Approved" or "Online"))
             throw AppException.Conflict("Thiết bị chưa online hoặc chưa được phê duyệt.");
@@ -69,15 +112,16 @@ public sealed class EdgeCommandService : IEdgeCommandService
             Command = command,
             Channel = channel,
             CorrelationId = correlationId,
-            RequestedByUserId = actorId
+            RequestedByUserId = actorId,
+            RequestSource = requestSource
         };
         await _uow.EdgeCommands.AddAsync(entity, ct);
 
-        if (actorId is Guid userId && userId != Guid.Empty)
+        if (actorId is Guid auditUserId && auditUserId != Guid.Empty)
         {
             await _uow.OperationLogs.AddAsync(new OperationLog
             {
-                UserId = userId,
+                UserId = auditUserId,
                 Action = $"edge_{command}",
                 EntityType = "EdgeCommand",
                 EntityId = entity.Id,

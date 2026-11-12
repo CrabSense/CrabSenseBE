@@ -27,20 +27,23 @@ public class S3MediaStorageService : IMediaStorageService, IPublicImageStorage
     }
 
     public Task<MediaUploadResult> UploadAsync(
-        Stream data, string fileName, string contentType, string category, CancellationToken ct = default)
+        Stream data, string fileName, string contentType, string category,
+        CancellationToken ct = default, bool publicRead = false)
         => UploadInternalAsync(
             data,
             fileName,
             contentType,
             category.Contains('/', StringComparison.Ordinal) ? category : MapCategoryFolder(category),
+            publicRead,
             ct);
 
     Task<MediaUploadResult> IPublicImageStorage.UploadAsync(
         Stream data, string fileName, string contentType, string folder, CancellationToken ct)
-        => UploadInternalAsync(data, fileName, contentType, folder, ct);
+        => UploadInternalAsync(data, fileName, contentType, folder, publicRead: true, ct: ct);
 
     private async Task<MediaUploadResult> UploadInternalAsync(
-        Stream data, string fileName, string contentType, string folder, CancellationToken ct)
+        Stream data, string fileName, string contentType, string folder,
+        bool publicRead, CancellationToken ct)
     {
         var bucket = RequireBucket();
         await using var buffer = await BufferAsync(data, ct);
@@ -56,12 +59,12 @@ public class S3MediaStorageService : IMediaStorageService, IPublicImageStorage
             AutoCloseStream = false
         };
 
-        if (bool.TryParse(_config["AwsS3:PublicRead"], out var publicRead) && publicRead)
+        if (publicRead)
             request.CannedACL = S3CannedACL.PublicRead;
 
         await _client.Value.PutObjectAsync(request, ct);
-        var url = PublicUrl(bucket, region, key);
-        _logger.LogInformation("S3 uploaded {Key} ({Bytes} bytes) → {Url}", key, buffer.Length, url);
+        var url = publicRead ? PublicUrl(bucket, region, key) : null;
+        _logger.LogInformation("S3 uploaded {Key} ({Bytes} bytes), public={Public}", key, buffer.Length, publicRead);
         return new MediaUploadResult(key, url, url, url, buffer.Length);
     }
 
@@ -75,10 +78,16 @@ public class S3MediaStorageService : IMediaStorageService, IPublicImageStorage
         return ms;
     }
 
-    public Task<string> EnsureShareLinkAsync(string storageKey, CancellationToken ct = default)
+    public async Task<string> EnsureShareLinkAsync(string storageKey, CancellationToken ct = default)
     {
         var bucket = RequireBucket();
-        return Task.FromResult(PublicUrl(bucket, Region(), storageKey));
+        await _client.Value.PutACLAsync(new PutACLRequest
+        {
+            BucketName = bucket,
+            Key = storageKey,
+            CannedACL = S3CannedACL.PublicRead
+        }, ct);
+        return PublicUrl(bucket, Region(), storageKey);
     }
 
     public async Task DeleteAsync(string storageKey, CancellationToken ct = default)

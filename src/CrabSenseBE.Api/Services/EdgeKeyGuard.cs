@@ -12,6 +12,12 @@ namespace CrabSenseBE.Api.Services;
 /// </summary>
 public static class EdgeKeyGuard
 {
+    public sealed record AuthenticatedEdgeDevice(
+        Guid DeviceId,
+        string DeviceCode,
+        string LeaseHolder,
+        bool IsLegacyCredential);
+
     public const string HeaderName = "X-Edge-Key";
     public const string DeviceHeaderName = "X-Device-Key";
     public const string ConfigKey = "EdgeSync:ApiKey";
@@ -39,7 +45,7 @@ public static class EdgeKeyGuard
         return null;
     }
 
-    public static async Task<(IActionResult? Denied, string? LeaseHolder)> CheckDeviceAsync(
+    public static async Task<(IActionResult? Denied, AuthenticatedEdgeDevice? Identity)> CheckDeviceAsync(
         HttpRequest request,
         IConfiguration configuration,
         IUnitOfWork uow,
@@ -66,7 +72,8 @@ public static class EdgeKeyGuard
                 SHA256.HashData(Encoding.UTF8.GetBytes(suppliedDeviceKey)));
             if (!FixedTimeEquals(suppliedHash, device.CredentialHash))
                 return (new UnauthorizedObjectResult(new { success = false, message = "X-Device-Key không hợp lệ." }), null);
-            return (null, $"device:{device.Id:N}");
+            return (null, new AuthenticatedEdgeDevice(
+                device.Id, device.DeviceCode, $"device:{device.Id:N}", false));
         }
 
         if (!configuration.GetValue("EdgeSync:AllowLegacySharedKey", true))
@@ -76,7 +83,10 @@ public static class EdgeKeyGuard
                 message = "Legacy edge credential đã bị tắt; hãy provision credential riêng."
             }), null);
         var denied = Check(request, configuration);
-        return denied is null ? (null, $"legacy:{device.Id:N}") : (denied, null);
+        return denied is null
+            ? (null, new AuthenticatedEdgeDevice(
+                device.Id, device.DeviceCode, $"legacy:{device.Id:N}", true))
+            : (denied, null);
     }
 
     private static bool FixedTimeEquals(string supplied, string expected) =>

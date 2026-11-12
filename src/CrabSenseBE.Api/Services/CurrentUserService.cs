@@ -1,4 +1,5 @@
 using CrabSenseBE.Application.Interfaces;
+using CrabSenseBE.Application.Common;
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 
@@ -21,7 +22,7 @@ public class CurrentUserService : ICurrentUserService
         get
         {
             var user = _httpContextAccessor.HttpContext?.User
-                ?? throw new UnauthorizedAccessException(
+                ?? throw AppException.Unauthorized(
                     "Authenticated user context is unavailable.");
 
             var rawUserId =
@@ -30,7 +31,7 @@ public class CurrentUserService : ICurrentUserService
 
             if (!Guid.TryParse(rawUserId, out var userId))
             {
-                throw new UnauthorizedAccessException(
+                throw AppException.Unauthorized(
                     "Authenticated user identifier is missing or invalid.");
             }
 

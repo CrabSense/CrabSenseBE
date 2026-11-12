@@ -75,7 +75,10 @@ public sealed class JwtAuthenticationSecurityTests : IAsyncLifetime
         var original = _jwt.GenerateAccessToken(_user).Token;
         (await Send(original)).ShouldBe(HttpStatusCode.OK);
         (await Send(null)).ShouldBe(HttpStatusCode.Unauthorized);
-        (await Send(original[..^1] + (original[^1] == 'a' ? 'b' : 'a')))
+        var tokenParts = original.Split('.');
+        tokenParts[2] = (tokenParts[2][0] == 'a' ? 'b' : 'a')
+            + tokenParts[2][1..];
+        (await Send(string.Join('.', tokenParts)))
             .ShouldBe(HttpStatusCode.Unauthorized);
 
         _user.IsActive = false;

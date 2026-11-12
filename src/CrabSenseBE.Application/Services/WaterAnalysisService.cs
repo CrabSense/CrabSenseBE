@@ -522,11 +522,34 @@ public class WaterAnalysisService : IWaterAnalysisService
         }
         else if (eventName == "ANALYSIS_RESULT_SAVED")
         {
-            if (request.Value is null || request.Confidence is null || string.IsNullOrWhiteSpace(request.ImageUrl))
-                throw AppException.BadRequest("Kết quả hardware cần value, confidence và imageUrl.");
+            if (request.Value is null
+                || request.Confidence is null
+                || string.IsNullOrWhiteSpace(request.ImageUrl)
+                || string.IsNullOrWhiteSpace(request.ModelResultId))
+                throw AppException.BadRequest(
+                    "Kết quả hardware cần value, confidence, imageUrl và modelResultId.");
+            var analyte = NormalizeAnalyte(run.Analyte);
+            if (request.Value < 0 || (analyte == "PH" && request.Value > 14))
+                throw AppException.BadRequest("Giá trị phân tích nằm ngoài miền hợp lệ.");
+            if (request.Confidence < 0 || request.Confidence > 1)
+                throw AppException.BadRequest("Confidence phải nằm trong khoảng 0..1.");
+            var assay = Assays.FirstOrDefault(item =>
+                item.Analyte == analyte);
+            if (assay?.AiConfidenceMin is decimal minimumConfidence
+                && request.Confidence < minimumConfidence)
+                throw AppException.BadRequest(
+                    $"Confidence thấp hơn ngưỡng assay ({minimumConfidence:0.###}).");
+            if (!Uri.TryCreate(request.ImageUrl.Trim(), UriKind.Absolute, out var imageUri)
+                || imageUri.Scheme != Uri.UriSchemeHttps)
+                throw AppException.BadRequest("ImageUrl phải là HTTPS URL hợp lệ.");
             SetAnalyteValue(run, request.Value.Value);
             run.Confidence = request.Confidence;
-            run.ImageUrl = request.ImageUrl.Trim();
+            run.ImageUrl = imageUri.AbsoluteUri;
+            run.HardwareJson = JsonSerializer.Serialize(new
+            {
+                modelResultId = request.ModelResultId.Trim(),
+                receivedAt = now
+            });
             run.ResultRecordedAt = now;
             AdvanceHardware(run, now, logs, eventName!);
         }

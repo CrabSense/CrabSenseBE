@@ -40,26 +40,105 @@ internal sealed class MediaAssetAreaGuard
 
     private async Task<HashSet<Guid>> AreaIdsAsync(MediaAsset asset, CancellationToken ct)
     {
+        var required = new HashSet<Guid>();
+        var referenceScopes = new List<HashSet<Guid>>();
         if (asset.BoxId is Guid boxId)
-            return [await AreaOfBoxAsync(boxId, ct)];
+        {
+            var scope = new HashSet<Guid> { await AreaOfBoxAsync(boxId, ct) };
+            referenceScopes.Add(scope);
+            required.UnionWith(scope);
+        }
         if (asset.CrabId is Guid crabId)
-            return await AreaOfCrabAsync(crabId, ct);
+        {
+            var scope = await AreaOfCrabAsync(crabId, ct);
+            referenceScopes.Add(scope);
+            required.UnionWith(scope);
+        }
         if (asset.DeviceId is Guid deviceId)
-            return await AreaOfDeviceAsync(deviceId, ct);
+        {
+            var scope = await AreaOfDeviceAsync(deviceId, ct);
+            referenceScopes.Add(scope);
+            required.UnionWith(scope);
+        }
+
+        if (asset.BoxId is Guid linkedBoxId && asset.CrabId is Guid linkedCrabId)
+            await EnsureCrabBelongsToBoxAsync(linkedCrabId, linkedBoxId, ct);
 
         var type = asset.RelatedEntityType?.Trim().ToLowerInvariant();
         var id = asset.RelatedEntityId;
-        if (id is null) return [];
-        return type switch
+        if (id is null)
         {
-            "box" => [await AreaOfBoxAsync(id.Value, ct)],
-            "crab" => await AreaOfCrabAsync(id.Value, ct),
-            "crablot" or "lot" => await AreaOfLotAsync(id.Value, ct),
-            "harvestvoucher" or "harvest" => await AreaOfHarvestAsync(id.Value, ct),
-            "frozenlot" => await AreaOfFrozenLotAsync(id.Value, ct),
-            "device" => await AreaOfDeviceAsync(id.Value, ct),
-            _ => []
-        };
+            if (!string.IsNullOrWhiteSpace(type))
+                throw AppException.BadRequest("RelatedEntityId is required.");
+            EnsureCoherentScopes(referenceScopes);
+            return required;
+        }
+        if (string.IsNullOrWhiteSpace(type))
+            throw AppException.BadRequest("RelatedEntityType is required.");
+
+        HashSet<Guid> relatedAreas;
+        switch (type)
+        {
+            case "box":
+                if (asset.BoxId is Guid explicitBoxId && explicitBoxId != id.Value)
+                    throw AppException.BadRequest("BoxId conflicts with RelatedEntityId.");
+                relatedAreas = [await AreaOfBoxAsync(id.Value, ct)];
+                break;
+            case "crab":
+                if (asset.CrabId is Guid explicitCrabId && explicitCrabId != id.Value)
+                    throw AppException.BadRequest("CrabId conflicts with RelatedEntityId.");
+                relatedAreas = await AreaOfCrabAsync(id.Value, ct);
+                break;
+            case "device":
+                if (asset.DeviceId is Guid explicitDeviceId && explicitDeviceId != id.Value)
+                    throw AppException.BadRequest("DeviceId conflicts with RelatedEntityId.");
+                relatedAreas = await AreaOfDeviceAsync(id.Value, ct);
+                break;
+            case "crablot":
+            case "lot":
+                relatedAreas = await AreaOfLotAsync(id.Value, ct);
+                break;
+            case "harvestvoucher":
+            case "harvest":
+                relatedAreas = await AreaOfHarvestAsync(id.Value, ct);
+                break;
+            case "frozenlot":
+                relatedAreas = await AreaOfFrozenLotAsync(id.Value, ct);
+                break;
+            default:
+                throw AppException.BadRequest(
+                    $"RelatedEntityType '{asset.RelatedEntityType}' is not supported.");
+        }
+
+        referenceScopes.Add(relatedAreas);
+        EnsureCoherentScopes(referenceScopes);
+        required.UnionWith(relatedAreas);
+        return required;
+    }
+
+    private static void EnsureCoherentScopes(IReadOnlyList<HashSet<Guid>> scopes)
+    {
+        if (scopes.Count < 2) return;
+        var common = new HashSet<Guid>(scopes[0]);
+        foreach (var scope in scopes.Skip(1))
+            common.IntersectWith(scope);
+        if (common.Count == 0)
+            throw AppException.BadRequest(
+                "Các liên kết media không thuộc cùng phạm vi khu.");
+    }
+
+    private async Task EnsureCrabBelongsToBoxAsync(
+        Guid crabId,
+        Guid boxId,
+        CancellationToken ct)
+    {
+        var crab = await _uow.Crabs.GetByIdAsync(crabId, ct)
+            ?? throw AppException.NotFound("Crab");
+        if (crab.BoxId == boxId) return;
+        var allocation = await _uow.CrabBoxAllocations.FirstOrDefaultAsync(
+            item => item.CrabId == crabId && item.BoxId == boxId, ct);
+        if (allocation is null)
+            throw AppException.BadRequest("CrabId is not related to BoxId.");
     }
 
     private async Task<Guid> AreaOfBoxAsync(Guid id, CancellationToken ct)

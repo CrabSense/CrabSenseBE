@@ -19,5 +19,6 @@ public class EdgeCommand : BaseEntity
     public string? ResultMessage { get; set; }
     public string? CorrelationId { get; set; }
     public Guid? RequestedByUserId { get; set; }
+    public string RequestSource { get; set; } = "manual";
     public uint ConcurrencyVersion { get; set; }
 }

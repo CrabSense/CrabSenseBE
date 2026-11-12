@@ -1,6 +1,9 @@
 using CrabSenseBE.Application.DTOs.Media;
+using CrabSenseBE.Application.Common;
+using CrabSenseBE.Application.Interfaces;
 using CrabSenseBE.Application.Services;
 using CrabSenseBE.Domain.Entities;
+using CrabSenseBE.Domain.Enums;
 using CrabSenseBE.Domain.Interfaces;
 using FluentAssertions;
 using Moq;
@@ -20,7 +23,8 @@ public class MediaServiceTests
     {
         _storage.SetupGet(s => s.ProviderName).Returns("GoogleDrive");
         _storage.Setup(s => s.UploadAsync(
-                It.IsAny<Stream>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+                It.IsAny<Stream>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(),
+                It.IsAny<CancellationToken>(), true))
             .ReturnsAsync(new MediaUploadResult("file123", "https://drive.google.com/view", null, null, 1024));
         _storage.Setup(s => s.EnsureShareLinkAsync("file123", It.IsAny<CancellationToken>()))
             .ReturnsAsync("https://drive.google.com/file/d/file123/view?usp=sharing");
@@ -50,12 +54,96 @@ public class MediaServiceTests
     }
 
     [Fact]
+    public async Task Upload_PrivateMedia_DoesNotExposeProviderLinks()
+    {
+        MediaAsset? saved = null;
+        _storage.SetupGet(s => s.ProviderName).Returns("GoogleDrive");
+        _storage.Setup(s => s.UploadAsync(
+                It.IsAny<Stream>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(),
+                It.IsAny<CancellationToken>(), false))
+            .ReturnsAsync(new MediaUploadResult(
+                "private-file", "https://provider/view", "https://provider/content",
+                "https://provider/public", 3));
+        var repo = new Mock<IRepository<MediaAsset>>();
+        repo.Setup(r => r.AddAsync(It.IsAny<MediaAsset>(), It.IsAny<CancellationToken>()))
+            .Callback<MediaAsset, CancellationToken>((asset, _) => saved = asset)
+            .Returns(Task.CompletedTask);
+        _uow.Setup(u => u.MediaAssets).Returns(repo.Object);
+        _uow.Setup(u => u.SaveChangesAsync(It.IsAny<CancellationToken>())).ReturnsAsync(1);
+
+        await using var stream = new MemoryStream(new byte[] { 1, 2, 3 });
+        var result = await Create().UploadAsync(
+            stream, "internal.jpg", "image/jpeg",
+            new MediaUploadMeta("image", null, null, null, null, null, null, false),
+            Guid.NewGuid());
+
+        result.Data!.IsShared.Should().BeFalse();
+        result.Data.ShareLink.Should().BeNull();
+        saved!.ShareLink.Should().BeNull();
+        _storage.Verify(s => s.EnsureShareLinkAsync(
+            It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
     public async Task Upload_InvalidCategory_Throws()
     {
         await using var stream = new MemoryStream(new byte[] { 1 });
         await Assert.ThrowsAsync<CrabSenseBE.Application.Common.AppException>(() =>
             Create().UploadAsync(stream, "x.bin", "application/octet-stream",
                 new MediaUploadMeta("pdf", null, null, null, null, null, null), null));
+    }
+
+    [Fact]
+    public async Task Upload_BoxAndUnrelatedCrab_IsRejectedEvenWhenUserHasBothAreas()
+    {
+        var userId = Guid.NewGuid();
+        var areaA = Guid.NewGuid();
+        var areaB = Guid.NewGuid();
+        var boxA = new Box { Id = Guid.NewGuid(), FarmingRowId = Guid.NewGuid() };
+        var boxB = new Box { Id = Guid.NewGuid(), FarmingRowId = Guid.NewGuid() };
+        var crabB = new Crab
+        {
+            Id = Guid.NewGuid(),
+            BoxId = boxB.Id,
+            CrabLotId = Guid.NewGuid()
+        };
+        var uow = new Mock<IUnitOfWork>();
+        uow.Setup(x => x.Users).Returns(Repo(new AppUser
+        {
+            Id = userId,
+            Role = UserRole.FarmManager,
+            IsActive = true
+        }));
+        uow.Setup(x => x.FarmManagerAssignments).Returns(Repo(
+            new FarmManagerAssignment { ManagerUserId = userId, FarmingAreaId = areaA },
+            new FarmManagerAssignment { ManagerUserId = userId, FarmingAreaId = areaB }));
+        uow.Setup(x => x.Boxes).Returns(Repo(boxA, boxB));
+        uow.Setup(x => x.FarmingRows).Returns(Repo(
+            new FarmingRow { Id = boxA.FarmingRowId, FarmingAreaId = areaA },
+            new FarmingRow { Id = boxB.FarmingRowId, FarmingAreaId = areaB }));
+        uow.Setup(x => x.Crabs).Returns(Repo(crabB));
+        uow.Setup(x => x.CrabBoxAllocations).Returns(Repo<CrabBoxAllocation>());
+        var current = new Mock<ICurrentUserService>();
+        current.SetupGet(x => x.IsAuthenticated).Returns(true);
+        current.SetupGet(x => x.UserId).Returns(userId);
+        var service = new MediaService(
+            uow.Object, _storage.Object, current.Object);
+
+        await using var stream = new MemoryStream([1]);
+        var act = () => service.UploadAsync(
+            stream,
+            "invalid.jpg",
+            "image/jpeg",
+            new MediaUploadMeta(
+                "image", boxA.Id, crabB.Id, null, null, null, null, false),
+            userId);
+
+        (await act.Should().ThrowAsync<AppException>())
+            .Which.StatusCode.Should().Be(400);
+        _storage.Verify(x => x.UploadAsync(
+            It.IsAny<Stream>(), It.IsAny<string>(), It.IsAny<string>(),
+            It.IsAny<string>(), It.IsAny<CancellationToken>(), It.IsAny<bool>()),
+            Times.Never);
     }
 
     [Fact]
@@ -74,5 +162,29 @@ public class MediaServiceTests
         var result = await Create().ShareAsync(id);
         result.Data!.ShareLink.Should().Be("https://drive.google.com/shared");
         asset.IsShared.Should().BeTrue();
+    }
+
+    private static IRepository<T> Repo<T>(params T[] values) where T : class
+    {
+        var rows = values.ToList();
+        var repo = new Mock<IRepository<T>>();
+        repo.Setup(x => x.GetByIdAsync(
+                It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((Guid id, CancellationToken _) =>
+                rows.FirstOrDefault(row =>
+                    (Guid)row.GetType().GetProperty("Id")!.GetValue(row)! == id));
+        repo.Setup(x => x.FindAsync(
+                It.IsAny<System.Linq.Expressions.Expression<Func<T, bool>>>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync((
+                System.Linq.Expressions.Expression<Func<T, bool>> predicate,
+                CancellationToken _) => rows.Where(predicate.Compile()).ToArray());
+        repo.Setup(x => x.FirstOrDefaultAsync(
+                It.IsAny<System.Linq.Expressions.Expression<Func<T, bool>>>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync((
+                System.Linq.Expressions.Expression<Func<T, bool>> predicate,
+                CancellationToken _) => rows.FirstOrDefault(predicate.Compile()));
+        return repo.Object;
     }
 }

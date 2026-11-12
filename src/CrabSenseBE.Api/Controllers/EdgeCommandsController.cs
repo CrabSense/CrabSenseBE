@@ -16,28 +16,35 @@ public sealed class EdgeCommandsController : ControllerBase
     private readonly IEdgeCommandService _service;
     private readonly IConfiguration _configuration;
     private readonly IUnitOfWork _uow;
+    private readonly ICurrentUserService _currentUser;
 
     public EdgeCommandsController(
         IEdgeCommandService service,
         IConfiguration configuration,
-        IUnitOfWork uow)
+        IUnitOfWork uow,
+        ICurrentUserService currentUser)
     {
         _service = service;
         _configuration = configuration;
         _uow = uow;
+        _currentUser = currentUser;
     }
 
     [HttpPost]
-    [Authorize(Roles = AppRoles.FarmWriteWithPlatform)]
+    [Authorize(Roles = AppRoles.FarmWrite)]
     public Task<IActionResult> Enqueue(
         [FromBody] EnqueueEdgeCommandRequest request,
         CancellationToken ct)
         => Execute(async () =>
         {
-            var userId = Guid.TryParse(
-                User.FindFirst("sub")?.Value,
-                out var id) ? id : (Guid?)null;
-            return Ok(await _service.EnqueueAsync(request, userId, ct));
+            if (!_currentUser.IsAuthenticated)
+                throw CrabSenseBE.Application.Common.AppException.Unauthorized(
+                    "Không xác định được người gửi lệnh.");
+            var userId = _currentUser.UserId;
+            if (userId == Guid.Empty)
+                throw CrabSenseBE.Application.Common.AppException.Unauthorized(
+                    "UserId không hợp lệ.");
+            return Ok(await _service.EnqueueManualAsync(request, userId, ct));
         });
 
     [HttpGet("pending")]
@@ -45,10 +52,11 @@ public sealed class EdgeCommandsController : ControllerBase
     public Task<IActionResult> Pending([FromQuery] string deviceCode, CancellationToken ct)
         => Execute(async () =>
         {
-            var (denied, leaseHolder) = await EdgeKeyGuard.CheckDeviceAsync(
+            var (denied, identity) = await EdgeKeyGuard.CheckDeviceAsync(
                 Request, _configuration, _uow, deviceCode, ct);
             if (denied is not null) return denied;
-            return Ok(await _service.GetPendingAsync(deviceCode, leaseHolder!, ct));
+            return Ok(await _service.GetPendingAsync(
+                identity!.DeviceCode, identity.LeaseHolder, ct));
         });
 
     [HttpPost("{id:guid}/ack")]
@@ -62,10 +70,11 @@ public sealed class EdgeCommandsController : ControllerBase
             var command = await _uow.EdgeCommands.GetByIdAsync(id, ct);
             if (command is null)
                 throw CrabSenseBE.Application.Common.AppException.NotFound("EdgeCommand");
-            var (denied, _) = await EdgeKeyGuard.CheckDeviceAsync(
+            var (denied, identity) = await EdgeKeyGuard.CheckDeviceAsync(
                 Request, _configuration, _uow, command.DeviceCode, ct);
             if (denied is not null) return denied;
-            return Ok(await _service.AcknowledgeAsync(id, request, command.DeviceCode, ct));
+            return Ok(await _service.AcknowledgeAsync(
+                id, request, identity!.DeviceCode, ct));
         });
 
     private static async Task<IActionResult> Execute(

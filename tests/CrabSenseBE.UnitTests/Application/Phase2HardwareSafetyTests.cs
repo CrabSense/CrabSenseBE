@@ -12,12 +12,35 @@ using CrabSenseBE.Domain.Interfaces;
 using FluentAssertions;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 
 namespace CrabSenseBE.UnitTests.Application;
 
 public sealed class Phase2HardwareSafetyTests
 {
+    [Fact]
+    public async Task ManualCommand_WithoutActor_IsRejectedWithoutQueueWrite()
+    {
+        var device = new Device
+        {
+            Id = Guid.NewGuid(), DeviceCode = "esp-a", FarmingAreaId = Guid.NewGuid(),
+            Status = DeviceStatus.Online, EdgeState = "Online"
+        };
+        var commands = Repository<EdgeCommand>();
+        var uow = new Mock<IUnitOfWork>();
+        uow.Setup(x => x.Devices).Returns(Repository(device).Object);
+        uow.Setup(x => x.EdgeCommands).Returns(commands.Object);
+
+        var act = () => new EdgeCommandService(uow.Object).EnqueueManualAsync(
+            new EnqueueEdgeCommandRequest("esp-a", "alloff"), Guid.Empty);
+
+        (await act.Should().ThrowAsync<AppException>()).Which.StatusCode.Should().Be(401);
+        commands.Verify(
+            x => x.AddAsync(It.IsAny<EdgeCommand>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
     [Fact]
     public async Task Manager_A_CannotEnqueue_Device_B()
     {
@@ -41,11 +64,42 @@ public sealed class Phase2HardwareSafetyTests
         current.SetupGet(x => x.IsAuthenticated).Returns(true);
         current.SetupGet(x => x.UserId).Returns(userId);
 
-        var act = () => new EdgeCommandService(uow.Object, current.Object).EnqueueAsync(
+        var act = () => new EdgeCommandService(uow.Object, current.Object).EnqueueManualAsync(
             new EnqueueEdgeCommandRequest("esp-b", "alloff"), userId);
 
         var error = await act.Should().ThrowAsync<AppException>();
         error.Which.StatusCode.Should().Be(403);
+    }
+
+    [Fact]
+    public async Task TrustedAutomation_WithMatchingArea_IsQueuedWithSource()
+    {
+        var areaId = Guid.NewGuid();
+        var device = new Device
+        {
+            Id = Guid.NewGuid(), DeviceCode = "esp-auto", FarmingAreaId = areaId,
+            Status = DeviceStatus.Online, EdgeState = "Approved"
+        };
+        EdgeCommand? saved = null;
+        var commands = Repository<EdgeCommand>();
+        commands.Setup(x => x.AddAsync(
+                It.IsAny<EdgeCommand>(), It.IsAny<CancellationToken>()))
+            .Callback<EdgeCommand, CancellationToken>((command, _) => saved = command)
+            .Returns(Task.CompletedTask);
+        var uow = new Mock<IUnitOfWork>();
+        uow.Setup(x => x.Devices).Returns(Repository(device).Object);
+        uow.Setup(x => x.EdgeCommands).Returns(commands.Object);
+        uow.Setup(x => x.SaveChangesAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(1);
+
+        await new EdgeCommandService(uow.Object).EnqueueAutomationAsync(
+            new EnqueueEdgeCommandRequest("esp-auto", "alloff"),
+            areaId,
+            "water-failsafe");
+
+        saved.Should().NotBeNull();
+        saved!.RequestedByUserId.Should().BeNull();
+        saved.RequestSource.Should().Be("automation:water-failsafe");
     }
 
     [Fact]
@@ -87,6 +141,35 @@ public sealed class Phase2HardwareSafetyTests
     }
 
     [Fact]
+    public async Task RevokedDevice_IsRejectedEvenWithItsPreviousCredential()
+    {
+        const string secret = "old-device-secret";
+        var device = new Device
+        {
+            Id = Guid.NewGuid(),
+            DeviceCode = "esp-revoked",
+            CredentialHash = Convert.ToHexString(
+                SHA256.HashData(Encoding.UTF8.GetBytes(secret))),
+            EdgeState = "Revoked",
+            Status = DeviceStatus.Offline
+        };
+        var uow = new Mock<IUnitOfWork>();
+        uow.Setup(x => x.Devices).Returns(Repository(device).Object);
+        var context = new DefaultHttpContext();
+        context.Request.Headers[EdgeKeyGuard.DeviceHeaderName] = secret;
+
+        var result = await EdgeKeyGuard.CheckDeviceAsync(
+            context.Request,
+            new ConfigurationBuilder().Build(),
+            uow.Object,
+            device.DeviceCode,
+            CancellationToken.None);
+
+        result.Denied.Should().BeOfType<Microsoft.AspNetCore.Mvc.UnauthorizedObjectResult>();
+        result.Identity.Should().BeNull();
+    }
+
+    [Fact]
     public async Task HardwareCleaningAck_WithoutResult_DoesNotComplete()
     {
         var run = new WaterAnalysisRun
@@ -114,6 +197,42 @@ public sealed class Phase2HardwareSafetyTests
         run.Status.Should().Be("failed");
         run.CleaningConfirmedAt.Should().NotBeNull();
         run.No2.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task HardwareResult_RequiresValidatedModelEvidence()
+    {
+        var run = new WaterAnalysisRun
+        {
+            Id = Guid.NewGuid(),
+            ExecutionMode = "hardware",
+            Status = "running",
+            CurrentStep = 6,
+            AwaitingEvent = "ANALYSIS_RESULT_SAVED",
+            ControllerId = "esp-1",
+            Analyte = "NO2"
+        };
+        var uow = new Mock<IUnitOfWork>();
+        uow.Setup(x => x.WaterAnalysisRuns).Returns(Repository(run).Object);
+        var service = new WaterAnalysisService(
+            uow.Object,
+            Mock.Of<ICurrentUserService>(),
+            Microsoft.Extensions.Options.Options.Create(
+                new CrabSenseBE.Application.Options.WaterAnalysisOptions()));
+
+        var act = () => service.RecordHardwareEventAsync(
+            run.Id,
+            new WaterAnalysisHardwareEventRequest(
+                "esp-1",
+                "ANALYSIS_RESULT_SAVED",
+                0.25m,
+                1.2m,
+                "http://insecure/image.jpg",
+                ModelResultId: "model-run-1"));
+
+        (await act.Should().ThrowAsync<AppException>()).Which.StatusCode.Should().Be(400);
+        run.No2.Should().BeNull();
+        run.ResultRecordedAt.Should().BeNull();
     }
 
     [Fact]
@@ -148,6 +267,141 @@ public sealed class Phase2HardwareSafetyTests
         var error = await act.Should().ThrowAsync<AppException>();
         error.Which.StatusCode.Should().Be(409);
         device.IpAddress.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task Device_A_CannotIngestSensorOwnedByDevice_B_OrReassignIt()
+    {
+        var deviceA = new Device
+        {
+            Id = Guid.NewGuid(), DeviceCode = "esp-a",
+            Status = DeviceStatus.Online, EdgeState = "Online"
+        };
+        var deviceB = new Device
+        {
+            Id = Guid.NewGuid(), DeviceCode = "esp-b",
+            Status = DeviceStatus.Online, EdgeState = "Online"
+        };
+        var sensorB = new Sensor
+        {
+            Id = Guid.NewGuid(), SensorCode = "ph-b", DeviceId = deviceB.Id,
+            SensorType = "pH", Unit = "pH", IsActive = true
+        };
+        var measurements = Repository<WaterMeasurement>();
+        var uow = new Mock<IUnitOfWork>();
+        uow.Setup(x => x.Devices).Returns(Repository(deviceA, deviceB).Object);
+        uow.Setup(x => x.Sensors).Returns(Repository(sensorB).Object);
+        uow.Setup(x => x.WaterMeasurements).Returns(measurements.Object);
+        var service = new IotService(
+            uow.Object,
+            Mock.Of<IStorageService>(),
+            Mock.Of<IAlertService>(),
+            Mock.Of<IRasFlowService>(),
+            NullLogger<IotService>.Instance);
+
+        var act = () => service.IngestSensorDataAsync(
+            new SensorDataRequest(deviceA.DeviceCode, "ph-b", 7.8m, "pH", DateTime.UtcNow),
+            deviceA.Id,
+            deviceA.DeviceCode,
+            CancellationToken.None);
+
+        (await act.Should().ThrowAsync<AppException>()).Which.StatusCode.Should().Be(403);
+        sensorB.DeviceId.Should().Be(deviceB.Id);
+        measurements.Verify(
+            x => x.AddAsync(It.IsAny<WaterMeasurement>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Fact]
+    public async Task AuthenticatedDevice_CanIngestItsOwnRegisteredSensor()
+    {
+        var device = new Device
+        {
+            Id = Guid.NewGuid(), DeviceCode = "esp-valid",
+            Status = DeviceStatus.Online, EdgeState = "Approved"
+        };
+        var sensor = new Sensor
+        {
+            Id = Guid.NewGuid(), SensorCode = "ph-valid", DeviceId = device.Id,
+            SensorType = "pH", Unit = "pH", IsActive = true
+        };
+        var measurements = Repository<WaterMeasurement>();
+        measurements.Setup(x => x.AddAsync(
+                It.IsAny<WaterMeasurement>(), It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+        var uow = new Mock<IUnitOfWork>();
+        uow.Setup(x => x.Devices).Returns(Repository(device).Object);
+        uow.Setup(x => x.Sensors).Returns(Repository(sensor).Object);
+        uow.Setup(x => x.WaterMeasurements).Returns(measurements.Object);
+        uow.Setup(x => x.SaveChangesAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(1);
+        var service = new IotService(
+            uow.Object,
+            Mock.Of<IStorageService>(),
+            Mock.Of<IAlertService>(),
+            Mock.Of<IRasFlowService>(),
+            NullLogger<IotService>.Instance);
+
+        var result = await service.IngestSensorDataAsync(
+            new SensorDataRequest(
+                device.DeviceCode, sensor.SensorCode, 7.2m, "pH", DateTime.UtcNow),
+            device.Id,
+            device.DeviceCode);
+
+        result.Success.Should().BeTrue();
+        measurements.Verify(x => x.AddAsync(
+            It.Is<WaterMeasurement>(row => row.SensorId == sensor.Id),
+            It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task Batch_WithForeignSensor_IsRejectedBeforeAnyMeasurementIsWritten()
+    {
+        var deviceA = new Device
+        {
+            Id = Guid.NewGuid(), DeviceCode = "esp-a",
+            Status = DeviceStatus.Online, EdgeState = "Approved"
+        };
+        var deviceB = new Device
+        {
+            Id = Guid.NewGuid(), DeviceCode = "esp-b",
+            Status = DeviceStatus.Online, EdgeState = "Approved"
+        };
+        var sensorA = new Sensor
+        {
+            Id = Guid.NewGuid(), SensorCode = "ph-a", DeviceId = deviceA.Id,
+            SensorType = "pH", Unit = "pH", IsActive = true
+        };
+        var sensorB = new Sensor
+        {
+            Id = Guid.NewGuid(), SensorCode = "ph-b", DeviceId = deviceB.Id,
+            SensorType = "pH", Unit = "pH", IsActive = true
+        };
+        var measurements = Repository<WaterMeasurement>();
+        var uow = new Mock<IUnitOfWork>();
+        uow.Setup(x => x.Devices).Returns(Repository(deviceA, deviceB).Object);
+        uow.Setup(x => x.Sensors).Returns(Repository(sensorA, sensorB).Object);
+        uow.Setup(x => x.WaterMeasurements).Returns(measurements.Object);
+        var service = new IotService(
+            uow.Object,
+            Mock.Of<IStorageService>(),
+            Mock.Of<IAlertService>(),
+            Mock.Of<IRasFlowService>(),
+            NullLogger<IotService>.Instance);
+
+        var act = () => service.IngestSensorDataBatchAsync(
+            new SensorDataBatchRequest(new[]
+            {
+                new SensorDataRequest("esp-a", "ph-a", 7.1m, "pH", DateTime.UtcNow),
+                new SensorDataRequest("esp-a", "ph-b", 7.2m, "pH", DateTime.UtcNow)
+            }),
+            deviceA.Id,
+            deviceA.DeviceCode);
+
+        (await act.Should().ThrowAsync<AppException>()).Which.StatusCode.Should().Be(403);
+        measurements.Verify(
+            x => x.AddAsync(It.IsAny<WaterMeasurement>(), It.IsAny<CancellationToken>()),
+            Times.Never);
     }
 
     private static Mock<IRepository<T>> Repository<T>(params T[] rows) where T : class

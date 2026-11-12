@@ -184,9 +184,9 @@ public async Task<IActionResult> GetCrabItemBarcodePng(
         CancellationToken ct)
         => Ok(await _service.GetAdjustmentsAsync(frozenLotId, ct));
 
-    /// <summary>FM xem số dư đầu kỳ và trạng thái đối soát trong các khu được phân công.</summary>
+    /// <summary>FA/FM xem số dư đầu kỳ; FA còn thấy hàng đợi legacy chưa xác định khu.</summary>
     [HttpGet("~/api/frozen-opening-balances")]
-    [Authorize(Roles = AppRoles.FarmManager)]
+    [Authorize(Roles = AppRoles.FarmAdministrator + "," + AppRoles.FarmManager)]
     public async Task<IActionResult> GetOpeningBalances(CancellationToken ct)
         => Ok(await _service.GetOpeningBalancesAsync(ct));
 

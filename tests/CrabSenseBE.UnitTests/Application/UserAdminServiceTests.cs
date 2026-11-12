@@ -470,6 +470,25 @@ public class UserAdminServiceTests
     }
 
     [Fact]
+    public async Task Unsupported_FarmAdministrator_transition_IsBlockedWithoutStaleAssignments()
+    {
+        var administrator = AddFarmAdministrator();
+        var systemId = Guid.NewGuid();
+
+        var act = () => Create().ChangeRoleAsync(
+            administrator.Id,
+            new CrabSenseBE.Application.DTOs.Auth.ChangeUserRoleRequest(
+                nameof(UserRole.FarmManager), null),
+            UserRole.SystemAdministrator,
+            systemId);
+
+        (await act.Should().ThrowAsync<AppException>())
+            .Which.StatusCode.Should().Be(400);
+        administrator.Role.Should().Be(UserRole.FarmAdministrator);
+        administrator.TokenVersion.Should().Be(0);
+    }
+
+    [Fact]
     public async Task Legacy_single_area_manager_keeps_singular_compatibility_field()
     {
         var manager = Add(UserRole.FarmManager);

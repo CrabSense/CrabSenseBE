@@ -67,26 +67,51 @@ public class SyncQueueStubController : ControllerBase
             {
                 accepted.Add(item.IdempotencyKey);
                 if (existing.Status == "processed")
+                {
                     processed.Add(item.IdempotencyKey);
-                else if (existing.Status == "failed")
+                    continue;
+                }
+                if (existing.Status != "failed")
+                {
                     failed.Add(item.IdempotencyKey);
-                continue;
+                    continue;
+                }
             }
-
-            accepted.Add(item.IdempotencyKey);
-            var inboxItem = NewInboxItem(item);
+            else
+            {
+                accepted.Add(item.IdempotencyKey);
+            }
+            var inboxItem = existing ?? NewInboxItem(item);
             await using var transaction = await _db.Database.BeginTransactionAsync(
                 HttpContext.RequestAborted);
             try
             {
-                _db.SyncInboxItems.Add(inboxItem);
+                if (existing is null)
+                    _db.SyncInboxItems.Add(inboxItem);
+                else
+                {
+                    inboxItem.Status = "pending";
+                    inboxItem.ErrorMessage = null;
+                    inboxItem.ProcessedAt = null;
+                    _db.SyncInboxItems.Update(inboxItem);
+                }
                 await ApplyMobileOp(item, inboxItem, processed, failed);
                 if (inboxItem.Status == "failed")
                 {
                     var error = inboxItem.ErrorMessage;
                     await transaction.RollbackAsync(HttpContext.RequestAborted);
                     _db.ChangeTracker.Clear();
-                    _db.SyncInboxItems.Add(NewInboxItem(item, "failed", error));
+                    var failedInbox = await _db.SyncInboxItems.FirstOrDefaultAsync(
+                        stored => stored.IdempotencyKey == item.IdempotencyKey,
+                        HttpContext.RequestAborted);
+                    if (failedInbox is null)
+                        _db.SyncInboxItems.Add(NewInboxItem(item, "failed", error));
+                    else
+                    {
+                        failedInbox.Status = "failed";
+                        failedInbox.ErrorMessage = error;
+                        failedInbox.ProcessedAt = null;
+                    }
                     await _db.SaveChangesAsync(HttpContext.RequestAborted);
                 }
                 else

@@ -30,7 +30,7 @@ public class MediaController : ControllerBase
         [FromForm] string? relatedEntityType = null,
         [FromForm] Guid? relatedEntityId = null,
         [FromForm] string? notes = null,
-        [FromForm] bool sharePublic = true,
+        [FromForm] bool sharePublic = false,
         CancellationToken ct = default)
     {
         if (file is null || file.Length == 0)

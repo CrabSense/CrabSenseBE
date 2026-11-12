@@ -26,7 +26,8 @@ public class LocalMediaStorageService : IMediaStorageService
     }
 
     public async Task<MediaUploadResult> UploadAsync(
-        Stream data, string fileName, string contentType, string category, CancellationToken ct = default)
+        Stream data, string fileName, string contentType, string category,
+        CancellationToken ct = default, bool publicRead = false)
     {
         var folder = string.IsNullOrWhiteSpace(category)
             ? "Media/image"
@@ -53,7 +54,7 @@ public class LocalMediaStorageService : IMediaStorageService
         var size = fs.Length;
 
         var key = relative.Replace('\\', '/');
-        var link = $"file:///{full.Replace('\\', '/')}";
+        var link = publicRead ? $"file:///{full.Replace('\\', '/')}" : null;
         _logger.LogInformation("Local media saved {Key}", key);
         return new MediaUploadResult(key, link, link, link, size);
     }

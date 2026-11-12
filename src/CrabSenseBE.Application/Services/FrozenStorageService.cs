@@ -638,7 +638,13 @@ public class FrozenStorageService : IFrozenStorageService
     public async Task<ApiResponse<IEnumerable<FrozenInventoryOpeningBalanceDto>>>
         GetOpeningBalancesAsync(CancellationToken ct = default)
     {
-        await EnsureOpeningBalanceManagerAsync(ct);
+        var reviewer = await _areas.CurrentUserAsync(ct);
+        if (reviewer is not null
+            && reviewer.Role is not (UserRole.FarmAdministrator or UserRole.FarmManager))
+            throw AppException.Forbidden(
+                "Chỉ Farm Administrator hoặc Farm Manager được rà soát số dư đầu kỳ.");
+        var canReviewUnscoped =
+            reviewer?.Role == UserRole.FarmAdministrator;
         var allowed = await _areas.AreaIdsAsync(ct);
         var candidates = await _uow.FrozenInventoryOpeningBalances.GetAllAsync(ct);
         var balances = new List<FrozenInventoryOpeningBalance>();
@@ -655,6 +661,8 @@ public class FrozenStorageService : IFrozenStorageService
             }
             if (evidenceAreaId.HasValue
                 && (allowed is null || allowed.Contains(evidenceAreaId.Value)))
+                balances.Add(item);
+            else if (!evidenceAreaId.HasValue && canReviewUnscoped)
                 balances.Add(item);
         }
         balances = balances

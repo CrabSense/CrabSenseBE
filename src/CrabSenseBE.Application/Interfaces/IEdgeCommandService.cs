@@ -5,9 +5,15 @@ namespace CrabSenseBE.Application.Interfaces;
 
 public interface IEdgeCommandService
 {
-    Task<ApiResponse<EdgeCommandDto>> EnqueueAsync(
+    Task<ApiResponse<EdgeCommandDto>> EnqueueManualAsync(
         EnqueueEdgeCommandRequest request,
-        Guid? actorId = null,
+        Guid actorId,
+        CancellationToken ct = default);
+
+    Task<ApiResponse<EdgeCommandDto>> EnqueueAutomationAsync(
+        EnqueueEdgeCommandRequest request,
+        Guid farmingAreaId,
+        string automationSource,
         CancellationToken ct = default);
 
     Task<ApiResponse<IReadOnlyList<EdgeCommandDto>>> GetPendingAsync(

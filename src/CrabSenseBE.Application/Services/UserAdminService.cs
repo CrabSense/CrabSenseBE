@@ -291,6 +291,12 @@ public class UserAdminService : IUserAdminService
                 await ToDtoAsync(user, ct),
                 "User already has this role.");
 
+        if (user.Role is not (UserRole.FarmManager or UserRole.FarmStaff)
+            || newRole is not (UserRole.FarmManager or UserRole.FarmStaff))
+            throw AppException.BadRequest(
+                "Chỉ hỗ trợ chuyển đổi FarmManager và FarmStaff qua endpoint này; "
+                + "transition liên quan FarmAdministrator cần workflow phân công riêng.");
+
         var previousRole = user.Role;
         await MoveAssignmentForRoleChangeAsync(user, newRole, request.ManagerUserId, callerId, ct);
 

@@ -32,12 +32,17 @@ public class IotController : ControllerBase
     [AllowAnonymous]
     public async Task<IActionResult> IngestSingle([FromBody] SensorDataRequest req, CancellationToken ct)
     {
-        var denied = string.IsNullOrWhiteSpace(req.DeviceCode)
-            ? EdgeKeyGuard.Check(Request, _configuration)
-            : (await EdgeKeyGuard.CheckDeviceAsync(
-                Request, _configuration, _uow, req.DeviceCode, ct)).Denied;
+        if (string.IsNullOrWhiteSpace(req.DeviceCode))
+            return Unauthorized(new
+            {
+                success = false,
+                message = "DeviceCode và credential riêng là bắt buộc."
+            });
+        var (denied, identity) = await EdgeKeyGuard.CheckDeviceAsync(
+            Request, _configuration, _uow, req.DeviceCode, ct);
         if (denied is not null) return denied;
-        return Ok(await _service.IngestSensorDataAsync(req, ct));
+        return Ok(await _service.IngestSensorDataAsync(
+            req, identity!.DeviceId, identity.DeviceCode, ct));
     }
 
     /// <summary>[CREATE] ESP32 / edge: ingest batch — yêu cầu X-Edge-Key</summary>
@@ -45,19 +50,25 @@ public class IotController : ControllerBase
     [AllowAnonymous]
     public async Task<IActionResult> IngestBatch([FromBody] SensorDataBatchRequest req, CancellationToken ct)
     {
-        var deviceCodes = (req.Measurements ?? [])
-            .Select(item => item.DeviceCode?.Trim())
-            .Where(code => !string.IsNullOrWhiteSpace(code))
+        var measurements = (req.Measurements ?? []).ToList();
+        if (measurements.Count == 0
+            || measurements.Any(item => string.IsNullOrWhiteSpace(item.DeviceCode)))
+            return Unauthorized(new
+            {
+                success = false,
+                message = "Mọi measurement phải có DeviceCode của thiết bị đã xác thực."
+            });
+        var deviceCodes = measurements
+            .Select(item => item.DeviceCode.Trim())
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
-        if (deviceCodes.Length > 1)
+        if (deviceCodes.Length != 1)
             return BadRequest(new { success = false, message = "Một batch chỉ được chứa dữ liệu từ một Device." });
-        var denied = deviceCodes.Length == 1
-            ? (await EdgeKeyGuard.CheckDeviceAsync(
-                Request, _configuration, _uow, deviceCodes[0]!, ct)).Denied
-            : EdgeKeyGuard.Check(Request, _configuration);
+        var (denied, identity) = await EdgeKeyGuard.CheckDeviceAsync(
+            Request, _configuration, _uow, deviceCodes[0], ct);
         if (denied is not null) return denied;
-        return Ok(await _service.IngestSensorDataBatchAsync(req, ct));
+        return Ok(await _service.IngestSensorDataBatchAsync(
+            req, identity!.DeviceId, identity.DeviceCode, ct));
     }
 
     /// <summary>Controller đã xác thực báo trạng thái relay quan sát thực tế.</summary>
@@ -65,10 +76,11 @@ public class IotController : ControllerBase
     [AllowAnonymous]
     public async Task<IActionResult> ReportRelay([FromBody] RelayStateRequest req, CancellationToken ct)
     {
-        var (denied, _) = await EdgeKeyGuard.CheckDeviceAsync(
+        var (denied, identity) = await EdgeKeyGuard.CheckDeviceAsync(
             Request, _configuration, _uow, req.DeviceCode, ct);
         if (denied is not null) return denied;
-        await _service.ReportRelayAsync(req.DeviceCode, req.Channel, req.On, null, ct);
+        await _service.ReportRelayAsync(
+            identity!.DeviceCode, req.Channel, req.On, null, ct);
         return Ok(ApiResponse.Ok("Relay state recorded."));
     }
 

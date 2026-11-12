@@ -39,10 +39,14 @@ public class IotService : IIotService
 
     // ─── Ingest (ESP32 HTTP) ────────────────────────────────────────────────
 
-    public async Task<ApiResponse> IngestSensorDataAsync(SensorDataRequest req, CancellationToken ct = default)
+    public async Task<ApiResponse> IngestSensorDataAsync(
+        SensorDataRequest req,
+        Guid authenticatedDeviceId,
+        string authenticatedDeviceCode,
+        CancellationToken ct = default)
     {
-        if (string.IsNullOrWhiteSpace(req.SensorCode))
-            throw AppException.BadRequest("SensorCode is required.");
+        var (device, sensor) = await RequireIngestOwnershipAsync(
+            req, authenticatedDeviceId, authenticatedDeviceCode, ct);
 
         var eventKey = string.IsNullOrWhiteSpace(req.EventId)
             ? null
@@ -51,73 +55,10 @@ public class IotService : IIotService
             && await _uow.WaterMeasurements.AnyAsync(m => m.Source == eventKey, ct))
             return ApiResponse.Ok("Sensor data already ingested.");
 
-        var sensor = await _uow.Sensors.FirstOrDefaultAsync(s => s.SensorCode == req.SensorCode, ct);
-        if (sensor is null)
-        {
-            var spec = MeterSpec(req.SensorCode);
-            if (spec is null)
-                throw AppException.NotFound($"Sensor '{req.SensorCode}' — register it first (POST /api/sensors).");
-
-            sensor = new Sensor
-            {
-                SensorCode = req.SensorCode.Trim(),
-                SensorType = spec.Value.Type,
-                Unit = spec.Value.Unit,
-                IsActive = true
-            };
-            if (!string.IsNullOrWhiteSpace(req.DeviceCode))
-            {
-                var known = await _uow.Devices.FirstOrDefaultAsync(
-                    d => d.DeviceCode == req.DeviceCode.Trim(), ct);
-                if (known is not null)
-                {
-                    sensor.DeviceId = known.Id;
-                    var sibling = await _uow.Sensors.FirstOrDefaultAsync(
-                        s => s.DeviceId == known.Id && s.WaterSystemId != null, ct);
-                    sensor.WaterSystemId = sibling?.WaterSystemId;
-                }
-            }
-            await _uow.Sensors.AddAsync(sensor, ct);
-        }
-
-        // Upsert device (ESP32) by DeviceCode so first heartbeat doesn't 404
-        Device? device = null;
-        if (!string.IsNullOrWhiteSpace(req.DeviceCode))
-        {
-            var codeKey = req.DeviceCode.Trim().ToLowerInvariant();
-            var matches = (await _uow.Devices.FindAsync(
-                    d => d.DeviceCode.ToLower() == codeKey, ct))
-                .OrderBy(d => d.CreatedAt)
-                .ToList();
-            device = matches.FirstOrDefault();
-            if (device is null)
-            {
-                device = new Device
-                {
-                    DeviceCode = req.DeviceCode.Trim(),
-                    // UPS cắm USB vào kiosk không phải ESP32: gắn đúng loại thiết bị
-                    DeviceType = req.SensorCode.Trim().StartsWith("ups_", StringComparison.Ordinal)
-                        ? "ups"
-                        : "esp32",
-                    Status = DeviceStatus.Online,
-                    LastSeenAt = DateTime.UtcNow,
-                    IpAddress = string.IsNullOrWhiteSpace(req.IpAddress) ? null : req.IpAddress.Trim()
-                };
-                await _uow.Devices.AddAsync(device, ct);
-            }
-            else
-            {
-                device.LastSeenAt = DateTime.UtcNow;
-                device.Status = DeviceStatus.Online;
-                if (!string.IsNullOrWhiteSpace(req.IpAddress))
-                    device.IpAddress = req.IpAddress.Trim();
-            }
-
-            if (sensor.DeviceId is null || sensor.DeviceId != device.Id)
-            {
-                sensor.DeviceId = device.Id;
-            }
-        }
+        device.LastSeenAt = DateTime.UtcNow;
+        device.Status = DeviceStatus.Online;
+        if (!string.IsNullOrWhiteSpace(req.IpAddress))
+            device.IpAddress = req.IpAddress.Trim();
 
         var measurement = new WaterMeasurement
         {
@@ -329,16 +270,29 @@ public class IotService : IIotService
     }
 
     public async Task<ApiResponse<IReadOnlyList<SensorDataBatchItemResult>>> IngestSensorDataBatchAsync(
-        SensorDataBatchRequest req, CancellationToken ct = default)
+        SensorDataBatchRequest req,
+        Guid authenticatedDeviceId,
+        string authenticatedDeviceCode,
+        CancellationToken ct = default)
     {
         var list = req.Measurements?.ToList() ?? new List<SensorDataRequest>();
+        if (list.Count == 0)
+            throw AppException.BadRequest("Measurements are required.");
+
+        // Validate the complete ownership set before the first SaveChanges so a
+        // foreign sensor cannot leave an earlier item partially persisted.
+        foreach (var item in list)
+            _ = await RequireIngestOwnershipAsync(
+                item, authenticatedDeviceId, authenticatedDeviceCode, ct);
+
         var results = new List<SensorDataBatchItemResult>(list.Count);
         for (var index = 0; index < list.Count; index++)
         {
             var item = list[index];
             try
             {
-                var result = await IngestSensorDataAsync(item, ct);
+                var result = await IngestSensorDataAsync(
+                    item, authenticatedDeviceId, authenticatedDeviceCode, ct);
                 results.Add(new(item.SensorCode, item.EventId, true, result.Message ?? "Saved."));
             }
             catch (OperationCanceledException)
@@ -358,6 +312,44 @@ public class IotService : IIotService
         var succeeded = results.Count(result => result.Success);
         return ApiResponse<IReadOnlyList<SensorDataBatchItemResult>>.Ok(
             results, $"Batch processed: {succeeded} succeeded, {results.Count - succeeded} failed.");
+    }
+
+    private async Task<(Device Device, Sensor Sensor)> RequireIngestOwnershipAsync(
+        SensorDataRequest req,
+        Guid authenticatedDeviceId,
+        string authenticatedDeviceCode,
+        CancellationToken ct)
+    {
+        if (authenticatedDeviceId == Guid.Empty
+            || string.IsNullOrWhiteSpace(authenticatedDeviceCode))
+            throw AppException.Unauthorized("Device identity is required.");
+        if (string.IsNullOrWhiteSpace(req.DeviceCode)
+            || !string.Equals(
+                req.DeviceCode.Trim(),
+                authenticatedDeviceCode.Trim(),
+                StringComparison.OrdinalIgnoreCase))
+            throw AppException.Forbidden(
+                "DeviceCode trong payload không khớp credential đã xác thực.");
+        if (string.IsNullOrWhiteSpace(req.SensorCode))
+            throw AppException.BadRequest("SensorCode is required.");
+
+        var device = await _uow.Devices.GetByIdAsync(authenticatedDeviceId, ct)
+            ?? throw AppException.Unauthorized("Authenticated device no longer exists.");
+        if (!string.Equals(
+                device.DeviceCode,
+                authenticatedDeviceCode,
+                StringComparison.OrdinalIgnoreCase))
+            throw AppException.Unauthorized("Device identity is inconsistent.");
+
+        var sensorCode = req.SensorCode.Trim();
+        var sensor = await _uow.Sensors.FirstOrDefaultAsync(
+            item => item.SensorCode == sensorCode, ct)
+            ?? throw AppException.NotFound(
+                $"Sensor '{sensorCode}' — register it through the technical configuration API.");
+        if (sensor.DeviceId != authenticatedDeviceId)
+            throw AppException.Forbidden(
+                "Sensor không thuộc thiết bị đã xác thực.");
+        return (device, sensor);
     }
 
     public async Task<ApiResponse<PagedResult<SensorDataDto>>> GetSensorDataAsync(
