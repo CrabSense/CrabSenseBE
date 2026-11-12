@@ -231,6 +231,48 @@ public class FarmingServiceFilterTests
         _uow.Verify(x => x.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Never);
     }
 
+    [Fact]
+    public async Task Historical_weight_is_recorded_without_overwriting_latest_snapshot()
+    {
+        var now = DateTime.UtcNow;
+        var crab = new Crab { Id = Guid.NewGuid(), WeightGram = 250, StockedAt = now.AddDays(-10),
+            CarapaceWidthMm = 80, CarapaceLengthMm = 60 };
+        var crabs = new Mock<IRepository<Crab>>();
+        crabs.Setup(r => r.GetByIdAsync(crab.Id, It.IsAny<CancellationToken>())).ReturnsAsync(crab);
+        var weights = new Mock<IRepository<CrabWeightHistory>>();
+        weights.Setup(r => r.FindAsync(It.IsAny<System.Linq.Expressions.Expression<Func<CrabWeightHistory, bool>>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new[] { new CrabWeightHistory { CrabId = crab.Id, WeightGram = 250, MeasuredAt = now.AddDays(-1) } });
+        CrabWeightHistory? saved = null;
+        weights.Setup(r => r.AddAsync(It.IsAny<CrabWeightHistory>(), It.IsAny<CancellationToken>()))
+            .Callback<CrabWeightHistory, CancellationToken>((x, _) => saved = x).Returns(Task.CompletedTask);
+        _uow.Setup(x => x.Crabs).Returns(crabs.Object);
+        _uow.Setup(x => x.CrabWeightHistories).Returns(weights.Object);
+
+        await Create().RecordCrabWeightAsync(crab.Id,
+            new RecordCrabWeightRequest(now.AddDays(-2), 200, 70, 50, Source: "ai", RecordedByName: "fake"));
+        saved.Should().NotBeNull();
+        saved!.WeightGram.Should().Be(200);
+        saved.Source.Should().Be("manual");
+        saved.RecordedByName.Should().BeNull();
+        crab.WeightGram.Should().Be(250);
+        crab.CarapaceWidthMm.Should().Be(80);
+        crab.CarapaceLengthMm.Should().Be(60);
+        crabs.Verify(r => r.Update(It.IsAny<Crab>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task Weight_measurement_before_stocking_is_rejected()
+    {
+        var crab = new Crab { Id = Guid.NewGuid(), WeightGram = 200, StockedAt = DateTime.UtcNow.AddDays(-1) };
+        var crabs = new Mock<IRepository<Crab>>();
+        crabs.Setup(r => r.GetByIdAsync(crab.Id, It.IsAny<CancellationToken>())).ReturnsAsync(crab);
+        _uow.Setup(x => x.Crabs).Returns(crabs.Object);
+        var ex = await Assert.ThrowsAsync<AppException>(() => Create().RecordCrabWeightAsync(crab.Id,
+            new RecordCrabWeightRequest(DateTime.UtcNow.AddDays(-2), 150)));
+        ex.StatusCode.Should().Be(400);
+        _uow.Verify(x => x.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Never);
+    }
+
     private void StubEmptyCrabsAndAlerts()
     {
         var crabRepo = new Mock<IRepository<Crab>>();
