@@ -115,8 +115,14 @@ VALUES
     Update-Database "legacy_migration" "20261003105028_AddFrozenCrabItems"
     if ((Invoke-Psql "legacy_migration" 'SELECT to_regclass(''be."FrozenCrabItems"'') IS NOT NULL;') -ne "t") { throw "Repair rollback removed the earlier inventory table." }
 
-    Update-Database "legacy_migration" "20261112012203_AddEdgeCommandRequestSource"
+    Update-Database "legacy_migration" "20261112081944_AddAlertIncidentIdentity"
+    Invoke-Psql "legacy_migration" @'
+INSERT INTO be."EdgeCommands" ("Id","DeviceCode","Command","Channel","Status","CreatedAt","ExpiresAt","AttemptCount","ConcurrencyVersion","RequestSource")
+VALUES ('60000000-0000-0000-0000-000000000003','legacy-esp','on','1','pending',now(),now()+interval '5 minutes',0,0,'manual');
+'@ | Out-Null
     Update-Database "legacy_migration"
+    $legacyCommand = Invoke-Psql "legacy_migration" 'SELECT "Status" || ''|'' || ("CommandSequence" > 0)::text FROM be."EdgeCommands" WHERE "Id" = ''60000000-0000-0000-0000-000000000003'';'
+    if ($legacyCommand -ne "superseded|true") { throw "Legacy pending command was not safely retired: $legacyCommand" }
     $legacyRow = Invoke-Psql "legacy_migration" 'SELECT "IdempotencyKey" || ''|'' || coalesce("ActorUserId"::text,''NULL'') || ''|'' || "RequestHash" || ''|'' || "Status" FROM be."SyncInboxItems" WHERE "IdempotencyKey" = ''legacy-key'';'
     if ($legacyRow -ne "legacy-key|NULL||processed") { throw "Legacy inbox history changed: $legacyRow" }
     $finalLegacyLabel = Invoke-Psql "legacy_migration" 'SELECT "FoodResponse" FROM be."TrainingLabels" WHERE "Id" = ''60000000-0000-0000-0000-000000000002'';'
@@ -124,6 +130,80 @@ VALUES
     $cleanHistory = Invoke-Psql "clean_migration" 'SELECT "MigrationId" FROM be."__EFMigrationsHistory" ORDER BY "MigrationId";'
     $legacyHistory = Invoke-Psql "legacy_migration" 'SELECT "MigrationId" FROM be."__EFMigrationsHistory" ORDER BY "MigrationId";'
     if ($cleanHistory -ne $legacyHistory) { throw "Clean and upgraded migration history differ." }
+    # Test the actual migrated EF schema (not a handcrafted fixture schema).
+    Invoke-Psql "clean_migration" @'
+DO $
+DECLARE
+    admin_id uuid := '70000000-0000-0000-0000-000000000001';
+    manager_id uuid := '70000000-0000-0000-0000-000000000002';
+    staff_id uuid := '70000000-0000-0000-0000-000000000003';
+    area_a uuid := '70000000-0000-0000-0000-000000000010';
+    area_b uuid := '70000000-0000-0000-0000-000000000020';
+    cmd_a uuid := '70000000-0000-0000-0000-000000000101';
+    cmd_b uuid := '70000000-0000-0000-0000-000000000102';
+    cmd_other uuid := '70000000-0000-0000-0000-000000000103';
+    cmd_alloff uuid := '70000000-0000-0000-0000-000000000104';
+    seq_a bigint;
+    seq_b bigint;
+BEGIN
+    INSERT INTO be."AppUsers" ("Id","Username","Email","FullName","PasswordHash","Role","IsActive","CreatedAt","TokenVersion","RefreshTokenVersion")
+    VALUES (admin_id,'test-fa','fa@example.test','FA','test','FarmAdministrator',true,now(),0,0),
+           (manager_id,'test-fm','fm@example.test','FM','test','FarmManager',true,now(),0,0),
+           (staff_id,'test-fs','fs@example.test','FS','test','FarmStaff',true,now(),0,0);
+    INSERT INTO be."FarmingAreas" ("Id","Code","Name","Address","IsActive","Status","CreatedAt")
+    VALUES (area_a,'TEST-AREA-A','Area A','test',true,'Active',now()),
+           (area_b,'TEST-AREA-B','Area B','test',true,'Active',now());
+    INSERT INTO be."FarmManagerAssignments" ("Id","ManagerUserId","FarmingAreaId","AssignedByUserId","CreatedAt")
+    VALUES ('70000000-0000-0000-0000-000000000030',manager_id,area_a,admin_id,now());
+
+    BEGIN
+        INSERT INTO be."FarmStaffAssignments" ("Id","StaffUserId","ManagerUserId","FarmingAreaId","AssignedByUserId","CreatedAt")
+        VALUES ('70000000-0000-0000-0000-000000000040',staff_id,manager_id,area_b,admin_id,now());
+        RAISE EXCEPTION 'Mismatched manager-area pair accepted';
+    EXCEPTION WHEN foreign_key_violation THEN
+        NULL;
+    END;
+    INSERT INTO be."FarmStaffAssignments" ("Id","StaffUserId","ManagerUserId","FarmingAreaId","AssignedByUserId","CreatedAt")
+    VALUES ('70000000-0000-0000-0000-000000000040',staff_id,manager_id,area_a,admin_id,now());
+    BEGIN
+        DELETE FROM be."FarmManagerAssignments" WHERE "ManagerUserId"=manager_id AND "FarmingAreaId"=area_a;
+        RAISE EXCEPTION 'Assignment with dependent staff was deleted';
+    EXCEPTION WHEN foreign_key_violation THEN NULL;
+    END;
+
+    INSERT INTO be."NotificationRules" ("Id","TypeCode","DisplayName","IsEnabled","RecipientRoles","ScopeByArea","ChannelCodes","CreatedAt","FarmingAreaId")
+    VALUES ('70000000-0000-0000-0000-000000000050','scope-test','Test',true,'FarmAdministrator',true,'in_app',now(),NULL),
+           ('70000000-0000-0000-0000-000000000051','scope-test','Test',false,'FarmAdministrator',true,'in_app',now(),area_a),
+           ('70000000-0000-0000-0000-000000000052','scope-test','Test',true,'FarmAdministrator',true,'in_app',now(),area_b);
+    BEGIN
+        INSERT INTO be."NotificationRules" ("Id","TypeCode","DisplayName","IsEnabled","RecipientRoles","ScopeByArea","ChannelCodes","CreatedAt","FarmingAreaId")
+        VALUES ('70000000-0000-0000-0000-000000000053','scope-test','Test',true,'FarmAdministrator',true,'in_app',now(),area_a);
+        RAISE EXCEPTION 'Duplicate area rule accepted';
+    EXCEPTION WHEN unique_violation THEN NULL;
+    END;
+
+    INSERT INTO be."EdgeCommands" ("Id","DeviceCode","Command","Channel","Status","CreatedAt","ExpiresAt","AttemptCount","ConcurrencyVersion","RequestSource")
+    VALUES (cmd_a,'test-esp','on','1','delivered',now(),now()+interval '5 minutes',1,0,'manual')
+    RETURNING "CommandSequence" INTO seq_a;
+    INSERT INTO be."EdgeCommands" ("Id","DeviceCode","Command","Channel","Status","CreatedAt","ExpiresAt","AttemptCount","ConcurrencyVersion","RequestSource")
+    VALUES (cmd_other,'test-esp','on','2','pending',now(),now()+interval '5 minutes',0,0,'manual');
+    INSERT INTO be."EdgeCommands" ("Id","DeviceCode","Command","Channel","Status","CreatedAt","ExpiresAt","AttemptCount","ConcurrencyVersion","RequestSource")
+    VALUES (cmd_b,'test-esp','off','1','pending',now(),now()+interval '5 minutes',0,0,'manual')
+    RETURNING "CommandSequence" INTO seq_b;
+    IF seq_a <= 0 OR seq_b <= seq_a THEN RAISE EXCEPTION 'Sequence is not monotonic'; END IF;
+    IF NOT EXISTS (SELECT 1 FROM be."EdgeCommands" WHERE "Id"=cmd_a AND "Status"='superseded'
+        AND "SupersededByCommandId"=cmd_b AND "ConcurrencyVersion"=1 AND "DeliveryAttemptId" IS NULL)
+        THEN RAISE EXCEPTION 'Older same-channel command not invalidated'; END IF;
+    IF NOT EXISTS (SELECT 1 FROM be."EdgeCommands" WHERE "Id"=cmd_other AND "Status"='pending')
+        THEN RAISE EXCEPTION 'Unrelated channel was incorrectly superseded'; END IF;
+    INSERT INTO be."EdgeCommands" ("Id","DeviceCode","Command","Channel","Status","CreatedAt","ExpiresAt","AttemptCount","ConcurrencyVersion","RequestSource")
+    VALUES (cmd_alloff,'test-esp','alloff',NULL,'pending',now(),now()+interval '5 minutes',0,0,'manual');
+    IF EXISTS (SELECT 1 FROM be."EdgeCommands" WHERE "DeviceCode"='test-esp' AND "Id"<>cmd_alloff
+        AND "Status" IN ('pending','delivered'))
+        THEN RAISE EXCEPTION 'Alloff did not invalidate older commands'; END IF;
+END $;
+'@ | Out-Null
+    Write-Output "AREA_AND_EDGE_SCHEMA_TESTS_PASSED=1"
     Write-Output "CLEAN_MIGRATION_PASSED=1"
     Write-Output "LEGACY_FULL_UPGRADE_PASSED=1"
 }
