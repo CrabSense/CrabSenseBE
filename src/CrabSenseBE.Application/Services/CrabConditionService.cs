@@ -15,10 +15,12 @@ public class CrabConditionService : ICrabConditionService
 
     private readonly IUnitOfWork _uow;
     private readonly FarmAreaScope _areas;
+    private readonly ICurrentUserService _currentUser;
 
     public CrabConditionService(IUnitOfWork uow, ICurrentUserService currentUser)
     {
         _uow = uow;
+        _currentUser = currentUser;
         _areas = new FarmAreaScope(uow, currentUser);
     }
 
@@ -61,6 +63,20 @@ public class CrabConditionService : ICrabConditionService
 
         _ = await _uow.Boxes.GetByIdAsync(req.BoxId, ct) ?? throw AppException.NotFound("Box");
         await _areas.EnsureBoxAsync(req.BoxId, manage: false, ct);
+        var actor = await _areas.CurrentUserAsync(ct) ?? throw AppException.Unauthorized("Không xác định người kiểm tra.");
+        var mediaGuard = new MediaAssetAreaGuard(_uow, _currentUser);
+        foreach (var photo in req.PhotoUrls ?? Array.Empty<string>())
+        {
+            MediaAsset? asset;
+            if (MediaReferenceGuard.TryParseContentId(photo, out var mediaId))
+                asset = await _uow.MediaAssets.GetByIdAsync(mediaId, ct);
+            else
+                asset = await _uow.MediaAssets.FirstOrDefaultAsync(m => m.ShareLink == photo || m.WebViewLink == photo || m.WebContentLink == photo, ct);
+            if (asset is null || asset.BoxId != req.BoxId || !string.Equals(asset.Category, "image", StringComparison.OrdinalIgnoreCase)
+                || (asset.CrabId.HasValue && asset.CrabId != req.CrabId))
+                throw AppException.Forbidden("Ảnh không thuộc hộp/cua được kiểm tra hoặc chưa đăng ký media.");
+            await mediaGuard.EnsureAsync(asset, ct);
+        }
 
         CrabConditionDto eval;
         try
@@ -96,40 +112,21 @@ public class CrabConditionService : ICrabConditionService
             {
                 if (crab.Status is CrabStatus.Dead or CrabStatus.Harvested or CrabStatus.Sold or CrabStatus.Missing)
                     throw AppException.Conflict("Không cập nhật tình trạng cua đã kết thúc hoặc mất dấu.");
+                // Kn is a heuristic from measurements, not a verified molt or
+                // disease observation. Preserve lifecycle, quarantine and observed
+                // condition; only record measured weight and a prediction snapshot.
                 crab.WeightGram = req.WeightG;
-                crab.MoltingStage = eval.MoltingStatusHint ?? crab.MoltingStage;
-                var oldCondition = crab.Condition;
-                var oldStatus = crab.Status;
-                crab.Condition = CrabConditions.FromMoltingAndStatus(
-                    crab.MoltingStage,
-                    eval.Status == "pre_molt" ? CrabStatus.Molting : crab.Status);
-                if (eval.Status == "pre_molt")
-                    crab.Status = CrabStatus.Molting;
-                else
-                    crab.Status = CrabConditions.ApplyCondition(oldStatus, crab.Condition);
                 crab.AiPrediction = eval.MoltingStatusHint ?? eval.Status;
+                crab.AiConfidence = 0;
                 crab.UpdatedAt = DateTime.UtcNow;
                 _uow.Crabs.Update(crab);
-
-                if (oldCondition != crab.Condition || oldStatus != crab.Status)
-                {
-                    await _uow.CrabStatusHistories.AddAsync(new CrabStatusHistory
-                    {
-                        CrabId = crab.Id,
-                        OldCondition = oldCondition,
-                        NewCondition = crab.Condition,
-                        OldStatus = oldStatus,
-                        NewStatus = crab.Status,
-                        Source = "ai",
-                        Reason = "Condition evaluate"
-                    }, ct);
-                }
 
                 await _uow.CrabWeightHistories.AddAsync(new CrabWeightHistory
                 {
                     CrabId = crab.Id,
                     WeightGram = req.WeightG,
-                    Source = "ai",
+                    Source = "kn-condition",
+                    MeasuredAt = DateTime.UtcNow,
                     Notes = "Condition evaluate"
                 }, ct);
 
@@ -182,8 +179,8 @@ public class CrabConditionService : ICrabConditionService
             Notes = JsonSerializer.Serialize(payload, JsonOpts),
             PhotoUrlsJson = JsonSerializer.Serialize(req.PhotoUrls ?? Array.Empty<string>(), JsonOpts),
             InspectedAt = DateTime.UtcNow,
-            InspectorId = req.OperatorId ?? Guid.Empty,
-            OperatorName = req.OperatorName ?? "Operator"
+            InspectorId = actor.Id,
+            OperatorName = string.IsNullOrWhiteSpace(actor.FullName) ? actor.Username : actor.FullName
         };
         await _uow.Inspections.AddAsync(entity, ct);
 
@@ -192,8 +189,8 @@ public class CrabConditionService : ICrabConditionService
             await _uow.AiRecommendations.AddAsync(new AiRecommendation
             {
                 Id = Guid.NewGuid(),
-                Category = "harvest",
-                Recommendation = eval.Recommendation,
+                Category = "inspection",
+                Recommendation = "Kiểm tra thực tế dấu hiệu lột và cua vỏ mềm trước khi lập phiếu thu hoạch. " + eval.Recommendation,
                 Priority = 1,
                 RelatedEntityId = req.BoxId,
                 RelatedEntityType = "box",

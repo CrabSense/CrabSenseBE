@@ -46,6 +46,7 @@ public interface IFarmingService
     Task<ApiResponse<CrabProfileDto>> GetCrabProfileAsync(Guid id, CancellationToken ct = default);
     Task<ApiResponse<NextCrabCodeDto>> GetNextCrabCodeAsync(CancellationToken ct = default);
     Task<ApiResponse<CrabDto>> CreateCrabAsync(CreateCrabRequest request, CancellationToken ct = default);
+    Task<ApiResponse<CrabDto>> CreateCrabWithIdAsync(Guid id, CreateCrabRequest request, CancellationToken ct = default);
     Task<ApiResponse<CreateCrabsBulkDto>> CreateCrabsBulkAsync(CreateCrabsBulkRequest request, CancellationToken ct = default);
     Task<ApiResponse<CrabDto>> UpdateCrabAsync(Guid id, UpdateCrabRequest request, CancellationToken ct = default);
     /// <summary>Soft-delete: IsAlive=false, free box, keep history.</summary>

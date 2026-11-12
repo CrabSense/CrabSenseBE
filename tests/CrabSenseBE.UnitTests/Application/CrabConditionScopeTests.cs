@@ -80,6 +80,76 @@ public sealed class CrabConditionScopeTests
             Times.Never);
     }
 
+    [Fact]
+    public async Task Condition_measurement_preserves_quarantine_and_uses_authenticated_inspector()
+    {
+        var staffId = Guid.NewGuid();
+        var area = Guid.NewGuid();
+        var row = Guid.NewGuid();
+        var boxId = Guid.NewGuid();
+        var crabId = Guid.NewGuid();
+        var (uow, current) = ScopeFixture(staffId, area);
+        var boxes = new Mock<IRepository<Box>>();
+        boxes.Setup(r => r.GetByIdAsync(boxId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new Box { Id = boxId, FarmingRowId = row });
+        var rows = new Mock<IRepository<FarmingRow>>();
+        rows.Setup(r => r.GetByIdAsync(row, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new FarmingRow { Id = row, FarmingAreaId = area });
+        var crab = new Crab { Id = crabId, BoxId = boxId, Status = CrabStatus.Quarantined,
+            Condition = CrabCondition.Problem, MoltingStage = "hard-shell" };
+        var crabs = new Mock<IRepository<Crab>>();
+        crabs.Setup(r => r.GetByIdAsync(crabId, It.IsAny<CancellationToken>())).ReturnsAsync(crab);
+        var inspections = new Mock<IRepository<Inspection>>();
+        Inspection? saved = null;
+        inspections.Setup(r => r.AddAsync(It.IsAny<Inspection>(), It.IsAny<CancellationToken>()))
+            .Callback<Inspection, CancellationToken>((x, _) => saved = x).Returns(Task.CompletedTask);
+        uow.Setup(x => x.Boxes).Returns(boxes.Object);
+        uow.Setup(x => x.FarmingRows).Returns(rows.Object);
+        uow.Setup(x => x.Crabs).Returns(crabs.Object);
+        uow.Setup(x => x.Inspections).Returns(inspections.Object);
+        uow.Setup(x => x.CrabWeightHistories).Returns(Mock.Of<IRepository<CrabWeightHistory>>());
+        uow.Setup(x => x.CrabAiAnalyses).Returns(Mock.Of<IRepository<CrabAiAnalysis>>());
+        uow.Setup(x => x.AiRecommendations).Returns(Mock.Of<IRepository<AiRecommendation>>());
+        var service = new CrabConditionService(uow.Object, current.Object);
+        await service.SubmitAsync(new SubmitCrabConditionRequest(boxId, 243m, CarapaceWidthCm: 7.5m,
+            CrabType: "duc", CrabId: crabId, OperatorId: Guid.NewGuid(), OperatorName: "spoofed"));
+        crab.Status.Should().Be(CrabStatus.Quarantined);
+        crab.Condition.Should().Be(CrabCondition.Problem);
+        crab.MoltingStage.Should().Be("hard-shell");
+        crab.WeightGram.Should().Be(243m);
+        saved.Should().NotBeNull();
+        saved!.InspectorId.Should().Be(staffId);
+        saved.OperatorName.Should().Be("staff");
+    }
+
+    [Fact]
+    public async Task Condition_rejects_photo_from_another_box_before_saving()
+    {
+        var staffId = Guid.NewGuid();
+        var area = Guid.NewGuid();
+        var row = Guid.NewGuid();
+        var boxId = Guid.NewGuid();
+        var photoId = Guid.NewGuid();
+        var (uow, current) = ScopeFixture(staffId, area);
+        var boxes = new Mock<IRepository<Box>>();
+        boxes.Setup(r => r.GetByIdAsync(boxId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new Box { Id = boxId, FarmingRowId = row });
+        var rows = new Mock<IRepository<FarmingRow>>();
+        rows.Setup(r => r.GetByIdAsync(row, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new FarmingRow { Id = row, FarmingAreaId = area });
+        var media = new Mock<IRepository<MediaAsset>>();
+        media.Setup(r => r.GetByIdAsync(photoId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new MediaAsset { Id = photoId, BoxId = Guid.NewGuid(), Category = "image" });
+        uow.Setup(x => x.Boxes).Returns(boxes.Object);
+        uow.Setup(x => x.FarmingRows).Returns(rows.Object);
+        uow.Setup(x => x.MediaAssets).Returns(media.Object);
+        var service = new CrabConditionService(uow.Object, current.Object);
+        Func<Task> act = () => service.SubmitAsync(new SubmitCrabConditionRequest(boxId, 200m,
+            CarapaceWidthCm: 8m, PhotoUrls: new[] { $"/api/media/{photoId}/content" }));
+        (await act.Should().ThrowAsync<AppException>()).Which.StatusCode.Should().Be(403);
+        uow.Verify(x => x.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Never);
+    }
+
     private static (
         Mock<IUnitOfWork> Uow,
         Mock<ICurrentUserService> Current) ScopeFixture(

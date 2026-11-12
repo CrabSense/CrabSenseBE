@@ -1032,7 +1032,17 @@ public class FarmingService : IFarmingService
             alerts));
     }
 
-    public async Task<ApiResponse<CrabDto>> CreateCrabAsync(CreateCrabRequest req, CancellationToken ct = default)
+    public Task<ApiResponse<CrabDto>> CreateCrabAsync(CreateCrabRequest req, CancellationToken ct = default)
+        => CreateCrabCoreAsync(req, Guid.NewGuid(), ct);
+
+    public async Task<ApiResponse<CrabDto>> CreateCrabWithIdAsync(Guid id, CreateCrabRequest req, CancellationToken ct = default)
+    {
+        if (id == Guid.Empty) throw AppException.BadRequest("CrabId không hợp lệ.");
+        if (await _uow.Crabs.AnyAsync(x => x.Id == id, ct)) throw AppException.Conflict("CrabId đã tồn tại.");
+        return await CreateCrabCoreAsync(req, id, ct);
+    }
+
+    private async Task<ApiResponse<CrabDto>> CreateCrabCoreAsync(CreateCrabRequest req, Guid id, CancellationToken ct)
     {
         if (req.CrabLotId == Guid.Empty)
             throw AppException.BadRequest("CrabLotId is required — crab must belong to a lot.");
@@ -1118,6 +1128,7 @@ public class FarmingService : IFarmingService
 
         var crab = new Crab
         {
+            Id = id,
             BoxId = box.Id,
             CrabLotId = req.CrabLotId,
             Code = code,
