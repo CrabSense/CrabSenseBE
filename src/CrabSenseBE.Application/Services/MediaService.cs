@@ -233,7 +233,7 @@ public class MediaService : IMediaService
                 "Chỉ Farm Administrator hoặc Farm Manager được công khai media.");
     }
 
-    private static string ValidateFileName(string fileName, string category)
+    internal static string ValidateFileName(string fileName, string category)
     {
         var trimmed = fileName.Trim();
         if (trimmed.Length is 0 or > 180
@@ -256,7 +256,7 @@ public class MediaService : IMediaService
         return trimmed;
     }
 
-    private static string ValidateContent(
+    internal static string ValidateContent(
         Stream stream,
         string category,
         string claimedContentType)
