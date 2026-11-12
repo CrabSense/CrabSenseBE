@@ -474,6 +474,7 @@ public class BoxDetailService : IBoxDetailService
             Status = CrabConditions.ToLifecycle(condition),
             ImageUrlsJson = JsonStringList.Serialize(req.ImageUrls)
         };
+        await MediaReferenceGuard.BindCrabAsync(_uow, _areas, crab, JsonStringList.Parse(crab.ImageUrlsJson), ct);
         await _uow.Crabs.AddAsync(crab, ct);
 
         // Tem QR cấp cho cá thể — desktop làm ở CreateCrabAsync; thiếu thì tem có mã nhưng quét không ra.
