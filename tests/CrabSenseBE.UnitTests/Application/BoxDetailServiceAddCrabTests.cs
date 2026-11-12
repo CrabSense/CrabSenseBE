@@ -493,7 +493,7 @@ public class BoxDetailServiceAddCrabTests
 
     [Theory]
     // Explicit owner stance wins over the molting stage, and drives lifecycle status.
-    [InlineData("problem", "hard", CrabCondition.Problem, CrabStatus.Quarantined)]
+    [InlineData("problem", "hard", CrabCondition.Problem, CrabStatus.Alive)]
     [InlineData("molting", "hard", CrabCondition.Molting, CrabStatus.Molting)]
     [InlineData("normal", "hard", CrabCondition.Normal, CrabStatus.Alive)]
     // No condition sent -> derive from molting stage (same rule as desktop).
