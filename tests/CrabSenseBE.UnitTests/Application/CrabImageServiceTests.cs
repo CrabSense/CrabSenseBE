@@ -12,7 +12,8 @@ namespace CrabSenseBE.UnitTests.Application;
 public class CrabImageServiceTests
 {
     private readonly Mock<IUnitOfWork> _uow = new();
-    private readonly Mock<IPublicImageStorage> _storage = new();
+    private readonly Mock<IPublicImageStorage> _legacyStorage = new();
+    private readonly Mock<IMediaStorageService> _storage = new();
     private readonly Mock<IRepository<Crab>> _crabs = new();
     private readonly Mock<IRepository<MediaAsset>> _media = new();
     private readonly Mock<ICurrentUserService> _currentUser = new();
@@ -65,28 +66,29 @@ public class CrabImageServiceTests
     }
 
     private CrabImageService Create() =>
-        new(_uow.Object, _storage.Object, _currentUser.Object);
+        new(_uow.Object, _legacyStorage.Object, _currentUser.Object, _storage.Object);
 
     [Fact]
-    public async Task Upload_WithoutCrab_ReturnsS3Urls()
+    public async Task Upload_WithoutCrab_ReturnsPrivateContentUrl()
     {
         _storage.Setup(s => s.UploadAsync(
-                It.IsAny<Stream>(), "a.jpg", "image/jpeg", "NhapHang/_pending", It.IsAny<CancellationToken>()))
+                It.IsAny<Stream>(), "a.jpg", "image/jpeg", "NhapHang/_pending", It.IsAny<CancellationToken>(), false))
             .ReturnsAsync(new MediaUploadResult("media/crabs/a.jpg",
                 "https://bucket.s3.amazonaws.com/a.jpg",
                 "https://bucket.s3.amazonaws.com/a.jpg",
                 "https://bucket.s3.amazonaws.com/a.jpg", 12));
 
-        await using var stream = new MemoryStream(new byte[] { 1, 2, 3 });
+        await using var stream = new MemoryStream(new byte[] { 0xFF, 0xD8, 0xFF });
         var result = await Create().UploadAsync(
             new[] { new CrabImageFile(stream, "a.jpg", "image/jpeg") },
             crabId: null, harvestVoucherId: null, uploadedBy: Guid.NewGuid());
 
         result.Success.Should().BeTrue();
         result.Data.Should().NotBeNull().And.HaveCount(1);
-        result.Data![0].Url.Should().StartWith("https://");
+        result.Data![0].Url.Should().StartWith("/api/media/").And.EndWith("/content");
         result.Data[0].Provider.Should().Be("S3");
         _crabs.Verify(r => r.Update(It.IsAny<Crab>()), Times.Never);
+        _media.Verify(r => r.AddAsync(It.Is<MediaAsset>(a => !a.IsShared && a.RelatedEntityType == "crab-pending" && a.UploadedBy == _currentUser.Object.UserId), It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]
@@ -99,16 +101,16 @@ public class CrabImageServiceTests
         _uow.Setup(u => u.CrabLots).Returns(lots.Object);
         var folder = $"NhapHang/_pending/{crabId:D}";
         _storage.Setup(s => s.UploadAsync(
-                It.IsAny<Stream>(), "b.png", "image/png", folder, It.IsAny<CancellationToken>()))
+                It.IsAny<Stream>(), "b.png", "image/png", folder, It.IsAny<CancellationToken>(), false))
             .ReturnsAsync(new MediaUploadResult("k", "https://new.png", "https://new.png", "https://new.png", 4));
 
-        await using var stream = new MemoryStream(new byte[] { 1 });
+        await using var stream = new MemoryStream(new byte[] { 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A });
         var result = await Create().UploadAsync(
             new[] { new CrabImageFile(stream, "b.png", "image/png") },
             crabId, null, Guid.NewGuid());
 
         result.Success.Should().BeTrue();
-        JsonStringList.Parse(crab.ImageUrlsJson).Should().Equal("https://old.jpg", "https://new.png");
+        JsonStringList.Parse(crab.ImageUrlsJson).Should().Equal("https://old.jpg", result.Data![0].Url);
         _crabs.Verify(r => r.Update(crab), Times.Once);
     }
 
@@ -152,17 +154,17 @@ public class CrabImageServiceTests
         _uow.Setup(u => u.HarvestLines).Returns(lines.Object);
 
         _storage.Setup(s => s.UploadAsync(
-                It.IsAny<Stream>(), "h.jpg", "image/jpeg", "ThuHoach/HAR-009", It.IsAny<CancellationToken>()))
+                It.IsAny<Stream>(), "h.jpg", "image/jpeg", "ThuHoach/HAR-009", It.IsAny<CancellationToken>(), false))
             .ReturnsAsync(new MediaUploadResult("k1", "https://v.jpg", "https://v.jpg", "https://v.jpg", 5));
 
-        await using var stream = new MemoryStream(new byte[] { 9 });
+        await using var stream = new MemoryStream(new byte[] { 0xFF, 0xD8, 0xFF });
         var result = await Create().UploadAsync(
             new[] { new CrabImageFile(stream, "h.jpg", "image/jpeg") },
             crabId: null, harvestVoucherId: voucherId, uploadedBy: null);
 
         result.Success.Should().BeTrue();
-        JsonStringList.Parse(voucher.PhotoUrlsJson).Should().Equal("https://v.jpg");
-        JsonStringList.Parse(crab.ImageUrlsJson).Should().Equal("https://v.jpg");
+        JsonStringList.Parse(voucher.PhotoUrlsJson).Should().Equal(result.Data![0].Url);
+        JsonStringList.Parse(crab.ImageUrlsJson).Should().Equal(result.Data[0].Url);
         vouchers.Verify(r => r.Update(voucher), Times.Once);
         _crabs.Verify(r => r.Update(crab), Times.Once);
     }
@@ -183,6 +185,7 @@ public class CrabImageServiceTests
                     ShareLink = url,
                     StorageKey = "media/crabs/a.jpg",
                     ContentType = "image/jpeg",
+                    Provider = "S3",
                     FileName = "a.jpg"
                 }
             });
