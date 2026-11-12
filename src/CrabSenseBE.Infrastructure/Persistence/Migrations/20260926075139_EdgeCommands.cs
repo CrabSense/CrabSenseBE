@@ -183,47 +183,14 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     table.PrimaryKey("PK_EdgeCommands", x => x.Id);
                 });
 
-            migrationBuilder.CreateTable(
-                name: "SyncInboxItems",
-                schema: "be",
-                columns: table => new
-                {
-                    Id = table.Column<Guid>(type: "uuid", nullable: false),
-                    IdempotencyKey = table.Column<string>(type: "text", nullable: false),
-                    EntityType = table.Column<string>(type: "text", nullable: false),
-                    EntityId = table.Column<string>(type: "text", nullable: false),
-                    OperationType = table.Column<string>(type: "text", nullable: false),
-                    BaseVersion = table.Column<int>(type: "integer", nullable: true),
-                    ClientUpdatedAt = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: true),
-                    PayloadJson = table.Column<string>(type: "jsonb", nullable: false),
-                    Status = table.Column<string>(type: "text", nullable: false),
-                    ErrorMessage = table.Column<string>(type: "text", nullable: true),
-                    ReceivedAt = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: false),
-                    ProcessedAt = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: true)
-                },
-                constraints: table =>
-                {
-                    table.PrimaryKey("PK_SyncInboxItems", x => x.Id);
-                });
+            // SyncInboxItems and its indexes are owned by the earlier OfflineSyncInbox
+            // migration. Do not recreate them on a fresh database or drop them on rollback.
 
             migrationBuilder.CreateIndex(
                 name: "IX_EdgeCommands_DeviceCode_Status_CreatedAt",
                 schema: "be",
                 table: "EdgeCommands",
                 columns: new[] { "DeviceCode", "Status", "CreatedAt" });
-
-            migrationBuilder.CreateIndex(
-                name: "IX_SyncInboxItems_IdempotencyKey",
-                schema: "be",
-                table: "SyncInboxItems",
-                column: "IdempotencyKey",
-                unique: true);
-
-            migrationBuilder.CreateIndex(
-                name: "IX_SyncInboxItems_Status_ReceivedAt",
-                schema: "be",
-                table: "SyncInboxItems",
-                columns: new[] { "Status", "ReceivedAt" });
         }
 
         /// <inheritdoc />
@@ -231,10 +198,6 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
         {
             migrationBuilder.DropTable(
                 name: "EdgeCommands",
-                schema: "be");
-
-            migrationBuilder.DropTable(
-                name: "SyncInboxItems",
                 schema: "be");
 
             migrationBuilder.DropColumn(
