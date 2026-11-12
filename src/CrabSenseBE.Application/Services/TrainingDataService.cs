@@ -1,3 +1,4 @@
+using CrabSenseBE.Domain.Enums;
 using CrabSenseBE.Application.Common;
 using CrabSenseBE.Application.DTOs.TrainingData;
 using CrabSenseBE.Application.Interfaces;
@@ -19,6 +20,9 @@ public class TrainingDataService : ITrainingDataService
     public async Task<ApiResponse<Guid>> CreateFeedingAsync(
         CreateFeedingEventRequest request, Guid? userId, CancellationToken ct)
     {
+        var actor = await _areas.CurrentUserAsync(ct);
+        if (actor is not null && (actor.Role != UserRole.FarmStaff || userId != actor.Id))
+            throw AppException.Forbidden("Chỉ Farm Staff ghi nhận feeding.");
         if (request.CrabId == Guid.Empty)
             throw AppException.BadRequest("CrabId is required.");
         var crab = await _uow.Crabs.GetByIdAsync(request.CrabId, ct)
@@ -42,6 +46,9 @@ public class TrainingDataService : ITrainingDataService
     public async Task<ApiResponse<Guid>> CreateObservationAsync(
         CreateObservationEventRequest request, CancellationToken ct)
     {
+        var actor = await _areas.CurrentUserAsync(ct);
+        if (actor is not null && actor.Role != UserRole.FarmStaff)
+            throw AppException.Forbidden("Chỉ Farm Staff ghi nhận observation.");
         if (request.CrabId == Guid.Empty)
             throw AppException.BadRequest("CrabId is required.");
         var crab = await _uow.Crabs.GetByIdAsync(request.CrabId, ct)
@@ -76,6 +83,9 @@ public class TrainingDataService : ITrainingDataService
     public async Task<ApiResponse> LabelAsync(
         SubmitTrainingLabelRequest request, Guid? userId, CancellationToken ct)
     {
+        var actor = await _areas.CurrentUserAsync(ct);
+        if (actor is not null && (actor.Role != UserRole.FarmManager || userId != actor.Id))
+            throw AppException.Forbidden("Chỉ Farm Manager xác nhận nhãn training.");
         if ((request.FeedingEventId is null) == (request.ObservationEventId is null))
             throw AppException.BadRequest(
                 "Exactly one of FeedingEventId or ObservationEventId is required.");
