@@ -107,7 +107,7 @@ public class SalesOrderService : ISalesOrderService
             throw AppException.Conflict($"Cua '{duplicate.Key}' bị chọn trùng.");
 
         var customer = await FindOrCreateCustomerAsync(
-            areaId, null, request.CustomerName,
+            areaId, request.CustomerId, request.CustomerName,
             request.CustomerPhone,
             null,
             request.CustomerAddress,

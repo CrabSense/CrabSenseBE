@@ -308,6 +308,32 @@ public class AuthServiceTests
         result.Data!.AccessToken.Should().Be("access");
     }
 
+    [Fact]
+    public async Task Login_uses_configured_refresh_lifetime()
+    {
+        var user = new AppUser
+        {
+            Id = Guid.NewGuid(), Username = "policy-user", Role = UserRole.FarmStaff,
+            IsActive = true, PasswordHash = BCrypt.Net.BCrypt.HashPassword("Password123!")
+        };
+        var users = new Mock<IRepository<AppUser>>();
+        users.Setup(x => x.FirstOrDefaultAsync(It.IsAny<System.Linq.Expressions.Expression<Func<AppUser, bool>>>(),
+            It.IsAny<CancellationToken>())).ReturnsAsync(user);
+        _uowMock.Setup(x => x.Users).Returns(users.Object);
+        _uowMock.Setup(x => x.OperationLogs).Returns(new Mock<IRepository<OperationLog>>().Object);
+        _jwtMock.Setup(x => x.GenerateAccessToken(user)).Returns(new AccessTokenResult("access", DateTime.UtcNow.AddMinutes(15)));
+        _jwtMock.Setup(x => x.GenerateRefreshToken()).Returns("refresh");
+        var platform = new Mock<CrabSenseBE.Application.Interfaces.ISystemPlatformService>();
+        platform.Setup(x => x.GetPolicyAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(ApiResponse<CrabSenseBE.Application.DTOs.SystemPlatform.SecurityPolicyDto>.Ok(
+                new CrabSenseBE.Application.DTOs.SystemPlatform.SecurityPolicyDto(7, 3, true)));
+        var before = DateTime.UtcNow;
+        await new AuthService(_uowMock.Object, _jwtMock.Object, platform.Object)
+            .LoginAsync(new LoginRequest(user.Username, "Password123!"));
+        user.RefreshTokenExpiry!.Value.Should().BeOnOrAfter(before.AddDays(7));
+        user.RefreshTokenExpiry.Value.Should().BeBefore(DateTime.UtcNow.AddDays(7).AddSeconds(1));
+    }
+
     private static string Hash(string token) =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(token)));
 }

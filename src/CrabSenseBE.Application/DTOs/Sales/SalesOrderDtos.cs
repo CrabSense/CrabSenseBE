@@ -75,7 +75,8 @@ public record CreateSalesOrderRequest(
     decimal? PaidAmount,
     string? DeliveryStatus,
     IEnumerable<CreateSalesOrderLineRequest>? Lines,
-    string? CustomerType = null);
+    string? CustomerType = null,
+    Guid? CustomerId = null);
 
 public record CreateSalesOrderLineRequest(
     Guid CrabId,

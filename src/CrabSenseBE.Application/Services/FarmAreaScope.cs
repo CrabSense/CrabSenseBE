@@ -180,12 +180,21 @@ public sealed class ReportAreaGate
     {
         var areas = await AreasAsync(requestedAreaId, ct);
         if (areas is null) return null;
-        var rowIds = (await _uow.FarmingRows.GetAllAsync(ct))
-            .Where(row => areas.Contains(row.FarmingAreaId))
-            .Select(row => row.Id)
+        var rowQuery = _uow.FarmingRows.Query();
+        var rowIds = (rowQuery is null
+                ? (await _uow.FarmingRows.GetAllAsync(ct)).Where(row => areas.Contains(row.FarmingAreaId)).Select(row => row.Id).ToList()
+                : rowQuery.Provider is Microsoft.EntityFrameworkCore.Query.IAsyncQueryProvider
+                    ? await rowQuery.Where(row => areas.Contains(row.FarmingAreaId)).Select(row => row.Id).ToListAsync(ct)
+                    : rowQuery.Where(row => areas.Contains(row.FarmingAreaId)).Select(row => row.Id).ToList())
             .ToHashSet();
-        return (await _uow.Boxes.GetAllAsync(ct))
-            .Where(box => rowIds.Contains(box.FarmingRowId))
+        var boxQuery = _uow.Boxes.Query();
+        if (boxQuery is not null)
+        {
+            var ids = boxQuery.Where(box => rowIds.Contains(box.FarmingRowId)).Select(box => box.Id);
+            return (ids.Provider is Microsoft.EntityFrameworkCore.Query.IAsyncQueryProvider
+                ? await ids.ToListAsync(ct) : ids.ToList()).ToHashSet();
+        }
+        return (await _uow.Boxes.GetAllAsync(ct)).Where(box => rowIds.Contains(box.FarmingRowId))
             .Select(box => box.Id)
             .ToHashSet();
     }
