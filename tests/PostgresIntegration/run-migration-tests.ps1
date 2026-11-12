@@ -36,7 +36,7 @@ function Assert-Exit([string]$Message) {
     if ($LASTEXITCODE -ne 0) { throw "$Message (exit $LASTEXITCODE)" }
 }
 function Invoke-Psql([string]$Database, [string]$Sql) {
-    $output = $Sql | & $psql -X -v ON_ERROR_STOP=1 -h 127.0.0.1 -p $Port -U postgres -d $Database -At 2>&1
+    $output = $Sql | & $psql -X -q -v ON_ERROR_STOP=1 -h 127.0.0.1 -p $Port -U postgres -d $Database -At 2>&1
     Assert-Exit "SQL assertion failed"
     return ($output -join "`n").Trim()
 }
@@ -53,10 +53,20 @@ function Update-Database([string]$Database, [string]$Target = "") {
 
 try {
     & $initdb -D $data --auth=trust --username=postgres --encoding=UTF8 | Out-Null
-    Assert-Exit "initdb failed"
-    & $pgctl -D $data -l (Join-Path $data "server.log") -o "-p $Port -F -h 127.0.0.1" -w start
-    Assert-Exit "pg_ctl start failed"
+    if ($LASTEXITCODE -ne 0) { throw "initdb failed (exit $LASTEXITCODE)" }
+    $serverLog = Join-Path $data "server.log"
+    $serverOptions = "-p $Port -F -h 127.0.0.1"
+    # Ubuntu packages default to /var/run/postgresql, which the runner may not own.
+    # All test clients use TCP; do not create a system Unix-domain socket.
+    if (!$windows) { $serverOptions += " -c unix_socket_directories=" }
+    & $pgctl -D $data -l $serverLog -o $serverOptions -w -t 60 start
+    if ($LASTEXITCODE -ne 0) {
+        if (Test-Path $serverLog) { Get-Content $serverLog | Write-Host }
+        throw "PostgreSQL test server failed to start; see server.log above."
+    }
     $started = $true
+    & $psql -X -q -v ON_ERROR_STOP=1 -h 127.0.0.1 -p $Port -U postgres -d postgres -c "SELECT 1"
+    if ($LASTEXITCODE -ne 0) { throw "PostgreSQL TCP readiness check failed." }
     $env:ASPNETCORE_ENVIRONMENT = "Production"
     $env:DOTNET_ENVIRONMENT = "Production"
     $env:Jwt__Secret = "migration-test-only-local-secret-not-for-production-2026"
@@ -78,7 +88,7 @@ INSERT INTO be."SyncInboxItems"
 VALUES
 ('60000000-0000-0000-0000-000000000001','legacy-key','crab','legacy-crab','create_crab','{}','processed',now(),now());
 '@
-    $fixture | & $psql -X -v ON_ERROR_STOP=1 -h 127.0.0.1 -p $Port -U postgres -d legacy_migration | Out-Null
+    $fixture | & $psql -X -q -v ON_ERROR_STOP=1 -h 127.0.0.1 -p $Port -U postgres -d legacy_migration | Out-Null
     Assert-Exit "Could not insert legacy inbox evidence"
     Update-Database "legacy_migration"
     $legacyRow = Invoke-Psql "legacy_migration" 'SELECT "IdempotencyKey" || ''|'' || coalesce("ActorUserId"::text,''NULL'') || ''|'' || "RequestHash" || ''|'' || "Status" FROM be."SyncInboxItems" WHERE "IdempotencyKey" = ''legacy-key'';'
