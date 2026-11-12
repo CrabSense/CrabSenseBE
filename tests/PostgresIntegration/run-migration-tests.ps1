@@ -1,136 +1,99 @@
 param(
-    [string]$PostgresBin = "C:\Program Files\PostgreSQL\18\bin",
+    [string]$PostgresBin = "",
     [int]$Port = 55440
 )
 
 $ErrorActionPreference = "Stop"
-$data = Join-Path $env:TEMP "crabsense-migration-pg"
-$initdb = Join-Path $PostgresBin "initdb.exe"
-$pgctl = Join-Path $PostgresBin "pg_ctl.exe"
-$createdb = Join-Path $PostgresBin "createdb.exe"
-$psql = Join-Path $PostgresBin "psql.exe"
-
-if (Test-Path $data) {
-    if (Test-Path (Join-Path $data "postmaster.pid")) {
-        & $pgctl -D $data stop -m immediate | Out-Null
+$windows = [System.Environment]::OSVersion.Platform -eq [System.PlatformID]::Win32NT
+$exe = if ($windows) { ".exe" } else { "" }
+if ([string]::IsNullOrWhiteSpace($PostgresBin)) {
+    if ($windows) {
+        $PostgresBin = Get-ChildItem "C:\Program Files\PostgreSQL" -Directory -ErrorAction SilentlyContinue |
+            Sort-Object Name -Descending |
+            ForEach-Object { Join-Path $_.FullName "bin" } |
+            Where-Object { Test-Path (Join-Path $_ "initdb.exe") } |
+            Select-Object -First 1
+    } else {
+        $pgConfig = Get-Command pg_config -ErrorAction SilentlyContinue
+        if ($pgConfig) { $PostgresBin = (& $pgConfig.Source --bindir).Trim() }
     }
-    Remove-Item $data -Recurse -Force
 }
-
-& $initdb -D $data --auth=trust --username=postgres --encoding=UTF8 | Out-Null
-& $pgctl -D $data -l (Join-Path $data "server.log") -o "-p $Port -F" -w start
-
+if ([string]::IsNullOrWhiteSpace($PostgresBin)) { throw "PostgreSQL binaries not found." }
+$initdb = Join-Path $PostgresBin "initdb$exe"
+$pgctl = Join-Path $PostgresBin "pg_ctl$exe"
+$createdb = Join-Path $PostgresBin "createdb$exe"
+$psql = Join-Path $PostgresBin "psql$exe"
+foreach ($binary in @($initdb, $pgctl, $createdb, $psql)) {
+    if (!(Test-Path $binary)) { throw "Missing binary: $binary" }
+}
+$data = Join-Path ([System.IO.Path]::GetTempPath()) ("crabsense-migration-" + [Guid]::NewGuid().ToString("N"))
+$oldConnection = $env:ConnectionStrings__DefaultConnection
+$oldEnvironment = $env:ASPNETCORE_ENVIRONMENT
+$oldDotnetEnvironment = $env:DOTNET_ENVIRONMENT
+$oldJwt = $env:Jwt__Secret
+$started = $false
+function Assert-Exit([string]$Message) {
+    if ($LASTEXITCODE -ne 0) { throw "$Message (exit $LASTEXITCODE)" }
+}
 function Invoke-Psql([string]$Database, [string]$Sql) {
-    $output = $Sql | & $psql -X -v ON_ERROR_STOP=1 -h 127.0.0.1 -p $Port `
-        -U postgres -d $Database -At 2>&1
-    if ($LASTEXITCODE -ne 0) {
-        throw ($output -join [Environment]::NewLine)
-    }
-    return ($output -join "`n")
+    $output = $Sql | & $psql -X -v ON_ERROR_STOP=1 -h 127.0.0.1 -p $Port -U postgres -d $Database -At 2>&1
+    Assert-Exit "SQL assertion failed"
+    return ($output -join "`n").Trim()
+}
+function Update-Database([string]$Database, [string]$Target = "") {
+    $env:ConnectionStrings__DefaultConnection = "Host=127.0.0.1;Port=$Port;Database=$Database;Username=postgres"
+    $arguments = @("ef","database","update")
+    if ($Target) { $arguments += $Target }
+    $arguments += @("--project","src/CrabSenseBE.Infrastructure/CrabSenseBE.Infrastructure.csproj",
+        "--startup-project","src/CrabSenseBE.Api/CrabSenseBE.Api.csproj",
+        "--context","AppDbContext","--configuration","Release","--no-build")
+    & dotnet @arguments
+    Assert-Exit "EF database update failed for $Database"
 }
 
 try {
-    & dotnet build src/CrabSenseBE.Api/CrabSenseBE.Api.csproj -c Debug --no-restore | Out-Null
-    if ($LASTEXITCODE -ne 0) {
-        throw "Could not compile the current migration assembly."
-    }
+    & $initdb -D $data --auth=trust --username=postgres --encoding=UTF8 | Out-Null
+    Assert-Exit "initdb failed"
+    & $pgctl -D $data -l (Join-Path $data "server.log") -o "-p $Port -F -h 127.0.0.1" -w start
+    Assert-Exit "pg_ctl start failed"
+    $started = $true
+    $env:ASPNETCORE_ENVIRONMENT = "Production"
+    $env:DOTNET_ENVIRONMENT = "Production"
+    $env:Jwt__Secret = "migration-test-only-local-secret-not-for-production-2026"
+
+    & dotnet build src/CrabSenseBE.Api/CrabSenseBE.Api.csproj -c Release --no-restore
+    Assert-Exit "Could not compile migration assembly"
 
     & $createdb -h 127.0.0.1 -p $Port -U postgres clean_migration
-    $env:ConnectionStrings__DefaultConnection = `
-        "Host=127.0.0.1;Port=$Port;Database=clean_migration;Username=postgres"
-    $cleanOutput = & dotnet ef database update `
-        --project src/CrabSenseBE.Infrastructure/CrabSenseBE.Infrastructure.csproj `
-        --startup-project src/CrabSenseBE.Api/CrabSenseBE.Api.csproj `
-        --context AppDbContext --no-build 2>&1
-    $cleanExit = $LASTEXITCODE
+    Assert-Exit "Could not create clean database"
+    Update-Database "clean_migration"
 
+    # Build an actual previous EF schema, not a hand-written subset.
     & $createdb -h 127.0.0.1 -p $Port -U postgres legacy_migration
-    $legacyFixture = @'
-CREATE SCHEMA be;
-CREATE TABLE be."SyncInboxItems" (
-  "Id" uuid PRIMARY KEY,
-  "IdempotencyKey" text NOT NULL,
-  "EntityType" text NOT NULL,
-  "EntityId" text NOT NULL,
-  "OperationType" text NOT NULL,
-  "BaseVersion" integer NULL,
-  "ClientUpdatedAt" timestamptz NULL,
-  "PayloadJson" jsonb NOT NULL,
-  "Status" text NOT NULL,
-  "ErrorMessage" text NULL,
-  "ReceivedAt" timestamptz NOT NULL,
-  "ProcessedAt" timestamptz NULL
-);
-CREATE UNIQUE INDEX "IX_SyncInboxItems_IdempotencyKey"
-ON be."SyncInboxItems" ("IdempotencyKey");
+    Assert-Exit "Could not create legacy database"
+    Update-Database "legacy_migration" "20261112012203_AddEdgeCommandRequestSource"
+    $fixture = @'
 INSERT INTO be."SyncInboxItems"
 ("Id","IdempotencyKey","EntityType","EntityId","OperationType","PayloadJson","Status","ReceivedAt","ProcessedAt")
 VALUES
 ('60000000-0000-0000-0000-000000000001','legacy-key','crab','legacy-crab','create_crab','{}','processed',now(),now());
-CREATE TABLE be."__EFMigrationsHistory" (
-  "MigrationId" character varying(150) NOT NULL PRIMARY KEY,
-  "ProductVersion" character varying(32) NOT NULL
-);
-INSERT INTO be."__EFMigrationsHistory" VALUES
-('20261112012203_AddEdgeCommandRequestSource','8.0.22');
 '@
-    $legacyFixture | & $psql -X -v ON_ERROR_STOP=1 -h 127.0.0.1 -p $Port `
-        -U postgres -d legacy_migration | Out-Null
-    if ($LASTEXITCODE -ne 0) {
-        throw "Could not create the legacy migration fixture."
-    }
-    $legacyIndex = Invoke-Psql "legacy_migration" `
-        "SELECT count(*) FROM pg_indexes WHERE schemaname='be' AND indexname='IX_SyncInboxItems_IdempotencyKey';"
-    if ($legacyIndex -ne "1") {
-        $allIndexes = Invoke-Psql "legacy_migration" `
-            "SELECT schemaname || '.' || indexname FROM pg_indexes WHERE tablename='SyncInboxItems' ORDER BY indexname;"
-        throw "Legacy idempotency index fixture was not created. count=$legacyIndex indexes=$allIndexes"
-    }
-
-    $upScript = & dotnet ef migrations script `
-        20261112012203_AddEdgeCommandRequestSource `
-        20261112025840_ScopeSyncIdempotencyByActor `
-        --project src/CrabSenseBE.Infrastructure/CrabSenseBE.Infrastructure.csproj `
-        --startup-project src/CrabSenseBE.Api/CrabSenseBE.Api.csproj `
-        --context AppDbContext --no-build
-    $upScript | & $psql -X -v ON_ERROR_STOP=1 -h 127.0.0.1 -p $Port `
-        -U postgres -d legacy_migration | Out-Null
-    if ($LASTEXITCODE -ne 0) {
-        throw "Latest migration failed on the legacy schema."
-    }
-
-    $legacyRow = Invoke-Psql "legacy_migration" `
-        'SELECT "IdempotencyKey" || ''|'' || coalesce("ActorUserId"::text,''NULL'') || ''|'' || "RequestHash" || ''|'' || "Status" FROM be."SyncInboxItems";'
-    if ($legacyRow -ne "legacy-key|NULL||processed") {
-        throw "Legacy inbox history was changed: $legacyRow"
-    }
-
-    $downScript = & dotnet ef migrations script `
-        20261112025840_ScopeSyncIdempotencyByActor `
-        20261112012203_AddEdgeCommandRequestSource `
-        --project src/CrabSenseBE.Infrastructure/CrabSenseBE.Infrastructure.csproj `
-        --startup-project src/CrabSenseBE.Api/CrabSenseBE.Api.csproj `
-        --context AppDbContext --no-build
-    $downScript | & $psql -X -v ON_ERROR_STOP=1 -h 127.0.0.1 -p $Port `
-        -U postgres -d legacy_migration | Out-Null
-    if ($LASTEXITCODE -ne 0) {
-        throw "Latest migration rollback failed on the legacy schema."
-    }
-    if ((Invoke-Psql "legacy_migration" `
-            'SELECT "IdempotencyKey" || ''|'' || "Status" FROM be."SyncInboxItems";') `
-        -ne "legacy-key|processed") {
-        throw "Rollback changed the legacy inbox row."
-    }
-
-    Write-Output "LEGACY_MIGRATION_AND_ROLLBACK_PASSED=1"
-    if ($cleanExit -ne 0) {
-        Write-Output "CLEAN_MIGRATION_FAILED=1"
-        Write-Output ($cleanOutput -join [Environment]::NewLine)
-        exit 1
-    }
+    $fixture | & $psql -X -v ON_ERROR_STOP=1 -h 127.0.0.1 -p $Port -U postgres -d legacy_migration | Out-Null
+    Assert-Exit "Could not insert legacy inbox evidence"
+    Update-Database "legacy_migration"
+    $legacyRow = Invoke-Psql "legacy_migration" 'SELECT "IdempotencyKey" || ''|'' || coalesce("ActorUserId"::text,''NULL'') || ''|'' || "RequestHash" || ''|'' || "Status" FROM be."SyncInboxItems" WHERE "IdempotencyKey" = ''legacy-key'';'
+    if ($legacyRow -ne "legacy-key|NULL||processed") { throw "Legacy inbox history changed: $legacyRow" }
+    $cleanHistory = Invoke-Psql "clean_migration" 'SELECT "MigrationId" FROM be."__EFMigrationsHistory" ORDER BY "MigrationId";'
+    $legacyHistory = Invoke-Psql "legacy_migration" 'SELECT "MigrationId" FROM be."__EFMigrationsHistory" ORDER BY "MigrationId";'
+    if ($cleanHistory -ne $legacyHistory) { throw "Clean and upgraded migration history differ." }
     Write-Output "CLEAN_MIGRATION_PASSED=1"
+    Write-Output "LEGACY_FULL_UPGRADE_PASSED=1"
 }
 finally {
-    Remove-Item Env:ConnectionStrings__DefaultConnection -ErrorAction SilentlyContinue
-    & $pgctl -D $data stop -m fast -w
+    $env:ConnectionStrings__DefaultConnection = $oldConnection
+    $env:ASPNETCORE_ENVIRONMENT = $oldEnvironment
+    $env:DOTNET_ENVIRONMENT = $oldDotnetEnvironment
+    $env:Jwt__Secret = $oldJwt
+    if ($started) { & $pgctl -D $data stop -m fast -w | Out-Null }
+    if (Test-Path $data) { Remove-Item $data -Recurse -Force }
 }
