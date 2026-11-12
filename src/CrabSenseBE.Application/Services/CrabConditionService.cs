@@ -112,41 +112,21 @@ public class CrabConditionService : ICrabConditionService
             {
                 if (crab.Status is CrabStatus.Dead or CrabStatus.Harvested or CrabStatus.Sold or CrabStatus.Missing)
                     throw AppException.Conflict("Không cập nhật tình trạng cua đã kết thúc hoặc mất dấu.");
+                // Kn is a heuristic from measurements, not a verified molt or
+                // disease observation. Preserve lifecycle, quarantine and observed
+                // condition; only record measured weight and a prediction snapshot.
                 crab.WeightGram = req.WeightG;
-                crab.MoltingStage = eval.MoltingStatusHint ?? crab.MoltingStage;
-                var oldCondition = crab.Condition;
-                var oldStatus = crab.Status;
-                crab.Condition = CrabConditions.FromMoltingAndStatus(
-                    crab.MoltingStage,
-                    eval.Status == "pre_molt" ? CrabStatus.Molting : crab.Status);
-                if (eval.Status == "pre_molt")
-                    crab.Status = CrabStatus.Molting;
-                else
-                    crab.Status = CrabConditions.ApplyCondition(oldStatus, crab.Condition);
                 crab.AiPrediction = eval.MoltingStatusHint ?? eval.Status;
+                crab.AiConfidence = 0;
                 crab.UpdatedAt = DateTime.UtcNow;
                 _uow.Crabs.Update(crab);
-
-                if (oldCondition != crab.Condition || oldStatus != crab.Status)
-                {
-                    await _uow.CrabStatusHistories.AddAsync(new CrabStatusHistory
-                    {
-                        CrabId = crab.Id,
-                        OldCondition = oldCondition,
-                        NewCondition = crab.Condition,
-                        OldStatus = oldStatus,
-                        NewStatus = crab.Status,
-                        Source = "kn-condition",
-                        ChangedByUserId = actor.Id,
-                        Reason = "Condition evaluate"
-                    }, ct);
-                }
 
                 await _uow.CrabWeightHistories.AddAsync(new CrabWeightHistory
                 {
                     CrabId = crab.Id,
                     WeightGram = req.WeightG,
-                    Source = "ai",
+                    Source = "kn-condition",
+                    MeasuredAt = DateTime.UtcNow,
                     Notes = "Condition evaluate"
                 }, ct);
 
@@ -209,8 +189,8 @@ public class CrabConditionService : ICrabConditionService
             await _uow.AiRecommendations.AddAsync(new AiRecommendation
             {
                 Id = Guid.NewGuid(),
-                Category = "harvest",
-                Recommendation = eval.Recommendation,
+                Category = "inspection",
+                Recommendation = "Kiểm tra thực tế dấu hiệu lột và cua vỏ mềm trước khi lập phiếu thu hoạch. " + eval.Recommendation,
                 Priority = 1,
                 RelatedEntityId = req.BoxId,
                 RelatedEntityType = "box",

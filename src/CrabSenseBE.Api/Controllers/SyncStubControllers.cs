@@ -493,7 +493,7 @@ public class SyncQueueStubController : ControllerBase
         }
         catch (DbUpdateException)
         {
-            inboxItem.Status = "failed";
+            inboxItem.Status = "conflict";
             inboxItem.ErrorMessage =
                 "Operation xung đột với dữ liệu hiện tại hoặc request đồng thời.";
             failed.Add(item.IdempotencyKey!.Trim());
@@ -731,13 +731,9 @@ public class SyncQueueStubController : ControllerBase
                 return;
             }
             await _areas.EnsureBoxAsync(scopedBox, manage: false, HttpContext.RequestAborted);
-            var requestedBox = SyncPayload.Str(payload, "boxId") ?? SyncPayload.Str(item.Payload ?? new(), "boxId");
-            if (!Guid.TryParse(requestedBox, out var sameBox) || sameBox != scopedBox)
-            {
-                Fail(inbox, failed, item, "Cua đã tồn tại; dùng thao tác chuyển hộp riêng.");
-                return;
-            }
-            Done(inbox, processed, item);
+            // Exact replays are already acknowledged by the actor+key inbox.
+            // Another key claiming the same UUID is a conflict, not a new creation.
+            Conflict(inbox, failed, item);
             return;
         }
 
@@ -809,6 +805,11 @@ public class SyncQueueStubController : ControllerBase
             return;
         }
         var status = SyncPayload.Str(payload, "status");
+        if (string.IsNullOrWhiteSpace(status))
+        {
+            Fail(inbox, failed, item, "update_box cần payload.status.");
+            return;
+        }
         if (!string.IsNullOrWhiteSpace(status))
         {
             if (!BoxStatuses.IsValid(status))
