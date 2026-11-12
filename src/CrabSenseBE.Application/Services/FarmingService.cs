@@ -1112,6 +1112,8 @@ public class FarmingService : IFarmingService
             ? CrabConditions.FromMoltingAndStatus(req.MoltingStage, CrabStatus.Alive)
             : CrabConditions.Parse(req.Condition);
         var status = CrabConditions.ToLifecycle(condition);
+        if (status is not (CrabStatus.Alive or CrabStatus.Molting))
+            throw AppException.BadRequest("Chỉ đăng ký cua sống hoặc đang lột.");
         var initialWeight = req.InitialWeightGram ?? req.WeightGram;
 
         var crab = new Crab
@@ -1310,9 +1312,9 @@ public class FarmingService : IFarmingService
     {
         var crab = await _uow.Crabs.GetByIdAsync(id, ct) ?? throw AppException.NotFound("Crab");
         await EnsureCrabAreaAsync(crab, ct);
-        if (crab.Status is CrabStatus.Dead or CrabStatus.Harvested or CrabStatus.Sold)
+        if (crab.Status is CrabStatus.Dead or CrabStatus.Harvested or CrabStatus.Sold or CrabStatus.Missing)
             throw AppException.Conflict(
-                "Sự kiện chết hoặc thu hoạch đã xác nhận không được sửa qua hồ sơ cua.");
+                "Cua kết thúc vòng đời hoặc mất dấu không được sửa qua hồ sơ thông thường.");
         if (req.IsAlive == false)
             throw AppException.BadRequest(
                 "Ghi nhận cua chết phải dùng POST /api/mortality để giữ lịch sử.");
@@ -3453,6 +3455,8 @@ public class FarmingService : IFarmingService
             ? CrabConditions.FromMoltingAndStatus(req.MoltingStage, CrabStatus.Alive)
             : CrabConditions.Parse(req.Condition);
         var status = CrabConditions.ToLifecycle(condition);
+        if (status is not (CrabStatus.Alive or CrabStatus.Molting))
+            throw AppException.BadRequest("Chỉ đăng ký cua sống hoặc đang lột.");
         var initialWeight = req.InitialWeightGram ?? req.WeightGram;
 
         var crab = new Crab
