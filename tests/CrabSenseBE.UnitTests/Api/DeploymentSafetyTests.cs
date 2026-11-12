@@ -18,6 +18,9 @@ public sealed class DeploymentSafetyTests
         workflow.Should().Contain("pg_dump");
         workflow.Should().Contain("migrations bundle");
         workflow.Should().Contain("restoring previous application package");
+        workflow.Should().Contain("vars.EDGE_PROTOCOL_V2_READY == 'true'");
+        workflow.Should().Contain("/opt/crabsense-api.previous/.edge-protocol-v2");
+        workflow.Should().Contain("Protocol-1 application rollback is unsafe");
     }
 
     [Fact]
