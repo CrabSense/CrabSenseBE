@@ -810,10 +810,19 @@ public class FarmingService : IFarmingService
         if (await _uow.Boxes.AnyAsync(b => b.Code == code && b.Id != id, ct))
             throw AppException.Conflict($"Box code '{code}' already exists.");
 
+        // Configuration edits cannot invent or remove an occupied allocation.
+        var occupied = await HasLiveCrabAsync(box.Id, ct);
+        if (req.IsOccupied != occupied)
+            throw AppException.Conflict("Không thể sửa số cua trong hộp qua cấu hình; dùng luồng phân bổ/chuyển/thu hoạch.");
+        var status = string.IsNullOrWhiteSpace(req.Status) ? box.Status : req.Status;
+        var normalized = NormalizeBoxOperationalStatus(status, occupied);
+        var oldStatus = box.Status;
+        var oldOccupied = box.IsOccupied;
         box.Code = code;
-        box.Status = req.Status;
-        box.IsOccupied = req.IsOccupied;
+        box.Status = normalized;
+        box.IsOccupied = occupied;
         _uow.Boxes.Update(box);
+        await RecordBoxStateChangeAsync(box, oldStatus, oldOccupied, "Configuration update", ct);
         await AuditConfigAsync("UpdateBox", "Box", box.Id, box.Code, ct);
         await _uow.SaveChangesAsync(ct);
 
@@ -829,38 +838,50 @@ public class FarmingService : IFarmingService
         var actor = await _areas.CurrentUserAsync(ct);
         if (actor is not null && actor.Role != UserRole.FarmStaff)
             throw AppException.Forbidden("Chỉ Farm Staff được cập nhật trạng thái vận hành hộp.");
-        if (string.IsNullOrWhiteSpace(req.Status))
-            throw AppException.BadRequest("Status is required.");
-        if (!BoxStatuses.IsValid(req.Status))
-            throw AppException.BadRequest(
-                $"Invalid box status '{req.Status}'. Allowed: {string.Join(", ", BoxStatuses.All)}");
-
-        var normalized = BoxStatuses.Normalize(req.Status);
+        var occupied = await HasLiveCrabAsync(box.Id, ct);
+        if (req.IsOccupied != occupied)
+            throw AppException.Conflict("Trạng thái chiếm hộp phải khớp phân bổ cua thực tế.");
+        var normalized = NormalizeBoxOperationalStatus(req.Status, occupied);
         var oldStatus = box.Status;
-        var oldOcc = box.IsOccupied;
-
+        var oldOccupied = box.IsOccupied;
         box.Status = normalized;
-        box.IsOccupied = req.IsOccupied;
+        box.IsOccupied = occupied;
         _uow.Boxes.Update(box);
-
-        if (!string.Equals(oldStatus, normalized, StringComparison.OrdinalIgnoreCase) || oldOcc != req.IsOccupied)
-        {
-            await _uow.BoxStatusHistories.AddAsync(new BoxStatusHistory
-            {
-                BoxId = box.Id,
-                OldStatus = oldStatus,
-                NewStatus = normalized,
-                OldIsOccupied = oldOcc,
-                NewIsOccupied = req.IsOccupied,
-                ChangedAt = DateTime.UtcNow,
-                Reason = "Manual status update"
-            }, ct);
-        }
+        await RecordBoxStateChangeAsync(box, oldStatus, oldOccupied, "Manual status update", ct);
 
         await _uow.SaveChangesAsync(ct);
 
         var ctx = await LoadBoxContextAsync(ct);
         return ApiResponse<BoxDto>.Ok(MapBox(box, ctx));
+    }
+
+    private async Task<bool> HasLiveCrabAsync(Guid boxId, CancellationToken ct)
+    {
+        return await _uow.CrabBoxAllocations.AnyAsync(x => x.BoxId == boxId && x.EndTime == null, ct)
+            || await _uow.Crabs.AnyAsync(x => x.BoxId == boxId &&
+                (x.Status == CrabStatus.Alive || x.Status == CrabStatus.Molting || x.Status == CrabStatus.Quarantined), ct);
+    }
+
+    private static string NormalizeBoxOperationalStatus(string? status, bool occupied)
+    {
+        if (!BoxStatuses.IsValid(status)) throw AppException.BadRequest("Trạng thái hộp không hợp lệ.");
+        var normalized = BoxStatuses.Normalize(status!);
+        if (!SyncMutationPolicy.IsBoxStatusConsistent(normalized, occupied))
+            throw AppException.Conflict("Trạng thái hộp không khớp phân bổ cua thực tế.");
+        return normalized;
+    }
+
+    private async Task RecordBoxStateChangeAsync(Box box, string? oldStatus, bool oldOccupied,
+        string reason, CancellationToken ct)
+    {
+        if (string.Equals(oldStatus, box.Status, StringComparison.OrdinalIgnoreCase) && oldOccupied == box.IsOccupied) return;
+        await _uow.BoxStatusHistories.AddAsync(new BoxStatusHistory
+        {
+            BoxId = box.Id, OldStatus = oldStatus, NewStatus = box.Status,
+            OldIsOccupied = oldOccupied, NewIsOccupied = box.IsOccupied,
+            ChangedAt = DateTime.UtcNow, Reason = reason,
+            ChangedByUserId = (await _areas.CurrentUserAsync(ct))?.Id
+        }, ct);
     }
 
     public async Task<ApiResponse<BoxDto>> UpdateBoxMapAsync(
@@ -1338,6 +1359,13 @@ public class FarmingService : IFarmingService
                 throw AppException.BadRequest(
                     "Trạng thái chết/thu hoạch phải dùng quy trình nghiệp vụ riêng.");
         }
+        if (req.WeightGram is <= 0 || req.CarapaceWidthMm is <= 0 || req.CarapaceLengthMm is <= 0)
+            throw AppException.BadRequest("Số đo cua phải lớn hơn 0.");
+        if (req.MoltedAt is DateTime moltAt && moltAt.ToUniversalTime() > DateTime.UtcNow.AddMinutes(5))
+            throw AppException.BadRequest("Thời điểm lột không được ở tương lai.");
+        if (crab.Status == CrabStatus.Quarantined && (!string.IsNullOrWhiteSpace(req.Condition)
+            || req.MoltingStage is not null || req.MoltedAt.HasValue))
+            throw AppException.Conflict("Không thay đổi tình trạng hoặc giai đoạn lột của cua đang cách ly qua hồ sơ thường.");
         var oldCondition = crab.Condition;
         var oldStatus = crab.Status;
         var oldWeight = crab.WeightGram;
@@ -1372,7 +1400,7 @@ public class FarmingService : IFarmingService
         if (req.IsAlive == true && crab.Condition == CrabCondition.Dead)
             crab.Condition = CrabConditions.FromMoltingAndStatus(crab.MoltingStage, CrabStatus.Alive);
 
-        crab.Status = CrabConditions.ApplyCondition(oldStatus, crab.Condition);
+        crab.Status = oldStatus == CrabStatus.Quarantined ? oldStatus : CrabConditions.ApplyCondition(oldStatus, crab.Condition);
         _uow.Crabs.Update(crab);
 
         var profileChanged = oldCondition != crab.Condition
@@ -1488,8 +1516,8 @@ public class FarmingService : IFarmingService
     {
         var crab = await _uow.Crabs.GetByIdAsync(crabId, ct) ?? throw AppException.NotFound("Crab");
         await EnsureCrabAreaAsync(crab, ct);
-        if (crab.Status is CrabStatus.Dead or CrabStatus.Harvested or CrabStatus.Sold)
-            throw AppException.Conflict("Không ghi thêm số đo cho cua đã chết hoặc đã thu hoạch.");
+        if (crab.Status is CrabStatus.Dead or CrabStatus.Harvested or CrabStatus.Sold or CrabStatus.Missing)
+            throw AppException.Conflict("Không ghi thêm số đo cho cua đã kết thúc hoặc mất dấu.");
         if (req.WeightGram <= 0)
             throw AppException.BadRequest("WeightGram must be greater than 0.");
         if (req.CarapaceWidthMm is <= 0)
@@ -1497,8 +1525,16 @@ public class FarmingService : IFarmingService
         if (req.CarapaceLengthMm is <= 0)
             throw AppException.BadRequest("CarapaceLengthMm must be greater than 0.");
 
-        var at = req.MeasuredAt ?? DateTime.UtcNow;
-        var source = string.IsNullOrWhiteSpace(req.Source) ? "manual" : req.Source!.Trim().ToLowerInvariant();
+        var at = NormalizeDate(req.MeasuredAt) ?? DateTime.UtcNow;
+        if (at > DateTime.UtcNow.AddMinutes(5))
+            throw AppException.BadRequest("Thời điểm đo không được ở tương lai.");
+        if (at < crab.StockedAt)
+            throw AppException.BadRequest("Thời điểm đo không được trước khi thả cua.");
+        await MediaReferenceGuard.BindCrabAsync(_uow, _areas, crab, req.PhotoUrls ?? Array.Empty<string>(), ct);
+        var actor = await _areas.CurrentUserAsync(ct);
+        var previous = (await _uow.CrabWeightHistories.FindAsync(x => x.CrabId == crab.Id, ct))
+            .OrderByDescending(x => x.MeasuredAt).FirstOrDefault();
+        var source = "manual";
         var row = new CrabWeightHistory
         {
             CrabId = crab.Id,
@@ -1508,15 +1544,19 @@ public class FarmingService : IFarmingService
             MeasuredAt = at,
             Source = source,
             Notes = req.Notes,
-            RecordedByName = string.IsNullOrWhiteSpace(req.RecordedByName) ? null : req.RecordedByName.Trim(),
+            RecordedByName = actor is null ? null : (string.IsNullOrWhiteSpace(actor.FullName) ? actor.Username : actor.FullName),
             PhotoUrlsJson = JsonStringList.Serialize(req.PhotoUrls)
         };
         await _uow.CrabWeightHistories.AddAsync(row, ct);
 
-        crab.WeightGram = req.WeightGram;
-        if (req.CarapaceWidthMm.HasValue) crab.CarapaceWidthMm = req.CarapaceWidthMm;
-        if (req.CarapaceLengthMm.HasValue) crab.CarapaceLengthMm = req.CarapaceLengthMm;
-        _uow.Crabs.Update(crab);
+        // Historical measurements are retained without overwriting a newer snapshot.
+        if (previous is null || at >= previous.MeasuredAt)
+        {
+            crab.WeightGram = req.WeightGram;
+            if (req.CarapaceWidthMm.HasValue) crab.CarapaceWidthMm = req.CarapaceWidthMm;
+            if (req.CarapaceLengthMm.HasValue) crab.CarapaceLengthMm = req.CarapaceLengthMm;
+            _uow.Crabs.Update(crab);
+        }
         await _uow.SaveChangesAsync(ct);
         return ApiResponse<CrabWeightHistoryDto>.Ok(MapWeight(row), "Growth recorded.");
     }
