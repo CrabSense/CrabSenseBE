@@ -57,7 +57,10 @@ public record RasFlowNodeDto(
     string Status,
     decimal? Capacity,
     DateTime? LastCommandAt = null,
-    DateTime? RunStartedAt = null);
+    DateTime? RunStartedAt = null,
+    bool? DesiredIsOn = null,
+    string? CommandStatus = null,
+    Guid? CommandId = null);
 
 public record RasFlowDiagramDto(
     Guid AreaId,
