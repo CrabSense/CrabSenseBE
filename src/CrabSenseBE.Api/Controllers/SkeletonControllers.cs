@@ -69,19 +69,22 @@ public class SettingsController : ControllerBase
 {
     private readonly IUnitOfWork _uow;
     private readonly ICurrentUserService _currentUser;
+    private readonly FarmAreaScope _areas;
 
     public SettingsController(IUnitOfWork uow, ICurrentUserService currentUser)
     {
         _uow = uow;
         _currentUser = currentUser;
+        _areas = new FarmAreaScope(uow, currentUser);
     }
 
     /// <summary>[READ] Cài đặt trại. Không gồm cấu hình hệ thống kỹ thuật.</summary>
     [HttpGet]
-    public async Task<IActionResult> GetAll([FromQuery] string? category, CancellationToken ct)
+    public async Task<IActionResult> GetAll([FromQuery] string? category, [FromQuery] Guid? farmingAreaId, CancellationToken ct)
     {
+        var allowed = await _areas.SelectionAsync(farmingAreaId, ct) ?? new HashSet<Guid>();
         var items = (await _uow.FarmSettings.GetAllAsync(ct))
-            .Where(item => !IsTechnical(item.Category));
+            .Where(item => item.FarmingAreaId is Guid id && allowed.Contains(id) && !IsTechnical(item.Category));
         if (!string.IsNullOrWhiteSpace(category))
         {
             var name = category.Trim();
@@ -94,9 +97,10 @@ public class SettingsController : ControllerBase
 
     /// <summary>[READ] Một cài đặt theo key.</summary>
     [HttpGet("{key}")]
-    public async Task<IActionResult> Get(string key, CancellationToken ct)
+    public async Task<IActionResult> Get(string key, [FromQuery] Guid? farmingAreaId, CancellationToken ct)
     {
-        var item = await FindAsync(key, ct) ?? throw AppException.NotFound("FarmSettings");
+        var areaId = await RequireAreaAsync(farmingAreaId, ct);
+        var item = await FindAsync(key, areaId, ct) ?? throw AppException.NotFound("FarmSettings");
         if (IsTechnical(item.Category))
             return Forbid();
         return Ok(ApiResponse<FarmSettingDto>.Ok(Map(item)));
@@ -104,16 +108,16 @@ public class SettingsController : ControllerBase
 
     /// <summary>[UPDATE] Tạo hoặc sửa cài đặt chung của trại.</summary>
     [HttpPut]
-    public Task<IActionResult> UpsertRoot([FromBody] UpsertFarmSettingBody req, CancellationToken ct)
+    public Task<IActionResult> UpsertRoot([FromBody] UpsertFarmSettingBody req, [FromQuery] Guid? farmingAreaId, CancellationToken ct)
     {
         if (req is null || string.IsNullOrWhiteSpace(req.Key))
             throw AppException.BadRequest("Key is required.");
-        return Upsert(req.Key, new UpsertFarmSettingRequest(req.Value, req.Description, req.Category), ct);
+        return Upsert(req.Key, new UpsertFarmSettingRequest(req.Value, req.Description, req.Category, req.FarmingAreaId), farmingAreaId, ct);
     }
 
     /// <summary>[UPDATE] Tạo hoặc sửa cài đặt trại.</summary>
     [HttpPut("{key}")]
-    public async Task<IActionResult> Upsert(string key, [FromBody] UpsertFarmSettingRequest req, CancellationToken ct)
+    public async Task<IActionResult> Upsert(string key, [FromBody] UpsertFarmSettingRequest req, [FromQuery] Guid? farmingAreaId, CancellationToken ct)
     {
         var normalized = NormalizeKey(key);
         var category = string.IsNullOrWhiteSpace(req.Category) ? "general" : req.Category.Trim();
@@ -122,12 +126,16 @@ public class SettingsController : ControllerBase
         if (string.IsNullOrWhiteSpace(req.Value))
             throw AppException.BadRequest("Value is required.");
 
-        var existing = await FindAsync(normalized, ct);
+        if (req.FarmingAreaId.HasValue && farmingAreaId.HasValue && req.FarmingAreaId != farmingAreaId)
+            throw AppException.BadRequest("FarmingAreaId không khớp.");
+        var areaId = await RequireAreaAsync(req.FarmingAreaId ?? farmingAreaId, ct);
+        var existing = await FindAsync(normalized, areaId, ct);
         if (existing is null)
         {
             existing = new FarmSettings
             {
                 Key = normalized,
+                FarmingAreaId = areaId,
                 Value = req.Value.Trim(),
                 Description = string.IsNullOrWhiteSpace(req.Description) ? null : req.Description.Trim(),
                 Category = category
@@ -153,9 +161,10 @@ public class SettingsController : ControllerBase
 
     /// <summary>[DELETE] Xóa cài đặt trại.</summary>
     [HttpDelete("{key}")]
-    public async Task<IActionResult> Delete(string key, CancellationToken ct)
+    public async Task<IActionResult> Delete(string key, [FromQuery] Guid? farmingAreaId, CancellationToken ct)
     {
-        var existing = await FindAsync(key, ct) ?? throw AppException.NotFound("FarmSettings");
+        var areaId = await RequireAreaAsync(farmingAreaId, ct);
+        var existing = await FindAsync(key, areaId, ct) ?? throw AppException.NotFound("FarmSettings");
         if (IsTechnical(existing.Category))
             return Forbid();
         _uow.FarmSettings.Remove(existing);
@@ -165,11 +174,27 @@ public class SettingsController : ControllerBase
         return Ok(ApiResponse.Ok("Deleted."));
     }
 
-    private async Task<FarmSettings?> FindAsync(string key, CancellationToken ct)
+    private async Task<Guid> RequireAreaAsync(Guid? requestedAreaId, CancellationToken ct)
+    {
+        if (requestedAreaId == Guid.Empty) throw AppException.BadRequest("FarmingAreaId không hợp lệ.");
+        if (requestedAreaId is Guid supplied)
+        {
+            await _areas.EnsureAsync(supplied, manage: true, ct);
+            return supplied;
+        }
+        var assigned = await _areas.AreaIdsAsync(ct) ?? new HashSet<Guid>();
+        if (assigned.Count == 0)
+            throw AppException.Forbidden("Bạn chưa được phân công khu.");
+        if (assigned.Count != 1)
+            throw AppException.BadRequest("Chọn FarmingAreaId khi quản lý nhiều khu.");
+        return assigned.Single();
+    }
+
+    private async Task<FarmSettings?> FindAsync(string key, Guid areaId, CancellationToken ct)
     {
         var normalized = NormalizeKey(key);
         return await _uow.FarmSettings.FirstOrDefaultAsync(
-            item => item.Key.ToLower() == normalized, ct);
+            item => item.FarmingAreaId == areaId && item.Key == normalized, ct);
     }
 
     private static string NormalizeKey(string key)
@@ -184,14 +209,14 @@ public class SettingsController : ControllerBase
         category is not null && category.Trim().ToLowerInvariant() is "system" or "technical" or "platform";
 
     private static FarmSettingDto Map(FarmSettings item) =>
-        new(item.Id, item.Key, item.Value, item.Description, item.Category, item.UpdatedAt ?? item.CreatedAt);
+        new(item.Id, item.Key, item.Value, item.Description, item.Category, item.UpdatedAt ?? item.CreatedAt, item.FarmingAreaId);
 
     private sealed record FarmSettingDto(
-        Guid Id, string Key, string Value, string? Description, string Category, DateTime UpdatedAt);
+        Guid Id, string Key, string Value, string? Description, string Category, DateTime UpdatedAt, Guid? FarmingAreaId);
 
-    public sealed record UpsertFarmSettingRequest(string Value, string? Description = null, string? Category = null);
+    public sealed record UpsertFarmSettingRequest(string Value, string? Description = null, string? Category = null, Guid? FarmingAreaId = null);
 
-    public sealed record UpsertFarmSettingBody(string Key, string Value, string? Description = null, string? Category = null);
+    public sealed record UpsertFarmSettingBody(string Key, string Value, string? Description = null, string? Category = null, Guid? FarmingAreaId = null);
 }
 
 [ApiController]

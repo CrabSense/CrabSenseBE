@@ -239,6 +239,51 @@ DO $$ BEGIN
     END;
 END $$;
 '@ | Out-Null
+    Invoke-Psql "clean_migration" @'
+DO $$
+DECLARE
+    area_a uuid := '70000000-0000-0000-0000-000000000010';
+    area_b uuid := '70000000-0000-0000-0000-000000000020';
+    sensor_a uuid := '70000000-0000-0000-0000-000000000201';
+    sensor_b uuid := '70000000-0000-0000-0000-000000000202';
+BEGIN
+    INSERT INTO be."FarmSettings" ("Id","Key","Value","Category","CreatedAt","FarmingAreaId")
+    VALUES (gen_random_uuid(),'scope-test','A','general',now(),area_a),
+           (gen_random_uuid(),'scope-test','B','general',now(),area_b);
+    BEGIN
+        INSERT INTO be."FarmSettings" ("Id","Key","Value","Category","CreatedAt","FarmingAreaId")
+        VALUES (gen_random_uuid(),'scope-test','duplicate','general',now(),area_a);
+        RAISE EXCEPTION 'Duplicate farm area setting accepted';
+    EXCEPTION WHEN unique_violation THEN NULL;
+    END;
+    INSERT INTO be."Sensors" ("Id","SensorCode","SensorType","IsActive","CreatedAt")
+    VALUES (sensor_a,'schema-sensor-a','PH',true,now()),
+           (sensor_b,'schema-sensor-b','PH',true,now());
+    INSERT INTO be."WaterMeasurements" ("Id","SensorId","Value","MeasuredAt","Source","CreatedAt","EdgeEventKey")
+    VALUES (gen_random_uuid(),sensor_a,7.2,now(),'edge:test',now(),repeat('A',64)),
+           (gen_random_uuid(),sensor_b,7.3,now(),'edge:test',now(),repeat('A',64));
+    BEGIN
+        INSERT INTO be."WaterMeasurements" ("Id","SensorId","Value","MeasuredAt","Source","CreatedAt","EdgeEventKey")
+        VALUES (gen_random_uuid(),sensor_a,7.4,now(),'edge:test',now(),repeat('A',64));
+        RAISE EXCEPTION 'Concurrent replay index missing';
+    EXCEPTION WHEN unique_violation THEN NULL;
+    END;
+    INSERT INTO be."UserPushTokens" ("Id","UserId","Token","Platform","IsActive","LastSeenAt","CreatedAt")
+    VALUES (gen_random_uuid(),'70000000-0000-0000-0000-000000000001','same-device-token','android',true,now(),now());
+    BEGIN
+        INSERT INTO be."UserPushTokens" ("Id","UserId","Token","Platform","IsActive","LastSeenAt","CreatedAt")
+        VALUES (gen_random_uuid(),'70000000-0000-0000-0000-000000000002','same-device-token','android',true,now(),now());
+        RAISE EXCEPTION 'Active push token shared across accounts';
+    EXCEPTION WHEN unique_violation THEN NULL;
+    END;
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='FK_FrozenCrabItems_OutboundTransaction')
+        THEN RAISE EXCEPTION 'Frozen outbound FK missing'; END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='be'
+        AND table_name='BackupScheduleSettings' AND column_name='LastAttemptSlotUtc')
+        THEN RAISE EXCEPTION 'Backup schedule execution history missing'; END IF;
+END $$;
+'@ | Out-Null
+    Write-Output "NON_SALES_SCHEMA_TESTS_PASSED=1"
     Write-Output "CUSTOMER_AREA_SCHEMA_TESTS_PASSED=1"
     Write-Output "AREA_AND_EDGE_SCHEMA_TESTS_PASSED=1"
     Write-Output "CLEAN_MIGRATION_PASSED=1"

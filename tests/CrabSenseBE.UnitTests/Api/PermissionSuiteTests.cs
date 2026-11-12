@@ -199,6 +199,10 @@ public sealed class PermissionSuiteTests : IAsyncLifetime
 
         await Expect(failures, "FA tạo ngưỡng", 200, AppRoles.FarmAdministrator, AdminA, HttpMethod.Post, "/api/alert-thresholds", thresholdCreate);
         await Expect(failures, "FA sửa cài đặt", 200, AppRoles.FarmAdministrator, AdminA, HttpMethod.Put, "/api/settings", setting);
+        await Expect(failures, "FA không sửa setting khu B", 403, AppRoles.FarmAdministrator, AdminA, HttpMethod.Put,
+            "/api/settings/site-name?farmingAreaId=" + AreaB, "{\"value\":\"outside\"}");
+        await Expect(failures, "FA không đọc setting khu B", 403, AppRoles.FarmAdministrator, AdminA, HttpMethod.Get,
+            "/api/settings?farmingAreaId=" + AreaB, null);
         if (_logs.All(log => log.Action != "CreateAlertThreshold") || _logs.All(log => log.Action != "UpsertFarmSetting"))
             failures.Add("Thay đổi cấu hình ngưỡng hoặc cài đặt trại không được ghi audit. " + string.Join(", ", _logs.Select(log => log.Action)));
         if (_saves < 2)

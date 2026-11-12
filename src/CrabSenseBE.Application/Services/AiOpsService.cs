@@ -56,7 +56,12 @@ public class AiOpsService : IAiOpsService
         if (box is null && media is null)
             throw AppException.BadRequest("BoxId hoặc MediaId có liên kết khu là bắt buộc.");
 
-        // Build recommendation from live farm signals (not hardcoded stub copy).
+        // A current-state rule engine cannot analyze historical pixels/video.
+        // Never assign today's occupant or current sensor state to historical media.
+        if (media is not null)
+            throw new AppException("Phân tích ảnh/video cần AI inference thật; chưa được tích hợp.", 501);
+
+        // Build recommendation from live farm signals (not image inference).
         var (detectionType, confidence, note, health) =
             await BuildHeuristicAsync(box, boxId, ct);
 
@@ -81,7 +86,7 @@ public class AiOpsService : IAiOpsService
             DeviceId = deviceId,
             ModelVersion = "crabsense-heuristic-v1",
             DetectionType = detectionType,
-            Confidence = confidence,
+            Confidence = 0, // no model inference was performed
             Status = "completed",
             DetectedAt = DateTime.UtcNow,
             ImagePath = media?.WebViewLink ?? media?.StorageKey,
@@ -92,7 +97,10 @@ public class AiOpsService : IAiOpsService
                 note,
                 boxId,
                 mediaId = media?.Id,
-                source = "rules-engine"
+                source = "rules-engine",
+                isModelInference = false,
+                ruleScore = confidence,
+                scoreMeaning = "rule-score-not-model-confidence"
             })
         };
 
@@ -101,7 +109,7 @@ public class AiOpsService : IAiOpsService
 
         Device? dev = deviceId is Guid did ? await _uow.Devices.GetByIdAsync(did, ct) : null;
         Crab? crab = crabId is Guid cid ? await _uow.Crabs.GetByIdAsync(cid, ct) : null;
-        return ApiResponse<AiDetectionDto>.Ok(Map(detection, dev, box, row, crab), "Analyzed.");
+        return ApiResponse<AiDetectionDto>.Ok(Map(detection, dev, box, row, crab), "Đã đánh giá trạng thái hiện tại bằng quy tắc; không phải AI nhận diện ảnh.");
     }
 
     private async Task<(string type, decimal confidence, string note, string health)> BuildHeuristicAsync(
@@ -126,7 +134,7 @@ public class AiOpsService : IAiOpsService
             {
                 detectionType = "quarantine_risk";
                 confidence = 0.91m;
-                health = "disease";
+                health = "warning";
                 notes.Add($"Box {box.Code} đang cách ly — ưu tiên kiểm tra sức khỏe cua.");
             }
             else if (status is "active" || box.IsOccupied)

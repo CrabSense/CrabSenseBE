@@ -415,6 +415,11 @@ public class AppDbContext : DbContext
             .HasConversion<string>();
         modelBuilder.Entity<SalesOrder>()
             .HasIndex(o => o.FarmingAreaId);
+        modelBuilder.Entity<FarmSettings>()
+            .HasIndex(x => new { x.FarmingAreaId, x.Key }).IsUnique()
+            .HasFilter("\"FarmingAreaId\" IS NOT NULL");
+        modelBuilder.Entity<FarmSettings>().HasOne<FarmingArea>().WithMany().HasForeignKey(x => x.FarmingAreaId)
+            .OnDelete(DeleteBehavior.Restrict);
         modelBuilder.Entity<Customer>()
             .HasIndex(c => c.FarmingAreaId);
         modelBuilder.Entity<Customer>()
@@ -637,6 +642,8 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<UserPushToken>()
             .HasIndex(t => new { t.UserId, t.Token })
             .IsUnique();
+        modelBuilder.Entity<UserPushToken>().HasIndex(t => t.Token).IsUnique()
+            .HasFilter("\"IsActive\" = true");
 
         modelBuilder.Entity<NotificationRule>(b =>
         {
@@ -763,6 +770,9 @@ public class AppDbContext : DbContext
     entity.Property(x => x.Grade)
         .HasMaxLength(1)
         .IsRequired();
+    entity.Property(x => x.StockState).HasMaxLength(16).HasDefaultValue("Unverified").IsRequired();
+    entity.HasOne(x => x.OutboundTransaction).WithMany().HasForeignKey(x => x.OutboundTransactionId)
+        .OnDelete(DeleteBehavior.Restrict).HasConstraintName("FK_FrozenCrabItems_OutboundTransaction");
 
     entity.HasOne(x => x.FrozenLot)
         .WithMany()
@@ -871,6 +881,9 @@ public class AppDbContext : DbContext
 
         modelBuilder.Entity<WaterMeasurement>()
             .HasIndex(x => new { x.SensorId, x.MeasuredAt });
+        modelBuilder.Entity<WaterMeasurement>().Property(x => x.EdgeEventKey).HasMaxLength(64);
+        modelBuilder.Entity<WaterMeasurement>().HasIndex(x => new { x.SensorId, x.EdgeEventKey }).IsUnique()
+            .HasFilter("\"EdgeEventKey\" IS NOT NULL");
         modelBuilder.Entity<FeedingEvent>(entity =>
         {
             entity.HasIndex(x => new { x.CrabId, x.FedAt });

@@ -116,6 +116,15 @@ public class FrozenStorageController : ControllerBase
     /// Tra cứu thông tin một cua cấp đông bằng barcode.
     /// Người gọi phải đăng nhập.
     /// </summary>
+    [HttpGet("{lotId:guid}/crab-items")]
+    public async Task<IActionResult> ListCrabItems(Guid lotId, CancellationToken ct)
+        => Ok(await _service.ListCrabItemsAsync(lotId, ct));
+
+    [HttpPost("{lotId:guid}/crab-items/reconcile")]
+    [Authorize(Roles = AppRoles.FarmManager)]
+    public async Task<IActionResult> ReconcileCrabItems(Guid lotId, [FromBody] ReconcileFrozenItemsRequest request, CancellationToken ct)
+        => Ok(await _service.ReconcileCrabItemsAsync(lotId, request, ct));
+
     [HttpGet("crab-items/barcode/{barcodeValue}")]
     [Authorize]
     public async Task<IActionResult> GetCrabItemByBarcode(

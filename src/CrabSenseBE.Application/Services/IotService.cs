@@ -56,8 +56,10 @@ public class IotService : IIotService
         var eventKey = string.IsNullOrWhiteSpace(req.EventId)
             ? null
             : $"edge:{req.EventId.Trim()}:{req.SensorCode.Trim()}";
+        var edgeEventKey = eventKey is null ? null : Convert.ToHexString(
+            SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(req.EventId!.Trim())));
         if (eventKey is not null
-            && await _uow.WaterMeasurements.AnyAsync(m => m.Source == eventKey, ct))
+            && await _uow.WaterMeasurements.AnyAsync(m => m.SensorId == sensor.Id && (m.EdgeEventKey == edgeEventKey || m.Source == eventKey), ct))
             return ApiResponse.Ok("Sensor data already ingested.");
 
         device.LastSeenAt = DateTime.UtcNow;
@@ -72,12 +74,18 @@ public class IotService : IIotService
             Value = req.Value,
             Unit = req.Unit ?? sensor.Unit,
             MeasuredAt = req.MeasuredAt == default ? DateTime.UtcNow : req.MeasuredAt,
-            Source = eventKey ?? "realtime"
+            Source = eventKey ?? "realtime",
+            EdgeEventKey = edgeEventKey
         };
         await _uow.WaterMeasurements.AddAsync(measurement, ct);
 
         sensor.LastSeenAt = DateTime.UtcNow;
-        await _uow.SaveChangesAsync(ct);
+        try { await _uow.SaveChangesAsync(ct); }
+        catch (DbUpdateException ex) when (edgeEventKey is not null && ex.Entries.Any(e => e.Entity is WaterMeasurement))
+        {
+            // Concurrent duplicate is protected by the unique index; retry in a fresh request.
+            throw AppException.Conflict("Ghi dữ liệu sensor xung đột; vui lòng gửi lại cùng EventId.");
+        }
 
         try
         {
@@ -406,7 +414,9 @@ public class IotService : IIotService
             }
             catch (Exception ex)
             {
-                results.Add(new(item.SensorCode, item.EventId, false, ex.Message));
+                if (ex is not AppException) _logger.LogError(ex, "Sensor batch item failed");
+                results.Add(new(item.SensorCode, item.EventId, false,
+                    ex is AppException ? ex.Message : "Sensor data could not be saved."));
                 foreach (var skipped in list.Skip(index + 1))
                     results.Add(new(
                         skipped.SensorCode, skipped.EventId, false,
@@ -1187,9 +1197,12 @@ public class IotService : IIotService
             device.InstallationLocation = Limit(Clean(req.InstallationLocation), 200);
         if (req.Note is not null || req.Notes is not null)
             device.Notes = Limit(Clean(req.Note ?? req.Notes), 500);
-        if (!string.IsNullOrWhiteSpace(req.Status)
-            && Enum.TryParse<DeviceStatus>(req.Status, true, out var st))
+        if (!string.IsNullOrWhiteSpace(req.Status))
+        {
+            if (!Enum.TryParse<DeviceStatus>(req.Status, true, out var st) || !Enum.IsDefined(st))
+                throw AppException.BadRequest("Trạng thái thiết bị không hợp lệ.");
             device.Status = st;
+        }
         _uow.Devices.Update(device);
         await WriteDeviceAuditAsync(actorId, "UpdateDevice", device.Id, device.DeviceCode, ip, ct);
         await _uow.SaveChangesAsync(ct);
@@ -1233,12 +1246,20 @@ public class IotService : IIotService
         Guid deviceId, UpdateDeviceStatusRequest req, CancellationToken ct = default)
     {
         var device = await _uow.Devices.GetByIdAsync(deviceId, ct) ?? throw AppException.NotFound("Device");
-        if (Enum.TryParse<DeviceStatus>(req.Status, true, out var status))
-            device.Status = status;
+        if (device.Status == DeviceStatus.Maintenance)
+            throw AppException.Forbidden("Thiết bị đang bảo trì; chỉ quản trị viên được thay đổi trạng thái.");
+        if (!Enum.TryParse<DeviceStatus>(req.Status, true, out var status)
+            || status is not (DeviceStatus.Online or DeviceStatus.Offline or DeviceStatus.Error))
+            throw AppException.BadRequest("Thiết bị chỉ được báo Online, Offline hoặc Error.");
+        if (req.BatteryLevel is < 0 or > 100)
+            throw AppException.BadRequest("BatteryLevel phải trong khoảng 0–100.");
+        if (!string.IsNullOrWhiteSpace(req.MacAddress)
+            && !string.Equals(req.MacAddress.Trim(), device.MacAddress, StringComparison.OrdinalIgnoreCase))
+            throw AppException.Forbidden("MAC là định danh cấu hình; thiết bị không được tự thay đổi.");
+        device.Status = status;
         device.BatteryLevel = req.BatteryLevel ?? device.BatteryLevel;
         device.RssiDbm = req.RssiDbm ?? device.RssiDbm;
         if (!string.IsNullOrWhiteSpace(req.IpAddress)) device.IpAddress = req.IpAddress.Trim();
-        if (!string.IsNullOrWhiteSpace(req.MacAddress)) device.MacAddress = req.MacAddress.Trim();
         device.LastSeenAt = DateTime.UtcNow;
         _uow.Devices.Update(device);
         await _uow.SaveChangesAsync(ct);

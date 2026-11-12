@@ -60,7 +60,9 @@ public static class DependencyInjection
         });
 
         // Sao lưu / phục hồi DB bằng pg_dump / pg_restore
-        services.AddSingleton<IDatabaseBackupService, DatabaseBackupService>();
+        services.AddSingleton<DatabaseBackupService>();
+        services.AddSingleton<IDatabaseBackupService>(sp => sp.GetRequiredService<DatabaseBackupService>());
+        services.AddHostedService<DatabaseBackupScheduler>();
         services.AddScoped<ISystemPlatformService, SystemPlatformService>();
 
         return services;

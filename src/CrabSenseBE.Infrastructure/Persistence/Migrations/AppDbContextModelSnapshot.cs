@@ -463,6 +463,11 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                         .IsRequired()
                         .HasColumnType("text");
 
+                    b.Property<DateTime?>("LastAttemptSlotUtc").HasColumnType("timestamp with time zone");
+                    b.Property<DateTime?>("LastCompletedAtUtc").HasColumnType("timestamp with time zone");
+                    b.Property<string>("LastResult").HasColumnType("text");
+                    b.Property<string>("LastBackupFile").HasColumnType("text");
+
                     b.Property<int>("RetentionDays")
                         .HasColumnType("integer");
 
@@ -1683,6 +1688,9 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.Property<string>("Description")
                         .HasColumnType("text");
 
+                    b.Property<Guid?>("FarmingAreaId")
+                        .HasColumnType("uuid");
+
                     b.Property<string>("Key")
                         .IsRequired()
                         .HasColumnType("text");
@@ -1695,6 +1703,10 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                         .HasColumnType("text");
 
                     b.HasKey("Id");
+
+                    b.HasIndex("FarmingAreaId", "Key")
+                        .IsUnique()
+                        .HasFilter("\"FarmingAreaId\" IS NOT NULL");
 
                     b.ToTable("FarmSettings", "be");
                 });
@@ -1966,6 +1978,9 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<DateTime?>("DispatchedAt")
+                        .HasColumnType("timestamp with time zone");
+
                     b.Property<DateTime>("ExpiryDate")
                         .HasColumnType("timestamp with time zone");
 
@@ -1995,6 +2010,16 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                         .HasMaxLength(64)
                         .HasColumnType("character varying(64)");
 
+                    b.Property<Guid?>("OutboundTransactionId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("StockState")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)")
+                        .HasDefaultValue("Unverified");
+
                     b.Property<DateTime?>("UpdatedAt")
                         .HasColumnType("timestamp with time zone");
 
@@ -2013,6 +2038,8 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
 
                     b.HasIndex("HarvestLineId")
                         .IsUnique();
+
+                    b.HasIndex("OutboundTransactionId");
 
                     b.ToTable("FrozenCrabItems", "be");
                 });
@@ -4031,6 +4058,8 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
 
                     b.HasKey("Id");
 
+                    b.HasIndex("Token").IsUnique().HasFilter("\"IsActive\" = true");
+
                     b.HasIndex("UserId", "Token")
                         .IsUnique();
 
@@ -4217,6 +4246,10 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<string>("EdgeEventKey")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
                     b.Property<DateTime>("MeasuredAt")
                         .HasColumnType("timestamp with time zone");
 
@@ -4241,6 +4274,10 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.HasKey("Id");
 
                     b.HasIndex("WaterSystemId");
+
+                    b.HasIndex("SensorId", "EdgeEventKey")
+                        .IsUnique()
+                        .HasFilter("\"EdgeEventKey\" IS NOT NULL");
 
                     b.HasIndex("SensorId", "MeasuredAt");
 
@@ -4629,6 +4666,14 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                         .OnDelete(DeleteBehavior.Restrict);
                 });
 
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.FarmSettings", b =>
+                {
+                    b.HasOne("CrabSenseBE.Domain.Entities.FarmingArea", null)
+                        .WithMany()
+                        .HasForeignKey("FarmingAreaId")
+                        .OnDelete(DeleteBehavior.Restrict);
+                });
+
             modelBuilder.Entity("CrabSenseBE.Domain.Entities.FarmStaffAssignment", b =>
                 {
                     b.HasOne("CrabSenseBE.Domain.Entities.AppUser", "AssignedBy")
@@ -4717,11 +4762,19 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
 
+                    b.HasOne("CrabSenseBE.Domain.Entities.FrozenStorageTransaction", "OutboundTransaction")
+                        .WithMany()
+                        .HasForeignKey("OutboundTransactionId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("FK_FrozenCrabItems_OutboundTransaction");
+
                     b.Navigation("Crab");
 
                     b.Navigation("FrozenLot");
 
                     b.Navigation("HarvestLine");
+
+                    b.Navigation("OutboundTransaction");
                 });
 
             modelBuilder.Entity("CrabSenseBE.Domain.Entities.FrozenInventoryAdjustment", b =>

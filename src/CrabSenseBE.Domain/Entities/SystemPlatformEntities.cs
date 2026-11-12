@@ -36,6 +36,10 @@ public class BackupScheduleSetting : BaseEntity
     public string Frequency { get; set; } = "Daily";
     public string BackupTime { get; set; } = "02:00";
     public int RetentionDays { get; set; } = 30;
+    public DateTime? LastAttemptSlotUtc { get; set; }
+    public DateTime? LastCompletedAtUtc { get; set; }
+    public string? LastResult { get; set; }
+    public string? LastBackupFile { get; set; }
 }
 
 public class SystemDeployment : BaseEntity

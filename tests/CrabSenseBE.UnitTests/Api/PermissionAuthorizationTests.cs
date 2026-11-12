@@ -385,6 +385,7 @@ public sealed class ChangedApiPermissionTests : IAsyncLifetime
             {
                 Id = Guid.NewGuid(),
                 Key = "site-name",
+                FarmingAreaId = AreaId,
                 Value = "CrabSense",
                 Category = "general"
             }
@@ -411,7 +412,7 @@ public sealed class ChangedApiPermissionTests : IAsyncLifetime
                 Username = "scoped"
             });
         var areas = new Mock<IRepository<FarmingArea>>();
-        areas.Setup(r => r.Query()).Returns(() => Array.Empty<FarmingArea>().AsQueryable());
+        areas.Setup(r => r.Query()).Returns(() => new[] { new FarmingArea { Id = AreaId, Administrators = { new AppUser { Id = AdminId } } } }.AsQueryable());
 
         uow.Setup(u => u.FarmSettings).Returns(repo.Object);
         uow.Setup(u => u.Users).Returns(users.Object);

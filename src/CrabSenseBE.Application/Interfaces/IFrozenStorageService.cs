@@ -41,6 +41,11 @@ public interface IFrozenStorageService
     RegisterFrozenCrabItemsRequest request,
     CancellationToken ct = default);
 
+    Task<ApiResponse<IEnumerable<FrozenCrabItemDto>>> ListCrabItemsAsync(
+        Guid lotId, CancellationToken ct = default);
+    Task<ApiResponse<IEnumerable<FrozenCrabItemDto>>> ReconcileCrabItemsAsync(
+        Guid lotId, ReconcileFrozenItemsRequest request, CancellationToken ct = default);
+
     Task<ApiResponse<FrozenCrabItemDto>> GetCrabItemByBarcodeAsync(
         string barcodeValue,
         CancellationToken ct = default);

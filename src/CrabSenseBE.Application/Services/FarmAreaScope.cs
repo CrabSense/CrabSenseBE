@@ -94,8 +94,10 @@ public sealed class FarmAreaScope
             return null;
         if (!_currentUser.IsAuthenticated)
             throw AppException.Unauthorized("Người dùng chưa được xác thực.");
-        return await _uow.Users.GetByIdAsync(_currentUser.UserId, ct)
+        var user = await _uow.Users.GetByIdAsync(_currentUser.UserId, ct)
             ?? throw AppException.Unauthorized("Không xác định được người dùng.");
+        if (!user.IsActive) throw AppException.Unauthorized("Tài khoản đã bị vô hiệu hóa.");
+        return user;
     }
 
     public async Task<Guid> AreaIdOfBoxAsync(Box box, CancellationToken ct)

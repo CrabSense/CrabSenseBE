@@ -85,7 +85,7 @@ public class DashboardService : IDashboardService
         var freshSensors = sensors.Count(s => s.IsActive && s.LastSeenAt != null && s.LastSeenAt > staleCutoff);
         int? waterScore = activeSensors == 0
             ? null
-            : (int)Math.Round(Math.Max(freshSensors, activeSensors * 0.7) * 100.0 / activeSensors);
+            : (int)Math.Round(freshSensors * 100.0 / activeSensors);
         if (waterScore.HasValue)
             waterScore = Math.Clamp(waterScore.Value
                 - activeAlerts.Count(a => a.Severity >= AlertSeverity.Warning) * 4, 0, 100);
@@ -112,7 +112,7 @@ public class DashboardService : IDashboardService
             ? $"Chưa có dữ liệu thiết bị, cảm biến hoặc cua cho {areaLabel}."
             : activeAlerts.Count > 0
             ? $"Có {activeAlerts.Count} cảnh báo đang mở trên {areaLabel}; điểm thiết bị {deviceScore}%, nước {waterScore}%, cua {crabScore}%."
-            : $"{(farmingAreaId.HasValue ? "Khu" : "Trang trại")} ổn định — nước {waterScore}%, cua {crabScore}%, thiết bị {deviceScore}%.";
+            : $"Điểm theo dõi vận hành {areaLabel}: độ phủ sensor mới {waterScore}%, cua {crabScore}%, thiết bị {deviceScore}%. Không thay thế kết quả đo chất lượng nước.";
 
         return ApiResponse<DashboardMetricsDto>.Ok(new DashboardMetricsDto(
             score,
