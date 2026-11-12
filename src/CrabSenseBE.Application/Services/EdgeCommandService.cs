@@ -51,6 +51,9 @@ public sealed class EdgeCommandService : IEdgeCommandService
             || _currentUser.UserId != actorId)
             throw AppException.Unauthorized("Không xác định được người gửi lệnh.");
 
+        var actor = await _areas.CurrentUserAsync(ct);
+        if (actor?.Role is not (UserRole.FarmManager or UserRole.FarmStaff))
+            throw AppException.Forbidden("Chỉ Farm Manager hoặc Farm Staff được điều khiển relay.");
         return await EnqueueCoreAsync(
             request, actorId, "manual", requiredAreaId: null, ct);
     }
@@ -104,7 +107,7 @@ public sealed class EdgeCommandService : IEdgeCommandService
             || device.EdgeState is not ("Approved" or "Online"))
             throw AppException.Conflict("Thiết bị chưa online hoặc chưa được phê duyệt.");
 
-        var channel = string.IsNullOrWhiteSpace(request.Channel) ? null : request.Channel.Trim();
+        var channel = command == "alloff" || string.IsNullOrWhiteSpace(request.Channel) ? null : request.Channel.Trim();
         if (command is "on" or "off" or "toggle")
         {
             if (channel is null)
@@ -158,7 +161,11 @@ public sealed class EdgeCommandService : IEdgeCommandService
                 Details = $"{deviceCode}|{entity.Channel}"
             }, ct);
         }
-        await _uow.SaveChangesAsync(ct);
+        try { await _uow.SaveChangesAsync(ct); }
+        catch (DbUpdateException)
+        {
+            throw AppException.Conflict("Lệnh đồng thời hoặc trùng idempotency; hãy tải lại trạng thái trước khi thử lại.");
+        }
 
         return ApiResponse<EdgeCommandDto>.Ok(Map(entity), "Command queued.");
     }
@@ -179,7 +186,8 @@ public sealed class EdgeCommandService : IEdgeCommandService
                 c => c.DeviceCode == code
                      && (c.Status == "pending"
                          || (c.Status == "delivered" && c.LeaseExpiresAt < now)), ct))
-            .OrderBy(c => c.CreatedAt)
+            .OrderBy(c => c.CommandSequence)
+            .ThenBy(c => c.CreatedAt)
             .Take(20)
             .ToList();
 
@@ -269,7 +277,11 @@ public sealed class EdgeCommandService : IEdgeCommandService
         command.DeliveryAttemptId = null;
         command.ConcurrencyVersion++;
         _uow.EdgeCommands.Update(command);
-        await _uow.SaveChangesAsync(ct);
+        try { await _uow.SaveChangesAsync(ct); }
+        catch (DbUpdateConcurrencyException)
+        {
+            throw AppException.Conflict("Lệnh đã thay đổi hoặc đã bị thay thế.");
+        }
         return ApiResponse<EdgeCommandDto>.Ok(Map(command), "Command acknowledgement saved.");
     }
 
@@ -278,7 +290,8 @@ public sealed class EdgeCommandService : IEdgeCommandService
             command.Status, command.CreatedAt, command.CorrelationId,
             command.LeaseExpiresAt, command.AttemptCount,
             command.DeliveryAttemptId,
-            command.ExpiresAt == default ? null : command.ExpiresAt);
+            command.ExpiresAt == default ? null : command.ExpiresAt,
+            command.CommandSequence, command.SupersededAt, command.SupersededByCommandId);
 
     private async Task<Guid> ResolveDeviceAreaAsync(Device device, CancellationToken ct)
     {
