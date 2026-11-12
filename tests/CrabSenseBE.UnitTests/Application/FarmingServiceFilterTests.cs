@@ -182,6 +182,55 @@ public class FarmingServiceFilterTests
         dto.CrabTag.Should().BeNull();
     }
 
+    [Fact]
+    public async Task BoxStatus_cannot_mark_allocated_box_empty()
+    {
+        var box = new Box { Id = Guid.NewGuid(), FarmingRowId = Guid.NewGuid(), Code = "A01", Status = "active", IsOccupied = true };
+        var boxes = new Mock<IRepository<Box>>();
+        boxes.Setup(r => r.GetByIdAsync(box.Id, It.IsAny<CancellationToken>())).ReturnsAsync(box);
+        var rows = new Mock<IRepository<FarmingRow>>();
+        rows.Setup(r => r.GetByIdAsync(box.FarmingRowId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new FarmingRow { Id = box.FarmingRowId, FarmingAreaId = Guid.NewGuid() });
+        var allocations = new Mock<IRepository<CrabBoxAllocation>>();
+        allocations.Setup(r => r.AnyAsync(It.IsAny<System.Linq.Expressions.Expression<Func<CrabBoxAllocation, bool>>>(), It.IsAny<CancellationToken>())).ReturnsAsync(true);
+        _uow.Setup(x => x.Boxes).Returns(boxes.Object);
+        _uow.Setup(x => x.FarmingRows).Returns(rows.Object);
+        _uow.Setup(x => x.CrabBoxAllocations).Returns(allocations.Object);
+        var ex = await Assert.ThrowsAsync<AppException>(() => Create().UpdateBoxStatusAsync(box.Id, new UpdateBoxStatusRequest("empty", false)));
+        ex.StatusCode.Should().Be(409);
+        box.IsOccupied.Should().BeTrue();
+        box.Status.Should().Be("active");
+        _uow.Verify(x => x.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Theory]
+    [InlineData(-1)]
+    [InlineData(0)]
+    public async Task CrabProfile_rejects_nonpositive_weight(int weight)
+    {
+        var crab = new Crab { Id = Guid.NewGuid(), WeightGram = 200 };
+        var crabs = new Mock<IRepository<Crab>>();
+        crabs.Setup(r => r.GetByIdAsync(crab.Id, It.IsAny<CancellationToken>())).ReturnsAsync(crab);
+        _uow.Setup(x => x.Crabs).Returns(crabs.Object);
+        var ex = await Assert.ThrowsAsync<AppException>(() => Create().UpdateCrabAsync(crab.Id, new UpdateCrabRequest(null, weight)));
+        ex.StatusCode.Should().Be(400);
+        crab.WeightGram.Should().Be(200);
+        _uow.Verify(x => x.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task CrabProfile_cannot_clear_quarantine_with_normal_condition()
+    {
+        var crab = new Crab { Id = Guid.NewGuid(), Status = CrabSenseBE.Domain.Enums.CrabStatus.Quarantined, Condition = CrabSenseBE.Domain.Enums.CrabCondition.Problem };
+        var crabs = new Mock<IRepository<Crab>>();
+        crabs.Setup(r => r.GetByIdAsync(crab.Id, It.IsAny<CancellationToken>())).ReturnsAsync(crab);
+        _uow.Setup(x => x.Crabs).Returns(crabs.Object);
+        var ex = await Assert.ThrowsAsync<AppException>(() => Create().UpdateCrabAsync(crab.Id, new UpdateCrabRequest(null, null, Condition: "normal")));
+        ex.StatusCode.Should().Be(409);
+        crab.Status.Should().Be(CrabSenseBE.Domain.Enums.CrabStatus.Quarantined);
+        _uow.Verify(x => x.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Never);
+    }
+
     private void StubEmptyCrabsAndAlerts()
     {
         var crabRepo = new Mock<IRepository<Crab>>();
