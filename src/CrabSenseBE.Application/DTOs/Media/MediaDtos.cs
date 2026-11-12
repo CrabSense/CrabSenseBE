@@ -18,6 +18,12 @@ public record MediaAssetDto(
     Guid? RelatedEntityId,
     DateTime CreatedAt);
 
+public sealed record MediaContentResult(
+    Stream Content,
+    string ContentType,
+    string FileName,
+    long Length);
+
 public record MediaUploadMeta(
     string Category,
     Guid? BoxId,
@@ -26,7 +32,7 @@ public record MediaUploadMeta(
     string? RelatedEntityType,
     Guid? RelatedEntityId,
     string? Notes,
-    bool SharePublic = true);
+    bool SharePublic = false);
 
 public record MediaShareResultDto(Guid Id, string ShareLink, bool IsShared);
 

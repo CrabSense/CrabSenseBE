@@ -63,9 +63,21 @@ public class MediaController : ControllerBase
     public async Task<IActionResult> GetById(Guid id, CancellationToken ct)
         => Ok(await _service.GetByIdAsync(id, ct));
 
+    /// <summary>[READ] Stream private media through authenticated area authorization.</summary>
+    [HttpGet("{id:guid}/content")]
+    public async Task<IActionResult> Content(Guid id, CancellationToken ct)
+    {
+        var content = await _service.OpenContentAsync(id, ct);
+        return File(
+            content.Content,
+            content.ContentType,
+            content.FileName,
+            enableRangeProcessing: true);
+    }
+
     /// <summary>[UPDATE] Create / refresh Drive share link</summary>
     [HttpPost("{id:guid}/share")]
-    [Authorize(Roles = AppRoles.FarmWrite)]
+    [Authorize(Roles = AppRoles.FarmAdministrator + "," + AppRoles.FarmManager)]
     public async Task<IActionResult> Share(Guid id, CancellationToken ct)
         => Ok(await _service.ShareAsync(id, ct));
 

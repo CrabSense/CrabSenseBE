@@ -12,11 +12,11 @@ public record InventoryReportDto
     // Tổng số lượng cua
     int TotalInventoryQuantity,
     // Số lô đang Available
-    int AvailableLots,
+    int? AvailableLots,
     // Số lô đã Reserved
-    int ReservedLots,
+    int? ReservedLots,
     // Số lô đã Shipped
-    int ShippedLots,
+    int? ShippedLots,
     // Số lô đã Expired
     int ExpiredLots,
 
@@ -28,7 +28,8 @@ public record InventoryReportDto
     int OpeningBalancesPendingReview = 0,
     int OpeningBalanceMismatchCount = 0,
     string DataStatus = "Complete",
-    int NeedsReviewLotCount = 0
+    int NeedsReviewLotCount = 0,
+    string HistoricalStatusDataStatus = "Complete"
 );
 
 /// <summary>

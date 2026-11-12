@@ -3735,6 +3735,9 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uuid");
 
+                    b.Property<Guid?>("ActorUserId")
+                        .HasColumnType("uuid");
+
                     b.Property<int?>("BaseVersion")
                         .HasColumnType("integer");
 
@@ -3770,6 +3773,11 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.Property<DateTimeOffset>("ReceivedAt")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<string>("RequestHash")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
                     b.Property<string>("Status")
                         .IsRequired()
                         .HasColumnType("text");
@@ -3777,7 +3785,12 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.HasKey("Id");
 
                     b.HasIndex("IdempotencyKey")
-                        .IsUnique();
+                        .IsUnique()
+                        .HasFilter("\"ActorUserId\" IS NULL");
+
+                    b.HasIndex("ActorUserId", "IdempotencyKey")
+                        .IsUnique()
+                        .HasFilter("\"ActorUserId\" IS NOT NULL");
 
                     b.HasIndex("Status", "ReceivedAt");
 

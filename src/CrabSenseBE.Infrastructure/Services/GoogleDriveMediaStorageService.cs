@@ -101,9 +101,11 @@ public class GoogleDriveMediaStorageService : IMediaStorageService
                 throw AppException.BadRequest(
                     "Private media requires GoogleDrive:PrivateFolderId; refusing to store it in a shared folder.");
             if (!publicRead)
-                await EnsureDriveRootAsync(rootId, ct);
+                await EnsurePrivateFolderAsync(rootId, ct);
             _logger.LogInformation("Drive upload path={Path} root={Root}", underProject, rootId);
             var targetFolderId = await EnsureSubFolderAsync(underProject, rootId, ct);
+            if (!publicRead && !string.Equals(targetFolderId, rootId, StringComparison.Ordinal))
+                await EnsurePrivateFolderAsync(targetFolderId, ct);
 
             await using var buffer = new MemoryStream();
             await data.CopyToAsync(buffer, ct);
@@ -175,6 +177,58 @@ public class GoogleDriveMediaStorageService : IMediaStorageService
         await request.DownloadAsync(ms, ct);
         ms.Position = 0;
         return ms;
+    }
+
+    public async Task EnsurePrivateAccessAsync(
+        string storageKey,
+        CancellationToken ct = default)
+    {
+        var privateRoot = PrivateFolderId;
+        if (string.IsNullOrWhiteSpace(privateRoot))
+            throw AppException.BadRequest(
+                "Private media requires GoogleDrive:PrivateFolderId.");
+        if (string.IsNullOrWhiteSpace(storageKey)
+            || string.Equals(storageKey, privateRoot, StringComparison.Ordinal))
+            throw AppException.Forbidden(
+                "Media key is not a file inside the configured private folder.");
+
+        var current = storageKey;
+        var visited = new HashSet<string>(StringComparer.Ordinal);
+        try
+        {
+            for (var depth = 0; depth < 64 && visited.Add(current); depth++)
+            {
+                var get = _drive.Files.Get(current);
+                get.Fields = "id,parents,trashed,mimeType";
+                get.SupportsAllDrives = true;
+                var item = await get.ExecuteAsync(ct);
+                if (item.Trashed == true)
+                    throw AppException.NotFound("Media file");
+
+                await EnsureNoPublicPermissionAsync(current, ct);
+                if (string.Equals(current, privateRoot, StringComparison.Ordinal))
+                    return;
+
+                var parents = item.Parents?.Where(id => !string.IsNullOrWhiteSpace(id))
+                    .Distinct(StringComparer.Ordinal)
+                    .ToArray() ?? [];
+                if (parents.Length != 1)
+                    throw AppException.Forbidden(
+                        "Media file does not have an unambiguous private-folder ancestry.");
+                current = parents[0];
+            }
+        }
+        catch (AppException)
+        {
+            throw;
+        }
+        catch (Google.GoogleApiException ex)
+        {
+            throw TranslateDriveError(ex);
+        }
+
+        throw AppException.Forbidden(
+            "Media file is outside GoogleDrive:PrivateFolderId.");
     }
 
     public async Task<string> EnsureShareLinkAsync(string storageKey, CancellationToken ct = default)
@@ -275,6 +329,42 @@ public class GoogleDriveMediaStorageService : IMediaStorageService
         {
             throw TranslateDriveError(ex);
         }
+    }
+
+    private async Task EnsurePrivateFolderAsync(
+        string folderId,
+        CancellationToken ct)
+    {
+        await EnsureDriveRootAsync(folderId, ct);
+        try
+        {
+            await EnsureNoPublicPermissionAsync(folderId, ct);
+        }
+        catch (AppException)
+        {
+            throw;
+        }
+        catch (Google.GoogleApiException ex)
+        {
+            throw TranslateDriveError(ex);
+        }
+    }
+
+    private async Task EnsureNoPublicPermissionAsync(
+        string fileId,
+        CancellationToken ct)
+    {
+        var list = _drive.Permissions.List(fileId);
+        list.SupportsAllDrives = true;
+        list.Fields = "permissions(id,type,role,allowFileDiscovery,permissionDetails)";
+        var permissions = await list.ExecuteAsync(ct);
+        if (permissions.Permissions?.Any(permission =>
+                string.Equals(
+                    permission.Type,
+                    "anyone",
+                    StringComparison.OrdinalIgnoreCase)) == true)
+            throw AppException.Conflict(
+                "Private media đang có quyền public hoặc thừa hưởng quyền anyone.");
     }
 
     private async Task<MediaUploadResult?> TryWebhookUploadAsync(

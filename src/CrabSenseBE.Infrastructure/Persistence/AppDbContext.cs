@@ -108,8 +108,16 @@ public class AppDbContext : DbContext
         // Apply all IEntityTypeConfiguration from this assembly
         modelBuilder.ApplyConfigurationsFromAssembly(typeof(AppDbContext).Assembly);
         modelBuilder.Entity<SyncInboxItem>()
+            .HasIndex(item => new { item.ActorUserId, item.IdempotencyKey })
+            .IsUnique()
+            .HasFilter("\"ActorUserId\" IS NOT NULL");
+        modelBuilder.Entity<SyncInboxItem>()
             .HasIndex(item => item.IdempotencyKey)
-            .IsUnique();
+            .IsUnique()
+            .HasFilter("\"ActorUserId\" IS NULL");
+        modelBuilder.Entity<SyncInboxItem>()
+            .Property(item => item.RequestHash)
+            .HasMaxLength(64);
         modelBuilder.Entity<SyncInboxItem>()
             .HasIndex(item => new { item.Status, item.ReceivedAt });
         modelBuilder.Entity<SyncInboxItem>()

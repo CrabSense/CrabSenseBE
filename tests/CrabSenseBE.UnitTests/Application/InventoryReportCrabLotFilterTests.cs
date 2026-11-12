@@ -110,9 +110,10 @@ public class InventoryReportCrabLotFilterTests
         result.TotalInventoryQuantity.Should().Be(2);
         result.TotalInventoryWeightKg.Should().Be(3.8m);
 
-        result.AvailableLots.Should().Be(1);
-        result.ReservedLots.Should().Be(0);
-        result.ShippedLots.Should().Be(0);
+        result.AvailableLots.Should().BeNull();
+        result.ReservedLots.Should().BeNull();
+        result.ShippedLots.Should().BeNull();
+        result.HistoricalStatusDataStatus.Should().StartWith("NeedsReview");
         result.ExpiredLots.Should().Be(0);
 
         // Grade và khối lượng được lấy từ các item phù hợp,
@@ -223,7 +224,10 @@ public class InventoryReportCrabLotFilterTests
 
         result.TotalInventoryQuantity.Should().Be(10);
         result.TotalInventoryWeightKg.Should().Be(10m);
-        result.DataStatus.Should().Be("Complete");
+        result.DataStatus.Should().Be("NeedsReview");
+        result.AvailableLots.Should().BeNull();
+        result.ReservedLots.Should().BeNull();
+        result.ShippedLots.Should().BeNull();
     }
 
     [Fact]
@@ -286,8 +290,9 @@ public class InventoryReportCrabLotFilterTests
 
         result.TotalInventoryQuantity.Should().Be(2);
         result.TotalInventoryWeightKg.Should().Be(4m);
-        result.AvailableLots.Should().Be(1);
-        result.ShippedLots.Should().Be(0);
+        result.AvailableLots.Should().BeNull();
+        result.ReservedLots.Should().BeNull();
+        result.ShippedLots.Should().BeNull();
         result.DataStatus.Should().Be("NeedsReview");
         result.ByGrade.Should().ContainSingle(x => x.Grade == "NeedsReview");
     }

@@ -58,7 +58,7 @@ public sealed class FrozenOpeningBalanceServiceTests
     }
 
     [Fact]
-    public async Task FarmAdministrator_CanSeeUnscopedLegacyBalance_InReviewQueue()
+    public async Task FarmAdministrator_CannotSeeUnscopedLegacyBalance()
     {
         var administratorId = Guid.NewGuid();
         var lot = new FrozenLot
@@ -115,10 +115,167 @@ public sealed class FrozenOpeningBalanceServiceTests
                 uow.Object, current.Object)
             .GetOpeningBalancesAsync();
 
-        result.Data.Should().ContainSingle(item =>
-            item.Id == balance.Id
-            && item.FarmingAreaId == null
-            && item.VerificationStatus == "NeedsReview");
+        result.Data.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task FarmAdministrator_A_CannotSeeUnassignedBalanceWithAreaBEvidence()
+    {
+        var administratorId = Guid.NewGuid();
+        var areaA = new FarmingArea { Id = Guid.NewGuid() };
+        areaA.Administrators.Add(new AppUser { Id = administratorId });
+        var areaB = new FarmingArea { Id = Guid.NewGuid() };
+        var lot = new FrozenLot
+        {
+            Id = Guid.NewGuid(),
+            FarmingAreaId = areaB.Id,
+            Quantity = 2,
+            WeightKg = 1m
+        };
+        var balance = new FrozenInventoryOpeningBalance
+        {
+            Id = Guid.NewGuid(),
+            FrozenLotId = lot.Id,
+            OpeningQuantity = 2,
+            OpeningWeightKg = 1m,
+            VerificationStatus = FrozenOpeningBalanceVerificationStatus.NeedsReview
+        };
+        var users = new Mock<IRepository<AppUser>>();
+        users.Setup(x => x.GetByIdAsync(
+                administratorId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new AppUser
+            {
+                Id = administratorId,
+                Role = UserRole.FarmAdministrator,
+                IsActive = true
+            });
+        var areas = new Mock<IRepository<FarmingArea>>();
+        areas.Setup(x => x.Query()).Returns(
+            new[] { areaA, areaB }.AsQueryable());
+        var balances = new Mock<IRepository<FrozenInventoryOpeningBalance>>();
+        balances.Setup(x => x.GetAllAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new[] { balance });
+        var lots = new Mock<IRepository<FrozenLot>>();
+        lots.Setup(x => x.GetByIdAsync(
+                lot.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(lot);
+        var adjustments = new Mock<IRepository<FrozenInventoryAdjustment>>();
+        adjustments.Setup(x => x.FindAsync(
+                It.IsAny<Expression<Func<FrozenInventoryAdjustment, bool>>>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Array.Empty<FrozenInventoryAdjustment>());
+        var uow = new Mock<IUnitOfWork>();
+        uow.Setup(x => x.Users).Returns(users.Object);
+        uow.Setup(x => x.FarmingAreas).Returns(areas.Object);
+        uow.Setup(x => x.FrozenInventoryOpeningBalances).Returns(balances.Object);
+        uow.Setup(x => x.FrozenLots).Returns(lots.Object);
+        uow.Setup(x => x.FrozenInventoryAdjustments).Returns(adjustments.Object);
+        var current = new Mock<ICurrentUserService>();
+        current.SetupGet(x => x.IsAuthenticated).Returns(true);
+        current.SetupGet(x => x.UserId).Returns(administratorId);
+
+        var result = await new FrozenStorageService(
+                uow.Object, current.Object)
+            .GetOpeningBalancesAsync();
+
+        result.Data.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task AssignArea_UpdatesFrozenLotAndBalanceAtomically_FromVoucherEvidence()
+    {
+        var areaId = Guid.NewGuid();
+        var managerId = Guid.NewGuid();
+        var voucher = new HarvestVoucher
+        {
+            Id = Guid.NewGuid(),
+            FarmingAreaId = areaId
+        };
+        var lot = new FrozenLot
+        {
+            Id = Guid.NewGuid(),
+            HarvestVoucherId = voucher.Id,
+            FarmingAreaId = null,
+            Quantity = 7,
+            WeightKg = 3.5m
+        };
+        var balance = new FrozenInventoryOpeningBalance
+        {
+            Id = Guid.NewGuid(),
+            FrozenLotId = lot.Id,
+            OpeningQuantity = 7,
+            OpeningWeightKg = 3.5m,
+            VerificationStatus = FrozenOpeningBalanceVerificationStatus.NeedsReview
+        };
+        var users = new Mock<IRepository<AppUser>>();
+        users.Setup(x => x.GetByIdAsync(managerId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new AppUser
+            {
+                Id = managerId,
+                Role = UserRole.FarmManager,
+                IsActive = true
+            });
+        var assignments = new Mock<IRepository<FarmManagerAssignment>>();
+        assignments.Setup(x => x.FindAsync(
+                It.IsAny<Expression<Func<FarmManagerAssignment, bool>>>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new[]
+            {
+                new FarmManagerAssignment
+                {
+                    ManagerUserId = managerId,
+                    FarmingAreaId = areaId
+                }
+            });
+        var lots = new Mock<IRepository<FrozenLot>>();
+        lots.Setup(x => x.GetByIdAsync(lot.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(lot);
+        var balances = new Mock<IRepository<FrozenInventoryOpeningBalance>>();
+        balances.Setup(x => x.GetByIdAsync(balance.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(balance);
+        var vouchers = new Mock<IRepository<HarvestVoucher>>();
+        vouchers.Setup(x => x.GetByIdAsync(voucher.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(voucher);
+        var adjustments = new Mock<IRepository<FrozenInventoryAdjustment>>();
+        adjustments.Setup(x => x.FindAsync(
+                It.IsAny<Expression<Func<FrozenInventoryAdjustment, bool>>>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Array.Empty<FrozenInventoryAdjustment>());
+        var operationLogs = new Mock<IRepository<OperationLog>>();
+        operationLogs.Setup(x => x.AddAsync(
+                It.IsAny<OperationLog>(), It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+        var uow = new Mock<IUnitOfWork>();
+        uow.Setup(x => x.Users).Returns(users.Object);
+        uow.Setup(x => x.FarmManagerAssignments).Returns(assignments.Object);
+        uow.Setup(x => x.FrozenLots).Returns(lots.Object);
+        uow.Setup(x => x.FrozenInventoryOpeningBalances).Returns(balances.Object);
+        uow.Setup(x => x.HarvestVouchers).Returns(vouchers.Object);
+        uow.Setup(x => x.FrozenInventoryAdjustments).Returns(adjustments.Object);
+        uow.Setup(x => x.OperationLogs).Returns(operationLogs.Object);
+        uow.Setup(x => x.SaveChangesAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(1);
+        var current = new Mock<ICurrentUserService>();
+        current.SetupGet(x => x.IsAuthenticated).Returns(true);
+        current.SetupGet(x => x.UserId).Returns(managerId);
+        var service = new FrozenStorageService(uow.Object, current.Object);
+
+        await service.AssignOpeningBalanceAreaAsync(
+            balance.Id,
+            new AssignFrozenOpeningBalanceAreaRequest(
+                areaId, "Đối chiếu phiếu thu hoạch"));
+
+        lot.FarmingAreaId.Should().Be(areaId);
+        balance.FarmingAreaId.Should().Be(areaId);
+        lot.Quantity.Should().Be(7);
+        lot.WeightKg.Should().Be(3.5m);
+        lots.Verify(x => x.Update(lot), Times.Once);
+        balances.Verify(x => x.Update(balance), Times.Once);
+        operationLogs.Verify(x => x.AddAsync(
+            It.Is<OperationLog>(log =>
+                log.Action == "AssignFrozenOpeningBalanceArea"),
+            It.IsAny<CancellationToken>()), Times.Once);
+        uow.Verify(x => x.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Once);
     }
 
     private static OpeningFixture Fixture()

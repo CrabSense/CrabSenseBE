@@ -29,6 +29,15 @@ public interface IMediaStorageService
 
     Task<Stream> DownloadAsync(string storageKey, CancellationToken ct = default);
 
+    /// <summary>
+    /// Verifies that a private object still belongs to the provider's private
+    /// storage boundary before its bytes are opened. Providers with an
+    /// intrinsically isolated private bucket/root may keep the default.
+    /// </summary>
+    Task EnsurePrivateAccessAsync(
+        string storageKey,
+        CancellationToken ct = default) => Task.CompletedTask;
+
     /// <summary>Bật share link (anyone with link) cho file đã upload.</summary>
     Task<string> EnsureShareLinkAsync(string storageKey, CancellationToken ct = default);
 

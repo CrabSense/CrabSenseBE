@@ -9,6 +9,8 @@ using CrabSenseBE.Infrastructure.Persistence;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 
 namespace CrabSenseBE.Api.Controllers;
@@ -49,6 +51,8 @@ public class SyncQueueStubController : ControllerBase
     [ProducesResponseType(StatusCodes.Status200OK)]
     public async Task<IActionResult> Batch([FromBody] SyncBatchRequest request)
     {
+        var actor = await _areas.CurrentUserAsync(HttpContext.RequestAborted)
+            ?? throw AppException.Unauthorized("Không xác định được người đồng bộ.");
         var items = request.Items ?? Array.Empty<SyncBatchItem>();
         var accepted = new List<string>();
         var processed = new List<string>();
@@ -60,40 +64,85 @@ public class SyncQueueStubController : ControllerBase
                 failed.Add(item.IdempotencyKey ?? string.Empty);
                 continue;
             }
-
-            var existing = await _db.SyncInboxItems.FirstOrDefaultAsync(
-                stored => stored.IdempotencyKey == item.IdempotencyKey);
-            if (existing != null)
-            {
-                accepted.Add(item.IdempotencyKey);
-                if (existing.Status == "processed")
-                {
-                    processed.Add(item.IdempotencyKey);
-                    continue;
-                }
-                if (existing.Status != "failed")
-                {
-                    failed.Add(item.IdempotencyKey);
-                    continue;
-                }
-            }
-            else
-            {
-                accepted.Add(item.IdempotencyKey);
-            }
-            var inboxItem = existing ?? NewInboxItem(item);
+            var key = item.IdempotencyKey.Trim();
+            var requestHash = RequestHash(item);
+            accepted.Add(key);
             await using var transaction = await _db.Database.BeginTransactionAsync(
                 HttpContext.RequestAborted);
             try
             {
+                var existing = await _db.SyncInboxItems
+                    .FromSqlInterpolated($"""
+                        SELECT * FROM be."SyncInboxItems"
+                        WHERE "ActorUserId" = {actor.Id}
+                          AND "IdempotencyKey" = {key}
+                        FOR UPDATE
+                        """)
+                    .SingleOrDefaultAsync(HttpContext.RequestAborted);
                 if (existing is null)
+                {
+                    var legacy = await _db.SyncInboxItems
+                        .FromSqlInterpolated($"""
+                            SELECT * FROM be."SyncInboxItems"
+                            WHERE "ActorUserId" IS NULL
+                              AND "IdempotencyKey" = {key}
+                            FOR UPDATE
+                            """)
+                        .SingleOrDefaultAsync(HttpContext.RequestAborted);
+                    if (legacy is not null)
+                    {
+                        if (legacy.Status == "processed")
+                        {
+                            processed.Add(key);
+                            await transaction.CommitAsync(HttpContext.RequestAborted);
+                        }
+                        else
+                        {
+                            failed.Add(key);
+                            await transaction.RollbackAsync(HttpContext.RequestAborted);
+                        }
+                        continue;
+                    }
+                }
+                if (existing is not null
+                    && !string.Equals(
+                        existing.RequestHash,
+                        requestHash,
+                        StringComparison.Ordinal))
+                {
+                    failed.Add(key);
+                    await transaction.RollbackAsync(HttpContext.RequestAborted);
+                    continue;
+                }
+                if (existing?.Status == "processed")
+                {
+                    processed.Add(key);
+                    await transaction.CommitAsync(HttpContext.RequestAborted);
+                    continue;
+                }
+                if (existing is not null && existing.Status != "failed")
+                {
+                    failed.Add(key);
+                    await transaction.RollbackAsync(HttpContext.RequestAborted);
+                    continue;
+                }
+
+                var inboxItem = existing
+                    ?? NewInboxItem(item, actor.Id, requestHash);
+                if (existing is null)
+                {
                     _db.SyncInboxItems.Add(inboxItem);
+                    // Reserve actor+key before any domain mutation. A concurrent
+                    // request must lose on the unique index before ApplyMobileOp.
+                    await _db.SaveChangesAsync(HttpContext.RequestAborted);
+                }
                 else
                 {
                     inboxItem.Status = "pending";
                     inboxItem.ErrorMessage = null;
                     inboxItem.ProcessedAt = null;
                     _db.SyncInboxItems.Update(inboxItem);
+                    await _db.SaveChangesAsync(HttpContext.RequestAborted);
                 }
                 await ApplyMobileOp(item, inboxItem, processed, failed);
                 if (inboxItem.Status == "failed")
@@ -102,10 +151,12 @@ public class SyncQueueStubController : ControllerBase
                     await transaction.RollbackAsync(HttpContext.RequestAborted);
                     _db.ChangeTracker.Clear();
                     var failedInbox = await _db.SyncInboxItems.FirstOrDefaultAsync(
-                        stored => stored.IdempotencyKey == item.IdempotencyKey,
+                        stored => stored.ActorUserId == actor.Id
+                            && stored.IdempotencyKey == key,
                         HttpContext.RequestAborted);
                     if (failedInbox is null)
-                        _db.SyncInboxItems.Add(NewInboxItem(item, "failed", error));
+                        _db.SyncInboxItems.Add(NewInboxItem(
+                            item, actor.Id, requestHash, "failed", error));
                     else
                     {
                         failedInbox.Status = "failed";
@@ -134,7 +185,8 @@ public class SyncQueueStubController : ControllerBase
                     failed.Add(item.IdempotencyKey);
                 processed.Remove(item.IdempotencyKey);
                 var concurrent = await _db.SyncInboxItems.AsNoTracking().FirstOrDefaultAsync(
-                    stored => stored.IdempotencyKey == item.IdempotencyKey,
+                    stored => stored.ActorUserId == actor.Id
+                        && stored.IdempotencyKey == key,
                     HttpContext.RequestAborted);
                 if (concurrent is not null)
                 {
@@ -146,8 +198,16 @@ public class SyncQueueStubController : ControllerBase
                 }
                 else
                 {
-                    _db.SyncInboxItems.Add(NewInboxItem(item, "failed", ex.Message));
-                    await _db.SaveChangesAsync(HttpContext.RequestAborted);
+                    try
+                    {
+                        _db.SyncInboxItems.Add(NewInboxItem(
+                            item, actor.Id, requestHash, "failed", ex.Message));
+                        await _db.SaveChangesAsync(HttpContext.RequestAborted);
+                    }
+                    catch (DbUpdateException)
+                    {
+                        _db.ChangeTracker.Clear();
+                    }
                 }
             }
         }
@@ -165,10 +225,16 @@ public class SyncQueueStubController : ControllerBase
     }
 
     private static SyncInboxItem NewInboxItem(
-        SyncBatchItem item, string status = "pending", string? error = null) => new()
+        SyncBatchItem item,
+        Guid actorUserId,
+        string requestHash,
+        string status = "pending",
+        string? error = null) => new()
     {
         Id = Guid.NewGuid(),
-        IdempotencyKey = item.IdempotencyKey!,
+        ActorUserId = actorUserId,
+        IdempotencyKey = item.IdempotencyKey!.Trim(),
+        RequestHash = requestHash,
         EntityType = item.EntityType ?? "unknown",
         EntityId = item.EntityId ?? string.Empty,
         OperationType = item.OperationType ?? "unknown",
@@ -180,6 +246,54 @@ public class SyncQueueStubController : ControllerBase
         ReceivedAt = DateTimeOffset.UtcNow,
         ProcessedAt = status == "processed" ? DateTimeOffset.UtcNow : null
     };
+
+    private static string RequestHash(SyncBatchItem item)
+    {
+        using var buffer = new MemoryStream();
+        using (var writer = new Utf8JsonWriter(buffer))
+        {
+            writer.WriteStartObject();
+            writer.WriteString("entityType", item.EntityType?.Trim());
+            writer.WriteString("entityId", item.EntityId?.Trim());
+            writer.WriteString("operationType", item.OperationType?.Trim().ToLowerInvariant());
+            if (item.BaseVersion is int version)
+                writer.WriteNumber("baseVersion", version);
+            if (item.ClientUpdatedAt is DateTimeOffset updatedAt)
+                writer.WriteString("clientUpdatedAt", updatedAt.ToUniversalTime());
+            writer.WritePropertyName("payload");
+            using var payload = JsonDocument.Parse(
+                JsonSerializer.Serialize(item.Payload ?? new Dictionary<string, object?>()));
+            WriteCanonical(writer, payload.RootElement);
+            writer.WriteEndObject();
+        }
+        return Convert.ToHexString(SHA256.HashData(buffer.ToArray()));
+    }
+
+    private static void WriteCanonical(Utf8JsonWriter writer, JsonElement value)
+    {
+        switch (value.ValueKind)
+        {
+            case JsonValueKind.Object:
+                writer.WriteStartObject();
+                foreach (var property in value.EnumerateObject()
+                             .OrderBy(item => item.Name, StringComparer.Ordinal))
+                {
+                    writer.WritePropertyName(property.Name);
+                    WriteCanonical(writer, property.Value);
+                }
+                writer.WriteEndObject();
+                break;
+            case JsonValueKind.Array:
+                writer.WriteStartArray();
+                foreach (var item in value.EnumerateArray())
+                    WriteCanonical(writer, item);
+                writer.WriteEndArray();
+                break;
+            default:
+                value.WriteTo(writer);
+                break;
+        }
+    }
 
     /// <summary>
     /// Incremental pull: only boxes/crabs changed after [since], optionally

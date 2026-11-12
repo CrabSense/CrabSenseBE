@@ -293,11 +293,8 @@ public class InventoryReportService : IInventoryReportService
 
         // Đếm số lô cấp đông đã xuất kho.
         // Khi lọc lô nhập, chỉ đếm lô có item thuộc lô đó.
-        var shippedLots = filter.AsOfDate.HasValue
-            ? matchingScopedLots.Count(lot =>
-                pointInTime.TryGetValue(lot.Id, out var stock)
-                && stock.IsComplete
-                && stock.Quantity == 0)
+        int? shippedLots = filter.AsOfDate.HasValue
+            ? null
             : matchingScopedLots.Count(lot =>
                 lot.Status == FrozenLotStatus.Shipped);
 
@@ -309,10 +306,8 @@ public class InventoryReportService : IInventoryReportService
                 && lot.Status == FrozenLotStatus.Expired));
 
         // Đếm lô có trạng thái Available.
-        var availableLots = filter.AsOfDate.HasValue
-            ? (filter.CrabLotId.HasValue
-                ? filteredInventoryLots.Count
-                : inventoryLots.Count)
+        int? availableLots = filter.AsOfDate.HasValue
+            ? null
             : filter.CrabLotId.HasValue
             ? filteredInventoryLots.Count(lot =>
                 lot.Status == FrozenLotStatus.Available)
@@ -320,8 +315,8 @@ public class InventoryReportService : IInventoryReportService
                 lot.Status == FrozenLotStatus.Available);
 
         // Đếm lô có trạng thái Reserved.
-        var reservedLots = filter.AsOfDate.HasValue
-            ? 0
+        int? reservedLots = filter.AsOfDate.HasValue
+            ? null
             : filter.CrabLotId.HasValue
             ? filteredInventoryLots.Count(lot =>
                 lot.Status == FrozenLotStatus.Reserved)
@@ -669,8 +664,13 @@ public class InventoryReportService : IInventoryReportService
             Trend: trend,
             OpeningBalancesPendingReview: openingBalancesPendingReview,
             OpeningBalanceMismatchCount: openingBalanceMismatchCount,
-            DataStatus: needsReviewLotCount == 0 ? "Complete" : "NeedsReview",
-            NeedsReviewLotCount: needsReviewLotCount);
+            DataStatus: needsReviewLotCount == 0 && !filter.AsOfDate.HasValue
+                ? "Complete"
+                : "NeedsReview",
+            NeedsReviewLotCount: needsReviewLotCount,
+            HistoricalStatusDataStatus: filter.AsOfDate.HasValue
+                ? "NeedsReview: reservation/status history is unavailable"
+                : "Complete");
     }
 
     private async Task<IEnumerable<Domain.Entities.FrozenLot>> LimitLotsAsync(

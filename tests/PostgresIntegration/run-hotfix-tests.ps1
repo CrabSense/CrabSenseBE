@@ -113,9 +113,18 @@ BEFORE INSERT ON be."Crabs" FOR EACH ROW
 EXECUTE FUNCTION be.enforce_one_live_crab_per_box();
 
 CREATE TABLE be."SyncInboxItems" (
-  "IdempotencyKey" text PRIMARY KEY,
+  "Id" uuid PRIMARY KEY,
+  "ActorUserId" uuid NULL,
+  "IdempotencyKey" text NOT NULL,
+  "RequestHash" varchar(64) NOT NULL,
   "Status" text NOT NULL
 );
+CREATE UNIQUE INDEX "IX_SyncInboxItems_ActorUserId_IdempotencyKey"
+ON be."SyncInboxItems" ("ActorUserId","IdempotencyKey")
+WHERE "ActorUserId" IS NOT NULL;
+CREATE UNIQUE INDEX "IX_SyncInboxItems_IdempotencyKey_Legacy"
+ON be."SyncInboxItems" ("IdempotencyKey")
+WHERE "ActorUserId" IS NULL;
 CREATE TABLE be."SyncBoxes" (
   "Id" uuid PRIMARY KEY,
   "Status" text NOT NULL
@@ -208,6 +217,51 @@ COMMIT;
     Assert-Equal 0 (Invoke-Psql "SELECT COUNT(*) FROM be.`"SyncCrabs`"").Output `
         "Failed sync operation left a crab row."
 
+    $syncActor = "41000000-0000-0000-0000-000000000001"
+    $otherActor = "41000000-0000-0000-0000-000000000002"
+    $syncKey = "same-mobile-operation"
+    $syncReservationSql = @(
+        @"
+BEGIN;
+INSERT INTO be."SyncInboxItems" ("Id","ActorUserId","IdempotencyKey","RequestHash","Status")
+VALUES ('41000000-0000-0000-0000-000000000011','$syncActor','$syncKey','HASH-A','pending');
+SELECT pg_sleep(0.2);
+INSERT INTO be."SyncCrabs" VALUES ('41000000-0000-0000-0000-000000000021','IDEMPOTENT-1');
+UPDATE be."SyncInboxItems" SET "Status"='processed'
+WHERE "ActorUserId"='$syncActor' AND "IdempotencyKey"='$syncKey';
+COMMIT;
+"@,
+        @"
+BEGIN;
+INSERT INTO be."SyncInboxItems" ("Id","ActorUserId","IdempotencyKey","RequestHash","Status")
+VALUES ('41000000-0000-0000-0000-000000000012','$syncActor','$syncKey','HASH-A','pending');
+SELECT pg_sleep(0.2);
+INSERT INTO be."SyncCrabs" VALUES ('41000000-0000-0000-0000-000000000022','IDEMPOTENT-2');
+UPDATE be."SyncInboxItems" SET "Status"='processed'
+WHERE "ActorUserId"='$syncActor' AND "IdempotencyKey"='$syncKey';
+COMMIT;
+"@
+    )
+    $syncReservationJobs = $syncReservationSql | ForEach-Object {
+        Start-Job -ScriptBlock {
+            param($Psql, $Port, $Sql)
+            & $Psql -X -v ON_ERROR_STOP=1 -h 127.0.0.1 -p $Port `
+                -U postgres -d postgres -c $Sql *> $null
+            $LASTEXITCODE
+        } -ArgumentList $psql, $Port, $_
+    }
+    $syncReservationExit = $syncReservationJobs | Wait-Job | Receive-Job
+    $syncReservationJobs | Remove-Job
+    Assert-Equal 1 (Invoke-Psql "SELECT COUNT(*) FROM be.`"SyncInboxItems`" WHERE `"ActorUserId`"='$syncActor' AND `"IdempotencyKey`"='$syncKey'").Output `
+        "Concurrent retries created duplicate inbox reservations."
+    Assert-Equal 1 (Invoke-Psql "SELECT COUNT(*) FROM be.`"SyncCrabs`" WHERE `"Code`" LIKE 'IDEMPOTENT-%'").Output `
+        "Concurrent retries executed the business mutation more than once."
+    Assert-Equal 1 (@($syncReservationExit | Where-Object { $_ -ne 0 }).Count) `
+        "Exactly one concurrent idempotency reservation must be rejected."
+    Invoke-Psql "INSERT INTO be.`"SyncInboxItems`" (`"Id`",`"ActorUserId`",`"IdempotencyKey`",`"RequestHash`",`"Status`") VALUES ('41000000-0000-0000-0000-000000000013','$otherActor','$syncKey','HASH-B','processed')" | Out-Null
+    Assert-Equal 2 (Invoke-Psql "SELECT COUNT(*) FROM be.`"SyncInboxItems`" WHERE `"IdempotencyKey`"='$syncKey'").Output `
+        "The same client key must be independently scoped to different actors."
+
     Invoke-Psql @'
 CREATE TABLE be."EdgeCommands" (
   "Id" uuid PRIMARY KEY,
@@ -221,7 +275,7 @@ ADD COLUMN "RequestSource" text NOT NULL DEFAULT 'legacy';
     Assert-Equal "legacy" (Invoke-Psql "SELECT `"RequestSource`" FROM be.`"EdgeCommands`"").Output `
         "Hotfix migration did not preserve/backfill the legacy command."
 
-    Write-Output "POSTGRES_HOTFIX_TESTS_PASSED=5"
+    Write-Output "POSTGRES_HOTFIX_TESTS_PASSED=6"
 }
 finally {
     & $pgctl -D $data stop -m fast -w

@@ -79,6 +79,7 @@ public class MediaServiceTests
 
         result.Data!.IsShared.Should().BeFalse();
         result.Data.ShareLink.Should().BeNull();
+        result.Data.StorageKey.Should().BeEmpty();
         saved!.ShareLink.Should().BeNull();
         _storage.Verify(s => s.EnsureShareLinkAsync(
             It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
@@ -144,6 +145,103 @@ public class MediaServiceTests
             It.IsAny<Stream>(), It.IsAny<string>(), It.IsAny<string>(),
             It.IsAny<string>(), It.IsAny<CancellationToken>(), It.IsAny<bool>()),
             Times.Never);
+    }
+
+    [Fact]
+    public async Task PrivateContent_StreamsOnlyInsideAssignedArea()
+    {
+        var userId = Guid.NewGuid();
+        var areaA = Guid.NewGuid();
+        var areaB = Guid.NewGuid();
+        var rowA = new FarmingRow { Id = Guid.NewGuid(), FarmingAreaId = areaA };
+        var rowB = new FarmingRow { Id = Guid.NewGuid(), FarmingAreaId = areaB };
+        var boxA = new Box { Id = Guid.NewGuid(), FarmingRowId = rowA.Id };
+        var boxB = new Box { Id = Guid.NewGuid(), FarmingRowId = rowB.Id };
+        var allowed = new MediaAsset
+        {
+            Id = Guid.NewGuid(),
+            BoxId = boxA.Id,
+            StorageKey = "private/a.mp4",
+            FileName = "a.mp4",
+            ContentType = "video/mp4",
+            SizeBytes = 4
+        };
+        var denied = new MediaAsset
+        {
+            Id = Guid.NewGuid(),
+            BoxId = boxB.Id,
+            StorageKey = "private/b.mp4",
+            FileName = "b.mp4",
+            ContentType = "video/mp4",
+            SizeBytes = 4
+        };
+        var uow = new Mock<IUnitOfWork>();
+        uow.Setup(x => x.Users).Returns(Repo(new AppUser
+        {
+            Id = userId,
+            Role = UserRole.FarmManager,
+            IsActive = true
+        }));
+        uow.Setup(x => x.FarmManagerAssignments).Returns(Repo(
+            new FarmManagerAssignment
+            {
+                ManagerUserId = userId,
+                FarmingAreaId = areaA
+            }));
+        uow.Setup(x => x.FarmingRows).Returns(Repo(rowA, rowB));
+        uow.Setup(x => x.Boxes).Returns(Repo(boxA, boxB));
+        uow.Setup(x => x.MediaAssets).Returns(Repo(allowed, denied));
+        var current = new Mock<ICurrentUserService>();
+        current.SetupGet(x => x.IsAuthenticated).Returns(true);
+        current.SetupGet(x => x.UserId).Returns(userId);
+        var storage = new Mock<IMediaStorageService>();
+        storage.Setup(x => x.EnsurePrivateAccessAsync(
+                allowed.StorageKey, It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+        storage.Setup(x => x.DownloadAsync(
+                allowed.StorageKey, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new MemoryStream([1, 2, 3, 4]));
+        var service = new MediaService(
+            uow.Object, storage.Object, current.Object);
+
+        var content = await service.OpenContentAsync(allowed.Id);
+        content.ContentType.Should().Be("video/mp4");
+        content.Content.CanSeek.Should().BeTrue();
+        storage.Verify(x => x.EnsurePrivateAccessAsync(
+            allowed.StorageKey, It.IsAny<CancellationToken>()), Times.Once);
+
+        var act = () => service.OpenContentAsync(denied.Id);
+        (await act.Should().ThrowAsync<AppException>())
+            .Which.StatusCode.Should().Be(403);
+        storage.Verify(x => x.DownloadAsync(
+            denied.StorageKey, It.IsAny<CancellationToken>()), Times.Never);
+        storage.Verify(x => x.EnsurePrivateAccessAsync(
+            denied.StorageKey, It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task FarmStaff_CannotCreatePublicShare()
+    {
+        var userId = Guid.NewGuid();
+        var uow = new Mock<IUnitOfWork>();
+        uow.Setup(x => x.Users).Returns(Repo(new AppUser
+        {
+            Id = userId,
+            Role = UserRole.FarmStaff,
+            IsActive = true
+        }));
+        var current = new Mock<ICurrentUserService>();
+        current.SetupGet(x => x.IsAuthenticated).Returns(true);
+        current.SetupGet(x => x.UserId).Returns(userId);
+        var service = new MediaService(
+            uow.Object, _storage.Object, current.Object);
+
+        var act = () => service.ShareAsync(Guid.NewGuid());
+
+        (await act.Should().ThrowAsync<AppException>())
+            .Which.StatusCode.Should().Be(403);
+        _storage.Verify(x => x.EnsureShareLinkAsync(
+            It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]

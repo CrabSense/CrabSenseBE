@@ -643,26 +643,18 @@ public class FrozenStorageService : IFrozenStorageService
             && reviewer.Role is not (UserRole.FarmAdministrator or UserRole.FarmManager))
             throw AppException.Forbidden(
                 "Chỉ Farm Administrator hoặc Farm Manager được rà soát số dư đầu kỳ.");
-        var canReviewUnscoped =
-            reviewer?.Role == UserRole.FarmAdministrator;
         var allowed = await _areas.AreaIdsAsync(ct);
         var candidates = await _uow.FrozenInventoryOpeningBalances.GetAllAsync(ct);
         var balances = new List<FrozenInventoryOpeningBalance>();
         foreach (var item in candidates)
         {
-            Guid? evidenceAreaId = item.FarmingAreaId;
-            if (!evidenceAreaId.HasValue)
-            {
-                var lot = await _uow.FrozenLots.GetByIdAsync(item.FrozenLotId, ct);
-                evidenceAreaId = lot?.FarmingAreaId;
-                if (!evidenceAreaId.HasValue && lot?.HarvestVoucherId is Guid voucherId)
-                    evidenceAreaId =
-                        (await _uow.HarvestVouchers.GetByIdAsync(voucherId, ct))?.FarmingAreaId;
-            }
-            if (evidenceAreaId.HasValue
-                && (allowed is null || allowed.Contains(evidenceAreaId.Value)))
-                balances.Add(item);
-            else if (!evidenceAreaId.HasValue && canReviewUnscoped)
+            var lot = await _uow.FrozenLots.GetByIdAsync(item.FrozenLotId, ct);
+            if (lot is null) continue;
+            var evidence = await ResolveOpeningBalanceAreaEvidenceAsync(
+                lot, item.FarmingAreaId, ct);
+            if (!evidence.Conflicting
+                && evidence.AreaId is Guid evidenceAreaId
+                && (allowed is null || allowed.Contains(evidenceAreaId)))
                 balances.Add(item);
         }
         balances = balances
@@ -704,21 +696,24 @@ public class FrozenStorageService : IFrozenStorageService
 
         var lot = await _uow.FrozenLots.GetByIdAsync(balance.FrozenLotId, ct)
             ?? throw AppException.NotFound("Frozen lot");
-        Guid? evidenceAreaId = lot.FarmingAreaId;
-        var evidence = lot.FarmingAreaId.HasValue ? "FrozenLot" : null;
-        if (!evidenceAreaId.HasValue && lot.HarvestVoucherId is Guid voucherId)
-        {
-            var voucher = await _uow.HarvestVouchers.GetByIdAsync(voucherId, ct);
-            evidenceAreaId = voucher?.FarmingAreaId;
-            evidence = evidenceAreaId.HasValue ? "HarvestVoucher" : null;
-        }
-        if (evidenceAreaId != request.FarmingAreaId)
+        var evidence = await ResolveOpeningBalanceAreaEvidenceAsync(
+            lot, balanceAreaId: null, ct);
+        if (evidence.Conflicting)
             throw AppException.Conflict(
-                "Không có bằng chứng FrozenLot/HarvestVoucher xác nhận khu được chọn.");
+                "Bằng chứng khu của FrozenLot, HarvestVoucher hoặc ledger đang mâu thuẫn.");
+        if (evidence.AreaId != request.FarmingAreaId)
+            throw AppException.Conflict(
+                "Không có bằng chứng lịch sử xác nhận khu được chọn; cần quy trình quản trị dữ liệu ngoại lệ.");
 
+        var lotAreaBefore = lot.FarmingAreaId;
+        if (!lot.FarmingAreaId.HasValue)
+        {
+            lot.FarmingAreaId = request.FarmingAreaId;
+            _uow.FrozenLots.Update(lot);
+        }
         balance.FarmingAreaId = request.FarmingAreaId;
         balance.VerificationNote =
-            $"AreaEvidence={evidence}; ReviewReason={reason}";
+            $"AreaEvidence={string.Join(",", evidence.Sources)}; ReviewReason={reason}";
         _uow.FrozenInventoryOpeningBalances.Update(balance);
         await ConfigAudit.WriteAsync(
             _uow,
@@ -726,13 +721,71 @@ public class FrozenStorageService : IFrozenStorageService
             "AssignFrozenOpeningBalanceArea",
             nameof(FrozenInventoryOpeningBalance),
             balance.Id,
-            $"Area={request.FarmingAreaId}; Evidence={evidence}; Reason={reason}",
+            $"Area={request.FarmingAreaId}; FrozenLotAreaBefore={lotAreaBefore}; "
+            + $"Evidence={string.Join(",", evidence.Sources)}; Reason={reason}",
             ct);
         await SaveInventoryChangesAsync(ct);
         return ApiResponse<FrozenInventoryOpeningBalanceDto>.Ok(
             await MapOpeningBalanceAsync(balance, ct),
             "Đã gán khu theo bằng chứng lịch sử; số dư vẫn chờ Farm Manager xác nhận.");
     }
+
+    private async Task<OpeningBalanceAreaEvidence> ResolveOpeningBalanceAreaEvidenceAsync(
+        FrozenLot lot,
+        Guid? balanceAreaId,
+        CancellationToken ct)
+    {
+        var evidence = new List<(Guid AreaId, string Source)>();
+        static void Add(
+            List<(Guid AreaId, string Source)> target,
+            Guid? areaId,
+            string source)
+        {
+            if (areaId is Guid id && id != Guid.Empty)
+                target.Add((id, source));
+        }
+
+        Add(evidence, balanceAreaId, "OpeningBalance");
+        Add(evidence, lot.FarmingAreaId, "FrozenLot");
+        if (lot.HarvestVoucherId is Guid voucherId)
+        {
+            var voucher = await _uow.HarvestVouchers.GetByIdAsync(voucherId, ct);
+            Add(evidence, voucher?.FarmingAreaId, "HarvestVoucher");
+            if (_uow.HarvestApprovedLines is { } approvedRepository)
+            {
+                var approved = await approvedRepository.FindAsync(
+                    line => line.HarvestVoucherId == voucherId, ct);
+                foreach (var line in approved)
+                    Add(evidence, line.FarmingAreaId, "HarvestApprovedLine");
+            }
+        }
+
+        if (_uow.FrozenStorageTransactions is { } transactionRepository)
+        {
+            var transactions = await transactionRepository.FindAsync(
+                item => item.FrozenLotId == lot.Id, ct);
+            foreach (var transaction in transactions)
+                Add(evidence, transaction.FarmingAreaId, "FrozenStorageTransaction");
+        }
+        if (_uow.FrozenInventoryAdjustments is { } adjustmentRepository)
+        {
+            var adjustments = await adjustmentRepository.FindAsync(
+                item => item.FrozenLotId == lot.Id, ct);
+            foreach (var adjustment in adjustments)
+                Add(evidence, adjustment.FarmingAreaId, "FrozenInventoryAdjustment");
+        }
+
+        var areas = evidence.Select(item => item.AreaId).Distinct().ToArray();
+        return new OpeningBalanceAreaEvidence(
+            areas.Length == 1 ? areas[0] : null,
+            areas.Length > 1,
+            evidence.Select(item => item.Source).Distinct().ToArray());
+    }
+
+    private sealed record OpeningBalanceAreaEvidence(
+        Guid? AreaId,
+        bool Conflicting,
+        IReadOnlyList<string> Sources);
 
     public async Task<ApiResponse<FrozenInventoryOpeningBalanceDto>>
         VerifyOpeningBalanceAsync(

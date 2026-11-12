@@ -2,6 +2,7 @@ using CrabSenseBE.Application.Common;
 using CrabSenseBE.Application.DTOs.Media;
 using CrabSenseBE.Application.Interfaces;
 using CrabSenseBE.Domain.Entities;
+using CrabSenseBE.Domain.Enums;
 using CrabSenseBE.Domain.Interfaces;
 
 namespace CrabSenseBE.Application.Services;
@@ -18,6 +19,7 @@ public class MediaService : IMediaService
     private readonly IUnitOfWork _uow;
     private readonly IMediaStorageService _storage;
     private readonly MediaAssetAreaGuard _areaGuard;
+    private readonly FarmAreaScope _areas;
 
     public MediaService(
         IUnitOfWork uow,
@@ -27,6 +29,7 @@ public class MediaService : IMediaService
         _uow = uow;
         _storage = storage;
         _areaGuard = new MediaAssetAreaGuard(uow, currentUser);
+        _areas = new FarmAreaScope(uow, currentUser);
     }
 
     public async Task<ApiResponse<MediaAssetDto>> UploadAsync(
@@ -43,6 +46,8 @@ public class MediaService : IMediaService
 
         if (string.IsNullOrWhiteSpace(fileName))
             throw AppException.BadRequest("fileName is required.");
+        if (meta.SharePublic)
+            await EnsureCanPublishAsync(ct);
 
         var entityType = meta.RelatedEntityType
             ?? (meta.CrabId is Guid ? "crab"
@@ -127,6 +132,7 @@ public class MediaService : IMediaService
 
     public async Task<ApiResponse<MediaShareResultDto>> ShareAsync(Guid id, CancellationToken ct = default)
     {
+        await EnsureCanPublishAsync(ct);
         var asset = await _uow.MediaAssets.GetByIdAsync(id, ct)
             ?? throw AppException.NotFound("MediaAsset");
         await _areaGuard.EnsureAsync(asset, ct);
@@ -142,6 +148,25 @@ public class MediaService : IMediaService
         return ApiResponse<MediaShareResultDto>.Ok(new MediaShareResultDto(asset.Id, link, true));
     }
 
+    public async Task<MediaContentResult> OpenContentAsync(
+        Guid id,
+        CancellationToken ct = default)
+    {
+        var asset = await _uow.MediaAssets.GetByIdAsync(id, ct)
+            ?? throw AppException.NotFound("MediaAsset");
+        await _areaGuard.EnsureAsync(asset, ct);
+        if (!asset.IsShared)
+            await _storage.EnsurePrivateAccessAsync(asset.StorageKey, ct);
+        var content = await _storage.DownloadAsync(asset.StorageKey, ct);
+        return new MediaContentResult(
+            content,
+            string.IsNullOrWhiteSpace(asset.ContentType)
+                ? "application/octet-stream"
+                : asset.ContentType,
+            asset.FileName,
+            asset.SizeBytes);
+    }
+
     public async Task<ApiResponse> DeleteAsync(Guid id, CancellationToken ct = default)
     {
         var asset = await _uow.MediaAssets.GetByIdAsync(id, ct)
@@ -155,7 +180,16 @@ public class MediaService : IMediaService
     }
 
     private static MediaAssetDto Map(MediaAsset a) => new(
-        a.Id, a.Category, a.FileName, a.ContentType, a.SizeBytes, a.Provider, a.StorageKey,
+        a.Id, a.Category, a.FileName, a.ContentType, a.SizeBytes, a.Provider, string.Empty,
         a.WebViewLink, a.ShareLink, a.IsShared, a.BoxId, a.CrabId, a.DeviceId,
         a.RelatedEntityType, a.RelatedEntityId, a.CreatedAt);
+
+    private async Task EnsureCanPublishAsync(CancellationToken ct)
+    {
+        var user = await _areas.CurrentUserAsync(ct);
+        if (user is null) return;
+        if (user.Role is not (UserRole.FarmAdministrator or UserRole.FarmManager))
+            throw AppException.Forbidden(
+                "Chỉ Farm Administrator hoặc Farm Manager được công khai media.");
+    }
 }

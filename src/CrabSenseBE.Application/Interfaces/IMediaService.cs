@@ -22,6 +22,8 @@ public interface IMediaService
 
     Task<ApiResponse<MediaAssetDto>> GetByIdAsync(Guid id, CancellationToken ct = default);
 
+    Task<MediaContentResult> OpenContentAsync(Guid id, CancellationToken ct = default);
+
     Task<ApiResponse<MediaShareResultDto>> ShareAsync(Guid id, CancellationToken ct = default);
 
     Task<ApiResponse> DeleteAsync(Guid id, CancellationToken ct = default);

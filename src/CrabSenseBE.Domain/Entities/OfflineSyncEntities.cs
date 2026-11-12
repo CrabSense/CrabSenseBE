@@ -7,7 +7,9 @@ namespace CrabSenseBE.Domain.Entities;
 public sealed class SyncInboxItem
 {
     public Guid Id { get; set; }
+    public Guid? ActorUserId { get; set; }
     public string IdempotencyKey { get; set; } = null!;
+    public string RequestHash { get; set; } = string.Empty;
     public string EntityType { get; set; } = null!;
     public string EntityId { get; set; } = null!;
     public string OperationType { get; set; } = null!;
