@@ -11,10 +11,9 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
         /// <inheritdoc />
         protected override void Up(MigrationBuilder migrationBuilder)
         {
-            migrationBuilder.DropColumn(
-                name: "FoodResponse",
-                schema: "be",
-                table: "TrainingLabels");
+            // The earlier generated migration did not create FoodResponse on clean databases.
+            // Older development databases may retain nullable FoodResponse annotations.
+            // The current model no longer maps this field; preserve historical values.
 
             migrationBuilder.AddColumn<string>(
                 name: "Analyte",
@@ -358,12 +357,9 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                 schema: "be",
                 table: "Alerts");
 
-            migrationBuilder.AddColumn<string>(
-                name: "FoodResponse",
-                schema: "be",
-                table: "TrainingLabels",
-                type: "text",
-                nullable: true);
+            migrationBuilder.Sql("""
+                ALTER TABLE be."TrainingLabels" ADD COLUMN IF NOT EXISTS "FoodResponse" text NULL;
+                """);
         }
     }
 }
