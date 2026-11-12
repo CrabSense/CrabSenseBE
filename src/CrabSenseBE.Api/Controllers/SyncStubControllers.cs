@@ -520,10 +520,11 @@ public class SyncQueueStubController : ControllerBase
         }
         await _areas.EnsureBoxAsync(
             scopedBoxId, manage: false, HttpContext.RequestAborted);
-        if (status is CrabStatus.Dead or CrabStatus.Harvested or CrabStatus.Sold)
+        if (status is not (CrabStatus.Alive or CrabStatus.Molting)
+            || crab.Status is CrabStatus.Dead or CrabStatus.Harvested or CrabStatus.Sold or CrabStatus.Missing)
         {
             Fail(inbox, failed, item,
-                "Trạng thái chết hoặc thu hoạch phải dùng quy trình nghiệp vụ có audit.");
+                "Sync chỉ cập nhật cua sống/đang lột; trạng thái kết thúc, mất dấu và cách ly cần quy trình nghiệp vụ có audit.");
             return;
         }
 
@@ -674,15 +675,38 @@ public class SyncQueueStubController : ControllerBase
                     SyncPayload.Str(payload, "status") ?? "", true, out var st)
                 && Enum.IsDefined(st))
             {
-                if (st is CrabStatus.Dead or CrabStatus.Harvested or CrabStatus.Sold)
+                if (st is not (CrabStatus.Alive or CrabStatus.Molting))
                 {
                     Fail(inbox, failed, item,
-                        "Không thể đăng ký cua mới với trạng thái chết hoặc thu hoạch.");
+                        "Chỉ đăng ký cua sống hoặc đang lột; không tạo trạng thái cách ly, mất dấu hay kết thúc.");
                     return;
                 }
                 crab.Status = st;
             }
+            crab.Condition = CrabConditions.FromMoltingAndStatus(crab.MoltingStage, crab.Status);
             _db.Crabs.Add(crab);
+        }
+        else
+        {
+            // A repeated create is not a transfer/overwrite and cannot reveal
+            // or acknowledge an existing crab outside the actor's assignment.
+            var existingBoxId = crab.BoxId ?? (await _uow.CrabBoxAllocations.FindAsync(
+                allocation => allocation.CrabId == crab.Id && allocation.EndTime == null,
+                HttpContext.RequestAborted)).OrderByDescending(a => a.StartTime).FirstOrDefault()?.BoxId;
+            if (existingBoxId is not Guid scopedBox || crab.Status is not (CrabStatus.Alive or CrabStatus.Molting))
+            {
+                Fail(inbox, failed, item, "Không thể đăng ký lại cua đã tồn tại hoặc không có hộp hợp lệ.");
+                return;
+            }
+            await _areas.EnsureBoxAsync(scopedBox, manage: false, HttpContext.RequestAborted);
+            var requestedBox = SyncPayload.Str(payload, "boxId") ?? SyncPayload.Str(item.Payload ?? new(), "boxId");
+            if (!Guid.TryParse(requestedBox, out var sameBox) || sameBox != scopedBox)
+            {
+                Fail(inbox, failed, item, "Cua đã tồn tại; dùng thao tác chuyển hộp riêng.");
+                return;
+            }
+            Done(inbox, processed, item);
+            return;
         }
 
         var boxRaw = SyncPayload.Str(payload, "boxId") ?? SyncPayload.Str(item.Payload ?? new(), "boxId");

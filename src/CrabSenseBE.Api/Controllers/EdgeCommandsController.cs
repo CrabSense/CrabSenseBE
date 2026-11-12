@@ -31,7 +31,7 @@ public sealed class EdgeCommandsController : ControllerBase
     }
 
     [HttpPost]
-    [Authorize(Roles = AppRoles.FarmWrite)]
+    [Authorize(Roles = AppRoles.FarmManager + "," + AppRoles.FarmStaff + ",Staff")]
     public Task<IActionResult> Enqueue(
         [FromBody] EnqueueEdgeCommandRequest request,
         CancellationToken ct)
@@ -55,6 +55,9 @@ public sealed class EdgeCommandsController : ControllerBase
             var (denied, identity) = await EdgeKeyGuard.CheckDeviceAsync(
                 Request, _configuration, _uow, deviceCode, ct);
             if (denied is not null) return denied;
+            if (Request.Headers["X-Edge-Protocol"].ToString() != "2")
+                throw CrabSenseBE.Application.Common.AppException.Conflict(
+                    "Firmware cần Edge protocol 2 (command sequence) trước khi nhận lệnh relay.");
             return Ok(await _service.GetPendingAsync(
                 identity!.DeviceCode, identity.LeaseHolder, ct));
         });
@@ -73,16 +76,14 @@ public sealed class EdgeCommandsController : ControllerBase
             var (denied, identity) = await EdgeKeyGuard.CheckDeviceAsync(
                 Request, _configuration, _uow, command.DeviceCode, ct);
             if (denied is not null) return denied;
+            if (Request.Headers["X-Edge-Protocol"].ToString() != "2")
+                throw CrabSenseBE.Application.Common.AppException.Conflict("Edge protocol 2 là bắt buộc.");
             return Ok(await _service.AcknowledgeAsync(
                 id,
                 request,
                 identity!.DeviceCode,
                 ct,
-                requireDeliveryAttemptId:
-                    !identity.IsLegacyCredential
-                    && _configuration.GetValue(
-                        "EdgeSync:RequireDeliveryAttemptId",
-                        false)));
+                requireDeliveryAttemptId: true));
         });
 
     private static async Task<IActionResult> Execute(

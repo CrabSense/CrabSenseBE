@@ -28,6 +28,7 @@ public sealed class EdgeCommandAuthorizationTests : IAsyncLifetime
     private readonly Guid _areaC = Guid.NewGuid();
     private readonly AppUser _staff = User(UserRole.FarmStaff, "staff");
     private readonly AppUser _manager = User(UserRole.FarmManager, "manager");
+    private readonly AppUser _admin = User(UserRole.FarmAdministrator, "fa");
     private readonly List<EdgeCommand> _commands = [];
     private WebApplication _app = null!;
     private HttpClient _client = null!;
@@ -41,13 +42,15 @@ public sealed class EdgeCommandAuthorizationTests : IAsyncLifetime
                 ["Jwt:Secret"] = Secret,
                 ["Jwt:Issuer"] = "CrabSenseBE.Edge.Tests",
                 ["Jwt:Audience"] = "CrabSenseBE.Edge.Clients",
-                ["Jwt:ExpiryMinutes"] = "30"
+                ["Jwt:ExpiryMinutes"] = "30",
+                ["EdgeSync:ApiKey"] = "test-edge-key",
+                ["EdgeSync:AllowLegacySharedKey"] = "true"
             })
             .Build();
         var deviceA = Device("device-a", _areaA);
         var deviceB = Device("device-b", _areaB);
         var deviceC = Device("device-c", _areaC);
-        var users = Repository(_staff, _manager);
+        var users = Repository(_staff, _manager, _admin);
         var devices = Repository(deviceA, deviceB, deviceC);
         var managerAssignments = Repository(
             new FarmManagerAssignment
@@ -142,6 +145,23 @@ public sealed class EdgeCommandAuthorizationTests : IAsyncLifetime
         using var response = await Enqueue(unknown, "device-a");
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
         Assert.Empty(_commands);
+    }
+
+    [Fact]
+    public async Task FarmAdministrator_CannotBypassRasCommandRole()
+    {
+        using var response = await Enqueue(_admin, "device-a");
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        Assert.Empty(_commands);
+    }
+
+    [Fact]
+    public async Task LegacyFirmware_CannotPollOrderedCommands()
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Get, "/api/edge/commands/pending?deviceCode=device-a");
+        request.Headers.Add("X-Edge-Key", "test-edge-key");
+        using var response = await _client.SendAsync(request);
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
     }
 
     private async Task<HttpResponseMessage> Enqueue(AppUser user, string deviceCode)

@@ -709,7 +709,7 @@ public class RasFlowService : IRasFlowService
             var wantOn = desired.Value;
             var pending = await LatestRelayCommandAsync(
                 device!.DeviceCode, pump.RelayChannel, ct);
-            if (pending?.Status == "acknowledged"
+            if (wantOn && pending?.Status == "acknowledged"
                 && (!pump.LastReportedAt.HasValue
                     || pump.LastReportedAt < pending.CreatedAt))
             {
@@ -764,7 +764,8 @@ public class RasFlowService : IRasFlowService
         return (await _uow.EdgeCommands.FindAsync(
                 command => command.DeviceCode == deviceCode
                     && (command.Channel == channel || command.Command == "alloff"), ct))
-            .OrderByDescending(command => command.CreatedAt)
+            .OrderByDescending(command => command.CommandSequence)
+            .ThenByDescending(command => command.CreatedAt)
             .ThenByDescending(command => command.Id)
             .FirstOrDefault();
     }

@@ -113,6 +113,8 @@ public class NotificationDelivery : BaseEntity
 /// </summary>
 public class NotificationRule : BaseEntity
 {
+    /// <summary>Null = global default; non-null = environmental override for an assigned area.</summary>
+    public Guid? FarmingAreaId { get; set; }
     /// <summary>Mã loại — xem NotificationTypeCodes.</summary>
     public string TypeCode { get; set; } = string.Empty;
     public string DisplayName { get; set; } = string.Empty;

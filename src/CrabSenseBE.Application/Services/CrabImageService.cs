@@ -9,17 +9,22 @@ namespace CrabSenseBE.Application.Services;
 public class CrabImageService : ICrabImageService
 {
     private readonly IUnitOfWork _uow;
-    private readonly IPublicImageStorage _storage;
+    private readonly IMediaStorageService _storage;
+    private readonly IPublicImageStorage _legacyStorage;
     private readonly FarmAreaScope _areas;
+    private readonly MediaAssetAreaGuard _mediaGuard;
 
     public CrabImageService(
         IUnitOfWork uow,
-        IPublicImageStorage storage,
-        ICurrentUserService currentUser)
+        IPublicImageStorage legacyStorage,
+        ICurrentUserService currentUser,
+        IMediaStorageService storage)
     {
         _uow = uow;
         _storage = storage;
+        _legacyStorage = legacyStorage;
         _areas = new FarmAreaScope(uow, currentUser);
+        _mediaGuard = new MediaAssetAreaGuard(uow, currentUser);
     }
 
     public async Task<ApiResponse<IReadOnlyList<CrabImageDto>>> UploadAsync(
@@ -31,6 +36,15 @@ public class CrabImageService : ICrabImageService
         bool replace = false)
     {
         ImageUploadRules.ValidateBatch(files);
+        var actor = await _areas.CurrentUserAsync(ct) ?? throw AppException.Unauthorized();
+        if (actor.Role == CrabSenseBE.Domain.Enums.UserRole.SystemAdministrator)
+            throw AppException.Forbidden("Không có quyền ảnh nghiệp vụ trại.");
+        uploadedBy = actor.Id;
+        foreach (var file in files)
+        {
+            MediaService.ValidateFileName(file.FileName, "image");
+            MediaService.ValidateContent(file.Data, "image", file.ContentType);
+        }
 
         HarvestVoucher? voucher = null;
         if (harvestVoucherId is Guid voucherId && voucherId != Guid.Empty)
@@ -42,7 +56,7 @@ public class CrabImageService : ICrabImageService
                 throw AppException.Forbidden("Không xác định được khu của phiếu thu hoạch.");
             await _areas.EnsureAsync(voucherAreaId, manage: false, ct);
             var voucherUrls = JsonStringList.Parse(voucher.PhotoUrlsJson);
-            if (voucherUrls.Count + files.Count > ImageUploadRules.MaxUrls)
+            if ((replace ? 0 : voucherUrls.Count) + files.Count > ImageUploadRules.MaxUrls)
                 throw AppException.BadRequest($"A harvest voucher can have at most {ImageUploadRules.MaxUrls} images.");
         }
 
@@ -52,8 +66,25 @@ public class CrabImageService : ICrabImageService
             crab = await _uow.Crabs.GetByIdAsync(id, ct) ?? throw AppException.NotFound("Crab");
             await EnsureCrabAreaAsync(crab, ct);
             var existing = JsonStringList.Parse(crab.ImageUrlsJson);
-            if (existing.Count + files.Count > ImageUploadRules.MaxUrls)
+            if ((replace ? 0 : existing.Count) + files.Count > ImageUploadRules.MaxUrls)
                 throw AppException.BadRequest($"A crab can have at most {ImageUploadRules.MaxUrls} images.");
+        }
+
+        var lineCrabs = new List<Crab>();
+        if (voucher is not null)
+        {
+            var lineCrabIds = (await _uow.HarvestLines.FindAsync(
+                l => l.HarvestVoucherId == voucher.Id && l.CrabId != null, ct))
+                .Select(l => l.CrabId!.Value).Distinct().ToArray();
+            if (crab is not null && !lineCrabIds.Contains(crab.Id))
+                throw AppException.BadRequest("Cua không thuộc phiếu thu hoạch.");
+            foreach (var lineCrabId in lineCrabIds)
+            {
+                var lineCrab = await _uow.Crabs.GetByIdAsync(lineCrabId, ct)
+                    ?? throw AppException.NotFound("Crab");
+                await EnsureCrabAreaAsync(lineCrab, ct);
+                lineCrabs.Add(lineCrab);
+            }
         }
 
         var folder = voucher is not null
@@ -64,74 +95,63 @@ public class CrabImageService : ICrabImageService
         var results = new List<CrabImageDto>(files.Count);
         var urls = new List<string>(files.Count);
 
-        foreach (var file in files)
+        var stored = new List<string>();
+        try
         {
-            var uploaded = await _storage.UploadAsync(
-                file.Data, file.FileName, file.ContentType, folder, ct);
-
-            var url = MediaPhotoResolver.PublicUrl(uploaded);
-
-            var asset = new MediaAsset
+            foreach (var file in files)
             {
-                Category = "image",
-                FileName = file.FileName,
-                ContentType = string.IsNullOrWhiteSpace(file.ContentType) ? "image/jpeg" : file.ContentType,
-                SizeBytes = uploaded.SizeBytes,
-                Provider = _storage.ProviderName,
-                StorageKey = uploaded.StorageKey,
-                WebViewLink = uploaded.WebViewLink,
-                WebContentLink = uploaded.WebContentLink,
-                ShareLink = url,
-                IsShared = true,
-                CrabId = crab?.Id,
-                RelatedEntityType = voucher is not null
-                    ? "HarvestVoucher"
-                    : crab is null ? "crab-pending" : "crab",
-                RelatedEntityId = voucher?.Id ?? crab?.Id,
-                Notes = voucher is not null ? "harvest-photo" : "crab-image",
-                UploadedBy = uploadedBy
-            };
-            await _uow.MediaAssets.AddAsync(asset, ct);
-
-            results.Add(new CrabImageDto(url, uploaded.StorageKey, file.FileName, _storage.ProviderName, uploaded.SizeBytes));
-            urls.Add(url);
-        }
-
-        if (voucher is not null)
-        {
-            voucher.PhotoUrlsJson = JsonStringList.Serialize(
-                replace
-                    ? urls
-                    : JsonStringList.Merge(voucher.PhotoUrlsJson, urls, ImageUploadRules.MaxUrls),
-                ImageUploadRules.MaxUrls);
-            _uow.HarvestVouchers.Update(voucher);
-
-            // Ảnh thu hoạch cũng là ảnh con cua -> ghi vào album từng con để hồ sơ cua không trống.
-            var lineCrabIds = (await _uow.HarvestLines.FindAsync(
-                    l => l.HarvestVoucherId == voucher.Id && l.CrabId != null, ct))
-                .Select(l => l.CrabId!.Value)
-                .Distinct();
-            foreach (var lineCrabId in lineCrabIds)
-            {
-                if (crab is not null && crab.Id == lineCrabId) continue;
-                var lineCrab = await _uow.Crabs.GetByIdAsync(lineCrabId, ct);
-                if (lineCrab is null) continue;
-                await EnsureCrabAreaAsync(lineCrab, ct);
-                lineCrab.ImageUrlsJson = JsonStringList.Serialize(
-                    JsonStringList.Merge(lineCrab.ImageUrlsJson, urls, ImageUploadRules.MaxUrls), ImageUploadRules.MaxUrls);
-                _uow.Crabs.Update(lineCrab);
+                var safeName = MediaService.ValidateFileName(file.FileName, "image");
+                var contentType = MediaService.ValidateContent(file.Data, "image", file.ContentType);
+                var uploaded = await _storage.UploadAsync(file.Data, safeName, contentType, folder, ct, publicRead: false);
+                stored.Add(uploaded.StorageKey);
+                var asset = new MediaAsset
+                {
+                    Category = "image", FileName = safeName, ContentType = contentType,
+                    SizeBytes = uploaded.SizeBytes, Provider = _storage.ProviderName,
+                    StorageKey = uploaded.StorageKey, IsShared = false,
+                    CrabId = crab?.Id, BoxId = crab?.BoxId,
+                    RelatedEntityType = voucher is not null ? "HarvestVoucher" : crab is null ? "crab-pending" : "crab",
+                    RelatedEntityId = voucher?.Id ?? crab?.Id,
+                    Notes = voucher is not null ? "harvest-photo" : "crab-image", UploadedBy = uploadedBy
+                };
+                var url = MediaReferenceGuard.ContentUrl(asset.Id);
+                await _uow.MediaAssets.AddAsync(asset, ct);
+                results.Add(new CrabImageDto(url, string.Empty, safeName, _storage.ProviderName, uploaded.SizeBytes));
+                urls.Add(url);
             }
-        }
 
-        if (crab is not null)
+            if (voucher is not null)
+            {
+                voucher.PhotoUrlsJson = JsonStringList.Serialize(replace ? urls :
+                    JsonStringList.Merge(voucher.PhotoUrlsJson, urls, ImageUploadRules.MaxUrls), ImageUploadRules.MaxUrls);
+                _uow.HarvestVouchers.Update(voucher);
+                foreach (var lineCrab in lineCrabs.Where(c => c.Id != crab?.Id))
+                {
+                    lineCrab.ImageUrlsJson = JsonStringList.Serialize(
+                        JsonStringList.Merge(lineCrab.ImageUrlsJson, urls, ImageUploadRules.MaxUrls), ImageUploadRules.MaxUrls);
+                    _uow.Crabs.Update(lineCrab);
+                }
+            }
+
+            if (crab is not null)
+            {
+                crab.ImageUrlsJson = JsonStringList.Serialize(replace ? urls :
+                    JsonStringList.Merge(crab.ImageUrlsJson, urls, ImageUploadRules.MaxUrls), ImageUploadRules.MaxUrls);
+                _uow.Crabs.Update(crab);
+            }
+
+            await _uow.SaveChangesAsync(ct);
+            return ApiResponse<IReadOnlyList<CrabImageDto>>.Ok(results, "Uploaded.");
+        }
+        catch (Exception original)
         {
-            crab.ImageUrlsJson = JsonStringList.Serialize(
-                JsonStringList.Merge(crab.ImageUrlsJson, urls, ImageUploadRules.MaxUrls), ImageUploadRules.MaxUrls);
-            _uow.Crabs.Update(crab);
+            var errors = new List<Exception> { original };
+            foreach (var key in stored)
+                try { await _storage.DeleteAsync(key, CancellationToken.None); }
+                catch (Exception cleanup) { errors.Add(cleanup); }
+            if (errors.Count > 1) throw new AggregateException("Image upload failed and cleanup was incomplete.", errors);
+            throw;
         }
-
-        await _uow.SaveChangesAsync(ct);
-        return ApiResponse<IReadOnlyList<CrabImageDto>>.Ok(results, "Uploaded.");
     }
 
     public async Task<CrabImageContent?> GetPhotoAsync(Guid crabId, int index, CancellationToken ct = default)
@@ -143,36 +163,37 @@ public class CrabImageService : ICrabImageService
         await EnsureCrabAreaAsync(crab, ct);
 
         var urls = JsonStringList.Parse(crab.ImageUrlsJson).ToList();
-        var assets = (await _uow.MediaAssets.FindAsync(
-                m => m.CrabId == crabId || (m.RelatedEntityId == crabId && m.RelatedEntityType == "crab"),
-                ct))
-            .OrderBy(m => m.CreatedAt)
-            .ToList();
+        var assets = (await _uow.MediaAssets.FindAsync(m => m.CrabId == crabId
+            || (m.RelatedEntityId == crabId && m.RelatedEntityType == "crab"), ct))
+            .OrderBy(m => m.CreatedAt).ToList();
 
-        foreach (var asset in assets)
-        {
-            var link = asset.ShareLink ?? asset.WebContentLink ?? asset.WebViewLink;
-            if (!string.IsNullOrWhiteSpace(link) && !urls.Contains(link, StringComparer.OrdinalIgnoreCase))
-                urls.Add(link);
-        }
-
+        // The saved album is authoritative after a replacement; do not re-add removed photos.
+        if (urls.Count == 0)
+            urls.AddRange(assets.Select(a => a.IsShared
+                ? a.ShareLink ?? a.WebContentLink ?? a.WebViewLink ?? MediaReferenceGuard.ContentUrl(a.Id)
+                : MediaReferenceGuard.ContentUrl(a.Id)));
         if (index >= urls.Count) return null;
         var url = urls[index];
-
-        var assetMatch = assets.FirstOrDefault(a =>
-            string.Equals(a.ShareLink, url, StringComparison.OrdinalIgnoreCase)
-            || string.Equals(a.WebContentLink, url, StringComparison.OrdinalIgnoreCase)
-            || string.Equals(a.WebViewLink, url, StringComparison.OrdinalIgnoreCase));
-
-        if (assetMatch is null && !string.IsNullOrWhiteSpace(url))
+        MediaAsset? asset;
+        if (MediaReferenceGuard.TryParseContentId(url, out var id))
+            asset = assets.FirstOrDefault(a => a.Id == id) ?? await _uow.MediaAssets.GetByIdAsync(id, ct);
+        else
+            asset = assets.FirstOrDefault(a => a.ShareLink == url || a.WebContentLink == url || a.WebViewLink == url)
+                ?? await _uow.MediaAssets.FirstOrDefaultAsync(a => a.ShareLink == url || a.WebContentLink == url || a.WebViewLink == url, ct);
+        if (asset is null || asset.Category != "image") return null;
+        if (asset.CrabId != crabId && !(asset.RelatedEntityType == "crab" && asset.RelatedEntityId == crabId))
         {
-            assetMatch = (await _uow.MediaAssets.FindAsync(
-                    m => m.ShareLink == url || m.WebContentLink == url || m.WebViewLink == url,
-                    ct))
-                .FirstOrDefault();
+            if (asset.RelatedEntityType != "HarvestVoucher" || asset.RelatedEntityId is not Guid voucherId
+                || !await _uow.HarvestLines.AnyAsync(l => l.HarvestVoucherId == voucherId && l.CrabId == crabId, ct))
+                throw AppException.Forbidden("Ảnh không thuộc cua hoặc phiếu thu hoạch của cua.");
         }
-
-        return await MediaPhotoResolver.OpenAsync(_storage, url, assetMatch, ct);
+        // Exact association above is required even if the caller knows the image URL.
+        if (asset.RelatedEntityType == "HarvestVoucher") await _mediaGuard.EnsureAsync(asset, ct);
+        if (asset.IsShared && asset.Provider != _storage.ProviderName)
+            return await MediaPhotoResolver.OpenAsync(_legacyStorage, url, asset, ct);
+        if (!asset.IsShared) await _storage.EnsurePrivateAccessAsync(asset.StorageKey, ct);
+        var stream = await _storage.DownloadAsync(asset.StorageKey, ct);
+        return new CrabImageContent(stream, asset.ContentType, asset.FileName);
     }
 
     private async Task EnsureCrabAreaAsync(Crab crab, CancellationToken ct)

@@ -26,60 +26,20 @@ public static class MediaPhotoResolver
             if (string.IsNullOrWhiteSpace(fileName)) fileName = "photo.jpg";
         }
 
-        var key = asset?.StorageKey;
-        if (string.IsNullOrWhiteSpace(key))
-            key = ExtractKeysFromUrl(url).FirstOrDefault();
-
-        foreach (var candidate in CandidateStorageKeys(url, key))
+        // Never derive storage keys from client-controlled URLs or fetch arbitrary
+        // HTTP/file URLs. Callers must resolve an authorized MediaAsset first.
+        if (asset is null || string.IsNullOrWhiteSpace(asset.StorageKey)) return null;
+        try
         {
-            try
-            {
-                await using var stream = await storage.DownloadAsync(candidate, ct);
-                var copy = new MemoryStream();
-                await stream.CopyToAsync(copy, ct);
-                copy.Position = 0;
-                if (copy.Length > 0)
-                    return new CrabImageContent(copy, contentType, fileName);
-            }
-            catch
-            {
-                // Try next key / HTTP / file.
-            }
+            await using var stream = await storage.DownloadAsync(asset.StorageKey, ct);
+            var copy = new MemoryStream();
+            await stream.CopyToAsync(copy, ct);
+            copy.Position = 0;
+            if (copy.Length > 0) return new CrabImageContent(copy, contentType, fileName);
+            copy.Dispose();
         }
-
-        if (Uri.TryCreate(url, UriKind.Absolute, out var httpUri)
-            && (httpUri.Scheme == Uri.UriSchemeHttp || httpUri.Scheme == Uri.UriSchemeHttps))
-        {
-            try
-            {
-                using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(20) };
-                using var resp = await http.GetAsync(httpUri, HttpCompletionOption.ResponseHeadersRead, ct);
-                if (resp.IsSuccessStatusCode)
-                {
-                    var bytes = await resp.Content.ReadAsByteArrayAsync(ct);
-                    if (bytes.Length > 0)
-                    {
-                        var headerType = resp.Content.Headers.ContentType?.MediaType;
-                        return new CrabImageContent(
-                            new MemoryStream(bytes),
-                            string.IsNullOrWhiteSpace(headerType) ? contentType : headerType,
-                            fileName);
-                    }
-                }
-            }
-            catch
-            {
-                // Fall through to file://.
-            }
-        }
-
-        if (Uri.TryCreate(url, UriKind.Absolute, out var uri) && uri.IsFile)
-        {
-            var path = uri.LocalPath;
-            if (File.Exists(path))
-                return new CrabImageContent(File.OpenRead(path), contentType, fileName);
-        }
-
+        catch (OperationCanceledException) { throw; }
+        catch { return null; }
         return null;
     }
 

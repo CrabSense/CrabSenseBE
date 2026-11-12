@@ -146,6 +146,7 @@ public class FarmOperationService : IFarmOperationService
                 "Farm operation phải gắn với ít nhất một box hoặc crab trong khu được phân công.");
         var actor = await _areas.CurrentUserAsync(ct)
             ?? throw AppException.Unauthorized();
+        if (actor.Role != UserRole.FarmStaff) throw AppException.Forbidden("Chỉ Farm Staff ghi nhận công việc.");
         var condition = NormalizeConditionKey(req.Condition);
         ValidateFeedingAmounts(req.Quantity, req.EatenQuantity);
 
@@ -191,6 +192,9 @@ public class FarmOperationService : IFarmOperationService
         var op = await _uow.FarmOperations.GetByIdAsync(id, ct)
             ?? throw AppException.NotFound("Farm operation");
         await EnsureOperationInScopeAsync(op, ct);
+        var actor = await _areas.CurrentUserAsync(ct) ?? throw AppException.Unauthorized();
+        if (actor.Role != UserRole.FarmStaff || op.OperatorId != actor.Id)
+            throw AppException.Forbidden("Chỉ nhân viên tạo phiếu được sửa trong thời hạn cho phép.");
         if (op.Timestamp < DateTime.UtcNow.AddHours(-24))
             throw AppException.BadRequest("Operation can only be edited within 24 hours.");
 
@@ -610,14 +614,15 @@ public class FarmOperationService : IFarmOperationService
         {
             if (!Guid.TryParse(raw, out var crabId)) continue;
             var crab = await _uow.Crabs.GetByIdAsync(crabId, ct);
-            if (crab is null) continue;
+            if (crab is null || crab.Status is CrabStatus.Dead or CrabStatus.Harvested
+                or CrabStatus.Sold or CrabStatus.Missing) continue;
 
             var oldCondition = crab.Condition;
             var oldStatus = crab.Status;
             if (oldCondition == next.Value) continue;
 
             crab.Condition = next.Value;
-            crab.Status = CrabConditions.ToLifecycle(next.Value);
+            crab.Status = CrabConditions.ApplyCondition(oldStatus, next.Value);
             crab.UpdatedAt = at;
             _uow.Crabs.Update(crab);
 

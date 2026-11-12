@@ -210,8 +210,12 @@ public record TraceabilityPublicDto(
     string? HarvestVoucherCode,
     DateTime? FrozenDate,
     DateTime? HarvestDate,
-    string? Grade
+    string? Grade,
+    IReadOnlyList<TraceabilityFrozenLotDto>? FrozenLots = null,
+    IReadOnlyList<string>? Grades = null
 );
+
+public record TraceabilityFrozenLotDto(string LotCode, DateTime? FrozenDate, string? Grade);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Box ↔ Harvest link

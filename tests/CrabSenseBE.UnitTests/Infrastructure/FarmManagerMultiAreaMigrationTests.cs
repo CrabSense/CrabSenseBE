@@ -40,11 +40,16 @@ public sealed class FarmManagerMultiAreaMigrationTests
         using var context = new AppDbContext(options);
         var entity = context.Model.FindEntityType(typeof(FarmManagerAssignment))!;
 
-        entity.GetIndexes().Any(index =>
-            index.IsUnique
-            && index.Properties.Select(property => property.Name)
+        entity.GetKeys().Any(key =>
+            key.Properties.Select(property => property.Name)
                 .SequenceEqual(new[] { "ManagerUserId", "FarmingAreaId" }))
             .Should().BeTrue();
+        var staff = context.Model.FindEntityType(typeof(FarmStaffAssignment))!;
+        staff.GetForeignKeys().Any(fk =>
+            fk.PrincipalEntityType == entity
+            && fk.Properties.Select(p => p.Name).SequenceEqual(new[] { "ManagerUserId", "FarmingAreaId" })
+            && fk.PrincipalKey.Properties.Select(p => p.Name).SequenceEqual(new[] { "ManagerUserId", "FarmingAreaId" })
+            && fk.DeleteBehavior == DeleteBehavior.Restrict).Should().BeTrue();
         entity.GetIndexes().Any(index =>
             index.IsUnique
             && index.Properties.Select(property => property.Name)

@@ -12,14 +12,17 @@ public sealed class ScheduledTaskService : IScheduledTaskService
 {
     private readonly IUnitOfWork _uow;
     private readonly TimeProvider _clock;
+    private readonly FarmAreaScope _areas;
     private readonly TimeZoneInfo _farmTimeZone;
 
     public ScheduledTaskService(
         IUnitOfWork uow,
         IConfiguration? configuration = null,
-        TimeProvider? clock = null)
+        TimeProvider? clock = null,
+        ICurrentUserService? currentUser = null)
     {
         _uow = uow;
+        _areas = new FarmAreaScope(uow, currentUser);
         _clock = clock ?? TimeProvider.System;
         _farmTimeZone = ResolveFarmTimeZone(configuration?["Farm:TimeZone"]);
     }
@@ -27,13 +30,14 @@ public sealed class ScheduledTaskService : IScheduledTaskService
     public async Task<ApiResponse<IEnumerable<ScheduledTaskDto>>> ListAsync(
         Guid ownerId, Guid? farmingAreaId, CancellationToken ct = default)
     {
+        var allowed = await _areas.SelectionAsync(farmingAreaId, ct);
         var tasks = await _uow.ScheduledFarmTasks.FindAsync(
             task => task.OwnerId == ownerId &&
                     (!farmingAreaId.HasValue ||
                      task.FarmingAreaId == farmingAreaId ||
                      task.FarmingAreaId == null),
             ct);
-        return ApiResponse<IEnumerable<ScheduledTaskDto>>.Ok(tasks
+        return ApiResponse<IEnumerable<ScheduledTaskDto>>.Ok(tasks.Where(t => !t.FarmingAreaId.HasValue || allowed == null || allowed.Contains(t.FarmingAreaId.Value))
             .OrderBy(task => task.ReminderMinuteOfDay)
             .Select(Map));
     }
@@ -41,6 +45,7 @@ public sealed class ScheduledTaskService : IScheduledTaskService
     public async Task<ApiResponse<IEnumerable<ScheduledTaskDto>>> TodayAsync(
         Guid ownerId, Guid? farmingAreaId, CancellationToken ct = default)
     {
+        var allowed = await _areas.SelectionAsync(farmingAreaId, ct);
         var tasks = await _uow.ScheduledFarmTasks.FindAsync(
             task => task.OwnerId == ownerId &&
                     task.IsEnabled &&
@@ -51,7 +56,7 @@ public sealed class ScheduledTaskService : IScheduledTaskService
         var today = LocalNow().Date;
         return ApiResponse<IEnumerable<ScheduledTaskDto>>.Ok(
             tasks
-                .Where(task => IsDueOnDate(task, today))
+                .Where(task => (!task.FarmingAreaId.HasValue || allowed == null || allowed.Contains(task.FarmingAreaId.Value)) && IsDueOnDate(task, today))
                 .Select(task => Map(task) with
                 {
                     NextRunAt = ToUtc(today.AddMinutes(task.ReminderMinuteOfDay))
@@ -61,6 +66,7 @@ public sealed class ScheduledTaskService : IScheduledTaskService
     public async Task<ApiResponse<ScheduledTaskDto>> CreateAsync(
         Guid ownerId, CreateScheduledTaskRequest request, CancellationToken ct = default)
     {
+        if (request.FarmingAreaId is Guid areaId) await _areas.EnsureAsync(areaId, false, ct);
         Validate(request.Title, request.RecurrenceType, request.DaysOfWeek,
             request.ReminderMinuteOfDay, request.StartDate, request.EndDate);
         var days = NormalizeDays(request.DaysOfWeek);
@@ -77,7 +83,7 @@ public sealed class ScheduledTaskService : IScheduledTaskService
             ReminderMinuteOfDay = request.ReminderMinuteOfDay,
             IsEnabled = request.IsEnabled,
         };
-        task.NextRunAt = NextRun(task, _clock.GetUtcNow().UtcDateTime);
+        task.NextRunAt = task.IsEnabled ? NextRun(task, _clock.GetUtcNow().UtcDateTime) : null;
         await _uow.ScheduledFarmTasks.AddAsync(task, ct);
         await _uow.SaveChangesAsync(ct);
         return ApiResponse<ScheduledTaskDto>.Ok(Map(task), "Scheduled task created.");
@@ -89,7 +95,11 @@ public sealed class ScheduledTaskService : IScheduledTaskService
         var task = await FindOwnedAsync(ownerId, id, ct);
         if (request.Title is not null) task.Title = request.Title.Trim();
         if (request.Description is not null) task.Description = request.Description.Trim();
-        if (request.FarmingAreaId.HasValue) task.FarmingAreaId = request.FarmingAreaId;
+        if (request.FarmingAreaId is Guid areaId)
+        {
+            await _areas.EnsureAsync(areaId, false, ct);
+            task.FarmingAreaId = areaId;
+        }
         if (request.RecurrenceType is not null)
             task.RecurrenceType = request.RecurrenceType.Trim().ToLowerInvariant();
         if (request.DaysOfWeek is not null)
@@ -129,10 +139,14 @@ public sealed class ScheduledTaskService : IScheduledTaskService
     }
 
     private async Task<ScheduledFarmTask> FindOwnedAsync(
-        Guid ownerId, Guid id, CancellationToken ct) =>
-        await _uow.ScheduledFarmTasks.FirstOrDefaultAsync(
+        Guid ownerId, Guid id, CancellationToken ct)
+    {
+        var task = await _uow.ScheduledFarmTasks.FirstOrDefaultAsync(
             task => task.Id == id && task.OwnerId == ownerId, ct)
-        ?? throw AppException.NotFound("Scheduled task");
+            ?? throw AppException.NotFound("Scheduled task");
+        if (task.FarmingAreaId is Guid areaId) await _areas.EnsureAsync(areaId, false, ct);
+        return task;
+    }
 
     private static void Validate(
         string title, string recurrence, IReadOnlyList<int>? days,
@@ -164,7 +178,7 @@ public sealed class ScheduledTaskService : IScheduledTaskService
         var minute = TimeSpan.FromMinutes(task.ReminderMinuteOfDay);
         if (task.RecurrenceType == "once")
         {
-            var once = baseDate + minute;
+            var once = start + minute;
             return once >= now && (!task.EndDate.HasValue || once.Date <= task.EndDate.Value.Date)
                 ? ToUtc(once)
                 : null;

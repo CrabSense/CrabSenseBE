@@ -47,7 +47,7 @@ public class NotificationService : INotificationService
         Guid userId, bool unreadOnly = false, CancellationToken ct = default)
     {
         var list = await _uow.Notifications.FindAsync(
-            n => n.UserId == userId && (!unreadOnly || !n.IsRead), ct);
+            n => n.UserId == userId && n.Channel != "delivery" && (!unreadOnly || !n.IsRead), ct);
         return ApiResponse<IEnumerable<NotificationDto>>.Ok(
             list.OrderByDescending(n => n.CreatedAt).Select(Map));
     }
@@ -55,7 +55,7 @@ public class NotificationService : INotificationService
     public async Task<ApiResponse<AlertUnreadCountDto>> GetUnreadCountAsync(
         Guid userId, CancellationToken ct = default)
     {
-        var count = await _uow.Notifications.CountAsync(n => n.UserId == userId && !n.IsRead, ct);
+        var count = await _uow.Notifications.CountAsync(n => n.UserId == userId && n.Channel != "delivery" && !n.IsRead, ct);
         return ApiResponse<AlertUnreadCountDto>.Ok(new AlertUnreadCountDto(count, count));
     }
 
@@ -79,7 +79,7 @@ public class NotificationService : INotificationService
     public async Task<ApiResponse> MarkAllReadAsync(Guid userId, CancellationToken ct = default)
     {
         var unread = (await _uow.Notifications.FindAsync(
-            n => n.UserId == userId && !n.IsRead, ct)).ToList();
+            n => n.UserId == userId && n.Channel != "delivery" && !n.IsRead, ct)).ToList();
         if (unread.Count == 0) return ApiResponse.Ok("No unread notifications.");
 
         var now = DateTime.UtcNow;
@@ -269,21 +269,59 @@ public class NotificationService : INotificationService
     public async Task<ApiResponse<IEnumerable<NotificationRuleDto>>> GetRulesAsync(CancellationToken ct = default)
     {
         var rules = await _uow.NotificationRules.GetAllAsync(ct);
+        var areas = new FarmAreaScope(_uow, _currentUser);
+        var actor = await areas.CurrentUserAsync(ct);
+        if (actor is not null)
+        {
+            var allowed = await areas.AreaIdsAsync(ct);
+            rules = actor.Role == UserRole.SystemAdministrator
+                ? rules.Where(r => r.FarmingAreaId == null && !NotificationTypeCodes.IsWarningType(r.TypeCode))
+                : rules.Where(r => NotificationTypeCodes.IsWarningType(r.TypeCode)
+                    && (r.FarmingAreaId == null || allowed!.Contains(r.FarmingAreaId.Value)));
+        }
         return ApiResponse<IEnumerable<NotificationRuleDto>>.Ok(
-            rules.OrderBy(r => r.TypeCode).Select(MapRule));
+            rules.OrderBy(r => r.TypeCode).ThenBy(r => r.FarmingAreaId).Select(MapRule));
     }
 
     public async Task<ApiResponse<NotificationRuleDto>> UpdateRuleAsync(
         string typeCode, UpdateNotificationRuleRequest req, CancellationToken ct = default)
     {
         var code = NormalizeCode(typeCode);
-        var rule = (await _uow.NotificationRules.FindAsync(r => r.TypeCode == code, ct)).FirstOrDefault()
+        var environmental = NotificationTypeCodes.IsWarningType(code);
+        var areas = new FarmAreaScope(_uow, _currentUser);
+        var actor = await areas.CurrentUserAsync(ct);
+        if (environmental && (req.ChannelCodes is not null || req.TitleTemplate is not null
+            || req.BodyTemplate is not null || req.ScopeByArea == false))
+            throw AppException.Forbidden("Kênh, mẫu và phạm vi an toàn không được thay đổi bởi Farm Administrator.");
+        if (environmental)
+        {
+            if (req.FarmingAreaId is not Guid areaId || areaId == Guid.Empty)
+                throw AppException.BadRequest("FarmingAreaId là bắt buộc khi sửa quy tắc môi trường.");
+            await areas.EnsureAsync(areaId, manage: true, ct);
+        }
+        else
+        {
+            if (req.FarmingAreaId.HasValue)
+                throw AppException.BadRequest("Quy tắc kỹ thuật chỉ có cấu hình hệ thống.");
+            if (actor is not null && actor.Role != UserRole.SystemAdministrator)
+                throw AppException.Forbidden("Chỉ System Administrator được sửa quy tắc kỹ thuật.");
+        }
+        var candidates = (await _uow.NotificationRules.FindAsync(r => r.TypeCode == code
+            && (r.FarmingAreaId == null || r.FarmingAreaId == req.FarmingAreaId), ct)).ToList();
+        var defaults = candidates.FirstOrDefault(r => r.FarmingAreaId == null)
             ?? throw AppException.NotFound("NotificationRule");
-
-        if (NotificationTypeCodes.IsWarningType(code)
-            && (req.ChannelCodes is not null || req.TitleTemplate is not null || req.BodyTemplate is not null))
-            throw AppException.Forbidden(
-                "Kênh, mẫu và hạ tầng gửi thông báo thuộc System Administrator.");
+        var rule = environmental
+            ? candidates.FirstOrDefault(r => r.FarmingAreaId == req.FarmingAreaId)
+            : defaults;
+        var isNew = rule is null;
+        rule ??= new NotificationRule
+        {
+            FarmingAreaId = req.FarmingAreaId, TypeCode = defaults.TypeCode,
+            DisplayName = defaults.DisplayName, IsEnabled = defaults.IsEnabled,
+            MinSeverity = defaults.MinSeverity, RecipientRoles = defaults.RecipientRoles,
+            ScopeByArea = true, ChannelCodes = defaults.ChannelCodes,
+            TitleTemplate = defaults.TitleTemplate, BodyTemplate = defaults.BodyTemplate
+        };
 
         if (req.MinSeverity is not null && !string.IsNullOrWhiteSpace(req.MinSeverity)
             && !Enum.TryParse<AlertSeverity>(req.MinSeverity.Trim(), true, out _))
@@ -308,7 +346,8 @@ public class NotificationService : INotificationService
         }
 
         if (req.IsEnabled is not null) rule.IsEnabled = req.IsEnabled.Value;
-        if (req.ScopeByArea is not null) rule.ScopeByArea = req.ScopeByArea.Value;
+        if (environmental) rule.ScopeByArea = true;
+        else if (req.ScopeByArea is not null) rule.ScopeByArea = req.ScopeByArea.Value;
         if (req.DisplayName is not null && !string.IsNullOrWhiteSpace(req.DisplayName))
             rule.DisplayName = req.DisplayName.Trim();
         if (req.MinSeverity is not null)
@@ -318,9 +357,10 @@ public class NotificationService : INotificationService
         if (req.BodyTemplate is not null)
             rule.BodyTemplate = string.IsNullOrWhiteSpace(req.BodyTemplate) ? null : req.BodyTemplate.Trim();
 
-        _uow.NotificationRules.Update(rule);
+        if (isNew) await _uow.NotificationRules.AddAsync(rule, ct);
+        else _uow.NotificationRules.Update(rule);
         var actorId = _currentUser is { IsAuthenticated: true } ? _currentUser.UserId : (Guid?)null;
-        await ConfigAudit.WriteAsync(_uow, actorId, "UpdateNotificationRule", "NotificationRule", rule.Id, rule.TypeCode, ct);
+        await ConfigAudit.WriteAsync(_uow, actorId, "UpdateNotificationRule", "NotificationRule", rule.Id, $"{rule.TypeCode}|area={rule.FarmingAreaId}", ct);
         await _uow.SaveChangesAsync(ct);
         return ApiResponse<NotificationRuleDto>.Ok(MapRule(rule), "Rule updated.");
     }
@@ -329,7 +369,7 @@ public class NotificationService : INotificationService
         string typeCode, IReadOnlyDictionary<string, string?> tokens, CancellationToken ct = default)
     {
         var code = NormalizeCode(typeCode);
-        var rule = (await _uow.NotificationRules.FindAsync(r => r.TypeCode == code, ct)).FirstOrDefault()
+        var rule = (await _uow.NotificationRules.FindAsync(r => r.TypeCode == code && r.FarmingAreaId == null, ct)).FirstOrDefault()
             ?? throw AppException.NotFound("NotificationRule");
 
         var sample = new Dictionary<string, string?>(tokens, StringComparer.OrdinalIgnoreCase)
@@ -371,11 +411,21 @@ public class NotificationService : INotificationService
         await EnsureDefaultChannelsAsync(ct);
 
         var code = NormalizeCode(typeCode);
-        var rule = (await _uow.NotificationRules.FindAsync(r => r.TypeCode == code, ct)).FirstOrDefault();
+        var candidates = (await _uow.NotificationRules.FindAsync(r => r.TypeCode == code
+            && (r.FarmingAreaId == null || r.FarmingAreaId == areaId), ct)).ToList();
+        var defaults = candidates.FirstOrDefault(r => r.FarmingAreaId == null);
+        var rule = areaId.HasValue && NotificationTypeCodes.IsWarningType(code)
+            ? candidates.FirstOrDefault(r => r.FarmingAreaId == areaId) ?? defaults
+            : defaults;
+        var scoped = NotificationTypeCodes.IsWarningType(code)
+            || areaId.HasValue || rule?.ScopeByArea == true;
 
-        // Rule chưa seed (loại mới) → giữ hành vi cũ; rule bị tắt → không gửi gì.
-        if (rule is not null && !rule.IsEnabled) return;
-        if (!SeverityPasses(rule?.MinSeverity, severity)) return;
+        // Critical environmental warnings are mandatory for the assigned farm.
+        // Turning off optional notifications must never suppress them.
+        var critical = NotificationTypeCodes.IsWarningType(code)
+            && string.Equals(severity, nameof(AlertSeverity.Critical), StringComparison.OrdinalIgnoreCase);
+        if (!critical && rule is not null && !rule.IsEnabled) return;
+        if (!critical && !SeverityPasses(rule?.MinSeverity, severity)) return;
 
         var roles = SplitCsv(rule?.RecipientRoles ?? _fallback.FallbackRecipientRoles)
             .Select(r => UserRoleParsing.TryParse(r, out var v) ? (UserRole?)v : null)
@@ -383,21 +433,23 @@ public class NotificationService : INotificationService
             .Select(r => r!.Value)
             .Distinct()
             .ToArray();
+        if (critical) roles = [UserRole.FarmAdministrator, UserRole.FarmManager, UserRole.FarmStaff];
         if (roles.Length == 0) return;
 
         var recipients = (await _uow.Users.FindAsync(u => u.IsActive && roles.Contains(u.Role), ct)).ToList();
-        recipients = await FilterByAreaAsync(recipients, rule?.ScopeByArea == true, areaId, ct);
+        recipients = await FilterByAreaAsync(recipients, scoped, areaId, ct);
 
         var values = BuildTokens(code, message, severity, tokens);
-        var title = Render(rule?.TitleTemplate ?? "CrabSense Alert", values);
+        var title = Render(defaults?.TitleTemplate ?? "CrabSense Alert", values);
         var body = Render(
-            string.IsNullOrWhiteSpace(rule?.BodyTemplate) ? "{message}" : rule!.BodyTemplate!, values);
+            string.IsNullOrWhiteSpace(defaults?.BodyTemplate) ? "{message}" : defaults!.BodyTemplate!, values);
 
-        var channelCodes = SplitCsv(rule?.ChannelCodes ?? _fallback.FallbackChannels);
+        var channelCodes = SplitCsv(defaults?.ChannelCodes ?? _fallback.FallbackChannels);
         var channels = (await _uow.NotificationChannels.FindAsync(
             c => c.IsEnabled && channelCodes.Contains(c.ChannelCode), ct)).ToList();
         var pushChannel = channels.FirstOrDefault(c => c.ChannelCode == "push");
-        var createInApp = channelCodes.Contains("in_app", StringComparer.OrdinalIgnoreCase);
+        var createInApp = critical || channelCodes.Contains("in_app", StringComparer.OrdinalIgnoreCase);
+        var external = scoped ? Array.Empty<NotificationChannel>() : channels.Where(c => c.ChannelCode is "telegram" or "zalo_oa" or "email").ToArray();
 
         Notification? anchor = null;
         foreach (var user in recipients)
@@ -405,7 +457,7 @@ public class NotificationService : INotificationService
             if (!PrefsAllow(user.NotificationPrefsJson, code, severity)) continue;
 
             Notification? own = null;
-            if (createInApp)
+            if (createInApp || pushChannel is not null || (anchor is null && external.Length > 0))
             {
                 own = new Notification
                 {
@@ -414,7 +466,8 @@ public class NotificationService : INotificationService
                     TypeCode = code,
                     Title = title,
                     Body = body,
-                    Channel = "in_app"
+                    Channel = createInApp ? "in_app" : "delivery",
+                    IsRead = !createInApp
                 };
                 await _uow.Notifications.AddAsync(own, ct);
                 anchor ??= own;
@@ -437,9 +490,9 @@ public class NotificationService : INotificationService
         }
 
         // Telegram / Zalo / Email: một đích chung toàn hệ thống (ConfigJson), gắn vào notification đầu tiên.
-        if (anchor is not null && rule?.ScopeByArea != true)
+        if (anchor is not null && !scoped)
         {
-            foreach (var ch in channels.Where(c => c.ChannelCode is "telegram" or "zalo_oa" or "email"))
+            foreach (var ch in external)
             {
                 var (ok, detail) = await DispatchChannelAsync(ch, title, body, null, ct);
                 await _uow.NotificationDeliveries.AddAsync(new NotificationDelivery
@@ -549,7 +602,8 @@ public class NotificationService : INotificationService
 
     private static NotificationRuleDto MapRule(NotificationRule r) =>
         new(r.Id, r.TypeCode, r.DisplayName, r.IsEnabled, r.MinSeverity, r.RecipientRoles,
-            r.ScopeByArea, r.ChannelCodes, r.TitleTemplate, r.BodyTemplate);
+            r.FarmingAreaId.HasValue || NotificationTypeCodes.IsWarningType(r.TypeCode) || r.ScopeByArea,
+            r.ChannelCodes, r.TitleTemplate, r.BodyTemplate, r.FarmingAreaId);
 
     private async Task UpsertChannelSettingAsync(
         List<NotificationChannel> channels,
@@ -669,7 +723,7 @@ public class NotificationService : INotificationService
             return (false, "no registered device tokens");
 
         if (!_fcm.Enabled || string.IsNullOrWhiteSpace(_fcm.ServerKey))
-            return (true, $"queued-stub ({tokens.Count} token(s), FCM not configured)");
+            return (false, "FCM not configured; push was not sent.");
 
         var client = _httpClientFactory.CreateClient("fcm");
         client.DefaultRequestHeaders.TryAddWithoutValidation("Authorization", $"key={_fcm.ServerKey}");

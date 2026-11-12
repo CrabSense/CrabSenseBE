@@ -11,7 +11,10 @@ public record EdgeCommandDto(
     DateTime? LeaseExpiresAt = null,
     int AttemptCount = 0,
     Guid? DeliveryAttemptId = null,
-    DateTime? ExpiresAt = null);
+    DateTime? ExpiresAt = null,
+    long CommandSequence = 0,
+    DateTime? SupersededAt = null,
+    Guid? SupersededByCommandId = null);
 
 public record EnqueueEdgeCommandRequest(
     string DeviceCode,

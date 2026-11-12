@@ -1428,6 +1428,11 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                         .IsRequired()
                         .HasColumnType("text");
 
+                    b.Property<long>("CommandSequence")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint")
+                        .HasDefaultValue(0L);
+
                     b.Property<long>("ConcurrencyVersion")
                         .IsConcurrencyToken()
                         .HasColumnType("bigint");
@@ -1477,10 +1482,19 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                         .IsRequired()
                         .HasColumnType("text");
 
+                    b.Property<DateTime?>("SupersededAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("SupersededByCommandId")
+                        .HasColumnType("uuid");
+
                     b.Property<DateTime?>("UpdatedAt")
                         .HasColumnType("timestamp with time zone");
 
                     b.HasKey("Id");
+
+                    b.HasIndex("CommandSequence")
+                        .IsUnique();
 
                     b.HasIndex("DeviceCode", "CorrelationId")
                         .IsUnique();
@@ -1555,12 +1569,11 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
 
                     b.HasKey("Id");
 
+                    b.HasAlternateKey("ManagerUserId", "FarmingAreaId");
+
                     b.HasIndex("AssignedByUserId");
 
                     b.HasIndex("FarmingAreaId");
-
-                    b.HasIndex("ManagerUserId", "FarmingAreaId")
-                        .IsUnique();
 
                     b.ToTable("FarmManagerAssignments", "be");
                 });
@@ -1712,6 +1725,8 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.HasIndex("FarmingAreaId");
 
                     b.HasIndex("ManagerUserId");
+
+                    b.HasIndex("ManagerUserId", "FarmingAreaId");
 
                     b.HasIndex("StaffUserId")
                         .IsUnique();
@@ -3031,6 +3046,9 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                         .HasMaxLength(128)
                         .HasColumnType("character varying(128)");
 
+                    b.Property<Guid?>("FarmingAreaId")
+                        .HasColumnType("uuid");
+
                     b.Property<bool>("IsEnabled")
                         .HasColumnType("boolean");
 
@@ -3061,7 +3079,12 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.HasKey("Id");
 
                     b.HasIndex("TypeCode")
-                        .IsUnique();
+                        .IsUnique()
+                        .HasFilter("\"FarmingAreaId\" IS NULL");
+
+                    b.HasIndex("FarmingAreaId", "TypeCode")
+                        .IsUnique()
+                        .HasFilter("\"FarmingAreaId\" IS NOT NULL");
 
                     b.ToTable("NotificationRules", "be");
                 });
@@ -3243,6 +3266,7 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                         .HasColumnType("uuid");
 
                     b.Property<string>("ApprovalStatus")
+                        .IsConcurrencyToken()
                         .IsRequired()
                         .HasColumnType("text");
 
@@ -4592,6 +4616,14 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.Navigation("Manager");
                 });
 
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.NotificationRule", b =>
+                {
+                    b.HasOne("CrabSenseBE.Domain.Entities.FarmingArea", null)
+                        .WithMany()
+                        .HasForeignKey("FarmingAreaId")
+                        .OnDelete(DeleteBehavior.Restrict);
+                });
+
             modelBuilder.Entity("CrabSenseBE.Domain.Entities.FarmStaffAssignment", b =>
                 {
                     b.HasOne("CrabSenseBE.Domain.Entities.AppUser", "AssignedBy")
@@ -4617,6 +4649,14 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                         .HasForeignKey("StaffUserId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
+
+                    b.HasOne("CrabSenseBE.Domain.Entities.FarmManagerAssignment", null)
+                        .WithMany()
+                        .HasForeignKey("ManagerUserId", "FarmingAreaId")
+                        .HasPrincipalKey("ManagerUserId", "FarmingAreaId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("FK_StaffAssignment_ManagerArea");
 
                     b.Navigation("AssignedBy");
 
