@@ -206,6 +206,19 @@ BEGIN
         THEN RAISE EXCEPTION 'Alloff did not invalidate older commands'; END IF;
 END $$;
 '@ | Out-Null
+    Invoke-Psql "clean_migration" @'
+DO $ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'FK_Customers_FarmingAreas_FarmingAreaId')
+        THEN RAISE EXCEPTION 'Customer area ownership FK missing'; END IF;
+    BEGIN
+        INSERT INTO be."Customers" ("Id","Name","CustomerType","IsActive","CreatedAt","FarmingAreaId")
+        VALUES ('70000000-0000-0000-0000-000000000080','Customer','retail',true,now(),'70000000-0000-0000-0000-000000000099');
+        RAISE EXCEPTION 'Invalid customer area accepted';
+    EXCEPTION WHEN foreign_key_violation THEN NULL;
+    END;
+END $;
+'@ | Out-Null
+    Write-Output "CUSTOMER_AREA_SCHEMA_TESTS_PASSED=1"
     Write-Output "AREA_AND_EDGE_SCHEMA_TESTS_PASSED=1"
     Write-Output "CLEAN_MIGRATION_PASSED=1"
     Write-Output "LEGACY_FULL_UPGRADE_PASSED=1"

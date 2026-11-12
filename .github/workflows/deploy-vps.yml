@@ -152,6 +152,15 @@ jobs:
           chmod 600 ./publish/appsettings.Local.json
           tar -czf crabsense-api.tar.gz -C ./publish .
 
+      - name: Recheck main before upload
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+        with:
+          script: |
+            const main = await github.rest.repos.getBranch({owner: context.repo.owner, repo: context.repo.repo, branch: 'main'});
+            if (main.data.commit.sha !== process.env.TARGET_SHA) core.setFailed('Main advanced while packaging; refusing stale deployment.');
+
       - name: Upload package to VPS
         uses: appleboy/scp-action@v0.1.7
         with:
@@ -173,7 +182,7 @@ jobs:
             set -euo pipefail
             # App publish cho net8.0 nhung VPS co the chi co runtime 9.x => exit 150.
             # Cai san runtime 8.0 (idempotent, khong lam gi neu da co).
-            if ! dotnet --list-runtimes 2>/dev/null | grep -q 'Microsoft.NETCore.App 8\.'; then
+            if ! dotnet --list-runtimes 2>/dev/null | grep -q 'Microsoft.NETCore.App 8\.' || ! dotnet --list-runtimes 2>/dev/null | grep -q 'Microsoft.AspNetCore.App 8\.'; then
               echo "Thieu runtime .NET 8 tren VPS - dang cai..."
               export DEBIAN_FRONTEND=noninteractive
               apt-get install -y --no-install-recommends dotnet-runtime-8.0 aspnetcore-runtime-8.0
@@ -192,6 +201,16 @@ jobs:
             if [ -z "$DB_CONNECTION" ]; then
               echo "Missing production database connection" >&2
               exit 1
+            fi
+            # Quiesce the previous API before the final backup. Recover it only if
+            # failure happens before any migration starts.
+            OLD_WAS_ACTIVE=false
+            MIGRATION_STARTED=false
+            if systemctl is-active --quiet crabsense-api; then OLD_WAS_ACTIVE=true; fi
+            trap 'rc=$?; if [ "$rc" -ne 0 ] && [ "$MIGRATION_STARTED" = false ] && [ "$OLD_WAS_ACTIVE" = true ]; then systemctl start crabsense-api || true; fi; exit "$rc"' EXIT
+            if systemctl cat crabsense-api >/dev/null 2>&1; then
+              systemctl stop crabsense-api
+              if systemctl is-active --quiet crabsense-api; then exit 1; fi
             fi
             mkdir -p /var/lib/crabsense/backups
             chmod 700 /var/lib/crabsense/backups
@@ -336,11 +355,6 @@ jobs:
             print('Database backup created and archive verified.')
             PY
             test -s "$BACKUP_FILE"
-            # A failed stop is fatal; never migrate while the previous API can write.
-            if systemctl cat crabsense-api >/dev/null 2>&1; then
-              systemctl stop crabsense-api
-              if systemctl is-active --quiet crabsense-api; then exit 1; fi
-            fi
             # Preserve default local media outside versioned application directories.
             python3 - <<'PY'
             import json, pathlib, shutil
@@ -359,6 +373,7 @@ jobs:
                             if not dest.exists(): shutil.copy2(file, dest)
             PY
             chmod +x /opt/crabsense-api.next/efbundle
+            MIGRATION_STARTED=true
             # EF uses the startup application's configuration. Run from the
             # staged package so appsettings.Local.json and relative paths resolve.
             (

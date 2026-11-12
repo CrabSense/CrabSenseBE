@@ -80,6 +80,19 @@ jobs:
         shell: pwsh
         run: ./tests/PostgresIntegration/run-migration-tests.ps1
 
+      - name: Validate production publish and migration bundle (no VPS)
+        env:
+          ASPNETCORE_ENVIRONMENT: Production
+          DOTNET_ENVIRONMENT: Production
+          Jwt__Secret: ci-design-time-only-not-a-runtime-secret-2026
+          ConnectionStrings__DefaultConnection: Host=localhost;Database=design_only;Username=postgres
+        run: |
+          dotnet publish src/CrabSenseBE.Api/CrabSenseBE.Api.csproj -c Release -r linux-x64 --self-contained false -o /tmp/crabsense-publish
+          dotnet ef migrations bundle --project src/CrabSenseBE.Infrastructure/CrabSenseBE.Infrastructure.csproj --startup-project src/CrabSenseBE.Api/CrabSenseBE.Api.csproj --configuration Release --self-contained -r linux-x64 --output /tmp/crabsense-publish/efbundle
+          test -s /tmp/crabsense-publish/CrabSenseBE.Api.dll
+          test -s /tmp/crabsense-publish/efbundle
+          /tmp/crabsense-publish/efbundle --help
+
       - name: Upload test and coverage artifacts
         if: always()
         uses: actions/upload-artifact@v4

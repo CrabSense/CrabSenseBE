@@ -105,6 +105,63 @@ public sealed class SalesServiceScopeTests
         error.Which.StatusCode.Should().Be(403);
     }
 
+    [Fact]
+    public async Task Customer_list_excludes_other_areas_and_unassigned_legacy()
+    {
+        var area = Guid.NewGuid();
+        var (uow, current) = Fixture(Guid.NewGuid(), area);
+        var customers = new Mock<IRepository<Customer>>();
+        var own = new Customer { Name = "Own", FarmingAreaId = area };
+        var rows = new[] { own, new Customer { Name = "Other", FarmingAreaId = Guid.NewGuid() },
+            new Customer { Name = "Legacy" } };
+        customers.Setup(x => x.FindAsync(It.IsAny<System.Linq.Expressions.Expression<Func<Customer, bool>>>(),
+            It.IsAny<CancellationToken>()))
+            .ReturnsAsync((System.Linq.Expressions.Expression<Func<Customer, bool>> predicate, CancellationToken _) =>
+                rows.AsQueryable().Where(predicate).ToList());
+        uow.Setup(x => x.Customers).Returns(customers.Object);
+        var result = await new SalesOrderService(uow.Object, current.Object).GetCustomersAsync();
+        result.Data!.Select(x => x.Id).Should().Equal(own.Id);
+    }
+
+    [Fact]
+    public async Task Customer_update_cannot_target_another_area()
+    {
+        var area = Guid.NewGuid();
+        var (uow, current) = Fixture(Guid.NewGuid(), area);
+        var other = new Customer { Name = "Other", FarmingAreaId = Guid.NewGuid() };
+        var customers = new Mock<IRepository<Customer>>();
+        customers.Setup(x => x.GetByIdAsync(other.Id, It.IsAny<CancellationToken>())).ReturnsAsync(other);
+        uow.Setup(x => x.Customers).Returns(customers.Object);
+        var act = () => new SalesOrderService(uow.Object, current.Object).UpsertCustomerAsync(
+            new UpsertCustomerRequest("Changed", FarmingAreaId: area, CustomerId: other.Id));
+        (await act.Should().ThrowAsync<AppException>()).Which.StatusCode.Should().Be(403);
+        other.Name.Should().Be("Other");
+        uow.Verify(x => x.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task Same_name_different_phone_creates_separate_customer()
+    {
+        var area = Guid.NewGuid();
+        var (uow, current) = Fixture(Guid.NewGuid(), area);
+        var customers = new Mock<IRepository<Customer>>();
+        var existing = new Customer { Name = "Nguyen Van A", Phone = "0901", FarmingAreaId = area };
+        customers.Setup(x => x.FindAsync(It.IsAny<System.Linq.Expressions.Expression<Func<Customer, bool>>>(),
+            It.IsAny<CancellationToken>()))
+            .ReturnsAsync((System.Linq.Expressions.Expression<Func<Customer, bool>> predicate, CancellationToken _) =>
+                new[] { existing }.AsQueryable().Where(predicate).ToList());
+        Customer? created = null;
+        customers.Setup(x => x.AddAsync(It.IsAny<Customer>(), It.IsAny<CancellationToken>()))
+            .Callback<Customer, CancellationToken>((c, _) => created = c).Returns(Task.CompletedTask);
+        uow.Setup(x => x.Customers).Returns(customers.Object);
+        await new SalesOrderService(uow.Object, current.Object).UpsertCustomerAsync(
+            new UpsertCustomerRequest(existing.Name, "0902", FarmingAreaId: area));
+        existing.Phone.Should().Be("0901");
+        created.Should().NotBeNull();
+        created!.Phone.Should().Be("0902");
+        created.FarmingAreaId.Should().Be(area);
+    }
+
     private static (
         Mock<IUnitOfWork> Uow,
         Mock<ICurrentUserService> Current) Fixture(
