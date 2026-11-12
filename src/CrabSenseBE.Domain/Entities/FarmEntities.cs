@@ -73,6 +73,8 @@ public class FarmingRow : BaseEntity
 /// <summary>Hộp/Khay nuôi cua — MOD-FARM</summary>
 public class Box : BaseEntity
 {
+    // PostgreSQL increments on every update; never supplied by API clients.
+    public long ConcurrencyVersion { get; set; }
     public Guid FarmingRowId { get; set; }
     public string Code { get; set; } = string.Empty;
     public string? Status { get; set; }
@@ -90,6 +92,8 @@ public class Box : BaseEntity
 /// <summary>Cá thể cua — snapshot hiện tại. Lịch sử nằm bảng riêng.</summary>
 public class Crab : BaseEntity
 {
+    // PostgreSQL increments on every update; never supplied by API clients.
+    public long ConcurrencyVersion { get; set; }
     public Guid? BoxId { get; set; }
     public Guid CrabLotId { get; set; }
 

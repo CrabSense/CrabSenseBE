@@ -581,16 +581,18 @@ public class FarmHistoryService : IFarmHistoryService
         var dayCount = Math.Clamp(days, 1, 31);
         var today = DateTime.UtcNow.Date;
         var allowedBoxIds = await ScopedBoxIdsAsync(ct);
-        var allowedCrabIds = allowedBoxIds is null
-            ? null
+        // Current snapshot reports must not reveal a crab that has moved out
+        // of the actor's area merely because it once occupied an allowed box.
+        var latestAllocationByCrab = allowedBoxIds is null ? null
             : (await _uow.CrabBoxAllocations.GetAllAsync(ct))
-                .Where(allocation => allowedBoxIds.Contains(allocation.BoxId))
-                .Select(allocation => allocation.CrabId)
-                .ToHashSet();
+                .GroupBy(a => a.CrabId)
+                .ToDictionary(g => g.Key, g => g.OrderByDescending(a => a.StartTime)
+                    .ThenByDescending(a => a.Id).First().BoxId);
         var crabs = (await _uow.Crabs.GetAllAsync(ct))
-            .Where(crab => allowedCrabIds is null
-                || allowedCrabIds.Contains(crab.Id)
-                || (crab.BoxId is Guid boxId && allowedBoxIds!.Contains(boxId)))
+            .Where(crab => allowedBoxIds is null
+                || (crab.BoxId is Guid boxId
+                    ? allowedBoxIds.Contains(boxId)
+                    : latestAllocationByCrab!.TryGetValue(crab.Id, out var lastBox) && allowedBoxIds.Contains(lastBox)))
             .ToList();
         var crabIds = crabs.Select(crab => crab.Id).ToHashSet();
         var events = (await _uow.CrabStatusHistories.GetAllAsync(ct))
