@@ -18,6 +18,15 @@ internal sealed class MediaAssetAreaGuard
 
     public async Task EnsureAsync(MediaAsset asset, CancellationToken ct)
     {
+        if (asset.RelatedEntityType == "crab-pending" && !asset.RelatedEntityId.HasValue
+            && !asset.CrabId.HasValue && !asset.BoxId.HasValue && !asset.DeviceId.HasValue)
+        {
+            var actor = await _scope.CurrentUserAsync(ct);
+            if (actor is null || actor.Id != asset.UploadedBy
+                || actor.Role == CrabSenseBE.Domain.Enums.UserRole.SystemAdministrator)
+                throw AppException.Forbidden("Ảnh chờ đăng ký chỉ thuộc người đã tải lên.");
+            return;
+        }
         var allowed = await _scope.AreaIdsAsync(ct);
         if (allowed is null) return;
         var required = await AreaIdsAsync(asset, ct);
