@@ -41,7 +41,9 @@ public sealed class EdgeCommandAuthorizationTests : IAsyncLifetime
                 ["Jwt:Secret"] = Secret,
                 ["Jwt:Issuer"] = "CrabSenseBE.Edge.Tests",
                 ["Jwt:Audience"] = "CrabSenseBE.Edge.Clients",
-                ["Jwt:ExpiryMinutes"] = "30"
+                ["Jwt:ExpiryMinutes"] = "30",
+                ["EdgeSync:ApiKey"] = "test-edge-key",
+                ["EdgeSync:AllowLegacySharedKey"] = "true"
             })
             .Build();
         var deviceA = Device("device-a", _areaA);
@@ -142,6 +144,23 @@ public sealed class EdgeCommandAuthorizationTests : IAsyncLifetime
         using var response = await Enqueue(unknown, "device-a");
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
         Assert.Empty(_commands);
+    }
+
+    [Fact]
+    public async Task FarmAdministrator_CannotBypassRasCommandRole()
+    {
+        using var response = await Enqueue(User(UserRole.FarmAdministrator, "fa"), "device-a");
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        Assert.Empty(_commands);
+    }
+
+    [Fact]
+    public async Task LegacyFirmware_CannotPollOrderedCommands()
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Get, "/api/edge/commands/pending?deviceCode=device-a");
+        request.Headers.Add("X-Edge-Key", "test-edge-key");
+        using var response = await _client.SendAsync(request);
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
     }
 
     private async Task<HttpResponseMessage> Enqueue(AppUser user, string deviceCode)
