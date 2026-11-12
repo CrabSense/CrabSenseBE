@@ -360,6 +360,56 @@ public sealed class Phase2HardwareSafetyTests
     }
 
     [Fact]
+    public async Task HardwareResult_PreservesExistingHardwareSnapshot()
+    {
+        var run = new WaterAnalysisRun
+        {
+            Id = Guid.NewGuid(), ExecutionMode = "hardware",
+            Status = "running", CurrentStep = 6,
+            AwaitingEvent = "ANALYSIS_RESULT_SAVED",
+            ControllerId = "esp-1", Analyte = "NO2",
+            HardwareJson = "{\"ControllerId\":\"esp-1\",\"CameraId\":\"cam-1\",\"SamplePumpId\":\"pump-1\"}"
+        };
+        var uow = new Mock<IUnitOfWork>();
+        uow.Setup(x => x.WaterAnalysisRuns).Returns(Repository(run).Object);
+        uow.Setup(x => x.SaveChangesAsync(It.IsAny<CancellationToken>())).ReturnsAsync(1);
+        var service = new WaterAnalysisService(uow.Object,
+            Mock.Of<ICurrentUserService>(),
+            Microsoft.Extensions.Options.Options.Create(new CrabSenseBE.Application.Options.WaterAnalysisOptions()));
+        await service.RecordHardwareEventAsync(run.Id, new WaterAnalysisHardwareEventRequest(
+            "esp-1", "ANALYSIS_RESULT_SAVED", 0.25m, 0.99m,
+            "https://example.com/sample.jpg", ModelResultId: "model-run-1"));
+        using var evidence = System.Text.Json.JsonDocument.Parse(run.HardwareJson!);
+        evidence.RootElement.GetProperty("ControllerId").GetString().Should().Be("esp-1");
+        evidence.RootElement.GetProperty("CameraId").GetString().Should().Be("cam-1");
+        evidence.RootElement.GetProperty("SamplePumpId").GetString().Should().Be("pump-1");
+        evidence.RootElement.GetProperty("modelResultId").GetString().Should().Be("model-run-1");
+        run.No2.Should().Be(0.25m);
+    }
+
+    [Fact]
+    public async Task HardwareEvent_AfterDeadline_IsRejected()
+    {
+        var run = new WaterAnalysisRun
+        {
+            Id = Guid.NewGuid(), ExecutionMode = "hardware",
+            Status = "stopping", CurrentStep = 8,
+            AwaitingEvent = "CLEANING_COMPLETED", ControllerId = "esp-1",
+            StepDeadlineAt = DateTime.UtcNow.AddMinutes(-1)
+        };
+        var uow = new Mock<IUnitOfWork>();
+        uow.Setup(x => x.WaterAnalysisRuns).Returns(Repository(run).Object);
+        var service = new WaterAnalysisService(uow.Object,
+            Mock.Of<ICurrentUserService>(),
+            Microsoft.Extensions.Options.Options.Create(new CrabSenseBE.Application.Options.WaterAnalysisOptions()));
+        var act = () => service.RecordHardwareEventAsync(run.Id,
+            new WaterAnalysisHardwareEventRequest("esp-1", "CLEANING_COMPLETED"));
+        (await act.Should().ThrowAsync<AppException>()).Which.StatusCode.Should().Be(409);
+        run.Status.Should().Be("stopping");
+        uow.Verify(x => x.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
     public async Task Kiosk_A_CannotUpdate_Device_OwnedBy_Kiosk_B()
     {
         const string secret = "kiosk-a-secret";
