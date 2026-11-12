@@ -199,6 +199,38 @@ public class FarmHistoryServiceTests
         crab.Condition.Should().Be(CrabCondition.Softshell);
     }
 
+    [Theory]
+    [InlineData(CrabStatus.Dead)]
+    [InlineData(CrabStatus.Harvested)]
+    [InlineData(CrabStatus.Sold)]
+    [InlineData(CrabStatus.Missing)]
+    [InlineData(CrabStatus.Quarantined)]
+    public async Task Molting_cannot_resurrect_or_clear_quarantine(CrabStatus status)
+    {
+        var crab = new Crab { Id = Guid.NewGuid(), Status = status, WeightGram = 200 };
+        var repo = new Mock<IRepository<Crab>>();
+        repo.Setup(r => r.GetByIdAsync(crab.Id, It.IsAny<CancellationToken>())).ReturnsAsync(crab);
+        _uow.Setup(x => x.Crabs).Returns(repo.Object);
+        var ex = await Assert.ThrowsAsync<AppException>(() => Create().CreateMoltingAsync(
+            new CreateMoltingRecordRequest(crab.Id, null, null, 120m, "success", "manual", null)));
+        ex.StatusCode.Should().Be(409);
+        crab.Status.Should().Be(status);
+        _uow.Verify(x => x.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task Molting_cannot_claim_another_box()
+    {
+        var crab = new Crab { Id = Guid.NewGuid(), BoxId = Guid.NewGuid() };
+        var repo = new Mock<IRepository<Crab>>();
+        repo.Setup(r => r.GetByIdAsync(crab.Id, It.IsAny<CancellationToken>())).ReturnsAsync(crab);
+        _uow.Setup(x => x.Crabs).Returns(repo.Object);
+        var ex = await Assert.ThrowsAsync<AppException>(() => Create().CreateMoltingAsync(
+            new CreateMoltingRecordRequest(crab.Id, Guid.NewGuid(), null, 120m, "success", "manual", null)));
+        ex.StatusCode.Should().Be(400);
+        _uow.Verify(x => x.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Never);
+    }
+
     [Fact]
     public async Task CreateMolting_AllowsCrabWithoutBox()
     {

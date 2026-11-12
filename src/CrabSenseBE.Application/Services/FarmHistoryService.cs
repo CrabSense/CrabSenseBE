@@ -51,7 +51,11 @@ public class FarmHistoryService : IFarmHistoryService
                     ? "Cua này đã được thu hoạch."
                     : "Không thể chuyển hộp cho cua đã chết.");
 
+        await EnsureCrabAreaAsync(crab, ct);
         var previousBoxId = GetCrabBoxId(crab);
+        if (previousBoxId == Guid.Empty && _currentUser is not null)
+            previousBoxId = (await _uow.CrabBoxAllocations.FindAsync(a => a.CrabId == crab.Id && a.EndTime == null, ct))
+                .OrderByDescending(a => a.StartTime).FirstOrDefault()?.BoxId ?? Guid.Empty;
         if (previousBoxId != Guid.Empty && previousBoxId == boxId)
             throw AppException.BadRequest("Không thể chuyển cua vào chính hộp hiện tại.");
 
@@ -92,9 +96,8 @@ public class FarmHistoryService : IFarmHistoryService
 
         if (req.SourceBoxId is Guid src && src != Guid.Empty)
         {
-            var current = GetCrabBoxId(crab);
-            if (current != Guid.Empty && current != src)
-                throw AppException.BadRequest("Crab is not in the given sourceBoxId.");
+            if (previousBoxId != src)
+                throw AppException.Conflict("Crab is not in the given sourceBoxId.");
         }
 
         var allocsWithCrab = await _uow.CrabBoxAllocations.FindAsync(
@@ -110,9 +113,9 @@ public class FarmHistoryService : IFarmHistoryService
             _uow.CrabBoxAllocations.Update(a);
         }
 
-        if (GetCrabBoxId(crab) != boxId)
+        if (previousBoxId != Guid.Empty && previousBoxId != boxId)
         {
-            var prevBox = await _uow.Boxes.GetByIdAsync(GetCrabBoxId(crab), ct);
+            var prevBox = await _uow.Boxes.GetByIdAsync(previousBoxId, ct);
             if (prevBox is not null)
             {
                 var stillAlloc = await _uow.CrabBoxAllocations.FindAsync(
@@ -135,7 +138,9 @@ public class FarmHistoryService : IFarmHistoryService
         crab.BoxAllocations.Add(alloc);
         _uow.Crabs.Update(crab);
 
-        await ApplyBoxStatusAsync(box, BoxStatuses.Active, true, "Crab allocated", ct);
+        await ApplyBoxStatusAsync(box, crab.Status == CrabStatus.Quarantined ? BoxStatuses.Quarantine
+            : crab.Status == CrabStatus.Molting || crab.Condition == CrabCondition.Softshell ? BoxStatuses.Molting : BoxStatuses.Active,
+            true, "Crab allocated", ct);
         await _uow.CrabStatusHistories.AddAsync(new CrabStatusHistory
         {
             CrabId = crab.Id,
@@ -151,7 +156,7 @@ public class FarmHistoryService : IFarmHistoryService
                     : $"Chuyển cua sang hộp {box.Code}|{req.Notes}"
         }, ct);
 
-        var administratorId = await AreaAdministratorQuery.IdAsync(_uow.FarmingAreas.Query(), area.Id, ct);
+        var administratorId = CurrentUserId();
         if (administratorId != Guid.Empty)
         {
             await _uow.OperationLogs.AddAsync(new OperationLog
@@ -218,6 +223,10 @@ public class FarmHistoryService : IFarmHistoryService
             ?? throw AppException.NotFound("Allocation");
         await _areas.EnsureBoxAsync(a.BoxId, manage: false, ct);
         var previous = JsonSerializer.Serialize(a);
+        if (a.EndTime is null && req.EndTime.HasValue)
+            throw AppException.Conflict("Không đóng phân bổ đang hoạt động qua sửa lịch sử; dùng chuyển hộp hoặc kết thúc vòng đời.");
+        if (req.StartTime > DateTime.UtcNow.AddMinutes(5) || req.EndTime > DateTime.UtcNow.AddMinutes(5))
+            throw AppException.BadRequest("Thời điểm phân bổ không được ở tương lai.");
 
         if (req.StartTime.HasValue)
             a.StartTime = req.StartTime.Value;
@@ -262,13 +271,23 @@ public class FarmHistoryService : IFarmHistoryService
         var crab = await _uow.Crabs.GetByIdAsync(req.CrabId, ct)
             ?? throw AppException.NotFound("Crab");
 
+        await EnsureCrabAreaAsync(crab, ct);
+        if (crab.Status is not (CrabStatus.Alive or CrabStatus.Molting))
+            throw AppException.Conflict("Không ghi lột xác cho cua đã kết thúc, mất dấu hoặc đang cách ly.");
         var moltTime = req.MoltTime ?? DateTime.UtcNow;
+        ValidateMoltMeasurements(moltTime, req.StartedAt, req.CompletedAt, req.WeightBeforeGram, req.WeightAfterGram,
+            req.ShellWidthBeforeMm, req.ShellLengthBeforeMm, req.ShellWidthAfterMm, req.ShellLengthAfterMm);
+        if (moltTime < crab.StockedAt || (crab.MoltedAt.HasValue && moltTime < crab.MoltedAt.Value))
+            throw AppException.Conflict("Không ghi sự kiện lột cũ đè lên trạng thái hiện tại.");
         var result = NormalizeMoltResult(req.Result);
-        var source = string.IsNullOrWhiteSpace(req.Source) ? "manual" : req.Source!.Trim().ToLowerInvariant();
-
-        Guid? boxId = req.BoxId is Guid requested && requested != Guid.Empty
-            ? requested
-            : GetCrabBoxIdOrNull(crab);
+        var source = "manual";
+        var currentBox = GetCrabBoxIdOrNull(crab);
+        if (currentBox is null && _currentUser is not null)
+            currentBox = (await _uow.CrabBoxAllocations.FindAsync(a => a.CrabId == crab.Id && a.EndTime == null, ct))
+                .OrderByDescending(a => a.StartTime).FirstOrDefault()?.BoxId;
+        if (req.BoxId is Guid requested && requested != currentBox)
+            throw AppException.BadRequest("Hộp lột xác phải là hộp hiện tại của cua.");
+        Guid? boxId = currentBox;
         Box? box = null;
         if (boxId is Guid resolvedBox)
         {
@@ -320,6 +339,7 @@ public class FarmHistoryService : IFarmHistoryService
                 NewStatus = crab.Status,
                 ChangedAt = moltTime,
                 Source = source,
+                ChangedByUserId = _currentUser is null ? null : CurrentUserId(),
                 Reason = "Molting success"
             }, ct);
         }
@@ -342,7 +362,7 @@ public class FarmHistoryService : IFarmHistoryService
         _uow.Crabs.Update(crab);
 
         if (result == "success" && box is not null)
-            await ApplyBoxStatusAsync(box, BoxStatuses.Molting, box.IsOccupied, "Molting success recorded", ct);
+            await ApplyBoxStatusAsync(box, BoxStatuses.Molting, true, "Molting success recorded", ct);
 
         await _uow.SaveChangesAsync(ct);
         return ApiResponse<MoltingRecordDto>.Ok(MapMolt(record), "Molting recorded.");
@@ -383,21 +403,16 @@ public class FarmHistoryService : IFarmHistoryService
             throw AppException.BadRequest("Cần ghi lý do chỉnh sửa lịch sử lột xác.");
         var previous = JsonSerializer.Serialize(record);
 
-        if (req.BoxId.HasValue)
-        {
-            _ = await _uow.Boxes.GetByIdAsync(req.BoxId.Value, ct)
-                ?? throw AppException.NotFound("Box");
-            await _areas.EnsureBoxAsync(req.BoxId.Value, manage: false, ct);
-            record.BoxId = req.BoxId.Value;
-        }
+        if (req.BoxId.HasValue && req.BoxId != record.BoxId)
+            throw AppException.Conflict("Không chuyển lịch sử lột sang hộp khác qua sửa bản ghi.");
         if (req.MoltTime.HasValue)
             record.MoltTime = req.MoltTime.Value;
         if (req.WeightAfterGram.HasValue)
             record.WeightAfterGram = req.WeightAfterGram.Value;
         if (req.Result is not null)
             record.Result = NormalizeMoltResult(req.Result);
-        if (req.Source is not null)
-            record.Source = string.IsNullOrWhiteSpace(req.Source) ? "manual" : req.Source.Trim().ToLowerInvariant();
+        if (req.Source is not null && !string.Equals(req.Source, record.Source, StringComparison.OrdinalIgnoreCase))
+            throw AppException.BadRequest("Không thay nguồn gốc bản ghi lột.");
         if (req.Notes is not null)
             record.Notes = req.Notes;
         if (req.StartedAt.HasValue) record.StartedAt = req.StartedAt;
@@ -409,14 +424,14 @@ public class FarmHistoryService : IFarmHistoryService
         if (req.ShellLengthAfterMm.HasValue) record.ShellLengthAfterMm = req.ShellLengthAfterMm;
         if (req.CameraId is not null)
             record.CameraId = string.IsNullOrWhiteSpace(req.CameraId) ? null : req.CameraId.Trim();
-        if (record.CompletedAt.HasValue && record.StartedAt.HasValue && record.CompletedAt < record.StartedAt)
-            throw AppException.BadRequest("CompletedAt must be greater than or equal to StartedAt.");
+        ValidateMoltMeasurements(record.MoltTime, record.StartedAt, record.CompletedAt, record.WeightBeforeGram,
+            record.WeightAfterGram, record.ShellWidthBeforeMm, record.ShellLengthBeforeMm, record.ShellWidthAfterMm, record.ShellLengthAfterMm);
 
         _uow.MoltingRecords.Update(record);
         await AddCorrectionAsync(
             record.CrabId, "molting", record.Id, "update",
             previous, JsonSerializer.Serialize(record), reason, ct);
-        await ResyncCrabFromMoltingsAsync(record.CrabId, excludeId: null, ct);
+        // Historical correction does not overwrite the current observed lifecycle or weight.
         await _uow.SaveChangesAsync(ct);
         return ApiResponse<MoltingRecordDto>.Ok(MapMolt(record), "Molting updated.");
     }
@@ -441,7 +456,7 @@ public class FarmHistoryService : IFarmHistoryService
         await AddCorrectionAsync(
             record.CrabId, "molting", record.Id, "void",
             previous, JsonSerializer.Serialize(record), reason, ct);
-        await ResyncCrabFromMoltingsAsync(record.CrabId, excludeId: null, ct);
+        // Historical correction does not overwrite the current observed lifecycle or weight.
         await _uow.SaveChangesAsync(ct);
         return ApiResponse<MoltingRecordDto>.Ok(
             MapMolt(record), "Molting record voided; history retained.");
@@ -863,41 +878,15 @@ public class FarmHistoryService : IFarmHistoryService
             lastMolt?.Result);
     }
 
-    private async Task ResyncCrabFromMoltingsAsync(Guid crabId, Guid? excludeId, CancellationToken ct)
+    private static void ValidateMoltMeasurements(DateTime moltTime, DateTime? started, DateTime? completed, params decimal?[] measurements)
     {
-        var crab = await _uow.Crabs.GetByIdAsync(crabId, ct);
-        if (crab is null) return;
-
-        var molts = (await _uow.MoltingRecords.FindAsync(m => m.CrabId == crabId, ct))
-            .Where(m => !m.IsVoided && (excludeId is null || m.Id != excludeId.Value))
-            .OrderByDescending(m => m.MoltTime)
-            .ToList();
-
-        var latestSuccess = molts.FirstOrDefault(m =>
-            string.Equals(m.Result, "success", StringComparison.OrdinalIgnoreCase));
-        var latest = molts.FirstOrDefault();
-
-        if (latestSuccess is not null)
-        {
-            crab.MoltedAt = latestSuccess.MoltTime;
-            crab.MoltingStage = "softshell";
-            crab.Condition = CrabCondition.Softshell;
-            crab.Status = CrabConditions.ToLifecycle(crab.Condition);
-            if (latestSuccess.WeightAfterGram.HasValue)
-                crab.WeightGram = latestSuccess.WeightAfterGram;
-        }
-        else if (latest is not null)
-        {
-            crab.MoltedAt = latest.MoltTime;
-            if (latest.WeightAfterGram.HasValue)
-                crab.WeightGram = latest.WeightAfterGram;
-        }
-        else
-        {
-            crab.MoltedAt = null;
-        }
-
-        _uow.Crabs.Update(crab);
+        var limit = DateTime.UtcNow.AddMinutes(5);
+        if (moltTime.ToUniversalTime() > limit || started?.ToUniversalTime() > limit || completed?.ToUniversalTime() > limit)
+            throw AppException.BadRequest("Thời điểm lột không được ở tương lai.");
+        if (started.HasValue && completed.HasValue && completed < started)
+            throw AppException.BadRequest("CompletedAt must be greater than or equal to StartedAt.");
+        if (measurements.Any(x => x is <= 0))
+            throw AppException.BadRequest("Số đo lột xác phải lớn hơn 0.");
     }
 
     private Guid CurrentUserId() =>
