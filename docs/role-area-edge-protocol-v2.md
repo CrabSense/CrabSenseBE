@@ -36,3 +36,12 @@ Firmware requirements:
   ```
 - **Do not use application-only rollback to a protocol-1 binary after this migration.** Old code cannot enforce area overrides or the firmware version gate. The migration Down refuses to discard scoped policies or ordered command history. Recover with a compatible application or a verified database backup and a coordinated firmware/device safe-state procedure.
 - BE repository contains no ESP32 firmware source. Firmware must be implemented and tested in its own repository; this PR changes only the BE contract and persistence.
+
+
+## Follow-up hardening
+
+- Farm operations: Staff records and may edit own entries within 24 hours; Managers read/approve through dedicated audited workflows. Training feeding/observation writes are Staff-only; label confirmation is Manager-only. Personal reminders remain available to farm roles, with area assignment checks on every read/write.
+- Critical environmental notifications always go in-app to assigned farm roles, even if optional rules or preferences are disabled. External-only sends create a hidden delivery anchor and record sent/failed without exposing an in-app notification. Email/FCM still require a configured provider; no fake success. Area-scoped external destinations are intentionally not routed to global chat IDs.
+- Crab/harvest photos: new uploads are private, using authenticated /api/media/{id}/content URLs. Frontend must load with JWT. Pending upload is owned by its uploader, then attached in the registration transaction. JPEG, PNG, WebP are accepted after signature validation. Legacy links without registered metadata are no longer server-fetched. Existing public links are not automatically revoked; review historical storage permissions separately.
+- QR public data includes frozenLots and grades, with Mixed for heterogeneous grades. The old singular lot fields are null when several lots exist.
+- VPS workflow is gated by repository Actions variable EDGE_PROTOCOL_V2_READY=true. Do not set it until firmware/FE and safe-state cutover are verified. The old application stops before migration; a failed health check will not restart a protocol-1 package on the upgraded schema. Do not restore production data automatically.
