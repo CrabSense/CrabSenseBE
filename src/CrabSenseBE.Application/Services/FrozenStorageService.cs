@@ -600,15 +600,15 @@ public class FrozenStorageService : IFrozenStorageService
             if (trackedItems.Any(x => x.StockState is not ("Available" or "Dispatched")))
                 throw AppException.Conflict("Cần đối soát barcode legacy trước khi xuất kho.");
             var available = trackedItems.Where(x => x.StockState == "Available").ToList();
-            if (available.Count != lot.Quantity || decimal.Round(available.Sum(x => x.WeightGram) / 1000m, 3) != lot.WeightKg)
+            if (available.Count != lot.Quantity || decimal.Round(available.Sum(x => x.WeightGram) / 1000m, 3, MidpointRounding.AwayFromZero) != lot.WeightKg)
                 throw AppException.Conflict("Tồn barcode không khớp tồn lô; cần đối soát.");
             if (selectedIds.Count != request.ActualQuantity || selectedIds.Distinct().Count() != selectedIds.Count)
                 throw AppException.BadRequest("Chọn đúng số barcode thực tế xuất kho, không trùng.");
             var selected = available.Where(x => selectedIds.Contains(x.Id)).ToList();
-            if (selected.Count != selectedIds.Count || decimal.Round(selected.Sum(x => x.WeightGram) / 1000m, 3) != actualWeight)
+            if (selected.Count != selectedIds.Count || decimal.Round(selected.Sum(x => x.WeightGram) / 1000m, 3, MidpointRounding.AwayFromZero) != actualWeight)
                 throw AppException.Conflict("Barcode không khả dụng, sai lô hoặc không khớp trọng lượng xuất.");
             var remaining = available.Where(x => !selectedIds.Contains(x.Id)).ToList();
-            if (decimal.Round(remaining.Sum(x => x.WeightGram) / 1000m, 3) != weightAfter)
+            if (decimal.Round(remaining.Sum(x => x.WeightGram) / 1000m, 3, MidpointRounding.AwayFromZero) != weightAfter)
                 throw AppException.Conflict("Trọng lượng còn lại không khớp barcode; cần đối soát làm tròn.");
             foreach (var item in selected)
             {
@@ -979,7 +979,7 @@ public class FrozenStorageService : IFrozenStorageService
                 "A HarvestLineId cannot be used more than once in the same request.");
 
         // Kiểm tra cân nặng riêng của từng con cua.
-        if (decimal.Round(inputs.Sum(x => x.WeightGram) / 1000m, 3) != lot.WeightKg)
+        if (decimal.Round(inputs.Sum(x => x.WeightGram) / 1000m, 3, MidpointRounding.AwayFromZero) != lot.WeightKg)
             throw AppException.BadRequest("Tổng trọng lượng barcode phải khớp trọng lượng tồn của lô.");
         if (inputs.Any(x => x.WeightGram <= 0 || decimal.Round(x.WeightGram, 2) != x.WeightGram))
             throw AppException.BadRequest("Every crab weight must be greater than zero.");
@@ -1128,7 +1128,7 @@ public class FrozenStorageService : IFrozenStorageService
         var ids = request.AvailableItemIds.ToHashSet();
         var available = items.Where(x => ids.Contains(x.Id)).ToList();
         if (ids.Count != request.AvailableItemIds.Count || available.Count != ids.Count
-            || available.Count != lot.Quantity || decimal.Round(available.Sum(x => x.WeightGram) / 1000m, 3) != lot.WeightKg)
+            || available.Count != lot.Quantity || decimal.Round(available.Sum(x => x.WeightGram) / 1000m, 3, MidpointRounding.AwayFromZero) != lot.WeightKg)
             throw AppException.Conflict("Barcode còn kho phải khớp số lượng/trọng lượng tồn, không trùng hoặc sai lô.");
         foreach (var item in items)
         {

@@ -12,7 +12,7 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
             migrationBuilder.AddColumn<DateTime>("DispatchedAt", "FrozenCrabItems", schema: "be", type: "timestamp with time zone", nullable: true);
             migrationBuilder.AddColumn<Guid>("OutboundTransactionId", "FrozenCrabItems", schema: "be", type: "uuid", nullable: true);
             migrationBuilder.CreateIndex("IX_FrozenCrabItems_OutboundTransactionId", "FrozenCrabItems", "OutboundTransactionId", schema: "be");
-            migrationBuilder.AddForeignKey("FK_FrozenCrabItems_FrozenStorageTransactions_OutboundTransactionId",
+            migrationBuilder.AddForeignKey("FK_FrozenCrabItems_OutboundTransaction",
                 "FrozenCrabItems", "OutboundTransactionId", "FrozenStorageTransactions", principalColumn: "Id",
                 schema: "be", principalSchema: "be", onDelete: ReferentialAction.Restrict);
             // Only certify historical items if there is no recorded outbound and
@@ -46,7 +46,7 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                 """);
             migrationBuilder.DropIndex("IX_WaterMeasurements_SensorId_EdgeEventKey", "WaterMeasurements", schema: "be");
             migrationBuilder.DropColumn("EdgeEventKey", "WaterMeasurements", schema: "be");
-            migrationBuilder.DropForeignKey("FK_FrozenCrabItems_FrozenStorageTransactions_OutboundTransactionId", "FrozenCrabItems", schema: "be");
+            migrationBuilder.DropForeignKey("FK_FrozenCrabItems_OutboundTransaction", "FrozenCrabItems", schema: "be");
             migrationBuilder.DropIndex("IX_FrozenCrabItems_OutboundTransactionId", "FrozenCrabItems", schema: "be");
             migrationBuilder.DropColumn("OutboundTransactionId", "FrozenCrabItems", schema: "be");
             migrationBuilder.DropColumn("DispatchedAt", "FrozenCrabItems", schema: "be");

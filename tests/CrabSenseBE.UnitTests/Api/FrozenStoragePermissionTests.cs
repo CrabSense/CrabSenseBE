@@ -159,6 +159,60 @@ public sealed class FrozenStoragePermissionTests : IAsyncLifetime
     public async Task DisposeAsync() => await _api.DisposeAsync();
 
     [Fact]
+    public async Task Tracked_outbound_requires_exact_available_barcodes_and_updates_stock_once()
+    {
+        _lotA.Quantity = 2;
+        _lotA.WeightKg = 0.5m;
+        var a = new FrozenCrabItem { Id = Guid.NewGuid(), FrozenLotId = LotA, WeightGram = 200, StockState = "Available" };
+        var b = new FrozenCrabItem { Id = Guid.NewGuid(), FrozenLotId = LotA, WeightGram = 300, StockState = "Available" };
+        _items.AddRange(new[] { a, b });
+        var transaction = ApprovedTransaction(FrozenStorageTransactionType.Outbound, 1, 0.2m);
+        var route = $"/api/frozen-storage-transactions/{transaction.Id}/execute";
+        using (var missing = await _api.SendAsync(AppRoles.FarmStaff, StaffA, HttpMethod.Post, route,
+            new StringContent("{\"actualQuantity\":1,\"actualWeightKg\":0.2}", Encoding.UTF8, "application/json")))
+            Assert.Equal(400, (int)missing.StatusCode);
+        Assert.Equal(2, _lotA.Quantity);
+        var json = System.Text.Json.JsonSerializer.Serialize(new { actualQuantity = 1, actualWeightKg = 0.2m, frozenCrabItemIds = new[] { a.Id } });
+        using (var executed = await _api.SendAsync(AppRoles.FarmStaff, StaffA, HttpMethod.Post, route,
+            new StringContent(json, Encoding.UTF8, "application/json")))
+            Assert.Equal(200, (int)executed.StatusCode);
+        Assert.Equal("Dispatched", a.StockState);
+        Assert.Equal(transaction.Id, a.OutboundTransactionId);
+        Assert.NotNull(a.DispatchedAt);
+        Assert.Equal("Available", b.StockState);
+        Assert.Equal(1, _lotA.Quantity);
+        Assert.Equal(0.3m, _lotA.WeightKg);
+        using (var replay = await _api.SendAsync(AppRoles.FarmStaff, StaffA, HttpMethod.Post, route,
+            new StringContent(json, Encoding.UTF8, "application/json")))
+            Assert.Equal(409, (int)replay.StatusCode);
+        Assert.Single(_adjustments);
+    }
+
+    [Fact]
+    public async Task Legacy_barcode_requires_manager_reconciliation_and_preserves_unknown_dispatch_date()
+    {
+        _lotA.Quantity = 1;
+        _lotA.WeightKg = 0.2m;
+        var a = new FrozenCrabItem { Id = Guid.NewGuid(), FrozenLotId = LotA, WeightGram = 200 };
+        var b = new FrozenCrabItem { Id = Guid.NewGuid(), FrozenLotId = LotA, WeightGram = 300 };
+        _items.AddRange(new[] { a, b });
+        var route = $"/api/frozen-lots/{LotA}/crab-items/reconcile";
+        var json = System.Text.Json.JsonSerializer.Serialize(new { availableItemIds = new[] { a.Id }, reason = "Physical inventory count" });
+        using (var denied = await _api.SendAsync(AppRoles.FarmStaff, StaffA, HttpMethod.Post, route,
+            new StringContent(json, Encoding.UTF8, "application/json")))
+            Assert.Equal(403, (int)denied.StatusCode);
+        using (var ok = await _api.SendAsync(AppRoles.FarmManager, ManagerA, HttpMethod.Post, route,
+            new StringContent(json, Encoding.UTF8, "application/json")))
+            Assert.Equal(200, (int)ok.StatusCode);
+        Assert.Equal("Available", a.StockState);
+        Assert.Equal("Dispatched", b.StockState);
+        Assert.Null(b.DispatchedAt);
+        Assert.Null(b.OutboundTransactionId);
+        Assert.Equal(1, _lotA.Quantity);
+        Assert.Equal(0.2m, _lotA.WeightKg);
+    }
+
+    [Fact]
     public async Task Staff_creates_but_cannot_approve_manager_cannot_execute_and_other_area_is_denied()
     {
         var failures = new List<string>();

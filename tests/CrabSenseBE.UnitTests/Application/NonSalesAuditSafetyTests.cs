@@ -24,7 +24,8 @@ public sealed class NonSalesAuditSafetyTests
         var uow = new Mock<IUnitOfWork>(MockBehavior.Strict);
         var service = new FrozenStorageService(uow.Object, Mock.Of<ICurrentUserService>());
         var request = new CreateFrozenStorageTransactionRequest(Guid.NewGuid(), type, 1, 0.1m, null);
-        (await (() => service.CreateTransactionAsync(request)).Should().ThrowAsync<AppException>())
+        Func<Task> act = () => service.CreateTransactionAsync(request);
+        (await act.Should().ThrowAsync<AppException>())
             .Which.StatusCode.Should().Be(400);
         uow.VerifyNoOtherCalls();
     }
@@ -43,7 +44,8 @@ public sealed class NonSalesAuditSafetyTests
         var service = new IotService(uow.Object, Mock.Of<IStorageService>(), Mock.Of<IAlertService>(),
             Mock.Of<IRasFlowService>(), NullLogger<IotService>.Instance);
         var request = new UpdateDeviceStatusRequest(reported, null, null);
-        (await (() => service.UpdateDeviceStatusAsync(device.Id, request)).Should().ThrowAsync<AppException>())
+        Func<Task> act = () => service.UpdateDeviceStatusAsync(device.Id, request);
+        (await act.Should().ThrowAsync<AppException>())
             .Which.StatusCode.Should().Be(expected);
         device.Status.Should().Be(Enum.Parse<DeviceStatus>(existing));
         uow.Verify(x => x.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Never);

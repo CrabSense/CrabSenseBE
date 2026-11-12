@@ -765,7 +765,7 @@ public class AppDbContext : DbContext
         .IsRequired();
     entity.Property(x => x.StockState).HasMaxLength(16).HasDefaultValue("Unverified").IsRequired();
     entity.HasOne(x => x.OutboundTransaction).WithMany().HasForeignKey(x => x.OutboundTransactionId)
-        .OnDelete(DeleteBehavior.Restrict);
+        .OnDelete(DeleteBehavior.Restrict).HasConstraintName("FK_FrozenCrabItems_OutboundTransaction");
 
     entity.HasOne(x => x.FrozenLot)
         .WithMany()

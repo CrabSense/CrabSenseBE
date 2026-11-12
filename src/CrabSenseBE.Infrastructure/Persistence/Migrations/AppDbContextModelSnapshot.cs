@@ -4743,7 +4743,8 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.HasOne("CrabSenseBE.Domain.Entities.FrozenStorageTransaction", "OutboundTransaction")
                         .WithMany()
                         .HasForeignKey("OutboundTransactionId")
-                        .OnDelete(DeleteBehavior.Restrict);
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("FK_FrozenCrabItems_OutboundTransaction");
 
                     b.Navigation("Crab");
 
