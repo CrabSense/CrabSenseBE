@@ -76,10 +76,6 @@ jobs:
         shell: pwsh
         run: ./tests/PostgresIntegration/run-hotfix-tests.ps1
 
-      - name: Full clean and legacy EF migration tests
-        shell: pwsh
-        run: ./tests/PostgresIntegration/run-migration-tests.ps1
-
       - name: Validate production publish and migration bundle (no VPS)
         env:
           ASPNETCORE_ENVIRONMENT: Production
@@ -92,6 +88,10 @@ jobs:
           test -s /tmp/crabsense-publish/CrabSenseBE.Api.dll
           test -s /tmp/crabsense-publish/efbundle
           /tmp/crabsense-publish/efbundle --help
+
+      - name: Full clean and legacy EF migration tests (including production bundle)
+        shell: pwsh
+        run: ./tests/PostgresIntegration/run-migration-tests.ps1 -MigrationBundle /tmp/crabsense-publish/efbundle
 
       - name: Upload test and coverage artifacts
         if: always()

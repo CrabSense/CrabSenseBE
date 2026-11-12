@@ -1,6 +1,7 @@
 param(
     [string]$PostgresBin = "",
-    [int]$Port = 55440
+    [int]$Port = 55440,
+    [string]$MigrationBundle = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -45,6 +46,26 @@ function Invoke-Psql([string]$Database, [string]$Sql) {
 }
 function Update-Database([string]$Database, [string]$Target = "") {
     $env:ConnectionStrings__DefaultConnection = "Host=127.0.0.1;Port=$Port;Database=$Database;Username=postgres"
+    if ($MigrationBundle -and !$Target) {
+        # Test the same self-contained artifact and environment-based connection
+        # used on VPS. Historical target/rollback checks still use EF CLI.
+        $bundle = (Resolve-Path $MigrationBundle).Path
+        $oldAspRoot = $env:ASPNETCORE_CONTENTROOT
+        $oldDotnetRoot = $env:DOTNET_CONTENTROOT
+        Push-Location (Split-Path $bundle -Parent)
+        try {
+            $env:ASPNETCORE_CONTENTROOT = (Get-Location).Path
+            $env:DOTNET_CONTENTROOT = (Get-Location).Path
+            & $bundle
+            Assert-Exit "EF bundle update failed for $Database"
+        }
+        finally {
+            Pop-Location
+            $env:ASPNETCORE_CONTENTROOT = $oldAspRoot
+            $env:DOTNET_CONTENTROOT = $oldDotnetRoot
+        }
+        return
+    }
     $arguments = @("ef","database","update")
     if ($Target) { $arguments += $Target }
     $arguments += @("--project","src/CrabSenseBE.Infrastructure/CrabSenseBE.Infrastructure.csproj",
