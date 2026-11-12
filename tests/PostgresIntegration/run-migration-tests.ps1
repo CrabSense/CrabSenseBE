@@ -171,7 +171,7 @@ BEGIN
     BEGIN
         DELETE FROM be."FarmManagerAssignments" WHERE "ManagerUserId"=manager_id AND "FarmingAreaId"=area_a;
         RAISE EXCEPTION 'Assignment with dependent staff was deleted';
-    EXCEPTION WHEN foreign_key_violation THEN NULL;
+    EXCEPTION WHEN foreign_key_violation OR restrict_violation THEN NULL;
     END;
 
     INSERT INTO be."NotificationRules" ("Id","TypeCode","DisplayName","IsEnabled","RecipientRoles","ScopeByArea","ChannelCodes","CreatedAt","FarmingAreaId")
