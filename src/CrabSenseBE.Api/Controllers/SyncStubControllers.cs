@@ -28,14 +28,16 @@ public class SyncQueueStubController : ControllerBase
     private readonly AppDbContext _db;
     private readonly IUnitOfWork _uow;
     private readonly IFarmHistoryService _farmHistory;
+    private readonly IFarmingService? _farming;
     private readonly FarmAreaScope _areas;
 
     public SyncQueueStubController(
         AppDbContext db,
         IUnitOfWork uow,
         IFarmHistoryService farmHistory,
-        ICurrentUserService currentUser)
+        ICurrentUserService currentUser, IFarmingService? farming = null)
     {
+        _farming = farming;
         _db = db;
         _uow = uow;
         _farmHistory = farmHistory;
@@ -54,18 +56,25 @@ public class SyncQueueStubController : ControllerBase
         var actor = await _areas.CurrentUserAsync(HttpContext.RequestAborted)
             ?? throw AppException.Unauthorized("Không xác định được người đồng bộ.");
         var items = request.Items ?? Array.Empty<SyncBatchItem>();
+        if (items.Count is < 1 or > 100)
+            throw AppException.BadRequest("Batch phải có từ 1 đến 100 thao tác.");
         var accepted = new List<string>();
         var processed = new List<string>();
         var failed = new List<string>();
         var conflicts = new List<string>();
         foreach (var item in items)
         {
-            if (string.IsNullOrWhiteSpace(item.IdempotencyKey))
+            if (string.IsNullOrWhiteSpace(item.IdempotencyKey) || item.IdempotencyKey.Length > 128)
             {
                 failed.Add(item.IdempotencyKey ?? string.Empty);
                 continue;
             }
             var key = item.IdempotencyKey.Trim();
+            if (items.Count(x => string.Equals(x.IdempotencyKey?.Trim(), key, StringComparison.Ordinal)) > 1)
+            {
+                if (!failed.Contains(key)) failed.Add(key);
+                continue;
+            }
             var requestHash = RequestHash(item);
             accepted.Add(key);
             await using var transaction = await _db.Database.BeginTransactionAsync(
@@ -119,6 +128,12 @@ public class SyncQueueStubController : ControllerBase
                     await transaction.CommitAsync(HttpContext.RequestAborted);
                     continue;
                 }
+                if (existing?.Status == "conflict")
+                {
+                    conflicts.Add(key);
+                    await transaction.CommitAsync(HttpContext.RequestAborted);
+                    continue;
+                }
                 if (existing is not null && existing.Status != "failed")
                 {
                     failed.Add(key);
@@ -146,9 +161,11 @@ public class SyncQueueStubController : ControllerBase
                 // Keep the inbox reservation/row lock while rolling back only domain changes.
                 await transaction.CreateSavepointAsync("sync_domain", HttpContext.RequestAborted);
                 await ApplyMobileOp(item, inboxItem, processed, failed);
-                if (inboxItem.Status == "failed")
+                if (inboxItem.Status is "failed" or "conflict")
                 {
                     var error = inboxItem.ErrorMessage;
+                    var outcome = inboxItem.Status;
+                    if (outcome == "conflict") { failed.Remove(key); conflicts.Add(key); }
                     await transaction.RollbackToSavepointAsync("sync_domain", HttpContext.RequestAborted);
                     _db.ChangeTracker.Clear();
                     var failedInbox = await _db.SyncInboxItems.SingleAsync(
@@ -156,7 +173,7 @@ public class SyncQueueStubController : ControllerBase
                             && stored.IdempotencyKey == key,
                         HttpContext.RequestAborted);
                     // The reservation is still locked by this transaction.
-                    failedInbox.Status = "failed";
+                    failedInbox.Status = outcome;
                     failedInbox.ErrorMessage = error;
                     failedInbox.ProcessedAt = null;
                     await _db.SaveChangesAsync(HttpContext.RequestAborted);
@@ -205,7 +222,7 @@ public class SyncQueueStubController : ControllerBase
             processedItemIds = processed,
             failedItemIds = failed,
             conflictItemIds = conflicts,
-            conflicts = Array.Empty<object>()
+            conflicts = conflicts.Select(key => new { idempotencyKey = key, reason = "Server conflict or idempotency key reused; pull latest state before retrying with a new key." })
         }, "Batch accepted"));
     }
 
@@ -243,6 +260,8 @@ public class SyncQueueStubController : ControllerBase
             writer.WriteString("operationType", item.OperationType?.Trim().ToLowerInvariant());
             if (item.BaseVersion is int version)
                 writer.WriteNumber("baseVersion", version);
+            if (item.BaseServerUpdatedAt is DateTimeOffset baseAt)
+                writer.WriteString("baseServerUpdatedAt", baseAt.ToUniversalTime());
             if (item.ClientUpdatedAt is DateTimeOffset updatedAt)
                 writer.WriteString("clientUpdatedAt", updatedAt.ToUniversalTime());
             writer.WritePropertyName("payload");
@@ -441,6 +460,7 @@ public class SyncQueueStubController : ControllerBase
                    && long.TryParse(parts[0], out var ticks)
                    && ticks >= DateTimeOffset.MinValue.UtcTicks
                    && ticks <= DateTimeOffset.MaxValue.UtcTicks
+                   && parts[1] is "box" or "crab"
                    && Guid.TryParse(parts[2], out var id)
                 ? new SyncPullCursor(new DateTimeOffset(ticks, TimeSpan.Zero), parts[1], id)
                 : null;
@@ -453,7 +473,7 @@ public class SyncQueueStubController : ControllerBase
         List<string> processed,
         List<string> failed)
     {
-        var op = item.OperationType ?? "";
+        var op = item.OperationType?.Trim() ?? "";
         try
         {
             if (op.Equals("update_crab", StringComparison.OrdinalIgnoreCase))
@@ -476,13 +496,19 @@ public class SyncQueueStubController : ControllerBase
             inboxItem.Status = "failed";
             inboxItem.ErrorMessage =
                 "Operation xung đột với dữ liệu hiện tại hoặc request đồng thời.";
-            failed.Add(item.IdempotencyKey!);
+            failed.Add(item.IdempotencyKey!.Trim());
         }
-        catch (Exception ex)
+        catch (AppException ex)
+        {
+            inboxItem.Status = ex.StatusCode == 409 ? "conflict" : "failed";
+            inboxItem.ErrorMessage = ex.Message;
+            failed.Add(item.IdempotencyKey!.Trim());
+        }
+        catch (Exception)
         {
             inboxItem.Status = "failed";
-            inboxItem.ErrorMessage = ex.Message;
-            failed.Add(item.IdempotencyKey!);
+            inboxItem.ErrorMessage = "Không thể thực hiện thao tác đồng bộ.";
+            failed.Add(item.IdempotencyKey!.Trim());
         }
     }
 
@@ -521,7 +547,7 @@ public class SyncQueueStubController : ControllerBase
         await _areas.EnsureBoxAsync(
             scopedBoxId, manage: false, HttpContext.RequestAborted);
         if (status is not (CrabStatus.Alive or CrabStatus.Molting)
-            || crab.Status is CrabStatus.Dead or CrabStatus.Harvested or CrabStatus.Sold or CrabStatus.Missing)
+            || crab.Status is not (CrabStatus.Alive or CrabStatus.Molting))
         {
             Fail(inbox, failed, item,
                 "Sync chỉ cập nhật cua sống/đang lột; trạng thái kết thúc, mất dấu và cách ly cần quy trình nghiệp vụ có audit.");
@@ -530,16 +556,23 @@ public class SyncQueueStubController : ControllerBase
 
         if (ServerWins(item, crab.UpdatedAt ?? crab.CreatedAt))
         {
-            KeepServer(inbox, processed, item);
+            Conflict(inbox, failed, item);
             return;
         }
 
         var oldStatus = crab.Status;
         var oldCondition = crab.Condition;
+        var stage = SyncPayload.Str(payload, "moltingStage", "moltingStatus") ?? crab.MoltingStage;
+        var condition = CrabConditions.FromMoltingAndStatus(stage, status);
+        if (CrabConditions.ToLifecycle(condition) != status)
+        {
+            Fail(inbox, failed, item, "Trạng thái cua không khớp giai đoạn lột.");
+            return;
+        }
         crab.Status = status;
-        crab.Condition = CrabConditions.FromMoltingAndStatus(
-            crab.MoltingStage, status);
-        crab.UpdatedAt = SyncBatchItem.ResolveClientUpdatedAt(item)!.Value.UtcDateTime;
+        crab.MoltingStage = stage;
+        crab.Condition = condition;
+        crab.UpdatedAt = DateTime.UtcNow;
         _db.CrabStatusHistories.Add(new CrabStatusHistory
         {
             CrabId = crab.Id,
@@ -659,32 +692,31 @@ public class SyncQueueStubController : ControllerBase
                 return;
             }
 
-            var code = SyncPayload.Str(payload, "code", "tag") ?? $"SYNC-{crabId.ToString("N")[..8]}";
-            crab = new Crab
+            if (_farming is null) throw new AppException("Farming registration unavailable.", 503);
+            var statusRaw = SyncPayload.Str(payload, "status");
+            if (statusRaw is not null && (!Enum.TryParse<CrabStatus>(statusRaw, true, out var status)
+                || status is not (CrabStatus.Alive or CrabStatus.Molting)))
             {
-                Id = crabId,
-                CrabLotId = lotId,
-                Code = code,
-                QrCode = $"QR-{code}",
-                Tag = SyncPayload.Str(payload, "tag") ?? code,
-                WeightGram = SyncPayload.Dec(payload, "weight", "weightGram"),
-                StockedAt = DateTime.UtcNow,
-                MoltingStage = SyncPayload.Str(payload, "moltingStatus", "moltingStage") ?? "",
-            };
-            if (Enum.TryParse<CrabStatus>(
-                    SyncPayload.Str(payload, "status") ?? "", true, out var st)
-                && Enum.IsDefined(st))
-            {
-                if (st is not (CrabStatus.Alive or CrabStatus.Molting))
-                {
-                    Fail(inbox, failed, item,
-                        "Chỉ đăng ký cua sống hoặc đang lột; không tạo trạng thái cách ly, mất dấu hay kết thúc.");
-                    return;
-                }
-                crab.Status = st;
+                Fail(inbox, failed, item, "Chỉ đăng ký cua sống hoặc đang lột.");
+                return;
             }
-            crab.Condition = CrabConditions.FromMoltingAndStatus(crab.MoltingStage, crab.Status);
-            _db.Crabs.Add(crab);
+            var stage = SyncPayload.Str(payload, "moltingStatus", "moltingStage");
+            var condition = SyncPayload.Str(payload, "condition") ??
+                (string.Equals(statusRaw, "Molting", StringComparison.OrdinalIgnoreCase) ? "molting" : null);
+            await _farming.CreateCrabWithIdAsync(crabId, new CreateCrabRequest(
+                lotId, BoxId: targetBoxId,
+                Tag: SyncPayload.Str(payload, "tag"),
+                WeightGram: SyncPayload.Dec(payload, "weight", "weightGram"),
+                MoltingStage: stage,
+                CrabType: SyncPayload.Str(payload, "crabType"),
+                Gender: SyncPayload.Str(payload, "gender"),
+                CarapaceWidthMm: SyncPayload.Dec(payload, "carapaceWidthMm"),
+                CarapaceLengthMm: SyncPayload.Dec(payload, "carapaceLengthMm"),
+                InitialCondition: SyncPayload.Str(payload, "initialCondition"),
+                Condition: condition,
+                Notes: SyncPayload.Str(payload, "notes")), HttpContext.RequestAborted);
+            Done(inbox, processed, item);
+            return;
         }
         else
         {
@@ -709,21 +741,6 @@ public class SyncQueueStubController : ControllerBase
             return;
         }
 
-        var boxRaw = SyncPayload.Str(payload, "boxId") ?? SyncPayload.Str(item.Payload ?? new(), "boxId");
-        if (Guid.TryParse(boxRaw, out var boxId) && boxId != Guid.Empty)
-        {
-            var currentBoxId = crab.BoxId
-                ?? (await _uow.CrabBoxAllocations.FindAsync(
-                        allocation => allocation.CrabId == crabId && allocation.EndTime == null,
-                        HttpContext.RequestAborted))
-                    .OrderByDescending(allocation => allocation.StartTime)
-                    .FirstOrDefault()?.BoxId;
-            if (currentBoxId != boxId)
-                await _farmHistory.TransferCrabAsync(new MobileTransferCrabRequest(
-                    crabId, boxId, currentBoxId));
-        }
-
-        Done(inbox, processed, item);
     }
 
     async Task ApplyTransfer(
@@ -742,8 +759,20 @@ public class SyncQueueStubController : ControllerBase
             return;
         }
 
-        Guid? source = Guid.TryParse(SyncPayload.Str(payload, "sourceBoxId"), out var src) ? src : null;
-        await _farmHistory.TransferCrabAsync(new MobileTransferCrabRequest(crabId, dest, source));
+        if (!Guid.TryParse(SyncPayload.Str(payload, "sourceBoxId"), out var source) || source == Guid.Empty)
+        {
+            Fail(inbox, failed, item, "transfer_crab cần sourceBoxId để tránh ghi đè lần chuyển mới hơn.");
+            return;
+        }
+        var crab = await _db.Crabs.FindAsync(crabId);
+        if (crab is null) { Fail(inbox, failed, item, "Không tìm thấy cua."); return; }
+        if (crab.BoxId is not Guid current) { Fail(inbox, failed, item, "Cua không có hộp hiện tại."); return; }
+        await _areas.EnsureBoxAsync(current, false, HttpContext.RequestAborted);
+        if (current != source || ServerWins(item, crab.UpdatedAt ?? crab.CreatedAt))
+        {
+            Conflict(inbox, failed, item); return;
+        }
+        await _farmHistory.TransferCrabAsync(new MobileTransferCrabRequest(crabId, dest, source), HttpContext.RequestAborted);
         Done(inbox, processed, item);
     }
 
@@ -768,7 +797,7 @@ public class SyncQueueStubController : ControllerBase
 
         if (ServerWins(item, box.UpdatedAt ?? box.CreatedAt))
         {
-            KeepServer(inbox, processed, item);
+            Conflict(inbox, failed, item);
             return;
         }
 
@@ -790,6 +819,13 @@ public class SyncQueueStubController : ControllerBase
             }
             var oldStatus = box.Status;
             var nextStatus = BoxStatuses.Normalize(status);
+            var hasCrab = await _db.CrabBoxAllocations.AnyAsync(x => x.BoxId == box.Id && x.EndTime == null, HttpContext.RequestAborted)
+                || await _db.Crabs.AnyAsync(x => x.BoxId == box.Id && (x.Status == CrabStatus.Alive || x.Status == CrabStatus.Molting || x.Status == CrabStatus.Quarantined), HttpContext.RequestAborted);
+            if (!SyncMutationPolicy.IsBoxStatusConsistent(nextStatus, hasCrab) || box.IsOccupied != hasCrab)
+            {
+                Fail(inbox, failed, item, "Trạng thái hộp không khớp phân bổ cua; dùng luồng chuyển hộp/thu hoạch.");
+                return;
+            }
             box.Status = nextStatus;
             if (!string.Equals(oldStatus, nextStatus, StringComparison.OrdinalIgnoreCase))
             {
@@ -807,36 +843,36 @@ public class SyncQueueStubController : ControllerBase
                 });
             }
         }
-        box.UpdatedAt = SyncBatchItem.ResolveClientUpdatedAt(item)!.Value.UtcDateTime;
+        box.UpdatedAt = DateTime.UtcNow;
         Done(inbox, processed, item);
     }
 
     static bool ServerWins(SyncBatchItem item, DateTime serverTime)
     {
-        var clientTime = SyncBatchItem.ResolveClientUpdatedAt(item);
-        return clientTime == null || serverTime.ToUniversalTime() > clientTime.Value.UtcDateTime;
+        return SyncMutationPolicy.IsStale(serverTime, SyncBatchItem.ResolveClientUpdatedAt(item),
+            item.BaseServerUpdatedAt, DateTimeOffset.UtcNow);
     }
 
-    static void KeepServer(SyncInboxItem inbox, List<string> processed, SyncBatchItem item)
+    static void Conflict(SyncInboxItem inbox, List<string> failed, SyncBatchItem item)
     {
-        inbox.Status = "processed";
-        inbox.ProcessedAt = DateTimeOffset.UtcNow;
-        inbox.ErrorMessage = "Giữ bản server vì updatedAt mới hơn clientUpdatedAt.";
-        processed.Add(item.IdempotencyKey!);
+        inbox.Status = "conflict";
+        inbox.ProcessedAt = null;
+        inbox.ErrorMessage = "Dữ liệu server đã đổi hoặc timestamp client không hợp lệ; tải lại trước khi gửi khóa mới.";
+        failed.Add(item.IdempotencyKey!.Trim());
     }
 
     static void Done(SyncInboxItem inbox, List<string> processed, SyncBatchItem item)
     {
         inbox.Status = "processed";
         inbox.ProcessedAt = DateTimeOffset.UtcNow;
-        processed.Add(item.IdempotencyKey!);
+        processed.Add(item.IdempotencyKey!.Trim());
     }
 
     static void Fail(SyncInboxItem inbox, List<string> failed, SyncBatchItem item, string message)
     {
         inbox.Status = "failed";
         inbox.ErrorMessage = message;
-        failed.Add(item.IdempotencyKey!);
+        failed.Add(item.IdempotencyKey!.Trim());
     }
 
     /// <summary>[READ] Hàng đợi sync (stub)</summary>
@@ -909,6 +945,7 @@ public sealed class SyncBatchItem
     public string? OperationType { get; init; }
     public int? BaseVersion { get; init; }
     public DateTimeOffset? ClientUpdatedAt { get; init; }
+    public DateTimeOffset? BaseServerUpdatedAt { get; init; }
     public Dictionary<string, object?>? Payload { get; init; }
 
     internal static DateTimeOffset? ResolveClientUpdatedAt(SyncBatchItem item)
@@ -971,7 +1008,8 @@ internal static class SyncPayload
     public static decimal? Dec(IDictionary<string, object?> payload, params string[] keys)
     {
         var text = Str(payload, keys);
-        return decimal.TryParse(text, out var value) ? value : null;
+        return decimal.TryParse(text, System.Globalization.NumberStyles.Number,
+            System.Globalization.CultureInfo.InvariantCulture, out var value) ? value : null;
     }
 }
 

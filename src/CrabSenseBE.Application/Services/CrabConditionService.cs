@@ -15,10 +15,12 @@ public class CrabConditionService : ICrabConditionService
 
     private readonly IUnitOfWork _uow;
     private readonly FarmAreaScope _areas;
+    private readonly ICurrentUserService _currentUser;
 
     public CrabConditionService(IUnitOfWork uow, ICurrentUserService currentUser)
     {
         _uow = uow;
+        _currentUser = currentUser;
         _areas = new FarmAreaScope(uow, currentUser);
     }
 
@@ -61,6 +63,20 @@ public class CrabConditionService : ICrabConditionService
 
         _ = await _uow.Boxes.GetByIdAsync(req.BoxId, ct) ?? throw AppException.NotFound("Box");
         await _areas.EnsureBoxAsync(req.BoxId, manage: false, ct);
+        var actor = await _areas.CurrentUserAsync(ct) ?? throw AppException.Unauthorized("Không xác định người kiểm tra.");
+        var mediaGuard = new MediaAssetAreaGuard(_uow, _currentUser);
+        foreach (var photo in req.PhotoUrls ?? Array.Empty<string>())
+        {
+            MediaAsset? asset;
+            if (MediaReferenceGuard.TryParseContentId(photo, out var mediaId))
+                asset = await _uow.MediaAssets.GetByIdAsync(mediaId, ct);
+            else
+                asset = await _uow.MediaAssets.FirstOrDefaultAsync(m => m.ShareLink == photo || m.WebViewLink == photo || m.WebContentLink == photo, ct);
+            if (asset is null || asset.BoxId != req.BoxId || !string.Equals(asset.Category, "image", StringComparison.OrdinalIgnoreCase)
+                || (asset.CrabId.HasValue && asset.CrabId != req.CrabId))
+                throw AppException.Forbidden("Ảnh không thuộc hộp/cua được kiểm tra hoặc chưa đăng ký media.");
+            await mediaGuard.EnsureAsync(asset, ct);
+        }
 
         CrabConditionDto eval;
         try
@@ -120,7 +136,8 @@ public class CrabConditionService : ICrabConditionService
                         NewCondition = crab.Condition,
                         OldStatus = oldStatus,
                         NewStatus = crab.Status,
-                        Source = "ai",
+                        Source = "kn-condition",
+                        ChangedByUserId = actor.Id,
                         Reason = "Condition evaluate"
                     }, ct);
                 }
@@ -182,8 +199,8 @@ public class CrabConditionService : ICrabConditionService
             Notes = JsonSerializer.Serialize(payload, JsonOpts),
             PhotoUrlsJson = JsonSerializer.Serialize(req.PhotoUrls ?? Array.Empty<string>(), JsonOpts),
             InspectedAt = DateTime.UtcNow,
-            InspectorId = req.OperatorId ?? Guid.Empty,
-            OperatorName = req.OperatorName ?? "Operator"
+            InspectorId = actor.Id,
+            OperatorName = string.IsNullOrWhiteSpace(actor.FullName) ? actor.Username : actor.FullName
         };
         await _uow.Inspections.AddAsync(entity, ct);
 
