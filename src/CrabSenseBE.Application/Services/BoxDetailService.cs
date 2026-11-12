@@ -450,6 +450,9 @@ public class BoxDetailService : IBoxDetailService
             ? CrabConditions.FromMoltingAndStatus(molt, CrabStatus.Alive)
             : CrabConditions.Parse(req.Condition);
 
+        if (CrabConditions.ToLifecycle(condition) is not (CrabStatus.Alive or CrabStatus.Molting))
+            throw AppException.BadRequest("Chỉ đăng ký cua sống hoặc đang lột.");
+
         // Code có unique index và không được rỗng: thiếu bước này thì lần thả thứ hai trở đi
         // vi phạm IX_Crabs_Code (Code = "") và trả 500. Mirror desktop CreateCrabAsync.
         var code = await CrabCodeAllocator.AllocateAsync(_uow.Crabs, ct);
