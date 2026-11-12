@@ -81,7 +81,7 @@ try {
     # Build an actual previous EF schema, not a hand-written subset.
     & $createdb -h 127.0.0.1 -p $Port -U postgres legacy_migration
     Assert-Exit "Could not create legacy database"
-    Update-Database "legacy_migration" "20261112012203_AddEdgeCommandRequestSource"
+    Update-Database "legacy_migration" "20260924164600_TrainingDataEvents"
     $fixture = @'
 INSERT INTO be."SyncInboxItems"
 ("Id","IdempotencyKey","EntityType","EntityId","OperationType","PayloadJson","Status","ReceivedAt","ProcessedAt")
@@ -90,9 +90,37 @@ VALUES
 '@
     $fixture | & $psql -X -q -v ON_ERROR_STOP=1 -h 127.0.0.1 -p $Port -U postgres -d legacy_migration | Out-Null
     Assert-Exit "Could not insert legacy inbox evidence"
+
+    # Validate the historic EdgeCommands duplicate-table fix against a populated inbox.
+    Update-Database "legacy_migration" "20260926075139_EdgeCommands"
+    Update-Database "legacy_migration" "20260924164600_TrainingDataEvents"
+    $inboxBeforeUpgrade = Invoke-Psql "legacy_migration" 'SELECT "Status" FROM be."SyncInboxItems" WHERE "IdempotencyKey" = ''legacy-key'';'
+    if ($inboxBeforeUpgrade -ne "processed") { throw "EdgeCommands rollback removed or changed the earlier sync inbox." }
+    Update-Database "legacy_migration" "20260926075139_EdgeCommands"
+
+    # Some deployed developer schemas retained the nullable FoodResponse field.
+    Invoke-Psql "legacy_migration" 'ALTER TABLE be."TrainingLabels" ADD COLUMN IF NOT EXISTS "FoodResponse" text NULL;' | Out-Null
+    Invoke-Psql "legacy_migration" 'INSERT INTO be."TrainingLabels" ("Id","LabelSource","LabeledAt","CreatedAt","FoodResponse") VALUES (''60000000-0000-0000-0000-000000000002'',''legacy'',now(),now(),''legacy-label'');' | Out-Null
+    Update-Database "legacy_migration" "20261003105028_AddFrozenCrabItems"
+    $legacyLabel = Invoke-Psql "legacy_migration" 'SELECT "FoodResponse" FROM be."TrainingLabels" WHERE "Id" = ''60000000-0000-0000-0000-000000000002'';'
+    if ($legacyLabel -ne "legacy-label") { throw "Legacy training annotation was lost: $legacyLabel" }
+
+    # Reproduce the old missing-table condition only in this disposable test DB.
+    Invoke-Psql "legacy_migration" 'DROP TABLE be."FrozenCrabItems";' | Out-Null
+    Update-Database "legacy_migration" "20261007084724_RepairMissingFrozenCrabItems"
+    $repairedTable = Invoke-Psql "legacy_migration" 'SELECT to_regclass(''be."FrozenCrabItems"'') IS NOT NULL;'
+    if ($repairedTable -ne "t") { throw "FrozenCrabItems repair did not restore the missing table." }
+    $repairIndexes = Invoke-Psql "legacy_migration" 'SELECT count(*) FROM pg_indexes WHERE schemaname = ''be'' AND tablename = ''FrozenCrabItems'' AND indexname IN (''IX_FrozenCrabItems_BarcodeValue'', ''IX_FrozenCrabItems_CrabId'', ''IX_FrozenCrabItems_FrozenLotId'', ''IX_FrozenCrabItems_HarvestLineId'');'
+    if ($repairIndexes -ne "4") { throw "FrozenCrabItems repair indexes incomplete: $repairIndexes" }
+    Update-Database "legacy_migration" "20261003105028_AddFrozenCrabItems"
+    if ((Invoke-Psql "legacy_migration" 'SELECT to_regclass(''be."FrozenCrabItems"'') IS NOT NULL;') -ne "t") { throw "Repair rollback removed the earlier inventory table." }
+
+    Update-Database "legacy_migration" "20261112012203_AddEdgeCommandRequestSource"
     Update-Database "legacy_migration"
     $legacyRow = Invoke-Psql "legacy_migration" 'SELECT "IdempotencyKey" || ''|'' || coalesce("ActorUserId"::text,''NULL'') || ''|'' || "RequestHash" || ''|'' || "Status" FROM be."SyncInboxItems" WHERE "IdempotencyKey" = ''legacy-key'';'
     if ($legacyRow -ne "legacy-key|NULL||processed") { throw "Legacy inbox history changed: $legacyRow" }
+    $finalLegacyLabel = Invoke-Psql "legacy_migration" 'SELECT "FoodResponse" FROM be."TrainingLabels" WHERE "Id" = ''60000000-0000-0000-0000-000000000002'';'
+    if ($finalLegacyLabel -ne "legacy-label") { throw "Legacy training annotation changed after full upgrade: $finalLegacyLabel" }
     $cleanHistory = Invoke-Psql "clean_migration" 'SELECT "MigrationId" FROM be."__EFMigrationsHistory" ORDER BY "MigrationId";'
     $legacyHistory = Invoke-Psql "legacy_migration" 'SELECT "MigrationId" FROM be."__EFMigrationsHistory" ORDER BY "MigrationId";'
     if ($cleanHistory -ne $legacyHistory) { throw "Clean and upgraded migration history differ." }
