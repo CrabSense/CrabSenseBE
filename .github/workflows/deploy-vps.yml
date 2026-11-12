@@ -14,7 +14,9 @@ concurrency:
 jobs:
   deploy:
     name: Publish & Deploy to VPS
-    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    # Protocol 2 migration is not compatible with the previous API/firmware.
+    # Merging to main must not actuate or cut over a live installation.
+    if: vars.EDGE_PROTOCOL_V2_READY == 'true' && (github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success')
     runs-on: ubuntu-latest
     permissions:
       actions: read
