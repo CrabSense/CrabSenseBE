@@ -176,6 +176,7 @@ public class WaterMeasurement : BaseEntity
     public string? Unit { get; set; }
     public DateTime MeasuredAt { get; set; }
     public string? Source { get; set; } // realtime, hdf5
+    public string? EdgeEventKey { get; set; } // SHA-256 of edge event ID, scoped to SensorId
 
     // Navigation
     public Sensor? Sensor { get; set; }

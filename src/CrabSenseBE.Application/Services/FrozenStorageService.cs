@@ -214,6 +214,8 @@ public class FrozenStorageService : IFrozenStorageService
                 transaction => transaction.FrozenLotId == id, ct))
             throw AppException.Conflict("Không thể xóa lô đã có lịch sử nhập/xuất kho.");
 
+        if (lot.Quantity != 0 || lot.WeightKg != 0)
+            throw AppException.Conflict("Không thể xóa lô còn tồn kho.");
         if (lot.Status == FrozenLotStatus.Reserved)
         {
             throw AppException.Conflict(
@@ -582,6 +584,43 @@ public class FrozenStorageService : IFrozenStorageService
             throw AppException.Conflict(
                 "Số lượng và trọng lượng tồn phải cùng về 0 khi xuất hết lô.");
 
+        var trackedItems = (await _uow.FrozenCrabItems.FindAsync(x => x.FrozenLotId == lot.Id, ct)).ToList();
+        var selectedIds = request.FrozenCrabItemIds ?? [];
+        if (transaction.Type == FrozenStorageTransactionType.Inbound)
+        {
+            if (selectedIds.Count != 0)
+                throw AppException.BadRequest("Không chọn barcode đã đăng ký cho phiếu nhập.");
+            if (trackedItems.Count != 0)
+                throw AppException.Conflict("Lô đã đăng ký barcode; tạo lô mới cho lần nhập tiếp theo.");
+        }
+        else if (trackedItems.Count != 0 || lot.HarvestVoucherId.HasValue)
+        {
+            if (trackedItems.Count == 0)
+                throw AppException.Conflict("Cần đăng ký barcode cho lô có nguồn thu hoạch trước khi xuất.");
+            if (trackedItems.Any(x => x.StockState is not ("Available" or "Dispatched")))
+                throw AppException.Conflict("Cần đối soát barcode legacy trước khi xuất kho.");
+            var available = trackedItems.Where(x => x.StockState == "Available").ToList();
+            if (available.Count != lot.Quantity || decimal.Round(available.Sum(x => x.WeightGram) / 1000m, 3) != lot.WeightKg)
+                throw AppException.Conflict("Tồn barcode không khớp tồn lô; cần đối soát.");
+            if (selectedIds.Count != request.ActualQuantity || selectedIds.Distinct().Count() != selectedIds.Count)
+                throw AppException.BadRequest("Chọn đúng số barcode thực tế xuất kho, không trùng.");
+            var selected = available.Where(x => selectedIds.Contains(x.Id)).ToList();
+            if (selected.Count != selectedIds.Count || decimal.Round(selected.Sum(x => x.WeightGram) / 1000m, 3) != actualWeight)
+                throw AppException.Conflict("Barcode không khả dụng, sai lô hoặc không khớp trọng lượng xuất.");
+            var remaining = available.Where(x => !selectedIds.Contains(x.Id)).ToList();
+            if (decimal.Round(remaining.Sum(x => x.WeightGram) / 1000m, 3) != weightAfter)
+                throw AppException.Conflict("Trọng lượng còn lại không khớp barcode; cần đối soát làm tròn.");
+            foreach (var item in selected)
+            {
+                item.StockState = "Dispatched";
+                item.DispatchedAt = DateTime.UtcNow;
+                item.OutboundTransactionId = transaction.Id;
+                _uow.FrozenCrabItems.Update(item);
+            }
+        }
+        else if (selectedIds.Count != 0)
+            throw AppException.BadRequest("Lô nhập tổng hợp không có barcode đã đăng ký.");
+
         var adjustment = new FrozenInventoryAdjustment
         {
             FrozenLotId = lot.Id,
@@ -942,7 +981,7 @@ public class FrozenStorageService : IFrozenStorageService
         // Kiểm tra cân nặng riêng của từng con cua.
         if (decimal.Round(inputs.Sum(x => x.WeightGram) / 1000m, 3) != lot.WeightKg)
             throw AppException.BadRequest("Tổng trọng lượng barcode phải khớp trọng lượng tồn của lô.");
-        if (inputs.Any(x => x.WeightGram <= 0))
+        if (inputs.Any(x => x.WeightGram <= 0 || decimal.Round(x.WeightGram, 2) != x.WeightGram))
             throw AppException.BadRequest("Every crab weight must be greater than zero.");
 
         // Chuẩn hóa size và chỉ chấp nhận S, M hoặc L.
@@ -1040,7 +1079,8 @@ public class FrozenStorageService : IFrozenStorageService
 
                 // Đây là cân nặng và size của từng con, không phải tổng của cả lô.
                 WeightGram = input.WeightGram,
-                Grade = normalizedGrades[i]
+                Grade = normalizedGrades[i],
+                StockState = "Available"
             };
 
             createdItems.Add(item);
@@ -1058,6 +1098,50 @@ public class FrozenStorageService : IFrozenStorageService
         return ApiResponse<IEnumerable<FrozenCrabItemDto>>.Ok(
             createdItems.Select(MapToFrozenCrabItemDto).ToList(),
             "Frozen crab items and barcodes registered.");
+    }
+
+    public async Task<ApiResponse<IEnumerable<FrozenCrabItemDto>>> ListCrabItemsAsync(
+        Guid lotId, CancellationToken ct = default)
+    {
+        var lot = await _uow.FrozenLots.GetByIdAsync(lotId, ct)
+            ?? throw AppException.NotFound("Frozen lot");
+        await EnsureLotAreaAsync(lot, ct);
+        var items = await _uow.FrozenCrabItems.FindAsync(x => x.FrozenLotId == lotId, ct);
+        return ApiResponse<IEnumerable<FrozenCrabItemDto>>.Ok(items.Select(MapToFrozenCrabItemDto).ToList());
+    }
+
+    public async Task<ApiResponse<IEnumerable<FrozenCrabItemDto>>> ReconcileCrabItemsAsync(
+        Guid lotId, ReconcileFrozenItemsRequest request, CancellationToken ct = default)
+    {
+        var actor = await _areas.CurrentUserAsync(ct);
+        if (actor?.Role != UserRole.FarmManager)
+            throw AppException.Forbidden("Chỉ Farm Manager được đối soát barcode.");
+        var lot = await _uow.FrozenLots.GetByIdAsync(lotId, ct)
+            ?? throw AppException.NotFound("Frozen lot");
+        await EnsureLotAreaAsync(lot, ct);
+        var reason = NormalizeOptionalText(request.Reason);
+        if (reason is null || reason.Length > 1000 || request.AvailableItemIds is null)
+            throw AppException.BadRequest("Cần danh sách barcode còn thực tế và lý do đối soát (tối đa 1000 ký tự).");
+        var items = (await _uow.FrozenCrabItems.FindAsync(x => x.FrozenLotId == lotId, ct)).ToList();
+        if (items.Count == 0 || items.Any(x => x.StockState != "Unverified"))
+            throw AppException.Conflict("Chỉ đối soát lô barcode legacy chưa xác minh; không ghi đè lịch sử đã xác nhận.");
+        var ids = request.AvailableItemIds.ToHashSet();
+        var available = items.Where(x => ids.Contains(x.Id)).ToList();
+        if (ids.Count != request.AvailableItemIds.Count || available.Count != ids.Count
+            || available.Count != lot.Quantity || decimal.Round(available.Sum(x => x.WeightGram) / 1000m, 3) != lot.WeightKg)
+            throw AppException.Conflict("Barcode còn kho phải khớp số lượng/trọng lượng tồn, không trùng hoặc sai lô.");
+        foreach (var item in items)
+        {
+            item.StockState = ids.Contains(item.Id) ? "Available" : "Dispatched";
+            // Historical dispatch timestamp and transaction are unknown; never fabricate.
+            _uow.FrozenCrabItems.Update(item);
+        }
+        lot.ConcurrencyVersion++;
+        _uow.FrozenLots.Update(lot);
+        await ConfigAudit.WriteAsync(_uow, actor.Id, "ReconcileFrozenItems", "FrozenLot", lot.Id,
+            System.Text.Json.JsonSerializer.Serialize(new { reason, availableItemIds = ids }), ct);
+        await SaveInventoryChangesAsync(ct);
+        return ApiResponse<IEnumerable<FrozenCrabItemDto>>.Ok(items.Select(MapToFrozenCrabItemDto).ToList());
     }
 
     public async Task<ApiResponse<FrozenCrabItemDto>> GetCrabItemByBarcodeAsync(
@@ -1132,7 +1216,10 @@ public class FrozenStorageService : IFrozenStorageService
             item.FrozenDate,
             item.ExpiryDate,
             item.WeightGram,
-            item.Grade);
+            item.Grade,
+            item.StockState,
+            item.DispatchedAt,
+            item.OutboundTransactionId);
     }
     //helper//
 

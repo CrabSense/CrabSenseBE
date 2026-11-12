@@ -24,6 +24,7 @@ public sealed class FrozenStoragePermissionTests : IAsyncLifetime
 
     private readonly List<FrozenStorageTransaction> _transactions = new();
     private readonly List<FrozenInventoryAdjustment> _adjustments = new();
+    private readonly List<FrozenCrabItem> _items = new();
     private readonly List<FrozenInventoryOpeningBalance> _openingBalances = new();
     private FrozenLot _lotA = null!;
     private int _saves;
@@ -132,6 +133,10 @@ public sealed class FrozenStoragePermissionTests : IAsyncLifetime
         uow.Setup(x => x.FarmingAreas).Returns(areaRepo.Object);
         uow.Setup(x => x.FrozenLots).Returns(Repo(new List<FrozenLot> { _lotA, lotB }, item => item.Id).Object);
         uow.Setup(x => x.FrozenStorageTransactions).Returns(transactionRepo.Object);
+        var itemRepo = Repo(_items, item => item.Id);
+        itemRepo.Setup(r => r.FindAsync(It.IsAny<System.Linq.Expressions.Expression<Func<FrozenCrabItem, bool>>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((System.Linq.Expressions.Expression<Func<FrozenCrabItem, bool>> predicate, CancellationToken _) => _items.Where(predicate.Compile()).ToList());
+        uow.Setup(x => x.FrozenCrabItems).Returns(itemRepo.Object);
         uow.Setup(x => x.FrozenInventoryAdjustments).Returns(adjustmentRepo.Object);
         uow.Setup(x => x.FrozenInventoryOpeningBalances).Returns(openingRepo.Object);
         uow.Setup(x => x.SaveChangesAsync(It.IsAny<CancellationToken>()))

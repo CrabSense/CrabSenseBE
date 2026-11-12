@@ -763,6 +763,9 @@ public class AppDbContext : DbContext
     entity.Property(x => x.Grade)
         .HasMaxLength(1)
         .IsRequired();
+    entity.Property(x => x.StockState).HasMaxLength(16).HasDefaultValue("Unverified").IsRequired();
+    entity.HasOne(x => x.OutboundTransaction).WithMany().HasForeignKey(x => x.OutboundTransactionId)
+        .OnDelete(DeleteBehavior.Restrict);
 
     entity.HasOne(x => x.FrozenLot)
         .WithMany()
@@ -871,6 +874,9 @@ public class AppDbContext : DbContext
 
         modelBuilder.Entity<WaterMeasurement>()
             .HasIndex(x => new { x.SensorId, x.MeasuredAt });
+        modelBuilder.Entity<WaterMeasurement>().Property(x => x.EdgeEventKey).HasMaxLength(64);
+        modelBuilder.Entity<WaterMeasurement>().HasIndex(x => new { x.SensorId, x.EdgeEventKey }).IsUnique()
+            .HasFilter("\"EdgeEventKey\" IS NOT NULL");
         modelBuilder.Entity<FeedingEvent>(entity =>
         {
             entity.HasIndex(x => new { x.CrabId, x.FedAt });

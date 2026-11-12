@@ -137,6 +137,11 @@ public class FrozenCrabItem : BaseEntity
     /// <summary>Size cua: S, M hoặc L.</summary>
     public string Grade { get; set; } = string.Empty;
 
+    public string StockState { get; set; } = "Unverified";
+    public DateTime? DispatchedAt { get; set; }
+    public Guid? OutboundTransactionId { get; set; }
+    public FrozenStorageTransaction? OutboundTransaction { get; set; }
+
     public FrozenLot? FrozenLot { get; set; }
     public HarvestLine? HarvestLine { get; set; }
     public Crab? Crab { get; set; }

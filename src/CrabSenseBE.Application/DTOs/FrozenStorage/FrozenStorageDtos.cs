@@ -143,7 +143,12 @@ public record FrozenCrabItemDto(
     DateTime FrozenDate,
     DateTime ExpiryDate,
     decimal WeightGram,
-    string Grade);
+    string Grade,
+    string StockState = "Unverified",
+    DateTime? DispatchedAt = null,
+    Guid? OutboundTransactionId = null);
+
+public record ReconcileFrozenItemsRequest(IReadOnlyList<Guid> AvailableItemIds, string Reason);
 
 public record CreateFrozenStorageTransactionRequest(
     Guid FrozenLotId,
@@ -158,7 +163,8 @@ public record ExecuteFrozenStorageTransactionRequest(
     int ActualQuantity,
     decimal ActualWeightKg,
     string? Notes = null,
-    string? VarianceReason = null);
+    string? VarianceReason = null,
+    IReadOnlyList<Guid>? FrozenCrabItemIds = null);
 
 public record FrozenStorageTransactionDto(
     Guid Id,

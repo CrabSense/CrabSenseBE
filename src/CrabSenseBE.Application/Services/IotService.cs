@@ -56,8 +56,10 @@ public class IotService : IIotService
         var eventKey = string.IsNullOrWhiteSpace(req.EventId)
             ? null
             : $"edge:{req.EventId.Trim()}:{req.SensorCode.Trim()}";
+        var edgeEventKey = eventKey is null ? null : Convert.ToHexString(
+            SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(req.EventId!.Trim())));
         if (eventKey is not null
-            && await _uow.WaterMeasurements.AnyAsync(m => m.SensorId == sensor.Id && m.Source == eventKey, ct))
+            && await _uow.WaterMeasurements.AnyAsync(m => m.SensorId == sensor.Id && (m.EdgeEventKey == edgeEventKey || m.Source == eventKey), ct))
             return ApiResponse.Ok("Sensor data already ingested.");
 
         device.LastSeenAt = DateTime.UtcNow;
@@ -72,12 +74,18 @@ public class IotService : IIotService
             Value = req.Value,
             Unit = req.Unit ?? sensor.Unit,
             MeasuredAt = req.MeasuredAt == default ? DateTime.UtcNow : req.MeasuredAt,
-            Source = eventKey ?? "realtime"
+            Source = eventKey ?? "realtime",
+            EdgeEventKey = edgeEventKey
         };
         await _uow.WaterMeasurements.AddAsync(measurement, ct);
 
         sensor.LastSeenAt = DateTime.UtcNow;
-        await _uow.SaveChangesAsync(ct);
+        try { await _uow.SaveChangesAsync(ct); }
+        catch (DbUpdateException ex) when (edgeEventKey is not null && ex.Entries.Any(e => e.Entity is WaterMeasurement))
+        {
+            // Concurrent duplicate is protected by the unique index; retry in a fresh request.
+            throw AppException.Conflict("Ghi dữ liệu sensor xung đột; vui lòng gửi lại cùng EventId.");
+        }
 
         try
         {
@@ -406,7 +414,9 @@ public class IotService : IIotService
             }
             catch (Exception ex)
             {
-                results.Add(new(item.SensorCode, item.EventId, false, ex.Message));
+                if (ex is not AppException) _logger.LogError(ex, "Sensor batch item failed");
+                results.Add(new(item.SensorCode, item.EventId, false,
+                    ex is AppException ? ex.Message : "Sensor data could not be saved."));
                 foreach (var skipped in list.Skip(index + 1))
                     results.Add(new(
                         skipped.SensorCode, skipped.EventId, false,
