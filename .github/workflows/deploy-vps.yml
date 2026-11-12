@@ -168,9 +168,99 @@ jobs:
             fi
             mkdir -p /var/lib/crabsense/backups
             chmod 700 /var/lib/crabsense/backups
-            pg_dump "$DB_CONNECTION" \
-              --format=custom \
-              --file="/var/lib/crabsense/backups/predeploy-$(date -u +%Y%m%dT%H%M%SZ).dump"
+            # Npgsql connection strings are not libpq connection strings.
+            # Pass credentials via the child process environment, never CLI arguments.
+            umask 077
+            BACKUP_FILE="/var/lib/crabsense/backups/predeploy-$(date -u +%Y%m%dT%H%M%SZ).dump"
+            python3 - "$BACKUP_FILE" <<'PY'
+            import json
+            import os
+            import re
+            import subprocess
+            import sys
+
+            with open('/opt/crabsense-api.next/appsettings.Local.json', encoding='utf-8-sig') as f:
+                connection = json.load(f)['ConnectionStrings']['DefaultConnection']
+
+            # Support ADO.NET quoted values, including embedded semicolons and doubled quotes.
+            pattern = re.compile(r"""\s*([^=;]+?)\s*=\s*(?:"((?:[^"]|"")*)"|'((?:[^']|'')*)'|([^;]*?))\s*(?:;|$)""")
+            values = {}
+            pos = 0
+            while pos < len(connection):
+                if not connection[pos:].strip(' ;\t\r\n'):
+                    break
+                if connection[pos] == ';':
+                    pos += 1
+                    continue
+                match = pattern.match(connection, pos)
+                if not match:
+                    sys.exit('Cannot parse production database connection for backup.')
+                key, double, single, bare = match.groups()
+                key = re.sub(r'\s+', '', key).lower()
+                value = double.replace('""', '"') if double is not None else (
+                    single.replace("''", "'") if single is not None else bare.strip())
+                values[key] = value
+                pos = match.end()
+
+            def get(*keys, default=None):
+                return next((values[key] for key in keys if key in values), default)
+
+            env = {key: value for key, value in os.environ.items() if not key.startswith('PG')}
+            required = {
+                'PGHOST': get('host', 'server'),
+                'PGDATABASE': get('database', 'initialcatalog'),
+                'PGUSER': get('username', 'userid', 'user', 'uid'),
+            }
+            if not all(required.values()):
+                sys.exit('Production backup requires explicit host, database and username.')
+            env.update(required)
+            env['PGPORT'] = get('port', default='5432')
+            env['PGPASSWORD'] = get('password', 'pwd', default='')
+            mode = re.sub(r'[\s_-]+', '', get('sslmode', default='Prefer')).lower()
+            modes = {'disable': 'disable', 'allow': 'allow', 'prefer': 'prefer',
+                     'require': 'require', 'verifyca': 'verify-ca', 'verifyfull': 'verify-full'}
+            if mode not in modes:
+                sys.exit('Unsupported SSL mode in production database connection.')
+            env['PGSSLMODE'] = modes[mode]
+            for option, variable in {
+                'rootcertificate': 'PGSSLROOTCERT',
+                'sslcertificate': 'PGSSLCERT',
+                'sslkey': 'PGSSLKEY',
+                'sslpassword': 'PGSSLKEYPASS',
+                'passfile': 'PGPASSFILE',
+            }.items():
+                if values.get(option):
+                    env[variable] = values[option]
+            # Do not silently ignore security settings that could change the target or TLS.
+            if get('integratedsecurity', default='false').lower() in ('true', 'yes', '1'):
+                sys.exit('Integrated security is not supported by the backup converter.')
+            if get('channelbinding'):
+                binding = get('channelbinding').lower()
+                if binding not in ('disable', 'prefer', 'require'):
+                    sys.exit('Unsupported channel binding mode.')
+                env['PGCHANNELBINDING'] = binding
+            if get('targetsessionattributes'):
+                target = get('targetsessionattributes').lower()
+                if target not in ('any', 'read-write', 'read-only', 'primary', 'standby', 'prefer-standby'):
+                    sys.exit('Unsupported target session attributes.')
+                env['PGTARGETSESSIONATTRS'] = target
+
+            backup = sys.argv[1]
+            partial = backup + '.partial'
+            try:
+                subprocess.run(['pg_dump', '--no-password', '--format=custom', '--file=' + partial],
+                               env=env, check=True)
+                subprocess.run(['pg_restore', '--list', partial],
+                               stdout=subprocess.DEVNULL, check=True)
+                if not os.path.getsize(partial):
+                    sys.exit('Database backup is empty.')
+                os.replace(partial, backup)
+            finally:
+                if os.path.exists(partial):
+                    os.unlink(partial)
+            print('Database backup created and archive verified.')
+            PY
+            test -s "$BACKUP_FILE"
             chmod +x /opt/crabsense-api.next/efbundle
             /opt/crabsense-api.next/efbundle --connection "$DB_CONNECTION"
             unset DB_CONNECTION
