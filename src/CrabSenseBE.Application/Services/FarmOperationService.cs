@@ -610,14 +610,15 @@ public class FarmOperationService : IFarmOperationService
         {
             if (!Guid.TryParse(raw, out var crabId)) continue;
             var crab = await _uow.Crabs.GetByIdAsync(crabId, ct);
-            if (crab is null) continue;
+            if (crab is null || crab.Status is CrabStatus.Dead or CrabStatus.Harvested
+                or CrabStatus.Sold or CrabStatus.Missing) continue;
 
             var oldCondition = crab.Condition;
             var oldStatus = crab.Status;
             if (oldCondition == next.Value) continue;
 
             crab.Condition = next.Value;
-            crab.Status = CrabConditions.ToLifecycle(next.Value);
+            crab.Status = CrabConditions.ApplyCondition(oldStatus, next.Value);
             crab.UpdatedAt = at;
             _uow.Crabs.Update(crab);
 
