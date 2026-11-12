@@ -123,28 +123,28 @@ public class OperationsController : ControllerBase
 
     /// <summary>[CREATE] Create farm operation / note / task</summary>
     [HttpPost]
-    [Authorize(Roles = AppRoles.FarmWrite)]
+    [Authorize(Roles = AppRoles.FarmStaff)]
     public async Task<IActionResult> Create(
         [FromBody] CreateFarmOperationRequest req, CancellationToken ct = default)
         => Ok(await _farmOps.CreateAsync(req, ct));
 
     /// <summary>[CREATE] Alias used by some Mobile clients</summary>
     [HttpPost("create")]
-    [Authorize(Roles = AppRoles.FarmWrite)]
+    [Authorize(Roles = AppRoles.FarmStaff)]
     public async Task<IActionResult> CreateAlias(
         [FromBody] CreateFarmOperationRequest req, CancellationToken ct = default)
         => Ok(await _farmOps.CreateAsync(req, ct));
 
     /// <summary>[UPDATE] Update farm operation (within 24h)</summary>
     [HttpPut("{id:guid}")]
-    [Authorize(Roles = AppRoles.FarmWrite)]
+    [Authorize(Roles = AppRoles.FarmStaff)]
     public async Task<IActionResult> Update(
         Guid id, [FromBody] UpdateFarmOperationRequest req, CancellationToken ct = default)
         => Ok(await _farmOps.UpdateAsync(id, req, ct));
 
     /// <summary>[CREATE] Upload operation photo (returns media URL)</summary>
     [HttpPost("photo")]
-    [Authorize(Roles = AppRoles.FarmWrite)]
+    [Authorize(Roles = AppRoles.FarmStaff)]
     [RequestSizeLimit(20_000_000)]
     public async Task<IActionResult> UploadPhoto(
         IFormFile file,
@@ -177,7 +177,7 @@ public class OperationsController : ControllerBase
             SharePublic: false);
 
         var uploaded = await media.UploadAsync(stream, file.FileName, file.ContentType, meta, userId, ct);
-        var url = uploaded.Data?.ShareLink ?? uploaded.Data?.WebViewLink ?? uploaded.Data?.StorageKey;
+        var url = uploaded.Data is { } asset ? $"/api/media/{asset.Id:D}/content" : null;
         return Ok(ApiResponse<object>.Ok(new { url, mediaId = uploaded.Data?.Id }, "Uploaded."));
     }
 
