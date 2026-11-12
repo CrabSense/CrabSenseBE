@@ -81,7 +81,8 @@ public record NotificationRuleDto(
     bool ScopeByArea,
     string ChannelCodes,
     string? TitleTemplate,
-    string? BodyTemplate);
+    string? BodyTemplate,
+    Guid? FarmingAreaId = null);
 
 public record UpdateNotificationRuleRequest(
     bool? IsEnabled = null,
@@ -91,7 +92,8 @@ public record UpdateNotificationRuleRequest(
     bool? ScopeByArea = null,
     string? ChannelCodes = null,
     string? TitleTemplate = null,
-    string? BodyTemplate = null);
+    string? BodyTemplate = null,
+    Guid? FarmingAreaId = null);
 
 public record NotificationRulePreviewDto(string Title, string Body);
 
