@@ -1355,7 +1355,7 @@ public class FarmingService : IFarmingService
         if (req.IsAlive == true && crab.Condition == CrabCondition.Dead)
             crab.Condition = CrabConditions.FromMoltingAndStatus(crab.MoltingStage, CrabStatus.Alive);
 
-        crab.Status = CrabConditions.ToLifecycle(crab.Condition);
+        crab.Status = CrabConditions.ApplyCondition(oldStatus, crab.Condition);
         _uow.Crabs.Update(crab);
 
         var profileChanged = oldCondition != crab.Condition

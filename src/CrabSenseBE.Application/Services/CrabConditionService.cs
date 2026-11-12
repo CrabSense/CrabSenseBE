@@ -94,6 +94,8 @@ public class CrabConditionService : ICrabConditionService
                     "Cua không thuộc hộp được kiểm tra.");
             if (req.UpdateCrabRecord)
             {
+                if (crab.Status is CrabStatus.Dead or CrabStatus.Harvested or CrabStatus.Sold or CrabStatus.Missing)
+                    throw AppException.Conflict("Không cập nhật tình trạng cua đã kết thúc hoặc mất dấu.");
                 crab.WeightGram = req.WeightG;
                 crab.MoltingStage = eval.MoltingStatusHint ?? crab.MoltingStage;
                 var oldCondition = crab.Condition;
@@ -104,7 +106,7 @@ public class CrabConditionService : ICrabConditionService
                 if (eval.Status == "pre_molt")
                     crab.Status = CrabStatus.Molting;
                 else
-                    crab.Status = CrabConditions.ToLifecycle(crab.Condition);
+                    crab.Status = CrabConditions.ApplyCondition(oldStatus, crab.Condition);
                 crab.AiPrediction = eval.MoltingStatusHint ?? eval.Status;
                 crab.UpdatedAt = DateTime.UtcNow;
                 _uow.Crabs.Update(crab);
