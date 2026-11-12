@@ -313,7 +313,7 @@ public class AppDbContext : DbContext
             .IsConcurrencyToken();
         modelBuilder.Entity<QrCode>()
             .Property(q => q.ApprovalStatus)
-            .HasConversion<string>();
+            .HasConversion<string>().IsConcurrencyToken();
         modelBuilder.Entity<QrCode>()
             .Property(q => q.RejectionReason)
             .HasMaxLength(500);
