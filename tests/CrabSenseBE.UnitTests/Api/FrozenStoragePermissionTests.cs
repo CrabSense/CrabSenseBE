@@ -174,6 +174,7 @@ public sealed class FrozenStoragePermissionTests : IAsyncLifetime
         _lotA.Quantity = 1; _lotA.WeightKg = 0.2m;
         _adjustments.Add(new FrozenInventoryAdjustment { FrozenLotId = LotA, QuantityDelta = -2, WeightDeltaKg = -0.4m });
         var transaction = ApprovedTransaction(FrozenStorageTransactionType.Inbound, 1, 0.2m);
+        _transactions.Add(transaction); // persist approved fixture before API lookup
         using var response = await _api.SendAsync(AppRoles.FarmStaff, StaffA, HttpMethod.Post,
             $"/api/frozen-storage-transactions/{transaction.Id}/execute",
             new StringContent("{\"actualQuantity\":1,\"actualWeightKg\":0.2}", Encoding.UTF8, "application/json"));
@@ -193,6 +194,7 @@ public sealed class FrozenStoragePermissionTests : IAsyncLifetime
         var b = new FrozenCrabItem { Id = Guid.NewGuid(), FrozenLotId = LotA, WeightGram = 300, StockState = "Available" };
         _items.AddRange(new[] { a, b });
         var transaction = ApprovedTransaction(FrozenStorageTransactionType.Outbound, 1, 0.2m);
+        _transactions.Add(transaction); // persist approved fixture before API lookup
         var route = $"/api/frozen-storage-transactions/{transaction.Id}/execute";
         using (var missing = await _api.SendAsync(AppRoles.FarmStaff, StaffA, HttpMethod.Post, route,
             new StringContent("{\"actualQuantity\":1,\"actualWeightKg\":0.2}", Encoding.UTF8, "application/json")))
