@@ -15,3 +15,7 @@ Migration 20261112120000_TrackFrozenItemsAndSensorReplay adds FrozenCrabItem.Sto
 GET /api/frozen-lots/{lotId}/crab-items lists area-scoped barcodes. POST /api/frozen-lots/{lotId}/crab-items/reconcile is FM only, accepts availableItemIds and reason, checks physical count/weight, records audit without inventing historical dispatch dates. Outbound execute adds frozenCrabItemIds; required for tracked lots; linked harvest lots require barcode registration before dispatch. Aggregate-only manual lots retain existing workflow. New inbound into a barcode-registered lot is rejected: create a new lot. No sales, payment or delivery changes.
 
 FE/App must implement barcode selection, reconcile UI, and render 501 for media inference. Deployment must use CI and migrations before API consumption.
+
+## Farm Settings ownership
+
+Migration 20261112130000_ScopeFarmSettingsToArea adds nullable FarmingAreaId, FK, and unique per-area key index. Existing global rows stay unassigned, preserved, and hidden from area-scoped APIs because no owner evidence exists. A Farm Admin assigned exactly one area may omit the area for backward compatibility; multi-area admins must specify farmingAreaId for single-key read/write/delete. List returns only assigned areas, optionally filtered. Technical settings remain excluded. Legacy values must be reviewed by the owner before recreating scoped settings; no automatic reassignment.

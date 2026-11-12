@@ -415,6 +415,11 @@ public class AppDbContext : DbContext
             .HasConversion<string>();
         modelBuilder.Entity<SalesOrder>()
             .HasIndex(o => o.FarmingAreaId);
+        modelBuilder.Entity<FarmSettings>()
+            .HasIndex(x => new { x.FarmingAreaId, x.Key }).IsUnique()
+            .HasFilter("\"FarmingAreaId\" IS NOT NULL");
+        modelBuilder.Entity<FarmSettings>().HasOne<FarmingArea>().WithMany().HasForeignKey(x => x.FarmingAreaId)
+            .OnDelete(DeleteBehavior.Restrict);
         modelBuilder.Entity<Customer>()
             .HasIndex(c => c.FarmingAreaId);
         modelBuilder.Entity<Customer>()

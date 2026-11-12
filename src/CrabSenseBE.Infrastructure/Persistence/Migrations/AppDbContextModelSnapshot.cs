@@ -1683,6 +1683,9 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.Property<string>("Description")
                         .HasColumnType("text");
 
+                    b.Property<Guid?>("FarmingAreaId")
+                        .HasColumnType("uuid");
+
                     b.Property<string>("Key")
                         .IsRequired()
                         .HasColumnType("text");
@@ -1695,6 +1698,10 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                         .HasColumnType("text");
 
                     b.HasKey("Id");
+
+                    b.HasIndex("FarmingAreaId", "Key")
+                        .IsUnique()
+                        .HasFilter("\"FarmingAreaId\" IS NOT NULL");
 
                     b.ToTable("FarmSettings", "be");
                 });
@@ -4645,6 +4652,14 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                 });
 
             modelBuilder.Entity("CrabSenseBE.Domain.Entities.NotificationRule", b =>
+                {
+                    b.HasOne("CrabSenseBE.Domain.Entities.FarmingArea", null)
+                        .WithMany()
+                        .HasForeignKey("FarmingAreaId")
+                        .OnDelete(DeleteBehavior.Restrict);
+                });
+
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.FarmSettings", b =>
                 {
                     b.HasOne("CrabSenseBE.Domain.Entities.FarmingArea", null)
                         .WithMany()
