@@ -81,6 +81,8 @@ public class RasComponent : BaseEntity
     public string? ControlMode { get; set; }
     public DateTime? LastCommandAt { get; set; }
     public DateTime? RunStartedAt { get; set; }
+    /// <summary>Last authenticated relay-state observation; null means unknown.</summary>
+    public DateTime? LastReportedAt { get; set; }
 
     public WaterSystem? WaterSystem { get; set; }
     public Device? RelayDevice { get; set; }
