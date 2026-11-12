@@ -1,6 +1,7 @@
 param(
     [string]$PostgresBin = "",
-    [int]$Port = 55440
+    [int]$Port = 55440,
+    [string]$MigrationBundle = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -45,6 +46,26 @@ function Invoke-Psql([string]$Database, [string]$Sql) {
 }
 function Update-Database([string]$Database, [string]$Target = "") {
     $env:ConnectionStrings__DefaultConnection = "Host=127.0.0.1;Port=$Port;Database=$Database;Username=postgres"
+    if ($MigrationBundle -and !$Target) {
+        # Test the same self-contained artifact and environment-based connection
+        # used on VPS. Historical target/rollback checks still use EF CLI.
+        $bundle = (Resolve-Path $MigrationBundle).Path
+        $oldAspRoot = $env:ASPNETCORE_CONTENTROOT
+        $oldDotnetRoot = $env:DOTNET_CONTENTROOT
+        Push-Location (Split-Path $bundle -Parent)
+        try {
+            $env:ASPNETCORE_CONTENTROOT = (Get-Location).Path
+            $env:DOTNET_CONTENTROOT = (Get-Location).Path
+            & $bundle
+            Assert-Exit "EF bundle update failed for $Database"
+        }
+        finally {
+            Pop-Location
+            $env:ASPNETCORE_CONTENTROOT = $oldAspRoot
+            $env:DOTNET_CONTENTROOT = $oldDotnetRoot
+        }
+        return
+    }
     $arguments = @("ef","database","update")
     if ($Target) { $arguments += $Target }
     $arguments += @("--project","src/CrabSenseBE.Infrastructure/CrabSenseBE.Infrastructure.csproj",
@@ -206,6 +227,19 @@ BEGIN
         THEN RAISE EXCEPTION 'Alloff did not invalidate older commands'; END IF;
 END $$;
 '@ | Out-Null
+    Invoke-Psql "clean_migration" @'
+DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'FK_Customers_FarmingAreas_FarmingAreaId')
+        THEN RAISE EXCEPTION 'Customer area ownership FK missing'; END IF;
+    BEGIN
+        INSERT INTO be."Customers" ("Id","Name","CustomerType","IsActive","CreatedAt","FarmingAreaId")
+        VALUES ('70000000-0000-0000-0000-000000000080','Customer','retail',true,now(),'70000000-0000-0000-0000-000000000099');
+        RAISE EXCEPTION 'Invalid customer area accepted';
+    EXCEPTION WHEN foreign_key_violation THEN NULL;
+    END;
+END $$;
+'@ | Out-Null
+    Write-Output "CUSTOMER_AREA_SCHEMA_TESTS_PASSED=1"
     Write-Output "AREA_AND_EDGE_SCHEMA_TESTS_PASSED=1"
     Write-Output "CLEAN_MIGRATION_PASSED=1"
     Write-Output "LEGACY_FULL_UPGRADE_PASSED=1"

@@ -208,11 +208,7 @@ public class AiOpsService : IAiOpsService
         var rows = (await _uow.FarmingRows.GetAllAsync(ct)).ToDictionary(r => r.Id);
         var devices = (await _uow.Devices.GetAllAsync(ct)).ToDictionary(d => d.Id);
         var allowedAreas = await _areas.SelectionAsync(farmingAreaId, ct);
-        // Cua đang ở trong hộp: để ghép mã cua cho phát hiện theo hộp (nếu detection không có CrabId).
-        var crabInBox = (await _uow.Crabs.GetAllAsync(ct))
-            .Where(c => c.BoxId != null && c.Status is CrabStatus.Alive or CrabStatus.Molting or CrabStatus.Quarantined)
-            .GroupBy(c => c.BoxId!.Value)
-            .ToDictionary(g => g.Key, g => g.OrderByDescending(c => c.StockedAt).First());
+        // Historical detections must never be relabeled with the current box occupant.
         var crabs = (await _uow.Crabs.GetAllAsync(ct)).ToDictionary(c => c.Id);
 
         Guid? AreaOf(AiDetection d)
@@ -244,7 +240,6 @@ public class AiOpsService : IAiOpsService
             dev ??= PickCamera(devices.Values, row);
             Crab? crab = null;
             if (d.CrabId is Guid cid) crabs.TryGetValue(cid, out crab);
-            if (crab is null && box is not null) crabInBox.TryGetValue(box.Id, out crab);
             return Map(d, dev, box, row, crab);
         }).ToList();
         return ApiResponse<IEnumerable<AiDetectionDto>>.Ok(list);

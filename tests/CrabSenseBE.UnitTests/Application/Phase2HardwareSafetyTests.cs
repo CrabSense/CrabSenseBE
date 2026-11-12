@@ -840,6 +840,79 @@ public sealed class Phase2HardwareSafetyTests
             .Which.StatusCode.Should().Be(403);
     }
 
+    [Fact]
+    public async Task Water_snapshot_is_read_only_and_ignores_failed_measurements()
+    {
+        var area = Guid.NewGuid();
+        var user = Guid.NewGuid();
+        var now = DateTime.UtcNow;
+        var completed = new WaterAnalysisRun
+        {
+            FarmingAreaId = area, Status = "completed", No2 = 0.02m,
+            StartedAt = now.AddMinutes(-10), CompletedAt = now.AddMinutes(-9)
+        };
+        var failed = new WaterAnalysisRun
+        {
+            FarmingAreaId = area, Status = "failed", No2 = 9m,
+            StartedAt = now.AddMinutes(-5), CompletedAt = now.AddMinutes(-4)
+        };
+        var active = new WaterAnalysisRun
+        {
+            FarmingAreaId = area, Status = "running", ExecutionMode = "simulation",
+            CurrentStep = 1, StartedAt = now.AddMinutes(-2), LastStepAt = now.AddMinutes(-2)
+        };
+        var uow = new Mock<IUnitOfWork>();
+        uow.Setup(x => x.Users).Returns(Repository(new AppUser
+            { Id = user, IsActive = true, Role = UserRole.FarmManager }).Object);
+        uow.Setup(x => x.FarmManagerAssignments).Returns(Repository(new FarmManagerAssignment
+            { ManagerUserId = user, FarmingAreaId = area }).Object);
+        uow.Setup(x => x.FarmingAreas).Returns(Repository(new FarmingArea { Id = area, Name = "A" }).Object);
+        uow.Setup(x => x.WaterAnalysisRuns).Returns(Repository(completed, failed, active).Object);
+        uow.Setup(x => x.Devices).Returns(Repository(new Device
+            { FarmingAreaId = area, DeviceType = "esp32", DeviceCode = "esp-a", Status = DeviceStatus.Online }).Object);
+        var current = new Mock<ICurrentUserService>();
+        current.SetupGet(x => x.IsAuthenticated).Returns(true);
+        current.SetupGet(x => x.UserId).Returns(user);
+        var service = new WaterAnalysisService(uow.Object, current.Object,
+            Microsoft.Extensions.Options.Options.Create(new CrabSenseBE.Application.Options.WaterAnalysisOptions()));
+        var result = await service.GetSnapshotAsync(area);
+        result.Data!.Latest!.Metrics.Single(x => x.Code == "no2").Value.Should().Be(0.02m);
+        active.CurrentStep.Should().Be(1);
+        uow.Verify(x => x.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task Historical_ai_detection_without_crab_does_not_adopt_current_occupant()
+    {
+        var area = Guid.NewGuid();
+        var row = new FarmingRow { FarmingAreaId = area };
+        var box = new Box { FarmingRowId = row.Id };
+        var crab = new Crab { BoxId = box.Id, Status = CrabStatus.Alive, Code = "NEW" };
+        var old = new AiDetection
+        {
+            BoxId = box.Id, DetectedAt = DateTime.UtcNow.AddDays(-1),
+            ModelVersion = "crabsense-heuristic-v1", Status = "completed"
+        };
+        var user = Guid.NewGuid();
+        var uow = new Mock<IUnitOfWork>();
+        uow.Setup(x => x.Users).Returns(Repository(new AppUser
+            { Id = user, IsActive = true, Role = UserRole.FarmManager }).Object);
+        uow.Setup(x => x.FarmManagerAssignments).Returns(Repository(new FarmManagerAssignment
+            { ManagerUserId = user, FarmingAreaId = area }).Object);
+        uow.Setup(x => x.AiDetections).Returns(Repository(old).Object);
+        uow.Setup(x => x.FarmingRows).Returns(Repository(row).Object);
+        uow.Setup(x => x.Boxes).Returns(Repository(box).Object);
+        uow.Setup(x => x.Crabs).Returns(Repository(crab).Object);
+        uow.Setup(x => x.Devices).Returns(Repository<Device>().Object);
+        var current = new Mock<ICurrentUserService>();
+        current.SetupGet(x => x.IsAuthenticated).Returns(true);
+        current.SetupGet(x => x.UserId).Returns(user);
+        var result = await new AiOpsService(uow.Object, current.Object)
+            .ListDetectionsAsync(box.Id, null);
+        result.Data!.Single().CrabId.Should().BeNull();
+        result.Data!.Single().CrabTag.Should().BeNull();
+    }
+
     private static string Hash(string secret) =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(secret)));
 

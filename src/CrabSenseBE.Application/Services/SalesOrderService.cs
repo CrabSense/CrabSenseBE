@@ -24,8 +24,9 @@ public class SalesOrderService : ISalesOrderService
     public async Task<ApiResponse<IEnumerable<CustomerDto>>> GetCustomersAsync(
         CancellationToken ct = default)
     {
-        var rows = (await _uow.Customers.GetAllAsync(ct))
-            .Where(c => c.IsActive)
+        var allowed = await _areas.AreaIdsAsync(ct) ?? new HashSet<Guid>();
+        var rows = (await _uow.Customers.FindAsync(c => c.IsActive
+                && c.FarmingAreaId.HasValue && allowed.Contains(c.FarmingAreaId.Value), ct))
             .OrderBy(c => c.Name)
             .Select(MapCustomer)
             .ToList();
@@ -36,8 +37,13 @@ public class SalesOrderService : ISalesOrderService
         UpsertCustomerRequest request,
         CancellationToken ct = default)
     {
+        var allowed = await _areas.AreaIdsAsync(ct) ?? new HashSet<Guid>();
+        if (allowed.Count == 0) throw AppException.Forbidden("Bạn chưa được phân công khu.");
+        var areaId = request.FarmingAreaId ?? (allowed.Count == 1 ? allowed.Single() : Guid.Empty);
+        if (areaId == Guid.Empty) throw AppException.BadRequest("FarmingAreaId là bắt buộc khi có nhiều khu.");
+        await _areas.EnsureAsync(areaId, manage: false, ct);
         var customer = await FindOrCreateCustomerAsync(
-            request.Name,
+            areaId, request.CustomerId, request.Name,
             request.Phone,
             request.Email,
             request.Address,
@@ -101,7 +107,7 @@ public class SalesOrderService : ISalesOrderService
             throw AppException.Conflict($"Cua '{duplicate.Key}' bị chọn trùng.");
 
         var customer = await FindOrCreateCustomerAsync(
-            request.CustomerName,
+            areaId, request.CustomerId, request.CustomerName,
             request.CustomerPhone,
             null,
             request.CustomerAddress,
@@ -579,6 +585,8 @@ public class SalesOrderService : ISalesOrderService
     }
 
     private async Task<Customer> FindOrCreateCustomerAsync(
+        Guid areaId,
+        Guid? customerId,
         string name,
         string? phone,
         string? email,
@@ -586,15 +594,33 @@ public class SalesOrderService : ISalesOrderService
         string? customerType,
         CancellationToken ct)
     {
+        if (string.IsNullOrWhiteSpace(name))
+            throw AppException.BadRequest("Tên khách hàng là bắt buộc.");
         var trimmedName = name.Trim();
         var trimmedPhone = string.IsNullOrWhiteSpace(phone) ? null : phone.Trim();
-        var existing = (await _uow.Customers.GetAllAsync(ct)).FirstOrDefault(c =>
-            (trimmedPhone != null
-                && !string.IsNullOrWhiteSpace(c.Phone)
-                && string.Equals(c.Phone.Trim(), trimmedPhone, StringComparison.OrdinalIgnoreCase))
-            || string.Equals(c.Name.Trim(), trimmedName, StringComparison.OrdinalIgnoreCase));
+        Customer? existing = null;
+        if (customerId.HasValue)
+        {
+            existing = await _uow.Customers.GetByIdAsync(customerId.Value, ct)
+                ?? throw AppException.NotFound("Customer");
+            if (existing.FarmingAreaId != areaId)
+                throw AppException.Forbidden("Khách hàng không thuộc khu này.");
+        }
+        else if (trimmedPhone is not null)
+        {
+            // Name alone is never an identity. Match within the authorized area,
+            // requiring both phone and name; do not merge different customers.
+            var matches = (await _uow.Customers.FindAsync(
+                    c => c.FarmingAreaId == areaId && c.Phone == trimmedPhone, ct))
+                .Where(c => string.Equals(c.Name.Trim(), trimmedName, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+            if (matches.Count > 1)
+                throw AppException.Conflict("Khách hàng trùng thông tin; chọn CustomerId cụ thể.");
+            existing = matches.SingleOrDefault();
+        }
         if (existing is not null)
         {
+            existing.Name = trimmedName;
             if (trimmedPhone is not null) existing.Phone = trimmedPhone;
             if (!string.IsNullOrWhiteSpace(email)) existing.Email = email.Trim();
             if (!string.IsNullOrWhiteSpace(address)) existing.Address = address.Trim();
@@ -606,6 +632,7 @@ public class SalesOrderService : ISalesOrderService
 
         var created = new Customer
         {
+            FarmingAreaId = areaId,
             Name = trimmedName,
             Phone = trimmedPhone,
             Email = string.IsNullOrWhiteSpace(email) ? null : email.Trim(),
@@ -703,7 +730,7 @@ public class SalesOrderService : ISalesOrderService
     }
 
     private static CustomerDto MapCustomer(Customer c) =>
-        new(c.Id, c.Name, c.Phone, c.Email, c.Address, c.CustomerType, c.IsActive);
+        new(c.Id, c.Name, c.Phone, c.Email, c.Address, c.CustomerType, c.IsActive, c.FarmingAreaId);
 
     private static OrderStatus ParseOrderStatus(string? raw)
     {

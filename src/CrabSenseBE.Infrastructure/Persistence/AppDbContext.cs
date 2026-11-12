@@ -415,6 +415,11 @@ public class AppDbContext : DbContext
             .HasConversion<string>();
         modelBuilder.Entity<SalesOrder>()
             .HasIndex(o => o.FarmingAreaId);
+        modelBuilder.Entity<Customer>()
+            .HasIndex(c => c.FarmingAreaId);
+        modelBuilder.Entity<Customer>()
+            .HasOne<FarmingArea>().WithMany().HasForeignKey(c => c.FarmingAreaId)
+            .OnDelete(DeleteBehavior.Restrict);
 
         modelBuilder.Entity<FarmingArea>()
             .Property(a => a.Status)

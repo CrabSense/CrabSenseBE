@@ -308,6 +308,63 @@ public class AuthServiceTests
         result.Data!.AccessToken.Should().Be("access");
     }
 
+    [Fact]
+    public async Task Login_uses_configured_refresh_lifetime()
+    {
+        var user = new AppUser
+        {
+            Id = Guid.NewGuid(), Username = "policy-user", Role = UserRole.FarmStaff,
+            IsActive = true, PasswordHash = BCrypt.Net.BCrypt.HashPassword("Password123!")
+        };
+        var users = new Mock<IRepository<AppUser>>();
+        users.Setup(x => x.FirstOrDefaultAsync(It.IsAny<System.Linq.Expressions.Expression<Func<AppUser, bool>>>(),
+            It.IsAny<CancellationToken>())).ReturnsAsync(user);
+        _uowMock.Setup(x => x.Users).Returns(users.Object);
+        _uowMock.Setup(x => x.OperationLogs).Returns(new Mock<IRepository<OperationLog>>().Object);
+        _jwtMock.Setup(x => x.GenerateAccessToken(user)).Returns(new AccessTokenResult("access", DateTime.UtcNow.AddMinutes(15)));
+        _jwtMock.Setup(x => x.GenerateRefreshToken()).Returns("refresh");
+        var platform = new Mock<CrabSenseBE.Application.Interfaces.ISystemPlatformService>();
+        platform.Setup(x => x.GetPolicyAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(ApiResponse<CrabSenseBE.Application.DTOs.SystemPlatform.SecurityPolicyDto>.Ok(
+                new CrabSenseBE.Application.DTOs.SystemPlatform.SecurityPolicyDto(7, 3, true)));
+        var before = DateTime.UtcNow;
+        await new AuthService(_uowMock.Object, _jwtMock.Object, platform.Object)
+            .LoginAsync(new LoginRequest(user.Username, "Password123!"));
+        user.RefreshTokenExpiry!.Value.Should().BeOnOrAfter(before.AddDays(7));
+        user.RefreshTokenExpiry.Value.Should().BeBefore(DateTime.UtcNow.AddDays(7).AddSeconds(1));
+    }
+
+    [Fact]
+    public async Task Known_account_failure_threshold_notifies_platform_admin()
+    {
+        var user = new AppUser { Id = Guid.NewGuid(), Username = "staff", IsActive = true,
+            Role = UserRole.FarmStaff, PasswordHash = BCrypt.Net.BCrypt.HashPassword("Correct123!") };
+        var admin = new AppUser { Id = Guid.NewGuid(), IsActive = true, Role = UserRole.SystemAdministrator };
+        var users = new Mock<IRepository<AppUser>>();
+        users.Setup(x => x.FirstOrDefaultAsync(It.IsAny<System.Linq.Expressions.Expression<Func<AppUser, bool>>>(),
+            It.IsAny<CancellationToken>())).ReturnsAsync(user);
+        users.Setup(x => x.FindAsync(It.IsAny<System.Linq.Expressions.Expression<Func<AppUser, bool>>>(),
+            It.IsAny<CancellationToken>())).ReturnsAsync(new[] { admin });
+        var logs = new Mock<IRepository<OperationLog>>();
+        logs.Setup(x => x.CountAsync(It.IsAny<System.Linq.Expressions.Expression<Func<OperationLog, bool>>>(),
+            It.IsAny<CancellationToken>())).ReturnsAsync(2);
+        var notifications = new Mock<IRepository<Notification>>();
+        _uowMock.Setup(x => x.Users).Returns(users.Object);
+        _uowMock.Setup(x => x.OperationLogs).Returns(logs.Object);
+        _uowMock.Setup(x => x.Notifications).Returns(notifications.Object);
+        var platform = new Mock<CrabSenseBE.Application.Interfaces.ISystemPlatformService>();
+        platform.Setup(x => x.GetPolicyAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(ApiResponse<CrabSenseBE.Application.DTOs.SystemPlatform.SecurityPolicyDto>.Ok(
+                new CrabSenseBE.Application.DTOs.SystemPlatform.SecurityPolicyDto(7, 3, true)));
+        var service = new AuthService(_uowMock.Object, _jwtMock.Object, platform.Object);
+        var act = () => service.LoginAsync(new LoginRequest(user.Username, "wrong"));
+        (await act.Should().ThrowAsync<AppException>()).Which.StatusCode.Should().Be(401);
+        logs.Verify(x => x.AddAsync(It.Is<OperationLog>(l => l.Action == "LoginFailureThresholdReached"),
+            It.IsAny<CancellationToken>()), Times.Once);
+        notifications.Verify(x => x.AddAsync(It.Is<Notification>(n => n.UserId == admin.Id && n.Channel == "in_app"),
+            It.IsAny<CancellationToken>()), Times.Once);
+    }
+
     private static string Hash(string token) =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(token)));
 }

@@ -65,6 +65,7 @@ public static class DependencyInjection
         services.AddHttpClient("zalo");
         services.AddHttpClient("fcm");
         services.AddHostedService<DisconnectCheckHostedService>();
+        services.AddHostedService<WaterAnalysisProgressHostedService>();
         return services;
     }
 }

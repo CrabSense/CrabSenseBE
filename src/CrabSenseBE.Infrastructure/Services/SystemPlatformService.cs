@@ -201,16 +201,11 @@ public class SystemPlatformService : ISystemPlatformService
     public async Task<ApiResponse<DeviceActionResultDto>> RestartDeviceAsync(
         Guid deviceId, Guid? userId, string? ip, CancellationToken ct = default)
     {
-        var device = await RequireDevice(deviceId, ct);
-        _db.EdgeCommands.Add(new EdgeCommand
-        {
-            DeviceCode = device.DeviceCode,
-            Command = "restart",
-            Status = "pending",
-        });
-        await AuditAsync(userId, "RestartDevice", "Device", device.Id, device.DeviceCode, ip, ct);
-        await _db.SaveChangesAsync(ct);
-        return ApiResponse<DeviceActionResultDto>.Ok(new DeviceActionResultDto(device.Id, device.Status.ToString(), "Đã xếp lệnh restart."));
+        _ = await RequireDevice(deviceId, ct);
+        // Protocol 2 defines relay desired-state commands, not safe device reboot.
+        throw new AppException(
+            "Restart thiết bị chưa được hỗ trợ an toàn bởi Edge Protocol 2; không xếp lệnh restart.",
+            501);
     }
 
     public async Task<ApiResponse<DeviceActionResultDto>> UpdateFirmwareAsync(
@@ -534,7 +529,8 @@ public class SystemPlatformService : ISystemPlatformService
             x => x.Action == "LoginFailed" && x.CreatedAt >= since, ct);
         var sessions = await _db.AppUsers.CountAsync(x => x.RefreshTokenExpiry > DateTime.UtcNow && x.IsActive, ct);
         var keys = await _db.ServiceApiKeys.CountAsync(x => x.RevokedAt == null, ct);
-        var alerts = await _db.Alerts.CountAsync(x => x.Status == AlertStatus.Active, ct);
+        var alerts = await _db.OperationLogs.CountAsync(
+            x => x.Action == "LoginFailureThresholdReached" && x.CreatedAt >= since, ct);
         return ApiResponse<SecurityOverviewDto>.Ok(new SecurityOverviewDto(failed, sessions, keys, alerts));
     }
 
@@ -609,12 +605,18 @@ public class SystemPlatformService : ISystemPlatformService
         var row = await _db.SecurityPolicySettings.AsNoTracking().FirstOrDefaultAsync(ct);
         return ApiResponse<SecurityPolicyDto>.Ok(row is null
             ? new SecurityPolicyDto(30, 5, true)
-            : new SecurityPolicyDto(row.SessionDays, row.FailedLoginAlertThreshold, row.RequireConfirmRestore));
+            : new SecurityPolicyDto(Math.Clamp(row.SessionDays, 1, 90), Math.Clamp(row.FailedLoginAlertThreshold, 1, 20), true));
     }
 
     public async Task<ApiResponse<SecurityPolicyDto>> UpdatePolicyAsync(
         SecurityPolicyDto request, Guid? userId, string? ip, CancellationToken ct = default)
     {
+        if (request.SessionDays is < 1 or > 90)
+            throw AppException.BadRequest("SessionDays phải từ 1 đến 90.");
+        if (request.FailedLoginAlertThreshold is < 1 or > 20)
+            throw AppException.BadRequest("FailedLoginAlertThreshold phải từ 1 đến 20.");
+        if (!request.RequireConfirmRestore)
+            throw AppException.BadRequest("Không thể tắt xác nhận bắt buộc khi phục hồi database.");
         var row = await _db.SecurityPolicySettings.FirstOrDefaultAsync(ct);
         if (row is null)
         {

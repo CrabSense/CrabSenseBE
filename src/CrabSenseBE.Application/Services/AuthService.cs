@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using CrabSenseBE.Application.Common;
 using CrabSenseBE.Application.DTOs.Auth;
+using CrabSenseBE.Application.DTOs.SystemPlatform;
 using CrabSenseBE.Application.Interfaces;
 using CrabSenseBE.Domain.Entities;
 using CrabSenseBE.Domain.Enums;
@@ -22,11 +23,19 @@ public class AuthService : IAuthService
     private readonly IUnitOfWork _uow;
     private readonly IJwtService _jwt;
 
-    public AuthService(IUnitOfWork uow, IJwtService jwt)
+    private readonly ISystemPlatformService? _platform;
+
+    public AuthService(IUnitOfWork uow, IJwtService jwt, ISystemPlatformService? platform = null)
     {
         _uow = uow;
         _jwt = jwt;
+        _platform = platform;
     }
+
+    private async Task<SecurityPolicyDto> SecurityPolicyAsync(CancellationToken ct)
+        => _platform is null ? new SecurityPolicyDto(30, 5, true)
+            : (await _platform.GetPolicyAsync(ct)).Data
+                ?? throw new InvalidOperationException("Security policy unavailable.");
 
     public async Task<ApiResponse<LoginResponse>> LoginAsync(
         LoginRequest request, CancellationToken ct = default, string? ipAddress = null, string? userAgent = null)
@@ -47,17 +56,20 @@ public class AuthService : IAuthService
                     Details = request.Username,
                     IpAddress = ipAddress,
                 }, ct);
+                if (_platform is not null)
+                    await RecordFailureThresholdAsync(user, ipAddress, ct);
                 await _uow.SaveChangesAsync(ct);
             }
             throw AppException.Unauthorized("Invalid username or password.");
         }
 
+        var policy = await SecurityPolicyAsync(ct);
         var accessToken = _jwt.GenerateAccessToken(user);
         var refreshToken = _jwt.GenerateRefreshToken();
 
         user.RefreshToken = null;
         user.RefreshTokenHash = HashRefreshToken(refreshToken);
-        user.RefreshTokenExpiry = DateTime.UtcNow.AddDays(30);
+        user.RefreshTokenExpiry = DateTime.UtcNow.AddDays(Math.Clamp(policy.SessionDays, 1, 90));
         user.RefreshTokenVersion++;
         user.LastLoginAt = DateTime.UtcNow;
         user.LastLoginIp = ipAddress;
@@ -97,11 +109,12 @@ public class AuthService : IAuthService
         if (user is null)
             throw AppException.Unauthorized("Invalid or expired refresh token.");
 
+        var policy = await SecurityPolicyAsync(ct);
         var accessToken = _jwt.GenerateAccessToken(user);
         var newRefresh = _jwt.GenerateRefreshToken();
         user.RefreshToken = null;
         user.RefreshTokenHash = HashRefreshToken(newRefresh);
-        user.RefreshTokenExpiry = DateTime.UtcNow.AddDays(30);
+        user.RefreshTokenExpiry = DateTime.UtcNow.AddDays(Math.Clamp(policy.SessionDays, 1, 90));
         user.RefreshTokenVersion++;
         _uow.Users.Update(user);
         try
@@ -119,6 +132,35 @@ public class AuthService : IAuthService
             newRefresh,
             accessToken.ExpiresAt,
             await ToDtoAsync(user, ct)));
+    }
+
+    // Alert on known-account failures within a rolling five-minute window.
+    // Rate limiting remains an independent hard safety limit.
+    private async Task RecordFailureThresholdAsync(AppUser user, string? ipAddress, CancellationToken ct)
+    {
+        var policy = await SecurityPolicyAsync(ct);
+        var threshold = Math.Clamp(policy.FailedLoginAlertThreshold, 1, 20);
+        var since = DateTime.UtcNow.AddMinutes(-5);
+        var failures = await _uow.OperationLogs.CountAsync(
+            x => x.UserId == user.Id && x.Action == "LoginFailed" && x.CreatedAt >= since, ct);
+        if (failures + 1 < threshold || await _uow.OperationLogs.AnyAsync(
+                x => x.UserId == user.Id && x.Action == "LoginFailureThresholdReached" && x.CreatedAt >= since, ct))
+            return;
+        await _uow.OperationLogs.AddAsync(new OperationLog
+        {
+            UserId = user.Id, EntityId = user.Id, EntityType = "AppUser",
+            Action = "LoginFailureThresholdReached", IpAddress = ipAddress,
+            Details = $"Failed login threshold ({threshold}) reached in five minutes."
+        }, ct);
+        var admins = await _uow.Users.FindAsync(
+            u => u.IsActive && u.Role == UserRole.SystemAdministrator, ct);
+        foreach (var admin in admins)
+            await _uow.Notifications.AddAsync(new Notification
+            {
+                UserId = admin.Id, TypeCode = NotificationTypeCodes.System,
+                Channel = "in_app", Title = "Cảnh báo bảo mật",
+                Body = $"Tài khoản {user.Username} có nhiều lần đăng nhập thất bại trong 5 phút."
+            }, ct);
     }
 
     public async Task<ApiResponse> LogoutAsync(Guid userId, CancellationToken ct = default)

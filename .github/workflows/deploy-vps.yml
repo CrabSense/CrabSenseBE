@@ -42,7 +42,12 @@ jobs:
               per_page: 20
             });
             const passed = runs.data.workflow_runs.some(run =>
-              run.conclusion === 'success' && run.head_sha === process.env.TARGET_SHA);
+              run.conclusion === 'success' && run.head_sha === process.env.TARGET_SHA &&
+              run.event === 'push' && run.head_branch === 'main');
+            const main = await github.rest.repos.getBranch({owner: context.repo.owner, repo: context.repo.repo, branch: 'main'});
+            if (main.data.commit.sha !== process.env.TARGET_SHA) {
+              core.setFailed('Refusing stale or non-main deployment.');
+            }
             if (!passed) {
               core.setFailed(`Commit ${process.env.TARGET_SHA} has no successful CI run.`);
             }
@@ -64,15 +69,25 @@ jobs:
             -o ./publish
 
       - name: Build controlled EF migration bundle
+        env:
+          ASPNETCORE_ENVIRONMENT: Production
+          DOTNET_ENVIRONMENT: Production
+          Jwt__Secret: ci-design-time-only-not-a-runtime-secret-2026
+          ConnectionStrings__DefaultConnection: Host=localhost;Database=design_only;Username=postgres
         run: |
-          dotnet tool install --global dotnet-ef --version 8.0.8
+          dotnet tool install --global dotnet-ef --version 8.0.22
           dotnet ef migrations bundle \
             --project src/CrabSenseBE.Infrastructure/CrabSenseBE.Infrastructure.csproj \
             --startup-project src/CrabSenseBE.Api/CrabSenseBE.Api.csproj \
             --configuration Release --self-contained -r linux-x64 \
             --output ./publish/efbundle
 
-      - name: Verify latest migration supports application rollback
+      - name: Record migration version and reject destructive latest migration
+        env:
+          ASPNETCORE_ENVIRONMENT: Production
+          DOTNET_ENVIRONMENT: Production
+          Jwt__Secret: ci-design-time-only-not-a-runtime-secret-2026
+          ConnectionStrings__DefaultConnection: Host=localhost;Database=design_only;Username=postgres
         run: |
           set -euo pipefail
           mapfile -t migrations < <(
@@ -88,6 +103,7 @@ jobs:
           fi
           previous="${migrations[$((${#migrations[@]}-2))]}"
           latest="${migrations[$((${#migrations[@]}-1))]}"
+          printf '%s\n' "$latest" > ./publish/.schema-migration
           dotnet ef migrations script "$previous" "$latest" --idempotent \
             --project src/CrabSenseBE.Infrastructure/CrabSenseBE.Infrastructure.csproj \
             --startup-project src/CrabSenseBE.Api/CrabSenseBE.Api.csproj \
@@ -107,6 +123,7 @@ jobs:
             echo "Missing secret APPSETTINGS_LOCAL_JSON" >&2
             exit 1
           fi
+          umask 077
           printf '%s' "$APPSETTINGS_LOCAL_JSON" > ./publish/appsettings.Local.json
           mkdir -p ./publish/secrets
           if [ -n "${GOOGLE_DRIVE_SA_JSON:-}" ]; then
@@ -122,11 +139,27 @@ jobs:
           ms=d.setdefault('MediaStorage', {})
           if not ms.get('Provider'):
               ms['Provider']='GoogleDrive' if d.get('GoogleDrive') else 'Local'
+          if ms.get('Provider','').lower() == 'local':
+              root = ms.get('LocalRoot') or 'media-storage'
+              if root in ('media-storage', './media-storage'):
+                  ms['LocalRoot']='/var/lib/crabsense/media-storage'
+              elif not __import__('os').path.isabs(root):
+                  raise SystemExit('Local media root must be absolute or the default media-storage.')
           json.dump(d, open(p,'w', encoding='utf-8'), indent=2)
           print('Local config ready, provider=', d.get('MediaStorage',{}).get('Provider'))
           PY
           touch ./publish/.edge-protocol-v2
+          chmod 600 ./publish/appsettings.Local.json
           tar -czf crabsense-api.tar.gz -C ./publish .
+
+      - name: Recheck main before upload
+        uses: actions/github-script@v7
+        env:
+          TARGET_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+        with:
+          script: |
+            const main = await github.rest.repos.getBranch({owner: context.repo.owner, repo: context.repo.repo, branch: 'main'});
+            if (main.data.commit.sha !== process.env.TARGET_SHA) core.setFailed('Main advanced while packaging; refusing stale deployment.');
 
       - name: Upload package to VPS
         uses: appleboy/scp-action@v0.1.7
@@ -149,7 +182,7 @@ jobs:
             set -euo pipefail
             # App publish cho net8.0 nhung VPS co the chi co runtime 9.x => exit 150.
             # Cai san runtime 8.0 (idempotent, khong lam gi neu da co).
-            if ! dotnet --list-runtimes 2>/dev/null | grep -q 'Microsoft.NETCore.App 8\.'; then
+            if ! dotnet --list-runtimes 2>/dev/null | grep -q 'Microsoft.NETCore.App 8\.' || ! dotnet --list-runtimes 2>/dev/null | grep -q 'Microsoft.AspNetCore.App 8\.'; then
               echo "Thieu runtime .NET 8 tren VPS - dang cai..."
               export DEBIAN_FRONTEND=noninteractive
               apt-get install -y --no-install-recommends dotnet-runtime-8.0 aspnetcore-runtime-8.0
@@ -168,6 +201,16 @@ jobs:
             if [ -z "$DB_CONNECTION" ]; then
               echo "Missing production database connection" >&2
               exit 1
+            fi
+            # Quiesce the previous API before the final backup. Recover it only if
+            # failure happens before any migration starts.
+            OLD_WAS_ACTIVE=false
+            MIGRATION_STARTED=false
+            if systemctl is-active --quiet crabsense-api; then OLD_WAS_ACTIVE=true; fi
+            trap 'rc=$?; if [ "$rc" -ne 0 ] && [ "$MIGRATION_STARTED" = false ] && [ "$OLD_WAS_ACTIVE" = true ]; then systemctl start crabsense-api || true; fi; exit "$rc"' EXIT
+            if systemctl cat crabsense-api >/dev/null 2>&1; then
+              systemctl stop crabsense-api
+              if systemctl is-active --quiet crabsense-api; then exit 1; fi
             fi
             mkdir -p /var/lib/crabsense/backups
             chmod 700 /var/lib/crabsense/backups
@@ -312,9 +355,25 @@ jobs:
             print('Database backup created and archive verified.')
             PY
             test -s "$BACKUP_FILE"
-            # Stop the old API before schema cutover; do not let protocol-1 code write the migrated DB.
-            systemctl stop crabsense-api || true
+            # Preserve default local media outside versioned application directories.
+            python3 - <<'PY'
+            import json, pathlib, shutil
+            config=json.load(open('/opt/crabsense-api.next/appsettings.Local.json'))
+            media=config.get('MediaStorage', {})
+            if media.get('Provider','').lower() == 'local' and media.get('LocalRoot') == '/var/lib/crabsense/media-storage':
+                target=pathlib.Path('/var/lib/crabsense/media-storage')
+                target.mkdir(parents=True, exist_ok=True)
+                old=pathlib.Path('/opt/crabsense-api/media-storage')
+                if old.is_dir() and not old.is_symlink():
+                    # Do not overwrite newer persistent assets during later deployments.
+                    for file in old.rglob('*'):
+                        if file.is_file():
+                            dest=target/file.relative_to(old)
+                            dest.parent.mkdir(parents=True, exist_ok=True)
+                            if not dest.exists(): shutil.copy2(file, dest)
+            PY
             chmod +x /opt/crabsense-api.next/efbundle
+            MIGRATION_STARTED=true
             # EF uses the startup application's configuration. Run from the
             # staged package so appsettings.Local.json and relative paths resolve.
             (
@@ -325,10 +384,10 @@ jobs:
               export DOTNET_CONTENTROOT="$PWD"
               test -r appsettings.Local.json
               echo "Running EF migration bundle from staged application directory."
-              ./efbundle --connection "$DB_CONNECTION"
+              export ConnectionStrings__DefaultConnection="$DB_CONNECTION"
+              ./efbundle
             )
             unset DB_CONNECTION
-            systemctl stop crabsense-api || true
             rm -rf /opt/crabsense-api.previous
             if [ -d /opt/crabsense-api ]; then
               mv /opt/crabsense-api /opt/crabsense-api.previous
@@ -371,11 +430,13 @@ jobs:
               systemctl stop crabsense-api || true
               rm -rf /opt/crabsense-api.failed
               mv /opt/crabsense-api /opt/crabsense-api.failed
-              if [ -f /opt/crabsense-api.previous/.edge-protocol-v2 ]; then
+              if [ -f /opt/crabsense-api.previous/.edge-protocol-v2 ] && \
+                 [ -f /opt/crabsense-api.previous/.schema-migration ] && \
+                 cmp -s /opt/crabsense-api.previous/.schema-migration /opt/crabsense-api.failed/.schema-migration; then
                 mv /opt/crabsense-api.previous /opt/crabsense-api
                 systemctl restart crabsense-api
               else
-                echo 'Protocol-1 application rollback is unsafe after v2 migration; manual recovery required.' >&2
+                echo 'Protocol-1 application rollback is unsafe after v2 migration; unverified schema compatibility also requires manual recovery.' >&2
               fi
               exit 1
             fi
