@@ -29,6 +29,31 @@ public class ManualInspectionService : IManualInspectionService
         _ = await _uow.Boxes.GetByIdAsync(req.BoxId, ct) ?? throw AppException.NotFound("Box");
         await _areas.EnsureBoxAsync(req.BoxId, manage: false, ct);
 
+        // Evidence must be a registered media asset for this exact box.
+        var guard = new MediaAssetAreaGuard(_uow, _currentUser);
+        if (req.RelatedVideoId is Guid videoId)
+        {
+            var video = await _uow.MediaAssets.GetByIdAsync(videoId, ct)
+                ?? throw AppException.NotFound("MediaAsset");
+            await guard.EnsureAsync(video, ct);
+            if (!string.Equals(video.Category, "video", StringComparison.OrdinalIgnoreCase)
+                || video.BoxId != req.BoxId)
+                throw AppException.Forbidden("Video không thuộc hộp kiểm tra.");
+        }
+        foreach (var photo in req.PhotoUrls ?? Array.Empty<string>())
+        {
+            MediaAsset? asset;
+            if (MediaReferenceGuard.TryParseContentId(photo, out var mediaId))
+                asset = await _uow.MediaAssets.GetByIdAsync(mediaId, ct);
+            else
+                asset = await _uow.MediaAssets.FirstOrDefaultAsync(m =>
+                    m.ShareLink == photo || m.WebViewLink == photo || m.WebContentLink == photo, ct);
+            if (asset is null || asset.BoxId != req.BoxId
+                || !string.Equals(asset.Category, "image", StringComparison.OrdinalIgnoreCase))
+                throw AppException.Forbidden("Ảnh không thuộc hộp kiểm tra hoặc chưa đăng ký media.");
+            await guard.EnsureAsync(asset, ct);
+        }
+
         var isUpdate = Guid.TryParse(req.Id, out var existingId) && existingId != Guid.Empty;
         if (isUpdate)
             throw AppException.Conflict(
