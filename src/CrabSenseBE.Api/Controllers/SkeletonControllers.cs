@@ -108,11 +108,11 @@ public class SettingsController : ControllerBase
 
     /// <summary>[UPDATE] Tạo hoặc sửa cài đặt chung của trại.</summary>
     [HttpPut]
-    public Task<IActionResult> UpsertRoot([FromBody] UpsertFarmSettingBody req, CancellationToken ct)
+    public Task<IActionResult> UpsertRoot([FromBody] UpsertFarmSettingBody req, [FromQuery] Guid? farmingAreaId, CancellationToken ct)
     {
         if (req is null || string.IsNullOrWhiteSpace(req.Key))
             throw AppException.BadRequest("Key is required.");
-        return Upsert(req.Key, new UpsertFarmSettingRequest(req.Value, req.Description, req.Category, req.FarmingAreaId), null, ct);
+        return Upsert(req.Key, new UpsertFarmSettingRequest(req.Value, req.Description, req.Category, req.FarmingAreaId), farmingAreaId, ct);
     }
 
     /// <summary>[UPDATE] Tạo hoặc sửa cài đặt trại.</summary>
@@ -176,7 +176,8 @@ public class SettingsController : ControllerBase
 
     private async Task<Guid> RequireAreaAsync(Guid? requestedAreaId, CancellationToken ct)
     {
-        if (requestedAreaId is Guid supplied && supplied != Guid.Empty)
+        if (requestedAreaId == Guid.Empty) throw AppException.BadRequest("FarmingAreaId không hợp lệ.");
+        if (requestedAreaId is Guid supplied)
         {
             await _areas.EnsureAsync(supplied, manage: true, ct);
             return supplied;

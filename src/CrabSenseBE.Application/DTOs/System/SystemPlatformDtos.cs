@@ -81,7 +81,8 @@ public record CameraRecordingDto(
     string? VideoQuality,
     int? Fps,
     int? MaxStorageGb,
-    string? WeeklyScheduleJson);
+    string? WeeklyScheduleJson,
+    string RuntimeStatus = "NotIntegrated");
 
 public record UpsertCameraRecordingRequest(
     string Mode,

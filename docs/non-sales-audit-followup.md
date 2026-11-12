@@ -31,3 +31,7 @@ FCM now uses HTTP v1 and service-account OAuth2. Configure Fcm:ProjectId and Fcm
 ## Regression and deployment verification
 
 Added PostgreSQL assertions for per-area settings uniqueness, per-sensor replay key uniqueness, active push-token isolation, outbound FK and backup execution columns. Added API tests for tracked outbound/replay, historical barcode reconciliation, harvest receipt capacity after previous outbound and cross-area settings denial. Backup files use a .partial path until archive verification and atomic rename. CI must pass all clean/legacy migration tests before merge. No sales source changed. Existing FE/App clients need the API contract changes described above; test against VPS only after the new deployment succeeds.
+
+## Platform configuration truthfulness
+
+Camera configuration validates camera identity, schedule JSON, retention/FPS/storage limits and returns runtimeStatus=NotIntegrated until an actual recording worker exists. AI service registration validates names/version, confidence, FPS, batch size and class JSON; the system service summary cannot infer Running from a configuration row. Rollback only references distinct previously recorded successful versions, not requested deployments. Media storage is not reported healthy from local disk alone. Heuristic AI has confidence=0 (no model result), with a separate ruleScore in ResultJson. External camera, inference and orchestration workers remain blocked by missing approved runtime contracts and credentials; do not fabricate execution.

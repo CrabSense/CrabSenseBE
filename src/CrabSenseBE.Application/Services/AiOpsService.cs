@@ -86,7 +86,7 @@ public class AiOpsService : IAiOpsService
             DeviceId = deviceId,
             ModelVersion = "crabsense-heuristic-v1",
             DetectionType = detectionType,
-            Confidence = confidence,
+            Confidence = 0, // no model inference was performed
             Status = "completed",
             DetectedAt = DateTime.UtcNow,
             ImagePath = media?.WebViewLink ?? media?.StorageKey,
@@ -99,6 +99,7 @@ public class AiOpsService : IAiOpsService
                 mediaId = media?.Id,
                 source = "rules-engine",
                 isModelInference = false,
+                ruleScore = confidence,
                 scoreMeaning = "rule-score-not-model-confidence"
             })
         };
@@ -133,7 +134,7 @@ public class AiOpsService : IAiOpsService
             {
                 detectionType = "quarantine_risk";
                 confidence = 0.91m;
-                health = "disease";
+                health = "warning";
                 notes.Add($"Box {box.Code} đang cách ly — ưu tiên kiểm tra sức khỏe cua.");
             }
             else if (status is "active" || box.IsOccupied)

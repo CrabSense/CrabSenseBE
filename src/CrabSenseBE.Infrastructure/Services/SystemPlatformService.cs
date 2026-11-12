@@ -44,7 +44,6 @@ public class SystemPlatformService : ISystemPlatformService
     {
         var database = await _db.Database.CanConnectAsync(ct);
         var drive = CurrentDrive();
-        var aiRunning = await _db.AiManagedServices.CountAsync(x => x.Status == "Running", ct);
         var aiTotal = await _db.AiManagedServices.CountAsync(ct);
         var mqtt = await ProbeMqttAsync(ct);
 
@@ -52,10 +51,10 @@ public class SystemPlatformService : ISystemPlatformService
         {
             new("API Server", "Running", $"PID {Environment.ProcessId}"),
             new("Database", database ? "Running" : "Error", database ? "PostgreSQL connected" : "Cannot connect"),
-            new("Storage Service", drive?.IsReady == true ? "Running" : "Warning", drive?.Name),
-            new("AI Inference Service",
-                aiTotal == 0 ? "NotConfigured" : aiRunning > 0 ? "Running" : "Stopped",
-                aiTotal == 0 ? "Chưa đăng ký dịch vụ AI" : $"{aiRunning}/{aiTotal} running"),
+            new("Local Server Disk", drive?.IsReady == true ? "Running" : "Warning", drive?.Name),
+            new("Media Storage", "NotVerified", "Provider health requires a real storage probe; local disk is not cloud storage."),
+            new("AI Inference Service", aiTotal == 0 ? "NotConfigured" : "NotIntegrated",
+                $"{aiTotal} registered configurations; runtime inference has not been verified."),
             mqtt,
         };
         return ApiResponse<IReadOnlyList<SystemServiceDto>>.Ok(services);
@@ -110,10 +109,13 @@ public class SystemPlatformService : ISystemPlatformService
         };
         foreach (var group in latest.GroupBy(x => x.Component))
         {
-            var current = group.First();
-            if (string.Equals(current.Component, "Backend API", StringComparison.OrdinalIgnoreCase))
+            var latestRequest = group.First();
+            if (string.Equals(latestRequest.Component, "Backend API", StringComparison.OrdinalIgnoreCase))
                 continue;
-            rows.Add(new SystemVersionDto(current.Component, current.Version, current.Status, "deployment"));
+            var confirmed = group.FirstOrDefault(x => x.Status is "Succeeded" or "Deployed");
+            rows.Add(confirmed is null
+                ? new SystemVersionDto(latestRequest.Component, "unknown", "Unverified", "request-history")
+                : new SystemVersionDto(confirmed.Component, confirmed.Version, "Recorded", "deployment-history"));
         }
         return ApiResponse<IReadOnlyList<SystemVersionDto>>.Ok(rows);
     }
@@ -154,12 +156,13 @@ public class SystemPlatformService : ISystemPlatformService
         RollbackRequest request, Guid? userId, string? actor, CancellationToken ct = default)
     {
         var history = await _db.SystemDeployments
-            .Where(x => x.Component == request.Component && x.Environment == request.Environment)
+            .Where(x => x.Component == request.Component && x.Environment == request.Environment
+                && (x.Status == "Succeeded" || x.Status == "Deployed"))
             .OrderByDescending(x => x.DeployedAt)
-            .Take(2)
             .ToListAsync(ct);
+        history = history.DistinctBy(x => x.Version).Take(2).ToList();
         if (history.Count < 2)
-            throw AppException.BadRequest("Không có phiên bản trước để rollback.");
+            throw AppException.Conflict("Không có hai phiên bản triển khai thành công để rollback; yêu cầu chưa thực thi không phải bản đã deploy.");
 
         var previous = history[1];
         var row = new SystemDeployment
@@ -340,7 +343,22 @@ public class SystemPlatformService : ISystemPlatformService
     {
         if (!RecordingModes.Contains(request.Mode))
             throw AppException.BadRequest("Mode không hợp lệ.");
+        if (request.RetentionDays is < 1 or > 3650 || request.Fps is < 1 or > 120 || request.MaxStorageGb is < 1)
+            throw AppException.BadRequest("RetentionDays, FPS hoặc giới hạn dung lượng không hợp lệ.");
+        if (request.Mode == "Scheduled" && string.IsNullOrWhiteSpace(request.WeeklyScheduleJson))
+            throw AppException.BadRequest("Scheduled cần WeeklyScheduleJson.");
+        if (!string.IsNullOrWhiteSpace(request.WeeklyScheduleJson))
+        {
+            try
+            {
+                using var schedule = System.Text.Json.JsonDocument.Parse(request.WeeklyScheduleJson);
+                if (schedule.RootElement.ValueKind is not (System.Text.Json.JsonValueKind.Array or System.Text.Json.JsonValueKind.Object))
+                    throw AppException.BadRequest("WeeklyScheduleJson phải là JSON object hoặc array.");
+            }
+            catch (System.Text.Json.JsonException) { throw AppException.BadRequest("WeeklyScheduleJson không hợp lệ."); }
+        }
         var device = await RequireDevice(deviceId, ct);
+        if (!IsCameraDevice(device)) throw AppException.BadRequest("Thiết bị không phải camera.");
         var setting = await _db.CameraRecordingSettings.FirstOrDefaultAsync(x => x.DeviceId == deviceId, ct);
         if (setting is null)
         {
@@ -355,7 +373,8 @@ public class SystemPlatformService : ISystemPlatformService
         setting.WeeklyScheduleJson = request.WeeklyScheduleJson;
         await AuditAsync(userId, "UpdateRecording", "Device", deviceId, request.Mode, ip, ct);
         await _db.SaveChangesAsync(ct);
-        return ApiResponse<CameraRecordingDto>.Ok(MapCamera(device, setting));
+        return ApiResponse<CameraRecordingDto>.Ok(MapCamera(device, setting),
+            "Đã lưu cấu hình; worker ghi hình chưa được tích hợp, chưa xác nhận đang ghi.");
     }
 
     public async Task<ApiResponse<IReadOnlyList<RecordingHistoryDto>>> GetRecordingHistoryAsync(Guid? deviceId, CancellationToken ct = default)
@@ -386,6 +405,23 @@ public class SystemPlatformService : ISystemPlatformService
     public async Task<ApiResponse<AiServiceDto>> CreateAiServiceAsync(
         UpsertAiServiceRequest request, Guid? userId, string? ip, CancellationToken ct = default)
     {
+        if (string.IsNullOrWhiteSpace(request.Name) || string.IsNullOrWhiteSpace(request.ModelName)
+            || string.IsNullOrWhiteSpace(request.Version))
+            throw AppException.BadRequest("Name, ModelName và Version là bắt buộc.");
+        if (request.ConfidenceThreshold is < 0 or > 1 || request.FrameSamplingFps is <= 0 or > 120
+            || request.BatchSize is < 1 or > 128)
+            throw AppException.BadRequest("Confidence, FPS hoặc BatchSize không hợp lệ.");
+        if (!string.IsNullOrWhiteSpace(request.DetectionClassesJson))
+        {
+            try
+            {
+                using var labels = System.Text.Json.JsonDocument.Parse(request.DetectionClassesJson);
+                if (labels.RootElement.ValueKind != System.Text.Json.JsonValueKind.Array
+                    || labels.RootElement.EnumerateArray().Any(x => x.ValueKind != System.Text.Json.JsonValueKind.String))
+                    throw AppException.BadRequest("DetectionClassesJson phải là mảng chuỗi.");
+            }
+            catch (System.Text.Json.JsonException) { throw AppException.BadRequest("DetectionClassesJson không hợp lệ."); }
+        }
         var row = new AiManagedService
         {
             Name = request.Name.Trim(),
@@ -715,11 +751,13 @@ public class SystemPlatformService : ISystemPlatformService
     private async Task<List<Device>> CameraDevices(CancellationToken ct)
     {
         var devices = await _db.Devices.AsNoTracking().ToListAsync(ct);
-        return devices.Where(device =>
-            device.DeviceType.Contains("camera", StringComparison.OrdinalIgnoreCase)
-            || !string.IsNullOrWhiteSpace(device.StreamUrl)
-            || !string.IsNullOrWhiteSpace(device.SnapshotUrl)).ToList();
+        return devices.Where(IsCameraDevice).ToList();
     }
+
+    private static bool IsCameraDevice(Device device) =>
+        (device.DeviceType ?? "").Contains("cam", StringComparison.OrdinalIgnoreCase)
+        || !string.IsNullOrWhiteSpace(device.StreamUrl)
+        || !string.IsNullOrWhiteSpace(device.SnapshotUrl);
 
     private async Task AuditAsync(Guid? userId, string action, string entityType, Guid entityId, string? details, string? ip, CancellationToken ct)
     {
@@ -743,7 +781,8 @@ public class SystemPlatformService : ISystemPlatformService
         setting?.Id, device.Id, device.DeviceCode, device.Name, device.InstallationLocation,
         device.Status.ToString(), device.Resolution, device.SnapshotUrl, device.StreamUrl,
         setting?.Mode ?? "Disabled", setting?.RetentionDays ?? 30, setting?.VideoQuality,
-        setting?.Fps, setting?.MaxStorageGb, setting?.WeeklyScheduleJson);
+        setting?.Fps, setting?.MaxStorageGb, setting?.WeeklyScheduleJson,
+        setting is null || setting.Mode == "Disabled" ? "Disabled" : "NotIntegrated");
 
     private static AiServiceDto MapAi(AiManagedService row, int detections) => new(
         row.Id, row.Name, row.ModelName, row.Version, row.PreviousVersion, row.Status, row.DeviceLabel,
