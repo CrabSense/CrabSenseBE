@@ -520,10 +520,11 @@ public class SyncQueueStubController : ControllerBase
         }
         await _areas.EnsureBoxAsync(
             scopedBoxId, manage: false, HttpContext.RequestAborted);
-        if (status is CrabStatus.Dead or CrabStatus.Harvested or CrabStatus.Sold)
+        if (status is not (CrabStatus.Alive or CrabStatus.Molting)
+            || crab.Status is CrabStatus.Dead or CrabStatus.Harvested or CrabStatus.Sold or CrabStatus.Missing)
         {
             Fail(inbox, failed, item,
-                "Trạng thái chết hoặc thu hoạch phải dùng quy trình nghiệp vụ có audit.");
+                "Sync chỉ cập nhật cua sống/đang lột; trạng thái kết thúc, mất dấu và cách ly cần quy trình nghiệp vụ có audit.");
             return;
         }
 
