@@ -25,5 +25,6 @@ public interface IEdgeCommandService
         Guid id,
         EdgeCommandAckRequest request,
         string authenticatedDeviceCode,
-        CancellationToken ct = default);
+        CancellationToken ct = default,
+        bool requireDeliveryAttemptId = false);
 }

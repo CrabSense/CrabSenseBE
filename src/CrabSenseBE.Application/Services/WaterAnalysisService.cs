@@ -5,6 +5,7 @@ using CrabSenseBE.Application.Interfaces;
 using CrabSenseBE.Domain.Entities;
 using CrabSenseBE.Domain.Enums;
 using CrabSenseBE.Domain.Interfaces;
+using Microsoft.EntityFrameworkCore;
 
 namespace CrabSenseBE.Application.Services;
 
@@ -219,7 +220,15 @@ public class WaterAnalysisService : IWaterAnalysisService
             ])
         };
         await _uow.WaterAnalysisRuns.AddAsync(run, ct);
-        await _uow.SaveChangesAsync(ct);
+        try
+        {
+            await _uow.SaveChangesAsync(ct);
+        }
+        catch (DbUpdateException)
+        {
+            throw AppException.Conflict(
+                "Khu này đã có phiên phân tích đang hoạt động.");
+        }
 
         return ApiResponse<WaterAnalysisSnapshotDto>.Ok(
             await BuildAsync(areaId, ct),

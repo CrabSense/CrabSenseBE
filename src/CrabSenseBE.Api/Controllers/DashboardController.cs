@@ -39,15 +39,18 @@ public class OperationsController : ControllerBase
     private readonly IOperationLogService _ops;
     private readonly IFarmOperationService _farmOps;
     private readonly IScheduledTaskService _scheduledTasks;
+    private readonly ICurrentUserService _currentUser;
 
     public OperationsController(
         IOperationLogService ops,
         IFarmOperationService farmOps,
-        IScheduledTaskService scheduledTasks)
+        IScheduledTaskService scheduledTasks,
+        ICurrentUserService currentUser)
     {
         _ops = ops;
         _farmOps = farmOps;
         _scheduledTasks = scheduledTasks;
+        _currentUser = currentUser;
     }
 
     /// <summary>[READ] Today's operational tasks for Home</summary>
@@ -157,9 +160,7 @@ public class OperationsController : ControllerBase
         if (file is null || file.Length == 0)
             return BadRequest(ApiResponse<object>.Fail("file is required."));
 
-        var userIdClaim = User.FindFirst("sub")?.Value
-            ?? User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
-        _ = Guid.TryParse(userIdClaim, out var userId);
+        var userId = OwnerId();
 
         await using var stream = file.OpenReadStream();
         var entityType = string.IsNullOrWhiteSpace(relatedEntityType) ? "FarmOperation" : relatedEntityType;
@@ -173,7 +174,7 @@ public class OperationsController : ControllerBase
             RelatedEntityType: entityType,
             RelatedEntityId: entityId,
             Notes: kind,
-            SharePublic: true);
+            SharePublic: false);
 
         var uploaded = await media.UploadAsync(stream, file.FileName, file.ContentType, meta, userId, ct);
         var url = uploaded.Data?.ShareLink ?? uploaded.Data?.WebViewLink ?? uploaded.Data?.StorageKey;
@@ -215,8 +216,8 @@ public class OperationsController : ControllerBase
 
     private Guid OwnerId()
     {
-        var value = User.FindFirst("sub")?.Value
-                    ?? User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
-        return Guid.TryParse(value, out var id) ? id : throw AppException.Unauthorized();
+        if (!_currentUser.IsAuthenticated || _currentUser.UserId == Guid.Empty)
+            throw AppException.Unauthorized();
+        return _currentUser.UserId;
     }
 }

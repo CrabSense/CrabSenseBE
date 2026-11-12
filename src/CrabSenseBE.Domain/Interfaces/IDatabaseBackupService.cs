@@ -23,6 +23,8 @@ public record DatabaseBackupResult(
 /// </summary>
 public interface IDatabaseBackupService
 {
+    bool IsMaintenanceMode { get; }
+
     /// <summary>Tạo bản sao lưu mới và trả về thông tin file.</summary>
     Task<DatabaseBackupResult> CreateAsync(CancellationToken ct = default);
 

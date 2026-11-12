@@ -46,7 +46,7 @@ public class LocalMediaStorageService : IMediaStorageService
             _project,
             folder.Replace('/', Path.DirectorySeparatorChar),
             $"{now:yyyyMMddHHmmss}_{Sanitize(fileName)}");
-        var full = Path.Combine(_root, relative);
+        var full = ResolveInsideRoot(relative);
         Directory.CreateDirectory(Path.GetDirectoryName(full)!);
 
         await using var fs = System.IO.File.Create(full);
@@ -61,23 +61,37 @@ public class LocalMediaStorageService : IMediaStorageService
 
     public Task<Stream> DownloadAsync(string storageKey, CancellationToken ct = default)
     {
-        var full = Path.Combine(_root, storageKey.Replace('/', Path.DirectorySeparatorChar));
+        var full = ResolveInsideRoot(storageKey);
         Stream stream = System.IO.File.OpenRead(full);
         return Task.FromResult(stream);
     }
 
     public Task<string> EnsureShareLinkAsync(string storageKey, CancellationToken ct = default)
     {
-        var full = Path.Combine(_root, storageKey.Replace('/', Path.DirectorySeparatorChar));
+        var full = ResolveInsideRoot(storageKey);
         return Task.FromResult($"file:///{full.Replace('\\', '/')}");
     }
 
     public Task DeleteAsync(string storageKey, CancellationToken ct = default)
     {
-        var full = Path.Combine(_root, storageKey.Replace('/', Path.DirectorySeparatorChar));
+        var full = ResolveInsideRoot(storageKey);
         if (System.IO.File.Exists(full))
             System.IO.File.Delete(full);
         return Task.CompletedTask;
+    }
+
+    private string ResolveInsideRoot(string relative)
+    {
+        var root = Path.GetFullPath(_root)
+            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+            + Path.DirectorySeparatorChar;
+        var full = Path.GetFullPath(Path.Combine(
+            root,
+            relative.Replace('/', Path.DirectorySeparatorChar)));
+        if (!full.StartsWith(root, StringComparison.OrdinalIgnoreCase))
+            throw new UnauthorizedAccessException(
+                "Media storage key escapes the configured local root.");
+        return full;
     }
 
     private static string Sanitize(string name)

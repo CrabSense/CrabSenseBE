@@ -9,7 +9,9 @@ public record EdgeCommandDto(
     DateTime CreatedAt,
     string? CorrelationId,
     DateTime? LeaseExpiresAt = null,
-    int AttemptCount = 0);
+    int AttemptCount = 0,
+    Guid? DeliveryAttemptId = null,
+    DateTime? ExpiresAt = null);
 
 public record EnqueueEdgeCommandRequest(
     string DeviceCode,
@@ -19,4 +21,5 @@ public record EnqueueEdgeCommandRequest(
 
 public record EdgeCommandAckRequest(
     string Status,
-    string? Message = null);
+    string? Message = null,
+    Guid? DeliveryAttemptId = null);

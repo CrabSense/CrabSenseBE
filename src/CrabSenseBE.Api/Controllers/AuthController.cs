@@ -52,6 +52,7 @@ public class AuthController : ControllerBase
 
     /// <summary>[AUTH] Refresh token</summary>
     [HttpPost("refresh")]
+    [EnableRateLimiting("refresh")]
     public async Task<IActionResult> Refresh([FromBody] RefreshTokenRequest request, CancellationToken ct)
         => Ok(await _authService.RefreshTokenAsync(request, ct));
 

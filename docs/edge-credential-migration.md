@@ -12,9 +12,15 @@ has completed this process.
    `X-Device-Key`. Never log or persist the plaintext secret in Backend config.
 4. Verify pending-command, ACK, sensor-ingest, relay-state, and water-analysis
    calls with the device credential. Verify another device cannot reuse it.
+   Updated firmware must persist the `deliveryAttemptId` returned with each
+   command and echo it in the ACK. A stale attempt ID must be rejected.
 5. Revoke and investigate a device if the secret is lost or ownership is
    uncertain. Re-approval rotates the credential.
-6. After the inventory query reports no active device with a null
+6. After every provisioned controller has been observed echoing delivery
+   attempt IDs, set `EdgeSync:RequireDeliveryAttemptId=true` in staging and
+   verify poll, reconnect, timeout, and ACK behavior. Keep it false during the
+   firmware compatibility window.
+7. After the inventory query reports no active device with a null
    `CredentialHash`, set `EdgeSync:AllowLegacySharedKey=false` in a staged
    environment, observe it, and then apply the same setting in production
    through the normal reviewed deployment.

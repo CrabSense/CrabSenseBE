@@ -1,13 +1,34 @@
 param(
-    [string]$PostgresBin = "C:\Program Files\PostgreSQL\18\bin",
+    [string]$PostgresBin = "",
     [int]$Port = 55439
 )
 
 $ErrorActionPreference = "Stop"
+$runningOnWindows = [System.Environment]::OSVersion.Platform -eq `
+    [System.PlatformID]::Win32NT
+if ([string]::IsNullOrWhiteSpace($PostgresBin)) {
+    if ($runningOnWindows) {
+        $roots = Get-ChildItem "C:\Program Files\PostgreSQL" -Directory `
+            -ErrorAction SilentlyContinue | Sort-Object Name -Descending
+        $PostgresBin = $roots | ForEach-Object { Join-Path $_.FullName "bin" } `
+            | Where-Object { Test-Path (Join-Path $_ "initdb.exe") } `
+            | Select-Object -First 1
+    }
+    else {
+        $pgConfig = Get-Command pg_config -ErrorAction SilentlyContinue
+        if ($pgConfig) {
+            $PostgresBin = (& $pgConfig.Source --bindir).Trim()
+        }
+    }
+}
+if ([string]::IsNullOrWhiteSpace($PostgresBin)) {
+    throw "Could not locate PostgreSQL binaries. Pass -PostgresBin explicitly."
+}
 $data = Join-Path $env:TEMP "crabsense-hotfix-pg"
-$initdb = Join-Path $PostgresBin "initdb.exe"
-$pgctl = Join-Path $PostgresBin "pg_ctl.exe"
-$psql = Join-Path $PostgresBin "psql.exe"
+$exe = if ($runningOnWindows) { ".exe" } else { "" }
+$initdb = Join-Path $PostgresBin "initdb$exe"
+$pgctl = Join-Path $PostgresBin "pg_ctl$exe"
+$psql = Join-Path $PostgresBin "psql$exe"
 if (!(Test-Path $initdb) -or !(Test-Path $pgctl) -or !(Test-Path $psql)) {
     throw "PostgreSQL binaries were not found in $PostgresBin"
 }
@@ -263,6 +284,56 @@ COMMIT;
         "The same client key must be independently scoped to different actors."
 
     Invoke-Psql @'
+CREATE TABLE be."RefreshSessions" (
+  "UserId" uuid PRIMARY KEY,
+  "RefreshTokenHash" varchar(64) NULL,
+  "RefreshTokenVersion" integer NOT NULL DEFAULT 0
+);
+CREATE UNIQUE INDEX "IX_RefreshSessions_RefreshTokenHash"
+ON be."RefreshSessions" ("RefreshTokenHash")
+WHERE "RefreshTokenHash" IS NOT NULL;
+INSERT INTO be."RefreshSessions" ("UserId","RefreshTokenHash")
+VALUES ('42000000-0000-0000-0000-000000000001','OLD-HASH');
+'@ | Out-Null
+    $refreshSql = @(
+        "UPDATE be.`"RefreshSessions`" SET `"RefreshTokenHash`"='NEW-A', `"RefreshTokenVersion`"=`"RefreshTokenVersion`"+1 WHERE `"UserId`"='42000000-0000-0000-0000-000000000001' AND `"RefreshTokenHash`"='OLD-HASH'",
+        "UPDATE be.`"RefreshSessions`" SET `"RefreshTokenHash`"='NEW-B', `"RefreshTokenVersion`"=`"RefreshTokenVersion`"+1 WHERE `"UserId`"='42000000-0000-0000-0000-000000000001' AND `"RefreshTokenHash`"='OLD-HASH'"
+    )
+    $refreshSql | ForEach-Object { Invoke-Psql $_ | Out-Null }
+    Assert-Equal 1 (Invoke-Psql "SELECT `"RefreshTokenVersion`" FROM be.`"RefreshSessions`" WHERE `"UserId`"='42000000-0000-0000-0000-000000000001'").Output `
+        "A refresh token was rotated more than once."
+
+    Invoke-Psql @'
+CREATE TABLE be."WaterAnalysisRuns" (
+  "Id" uuid PRIMARY KEY,
+  "FarmingAreaId" uuid NOT NULL,
+  "Status" text NOT NULL
+);
+CREATE UNIQUE INDEX "IX_WaterAnalysisRuns_FarmingAreaId_Active"
+ON be."WaterAnalysisRuns" ("FarmingAreaId")
+WHERE "Status" IN ('running', 'stopping');
+'@ | Out-Null
+    $waterArea = "43000000-0000-0000-0000-000000000001"
+    $waterSql = @(
+        "INSERT INTO be.`"WaterAnalysisRuns`" VALUES ('43000000-0000-0000-0000-000000000011','$waterArea','running')",
+        "INSERT INTO be.`"WaterAnalysisRuns`" VALUES ('43000000-0000-0000-0000-000000000012','$waterArea','running')"
+    )
+    $waterJobs = $waterSql | ForEach-Object {
+        Start-Job -ScriptBlock {
+            param($Psql, $Port, $Sql)
+            & $Psql -X -v ON_ERROR_STOP=1 -h 127.0.0.1 -p $Port `
+                -U postgres -d postgres -c $Sql *> $null
+            $LASTEXITCODE
+        } -ArgumentList $psql, $Port, $_
+    }
+    $waterExit = $waterJobs | Wait-Job | Receive-Job
+    $waterJobs | Remove-Job
+    Assert-Equal 1 (Invoke-Psql "SELECT COUNT(*) FROM be.`"WaterAnalysisRuns`" WHERE `"FarmingAreaId`"='$waterArea' AND `"Status`"='running'").Output `
+        "Two active water-analysis runs were created for one area."
+    Assert-Equal 1 (@($waterExit | Where-Object { $_ -ne 0 }).Count) `
+        "Exactly one concurrent water-analysis start must be rejected."
+
+    Invoke-Psql @'
 CREATE TABLE be."EdgeCommands" (
   "Id" uuid PRIMARY KEY,
   "Command" text NOT NULL
@@ -275,7 +346,7 @@ ADD COLUMN "RequestSource" text NOT NULL DEFAULT 'legacy';
     Assert-Equal "legacy" (Invoke-Psql "SELECT `"RequestSource`" FROM be.`"EdgeCommands`"").Output `
         "Hotfix migration did not preserve/backfill the legacy command."
 
-    Write-Output "POSTGRES_HOTFIX_TESTS_PASSED=6"
+    Write-Output "POSTGRES_HOTFIX_TESTS_PASSED=8"
 }
 finally {
     & $pgctl -D $data stop -m fast -w

@@ -46,7 +46,9 @@ public class S3MediaStorageService : IMediaStorageService, IPublicImageStorage
         bool publicRead, CancellationToken ct)
     {
         var bucket = RequireBucket();
-        await using var buffer = await BufferAsync(data, ct);
+        if (!data.CanSeek)
+            throw new InvalidOperationException("S3 media upload requires a seekable stream.");
+        var size = data.Length - data.Position;
         var key = BuildObjectKey(folder, fileName);
         var region = Region();
 
@@ -54,7 +56,7 @@ public class S3MediaStorageService : IMediaStorageService, IPublicImageStorage
         {
             BucketName = bucket,
             Key = key,
-            InputStream = buffer,
+            InputStream = data,
             ContentType = string.IsNullOrWhiteSpace(contentType) ? "application/octet-stream" : contentType,
             AutoCloseStream = false
         };
@@ -64,18 +66,36 @@ public class S3MediaStorageService : IMediaStorageService, IPublicImageStorage
 
         await _client.Value.PutObjectAsync(request, ct);
         var url = publicRead ? PublicUrl(bucket, region, key) : null;
-        _logger.LogInformation("S3 uploaded {Key} ({Bytes} bytes), public={Public}", key, buffer.Length, publicRead);
-        return new MediaUploadResult(key, url, url, url, buffer.Length);
+        _logger.LogInformation("S3 uploaded {Key} ({Bytes} bytes), public={Public}", key, size, publicRead);
+        return new MediaUploadResult(key, url, url, url, size);
     }
 
     public async Task<Stream> DownloadAsync(string storageKey, CancellationToken ct = default)
     {
         var bucket = RequireBucket();
-        var response = await _client.Value.GetObjectAsync(bucket, storageKey, ct);
-        var ms = new MemoryStream();
-        await response.ResponseStream.CopyToAsync(ms, ct);
-        ms.Position = 0;
-        return ms;
+        using var response = await _client.Value.GetObjectAsync(bucket, storageKey, ct);
+        var path = Path.GetTempFileName();
+        FileStream? file = null;
+        try
+        {
+            file = new FileStream(
+                path,
+                FileMode.Create,
+                FileAccess.ReadWrite,
+                FileShare.Read,
+                81_920,
+                FileOptions.Asynchronous | FileOptions.DeleteOnClose);
+            await response.ResponseStream.CopyToAsync(file, ct);
+            file.Position = 0;
+            return file;
+        }
+        catch
+        {
+            if (file is not null)
+                await file.DisposeAsync();
+            try { File.Delete(path); } catch (IOException) { }
+            throw;
+        }
     }
 
     public async Task<string> EnsureShareLinkAsync(string storageKey, CancellationToken ct = default)
@@ -143,15 +163,6 @@ public class S3MediaStorageService : IMediaStorageService, IPublicImageStorage
             "log" or "logs" => "Media/log",
             _ => SanitizeSegment(category)
         };
-
-    private static async Task<MemoryStream> BufferAsync(Stream data, CancellationToken ct)
-    {
-        var ms = new MemoryStream();
-        if (data.CanSeek) data.Position = 0;
-        await data.CopyToAsync(ms, ct);
-        ms.Position = 0;
-        return ms;
-    }
 
     private static string Sanitize(string name)
     {

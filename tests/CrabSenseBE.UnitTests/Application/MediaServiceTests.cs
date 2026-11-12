@@ -40,7 +40,7 @@ public class MediaServiceTests
         boxes.Setup(r => r.GetByIdAsync(boxId, It.IsAny<CancellationToken>())).ReturnsAsync((Box?)null);
         _uow.Setup(u => u.Boxes).Returns(boxes.Object);
 
-        await using var stream = new MemoryStream(new byte[] { 1, 2, 3 });
+        await using var stream = Jpeg();
         var result = await Create().UploadAsync(
             stream, "box.jpg", "image/jpeg",
             new MediaUploadMeta("image", boxId, null, null, "box", null, null, true),
@@ -71,7 +71,7 @@ public class MediaServiceTests
         _uow.Setup(u => u.MediaAssets).Returns(repo.Object);
         _uow.Setup(u => u.SaveChangesAsync(It.IsAny<CancellationToken>())).ReturnsAsync(1);
 
-        await using var stream = new MemoryStream(new byte[] { 1, 2, 3 });
+        await using var stream = Jpeg();
         var result = await Create().UploadAsync(
             stream, "internal.jpg", "image/jpeg",
             new MediaUploadMeta("image", null, null, null, null, null, null, false),
@@ -130,7 +130,7 @@ public class MediaServiceTests
         var service = new MediaService(
             uow.Object, _storage.Object, current.Object);
 
-        await using var stream = new MemoryStream([1]);
+        await using var stream = Jpeg();
         var act = () => service.UploadAsync(
             stream,
             "invalid.jpg",
@@ -245,6 +245,78 @@ public class MediaServiceTests
     }
 
     [Fact]
+    public async Task Upload_RejectsSpoofedContentTypeAndTraversalName()
+    {
+        await using var executable = new MemoryStream(
+            "MZ fake executable"u8.ToArray());
+        var service = Create();
+
+        var spoofed = () => service.UploadAsync(
+            executable,
+            "photo.jpg",
+            "image/jpeg",
+            new MediaUploadMeta(
+                "image", null, null, null, null, null, null, false),
+            Guid.NewGuid());
+        (await spoofed.Should().ThrowAsync<AppException>())
+            .Which.StatusCode.Should().Be(400);
+
+        await using var jpeg = Jpeg();
+        var traversal = () => service.UploadAsync(
+            jpeg,
+            "../photo.jpg",
+            "image/jpeg",
+            new MediaUploadMeta(
+                "image", null, null, null, null, null, null, false),
+            Guid.NewGuid());
+        (await traversal.Should().ThrowAsync<AppException>())
+            .Which.StatusCode.Should().Be(400);
+
+        _storage.Verify(x => x.UploadAsync(
+            It.IsAny<Stream>(), It.IsAny<string>(), It.IsAny<string>(),
+            It.IsAny<string>(), It.IsAny<CancellationToken>(), It.IsAny<bool>()),
+            Times.Never);
+    }
+
+    [Fact]
+    public async Task Upload_DeletesStorageObjectWhenDatabaseWriteFails()
+    {
+        _storage.SetupGet(x => x.ProviderName).Returns("Local");
+        _storage.Setup(x => x.UploadAsync(
+                It.IsAny<Stream>(),
+                "photo.jpg",
+                "image/jpeg",
+                It.IsAny<string>(),
+                It.IsAny<CancellationToken>(),
+                false))
+            .ReturnsAsync(new MediaUploadResult(
+                "orphan-key", null, null, null, 4));
+        _storage.Setup(x => x.DeleteAsync(
+                "orphan-key", It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+        var media = new Mock<IRepository<MediaAsset>>();
+        media.Setup(x => x.AddAsync(
+                It.IsAny<MediaAsset>(), It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+        _uow.Setup(x => x.MediaAssets).Returns(media.Object);
+        _uow.Setup(x => x.SaveChangesAsync(It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("database unavailable"));
+        await using var stream = Jpeg();
+
+        var act = () => Create().UploadAsync(
+            stream,
+            "photo.jpg",
+            "image/jpeg",
+            new MediaUploadMeta(
+                "image", null, null, null, null, null, null, false),
+            Guid.NewGuid());
+
+        await act.Should().ThrowAsync<InvalidOperationException>();
+        _storage.Verify(x => x.DeleteAsync(
+            "orphan-key", It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
     public async Task Share_UpdatesLink()
     {
         var id = Guid.NewGuid();
@@ -285,4 +357,7 @@ public class MediaServiceTests
                 CancellationToken _) => rows.FirstOrDefault(predicate.Compile()));
         return repo.Object;
     }
+
+    private static MemoryStream Jpeg() =>
+        new([0xFF, 0xD8, 0xFF, 0xE0]);
 }

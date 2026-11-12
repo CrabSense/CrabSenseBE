@@ -54,5 +54,10 @@ public interface IIotService
     Task<ApiResponse<WaterSystemDto>> UpdateWaterSystemAsync(Guid id, UpdateWaterSystemRequest request, CancellationToken ct = default);
     Task<ApiResponse> DeleteWaterSystemAsync(Guid id, CancellationToken ct = default);
 
-    Task<ApiResponse<string>> ProcessHdf5UploadAsync(Hdf5UploadRequest request, Stream fileStream, CancellationToken ct = default);
+    Task<ApiResponse<string>> ProcessHdf5UploadAsync(
+        Hdf5UploadRequest request,
+        Stream fileStream,
+        Guid authenticatedDeviceId,
+        string authenticatedDeviceCode,
+        CancellationToken ct = default);
 }

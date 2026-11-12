@@ -385,6 +385,13 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.Property<DateTime?>("RefreshTokenExpiry")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<string>("RefreshTokenHash")
+                        .HasColumnType("text");
+
+                    b.Property<int>("RefreshTokenVersion")
+                        .IsConcurrencyToken()
+                        .HasColumnType("integer");
+
                     b.Property<string>("Role")
                         .IsRequired()
                         .HasColumnType("text");
@@ -403,6 +410,10 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                         .HasColumnType("text");
 
                     b.HasKey("Id");
+
+                    b.HasIndex("RefreshTokenHash")
+                        .IsUnique()
+                        .HasFilter("\"RefreshTokenHash\" IS NOT NULL");
 
                     b.HasIndex("UserCode")
                         .IsUnique()
@@ -1409,9 +1420,15 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.Property<DateTime?>("DeliveredAt")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<Guid?>("DeliveryAttemptId")
+                        .HasColumnType("uuid");
+
                     b.Property<string>("DeviceCode")
                         .IsRequired()
                         .HasColumnType("text");
+
+                    b.Property<DateTime>("ExpiresAt")
+                        .HasColumnType("timestamp with time zone");
 
                     b.Property<DateTime?>("FailedAt")
                         .HasColumnType("timestamp with time zone");
@@ -4080,6 +4097,10 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                         .HasColumnType("timestamp with time zone");
 
                     b.HasKey("Id");
+
+                    b.HasIndex("FarmingAreaId")
+                        .IsUnique()
+                        .HasFilter("\"Status\" IN ('running', 'stopping')");
 
                     b.HasIndex("FarmingAreaId", "StartedAt");
 
