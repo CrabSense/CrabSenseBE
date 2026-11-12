@@ -32,6 +32,15 @@ internal static class MediaReferenceGuard
             if (asset.Category != "image")
                 throw AppException.BadRequest("Media không phải ảnh.");
             if (asset.CrabId == crab.Id && asset.RelatedEntityType == "crab") continue;
+            if (asset.RelatedEntityType == "HarvestVoucher" && asset.RelatedEntityId is Guid voucherId
+                && await uow.HarvestLines.AnyAsync(l => l.HarvestVoucherId == voucherId && l.CrabId == crab.Id, ct))
+            {
+                var voucher = await uow.HarvestVouchers.GetByIdAsync(voucherId, ct);
+                if (voucher?.FarmingAreaId is not Guid areaId)
+                    throw AppException.Forbidden("Không xác định khu ảnh thu hoạch.");
+                await areas.EnsureAsync(areaId, false, ct);
+                continue;
+            }
             var actor = await areas.CurrentUserAsync(ct);
             if (asset.RelatedEntityType != "crab-pending" || asset.RelatedEntityId.HasValue
                 || asset.CrabId.HasValue || actor is null || asset.UploadedBy != actor.Id)
