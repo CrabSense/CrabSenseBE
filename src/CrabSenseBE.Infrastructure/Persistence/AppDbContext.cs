@@ -129,6 +129,12 @@ public class AppDbContext : DbContext
             .HasIndex(command => new { command.DeviceCode, command.CorrelationId })
             .IsUnique();
         modelBuilder.Entity<EdgeCommand>()
+            .Property(command => command.CommandSequence)
+            .HasDefaultValue(0L)
+            .ValueGeneratedOnAdd();
+        modelBuilder.Entity<EdgeCommand>()
+            .HasIndex(command => command.CommandSequence).IsUnique();
+        modelBuilder.Entity<EdgeCommand>()
             .Property(command => command.ConcurrencyVersion)
             .IsConcurrencyToken();
         modelBuilder.Entity<FarmKiosk>()
@@ -635,7 +641,12 @@ public class AppDbContext : DbContext
             b.Property(r => r.RecipientRoles).HasMaxLength(256);
             b.Property(r => r.ChannelCodes).HasMaxLength(128);
             b.Property(r => r.TitleTemplate).HasMaxLength(256);
-            b.HasIndex(r => r.TypeCode).IsUnique();
+            b.HasIndex(r => r.TypeCode).IsUnique()
+                .HasFilter("\"FarmingAreaId\" IS NULL");
+            b.HasIndex(r => new { r.FarmingAreaId, r.TypeCode }).IsUnique()
+                .HasFilter("\"FarmingAreaId\" IS NOT NULL");
+            b.HasOne<FarmingArea>().WithMany()
+                .HasForeignKey(r => r.FarmingAreaId).OnDelete(DeleteBehavior.Restrict);
         });
 
         modelBuilder.Entity<Notification>()
@@ -804,8 +815,7 @@ public class AppDbContext : DbContext
             .HasFilter("\"UserCode\" IS NOT NULL");
 
         modelBuilder.Entity<FarmManagerAssignment>()
-            .HasIndex(a => new { a.ManagerUserId, a.FarmingAreaId })
-            .IsUnique();
+            .HasAlternateKey(a => new { a.ManagerUserId, a.FarmingAreaId });
         modelBuilder.Entity<FarmManagerAssignment>()
             .HasIndex(a => a.FarmingAreaId);
         modelBuilder.Entity<FarmManagerAssignment>()
@@ -824,6 +834,12 @@ public class AppDbContext : DbContext
             .HasForeignKey(a => a.AssignedByUserId)
             .OnDelete(DeleteBehavior.Restrict);
 
+        modelBuilder.Entity<FarmStaffAssignment>()
+            .HasOne<FarmManagerAssignment>().WithMany()
+            .HasForeignKey(a => new { a.ManagerUserId, a.FarmingAreaId })
+            .HasPrincipalKey(a => new { a.ManagerUserId, a.FarmingAreaId })
+            .OnDelete(DeleteBehavior.Restrict)
+            .HasConstraintName("FK_StaffAssignment_ManagerArea");
         modelBuilder.Entity<FarmStaffAssignment>()
             .HasIndex(a => a.StaffUserId)
             .IsUnique();
