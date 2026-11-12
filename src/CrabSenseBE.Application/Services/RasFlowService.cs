@@ -248,6 +248,7 @@ public class RasFlowService : IRasFlowService
     public async Task<ApiResponse<RasFlowDiagramDto>> CommandAsync(
         Guid areaId, Guid nodeId, RasFlowCommandRequest req, Guid? actorId = null, CancellationToken ct = default)
     {
+        HardwareControlGuard.RequireEnabled(_configuration);
         var actor = await _areas.CurrentUserAsync(ct);
         if (actor is not null && actor.Role is not (UserRole.FarmManager or UserRole.FarmStaff))
             throw AppException.Forbidden("Chỉ Farm Manager và Farm Staff được điều khiển vận hành RAS.");
@@ -590,6 +591,7 @@ public class RasFlowService : IRasFlowService
 
     public async Task ApplyAutoRelaysAsync(Guid deviceId, CancellationToken ct = default)
     {
+        if (HardwareControlGuard.IsDisabled(_configuration)) return;
         var now = DateTime.UtcNow;
         var device = await _uow.Devices.GetByIdAsync(deviceId, ct);
         var pumps = (await _uow.RasComponents.FindAsync(

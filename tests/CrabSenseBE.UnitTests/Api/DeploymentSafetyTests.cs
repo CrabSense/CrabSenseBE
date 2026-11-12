@@ -18,7 +18,11 @@ public sealed class DeploymentSafetyTests
         workflow.Should().Contain("pg_dump");
         workflow.Should().Contain("migrations bundle");
         workflow.Should().Contain("restoring previous application package");
-        workflow.Should().Contain("vars.EDGE_PROTOCOL_V2_READY == 'true'");
+        workflow.Should().NotContain("vars.EDGE_PROTOCOL_V2_READY == 'true'");
+        workflow.Should().Contain("Environment=EdgeSync__ControlDisabled=true");
+        workflow.Should().Contain("Environment=RasAutomation__FirmwareInterlockVerified=false");
+        workflow.Should().Contain("/health/edge-control");
+        workflow.Should().Contain("/opt/crabsense-api.previous/.hardware-control-disabled");
         workflow.Should().Contain("/opt/crabsense-api.previous/.edge-protocol-v2");
         workflow.Should().Contain("Protocol-1 application rollback is unsafe");
     }

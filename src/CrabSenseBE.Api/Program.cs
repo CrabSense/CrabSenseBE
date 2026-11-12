@@ -197,6 +197,10 @@ if (builder.Configuration.GetValue("Https:Redirect", false))
 app.UseAuthentication();
 app.UseAuthorization();
 app.MapControllers();
+app.MapGet("/health/edge-control", (IConfiguration config) => Results.Ok(new
+{
+    hardwareControlDisabled = CrabSenseBE.Application.Services.HardwareControlGuard.IsDisabled(config)
+})).AllowAnonymous();
 app.MapHealthChecks("/health/live", new HealthCheckOptions
 {
     Predicate = _ => false
