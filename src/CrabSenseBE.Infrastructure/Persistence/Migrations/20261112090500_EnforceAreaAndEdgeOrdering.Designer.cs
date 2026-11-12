@@ -3268,6 +3268,7 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                         .HasColumnType("uuid");
 
                     b.Property<string>("ApprovalStatus")
+                        .IsConcurrencyToken()
                         .IsRequired()
                         .HasColumnType("text");
 
