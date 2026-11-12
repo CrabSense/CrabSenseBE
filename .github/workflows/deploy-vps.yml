@@ -245,12 +245,60 @@ jobs:
                     sys.exit('Unsupported target session attributes.')
                 env['PGTARGETSESSIONATTRS'] = target
 
+            # Debian/Ubuntu pg_wrapper may select a different version for pg_dump
+            # and pg_restore. Use real binaries from the same installed client.
+            from pathlib import Path
+            import shutil
+
+            def client_version(binary):
+                result = subprocess.run([str(binary), '--version'], check=True,
+                                        text=True, capture_output=True)
+                match = re.search(r'\(PostgreSQL\)\s+(\d+(?:\.\d+)+|\d+)', result.stdout)
+                if not match:
+                    raise ValueError('Unrecognized PostgreSQL client version')
+                return tuple(int(part) for part in match.group(1).split('.'))
+
+            candidates = set()
+            for base in (Path('/usr/lib/postgresql'), Path('/usr/pgsql'),
+                         Path('/usr/local/pgsql'), Path('/opt/postgresql')):
+                candidates.update(base.glob('*/bin'))
+                candidates.add(base / 'bin')
+            candidates.update(Path('/usr').glob('pgsql-*/bin'))
+            candidates.update(Path('/usr/local').glob('pgsql-*/bin'))
+            for binary in ('pg_dump', 'pg_restore'):
+                found = shutil.which(binary, path=env.get('PATH'))
+                if found:
+                    candidates.add(Path(found).parent)
+                    candidates.add(Path(found).resolve().parent)
+
+            pairs = []
+            for directory in sorted(candidates):
+                dump = directory / 'pg_dump'
+                restore = directory / 'pg_restore'
+                if not (os.access(dump, os.X_OK) and os.access(restore, os.X_OK)):
+                    continue
+                # Avoid pg_wrapper symlinks even if --version happens to agree.
+                if any(binary.resolve().name == 'pg_wrapper' for binary in (dump, restore)):
+                    continue
+                try:
+                    dump_version = client_version(dump)
+                    restore_version = client_version(restore)
+                except (OSError, ValueError, subprocess.CalledProcessError):
+                    continue
+                if dump_version == restore_version:
+                    pairs.append((dump_version, str(directory), str(dump), str(restore)))
+
+            if not pairs:
+                sys.exit('No matching PostgreSQL client binaries found. Install a compatible PostgreSQL client package on the VPS.')
+            version, directory, pg_dump, pg_restore = max(pairs)
+            print('Using PostgreSQL client ' + '.'.join(map(str, version)) + ' from ' + directory, flush=True)
+
             backup = sys.argv[1]
             partial = backup + '.partial'
             try:
-                subprocess.run(['pg_dump', '--no-password', '--format=custom', '--file=' + partial],
+                subprocess.run([pg_dump, '--no-password', '--format=custom', '--file=' + partial],
                                env=env, check=True)
-                subprocess.run(['pg_restore', '--list', partial],
+                subprocess.run([pg_restore, '--list', partial],
                                stdout=subprocess.DEVNULL, check=True)
                 if not os.path.getsize(partial):
                     sys.exit('Database backup is empty.')
