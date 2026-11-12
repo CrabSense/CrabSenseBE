@@ -25,6 +25,7 @@ public sealed class FrozenStoragePermissionTests : IAsyncLifetime
     private readonly List<FrozenStorageTransaction> _transactions = new();
     private readonly List<FrozenInventoryAdjustment> _adjustments = new();
     private readonly List<FrozenCrabItem> _items = new();
+    private readonly List<HarvestVoucher> _vouchers = new();
     private readonly List<FrozenInventoryOpeningBalance> _openingBalances = new();
     private FrozenLot _lotA = null!;
     private int _saves;
@@ -131,7 +132,12 @@ public sealed class FrozenStoragePermissionTests : IAsyncLifetime
         areaRepo.Setup(repo => repo.Query())
             .Returns(() => new[] { areaA, areaB }.AsQueryable());
         uow.Setup(x => x.FarmingAreas).Returns(areaRepo.Object);
-        uow.Setup(x => x.FrozenLots).Returns(Repo(new List<FrozenLot> { _lotA, lotB }, item => item.Id).Object);
+        var lotRepo = Repo(new List<FrozenLot> { _lotA, lotB }, item => item.Id);
+        lotRepo.Setup(r => r.FindAsync(It.IsAny<System.Linq.Expressions.Expression<Func<FrozenLot, bool>>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((System.Linq.Expressions.Expression<Func<FrozenLot, bool>> predicate, CancellationToken _) =>
+                new[] { _lotA, lotB }.Where(predicate.Compile()).ToList());
+        uow.Setup(x => x.FrozenLots).Returns(lotRepo.Object);
+        uow.Setup(x => x.HarvestVouchers).Returns(Repo(_vouchers, item => item.Id).Object);
         uow.Setup(x => x.FrozenStorageTransactions).Returns(transactionRepo.Object);
         var itemRepo = Repo(_items, item => item.Id);
         itemRepo.Setup(r => r.FindAsync(It.IsAny<System.Linq.Expressions.Expression<Func<FrozenCrabItem, bool>>>(), It.IsAny<CancellationToken>()))
@@ -157,6 +163,26 @@ public sealed class FrozenStoragePermissionTests : IAsyncLifetime
     }
 
     public async Task DisposeAsync() => await _api.DisposeAsync();
+
+    [Fact]
+    public async Task Linked_inbound_cannot_exceed_confirmed_harvest_even_after_outbound()
+    {
+        var voucher = new HarvestVoucher { Id = Guid.NewGuid(), FarmingAreaId = AreaA,
+            Status = HarvestStatus.Completed, TotalQuantity = 3, TotalWeightKg = 0.6m };
+        _vouchers.Add(voucher);
+        _lotA.HarvestVoucherId = voucher.Id;
+        _lotA.Quantity = 1; _lotA.WeightKg = 0.2m;
+        _adjustments.Add(new FrozenInventoryAdjustment { FrozenLotId = LotA, QuantityDelta = -2, WeightDeltaKg = -0.4m });
+        var transaction = ApprovedTransaction(FrozenStorageTransactionType.Inbound, 1, 0.2m);
+        using var response = await _api.SendAsync(AppRoles.FarmStaff, StaffA, HttpMethod.Post,
+            $"/api/frozen-storage-transactions/{transaction.Id}/execute",
+            new StringContent("{\"actualQuantity\":1,\"actualWeightKg\":0.2}", Encoding.UTF8, "application/json"));
+        Assert.Equal(409, (int)response.StatusCode);
+        Assert.Equal(1, _lotA.Quantity);
+        Assert.Equal(0.2m, _lotA.WeightKg);
+        Assert.Equal(FrozenStorageTransactionStatus.Approved, transaction.Status);
+        Assert.Equal((uint)0, voucher.ConcurrencyVersion);
+    }
 
     [Fact]
     public async Task Tracked_outbound_requires_exact_available_barcodes_and_updates_stock_once()

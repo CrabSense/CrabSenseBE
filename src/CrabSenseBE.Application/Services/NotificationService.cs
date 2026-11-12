@@ -167,6 +167,7 @@ public class NotificationService : INotificationService
 
         var userId = ch.ChannelCode == "push" && _currentUser?.IsAuthenticated == true ? _currentUser.UserId : (Guid?)null;
         var (ok, detail) = await DispatchChannelAsync(ch, title, body, userId, ct);
+        if (userId.HasValue) await _uow.SaveChangesAsync(ct);
         return ok
             ? ApiResponse.Ok($"Test OK via {ch.ChannelCode}: {detail}")
             : throw AppException.BadRequest($"Test failed via {ch.ChannelCode}: {detail}");
@@ -179,7 +180,8 @@ public class NotificationService : INotificationService
             throw AppException.BadRequest("token is required.");
 
         var token = req.Token.Trim();
-        if (token.Length > 4096) throw AppException.BadRequest("Push token quá dài.");
+        if (token.Length > 1024 || token.Any(c => c < 33 || c > 126))
+            throw AppException.BadRequest("Push token không hợp lệ.");
         var activeOwner = (await _uow.UserPushTokens.FindAsync(t => t.Token == token && t.IsActive && t.UserId != userId, ct)).FirstOrDefault();
         if (activeOwner is not null)
             throw AppException.Conflict("Push token đang thuộc tài khoản khác; hủy đăng ký hoặc làm mới token trên thiết bị.");

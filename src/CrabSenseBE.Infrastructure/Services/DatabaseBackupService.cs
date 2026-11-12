@@ -137,7 +137,8 @@ public class DatabaseBackupService : IDatabaseBackupService
         // Tên theo UTC để không lệ thuộc timezone máy chủ.
         var fileName =
             $"crabsense_{SchemaName}_{DateTime.UtcNow:yyyyMMdd_HHmmss_fff}_{Guid.NewGuid():N}{BackupExtension}";
-        var path = Path.Combine(_directory, fileName);
+        var finalPath = Path.Combine(_directory, fileName);
+        var path = finalPath + ".partial";
 
         var args = new List<string>
         {
@@ -181,7 +182,9 @@ public class DatabaseBackupService : IDatabaseBackupService
 
         try { await ValidateArchiveAsync(ResolveTool("pg_restore"), path, ct); }
         catch { TryDelete(path); throw; }
-        var info = Describe(path);
+        try { File.Move(path, finalPath); }
+        catch { TryDelete(path); throw; }
+        var info = Describe(finalPath);
         _logger.LogInformation(
             "Đã tạo backup DB {FileName} ({SizeBytes} bytes) trong {Seconds:0.0}s",
             info.FileName, info.SizeBytes, sw.Elapsed.TotalSeconds);
