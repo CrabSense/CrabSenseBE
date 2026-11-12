@@ -179,6 +179,30 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<Alert>()
             .Property(a => a.Status)
             .HasConversion<string>();
+        modelBuilder.Entity<Alert>()
+            .Property(a => a.IncidentType)
+            .HasMaxLength(64);
+        modelBuilder.Entity<Alert>()
+            .Property(a => a.SourceType)
+            .HasMaxLength(64);
+        modelBuilder.Entity<Alert>()
+            .Property(a => a.SourceId)
+            .HasMaxLength(128);
+        modelBuilder.Entity<Alert>()
+            .HasIndex(a => a.FarmingAreaId);
+        modelBuilder.Entity<Alert>()
+            .HasIndex(a => new
+            {
+                a.FarmingAreaId,
+                a.SourceType,
+                a.SourceId,
+                a.IncidentType
+            })
+            .IsUnique()
+            .HasFilter(
+                "\"SourceType\" IS NOT NULL AND \"SourceId\" IS NOT NULL "
+                + "AND \"IncidentType\" IS NOT NULL "
+                + "AND \"Status\" IN ('Active', 'Acknowledged', 'InProgress')");
 
         modelBuilder.Entity<Device>()
             .Property(d => d.Status)

@@ -234,8 +234,15 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<Guid?>("FarmingAreaId")
+                        .HasColumnType("uuid");
+
                     b.Property<string>("IncidentId")
                         .HasColumnType("text");
+
+                    b.Property<string>("IncidentType")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
 
                     b.Property<DateTime?>("LastOccurredAt")
                         .HasColumnType("timestamp with time zone");
@@ -275,6 +282,14 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                         .IsRequired()
                         .HasColumnType("text");
 
+                    b.Property<string>("SourceId")
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)");
+
+                    b.Property<string>("SourceType")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
                     b.Property<string>("Status")
                         .IsRequired()
                         .HasColumnType("text");
@@ -289,7 +304,13 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
 
                     b.HasIndex("AlertThresholdId");
 
+                    b.HasIndex("FarmingAreaId");
+
                     b.HasIndex("SensorId");
+
+                    b.HasIndex("FarmingAreaId", "SourceType", "SourceId", "IncidentType")
+                        .IsUnique()
+                        .HasFilter("\"SourceType\" IS NOT NULL AND \"SourceId\" IS NOT NULL AND \"IncidentType\" IS NOT NULL AND \"Status\" IN ('Active', 'Acknowledged', 'InProgress')");
 
                     b.ToTable("Alerts", "be");
                 });

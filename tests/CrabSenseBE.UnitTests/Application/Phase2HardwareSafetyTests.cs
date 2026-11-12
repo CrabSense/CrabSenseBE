@@ -410,6 +410,48 @@ public sealed class Phase2HardwareSafetyTests
     }
 
     [Fact]
+    public async Task HardwareStart_WithoutCommandDispatcher_ReturnsNotImplemented()
+    {
+        var userId = Guid.NewGuid();
+        var areaId = Guid.NewGuid();
+        var uow = new Mock<IUnitOfWork>();
+        uow.SetupGet(x => x.Users).Returns(Repository(new AppUser
+        {
+            Id = userId,
+            IsActive = true,
+            Role = UserRole.FarmManager
+        }).Object);
+        uow.SetupGet(x => x.FarmManagerAssignments).Returns(Repository(
+            new FarmManagerAssignment
+            {
+                ManagerUserId = userId,
+                FarmingAreaId = areaId
+            }).Object);
+        uow.SetupGet(x => x.FarmingAreas).Returns(Repository(
+            new FarmingArea { Id = areaId, Name = "A" }).Object);
+        uow.SetupGet(x => x.WaterAnalysisRuns)
+            .Returns(Repository<WaterAnalysisRun>().Object);
+        var current = new Mock<ICurrentUserService>();
+        current.SetupGet(x => x.IsAuthenticated).Returns(true);
+        current.SetupGet(x => x.UserId).Returns(userId);
+        var service = new WaterAnalysisService(
+            uow.Object,
+            current.Object,
+            Microsoft.Extensions.Options.Options.Create(
+                new CrabSenseBE.Application.Options.WaterAnalysisOptions()));
+
+        var act = () => service.StartAsync(
+            areaId,
+            new StartWaterAnalysisRequest(
+                "NO2", null, null, null, "hardware"));
+
+        (await act.Should().ThrowAsync<AppException>())
+            .Which.StatusCode.Should().Be(501);
+        uow.Verify(x => x.SaveChangesAsync(
+            It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
     public async Task Kiosk_A_CannotUpdate_Device_OwnedBy_Kiosk_B()
     {
         const string secret = "kiosk-a-secret";
@@ -698,6 +740,57 @@ public sealed class Phase2HardwareSafetyTests
             It.IsAny<string>(),
             It.IsAny<string>(),
             It.IsAny<Stream>(),
+            It.IsAny<string>(),
+            It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task FirstRelayState_IsObservationNotFalseTransitionAlert()
+    {
+        var device = new Device
+        {
+            Id = Guid.NewGuid(),
+            DeviceCode = "edge-a",
+            EdgeState = "Approved",
+            Status = DeviceStatus.Online
+        };
+        var node = new RasComponent
+        {
+            Id = Guid.NewGuid(),
+            RelayDeviceId = device.Id,
+            RelayChannel = "1",
+            IsOn = false,
+            LastReportedAt = null
+        };
+        var alerts = new Mock<IAlertService>();
+        var uow = new Mock<IUnitOfWork>();
+        uow.SetupGet(x => x.Devices).Returns(Repository(device).Object);
+        uow.SetupGet(x => x.RasComponents).Returns(Repository(node).Object);
+        uow.Setup(x => x.SaveChangesAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(1);
+        var service = new IotService(
+            uow.Object,
+            Mock.Of<IStorageService>(),
+            alerts.Object,
+            Mock.Of<IRasFlowService>(),
+            NullLogger<IotService>.Instance);
+
+        await service.ReportRelayAsync(device.DeviceCode, 1, true);
+
+        node.IsOn.Should().BeTrue();
+        node.LastReportedAt.Should().NotBeNull();
+        alerts.Verify(alert => alert.RaiseOnceAsync(
+            It.IsAny<string>(),
+            It.IsAny<string>(),
+            It.IsAny<string>(),
+            It.IsAny<string>(),
+            It.IsAny<string?>(),
+            It.IsAny<Guid?>(),
+            It.IsAny<IReadOnlyDictionary<string, string?>?>(),
+            It.IsAny<CancellationToken>()), Times.Never);
+        alerts.Verify(alert => alert.ClearAsync(
+            It.IsAny<string>(),
+            It.IsAny<string>(),
             It.IsAny<string>(),
             It.IsAny<CancellationToken>()), Times.Never);
     }

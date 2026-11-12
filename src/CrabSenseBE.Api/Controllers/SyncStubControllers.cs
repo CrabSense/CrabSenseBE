@@ -92,16 +92,14 @@ public class SyncQueueStubController : ControllerBase
                         .SingleOrDefaultAsync(HttpContext.RequestAborted);
                     if (legacy is not null)
                     {
-                        if (legacy.Status == "processed")
-                        {
-                            processed.Add(key);
-                            await transaction.CommitAsync(HttpContext.RequestAborted);
-                        }
-                        else
-                        {
-                            failed.Add(key);
-                            await transaction.RollbackAsync(HttpContext.RequestAborted);
-                        }
+                        // Legacy rows have no actor ownership. Even when the
+                        // payload hash matches, acknowledging "processed" would
+                        // let another user claim an operation they do not own.
+                        // Keep the row immutable and require explicit audited
+                        // ownership reconciliation.
+                        conflicts.Add(key);
+                        await transaction.RollbackAsync(
+                            HttpContext.RequestAborted);
                         continue;
                     }
                 }

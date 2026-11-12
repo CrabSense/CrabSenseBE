@@ -5,6 +5,7 @@ using CrabSenseBE.Domain.Entities;
 using CrabSenseBE.Domain.Enums;
 using CrabSenseBE.Domain.Interfaces;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using System.Security.Cryptography;
 
@@ -21,6 +22,7 @@ public class IotService : IIotService
     private readonly IRasFlowService _rasFlow;
     private readonly ILogger<IotService> _logger;
     private readonly FarmAreaScope _areas;
+    private readonly IConfiguration? _configuration;
 
     public IotService(
         IUnitOfWork uow,
@@ -28,7 +30,8 @@ public class IotService : IIotService
         IAlertService alerts,
         IRasFlowService rasFlow,
         ILogger<IotService> logger,
-        ICurrentUserService? currentUser = null)
+        ICurrentUserService? currentUser = null,
+        IConfiguration? configuration = null)
     {
         _uow = uow;
         _storage = storage;
@@ -36,6 +39,7 @@ public class IotService : IIotService
         _rasFlow = rasFlow;
         _logger = logger;
         _areas = new FarmAreaScope(uow, currentUser);
+        _configuration = configuration;
     }
 
     // ─── Ingest (ESP32 HTTP) ────────────────────────────────────────────────
@@ -79,7 +83,8 @@ public class IotService : IIotService
         {
             await _alerts.EvaluateMeasurementAsync(sensor, req.Value, ct);
             if (sensor.SensorCode.StartsWith("float_", StringComparison.Ordinal))
-                await EvaluateTanksAsync(sensor.SensorCode, req.Value, ct);
+                await EvaluateTanksAsync(
+                    sensor, req.Value, measurement.MeasuredAt, ct);
             if (sensor.DeviceId is Guid deviceId)
                 await _rasFlow.ApplyAutoRelaysAsync(deviceId, ct);
         }
@@ -107,17 +112,25 @@ public class IotService : IIotService
         var logged = false;
         foreach (var node in nodes)
         {
-            var wasOn = node.IsOn && node.LastReportedAt.HasValue;
+            var hadObservation = node.LastReportedAt.HasValue;
+            var wasOn = node.IsOn;
             node.IsOn = on;
-            node.RunStartedAt = on ? (wasOn ? node.RunStartedAt : DateTime.UtcNow) : null;
+            node.RunStartedAt = on
+                ? hadObservation && wasOn
+                    ? node.RunStartedAt
+                    : DateTime.UtcNow
+                : null;
             node.LastReportedAt = DateTime.UtcNow;
             // This tracked entity only changes observed fields, not control mode.
             var offMessage = $"{node.Name} đã tắt";
             var onMessage = $"{node.Name} đã bật";
-            if (wasOn && !on)
+            if (hadObservation && wasOn && !on)
             {
-                await _alerts.ClearAsync(onMessage, ct);
-                await _alerts.RaiseOnceAsync(offMessage, NotificationTypeCodes.RasRelayOff,
+                await _alerts.ClearAsync(
+                    "relay_on", "RasComponent", node.Id.ToString("N"), ct);
+                await _alerts.RaiseOnceAsync(
+                    "relay_off", "RasComponent", node.Id.ToString("N"),
+                    offMessage, NotificationTypeCodes.RasRelayOff,
                     await AreaOfWaterSystemAsync(node.WaterSystemId, ct),
                     new Dictionary<string, string?>
                     {
@@ -126,10 +139,13 @@ public class IotService : IIotService
                         ["device"] = device.DeviceCode
                     }, ct);
             }
-            else if (!wasOn && on)
+            else if (hadObservation && !wasOn && on)
             {
-                await _alerts.ClearAsync(offMessage, ct);
-                await _alerts.RaiseOnceAsync(onMessage, NotificationTypeCodes.RasRelayOn,
+                await _alerts.ClearAsync(
+                    "relay_off", "RasComponent", node.Id.ToString("N"), ct);
+                await _alerts.RaiseOnceAsync(
+                    "relay_on", "RasComponent", node.Id.ToString("N"),
+                    onMessage, NotificationTypeCodes.RasRelayOn,
                     await AreaOfWaterSystemAsync(node.WaterSystemId, ct),
                     new Dictionary<string, string?>
                     {
@@ -183,9 +199,20 @@ public class IotService : IIotService
         return true;
     }
 
-    private async Task EvaluateTanksAsync(string code, decimal value, CancellationToken ct)
+    private async Task EvaluateTanksAsync(
+        Sensor sourceSensor,
+        decimal value,
+        DateTime measuredAt,
+        CancellationToken ct)
     {
-        var nodes = await _uow.RasComponents.FindAsync(c => c.ParamDefaultsJson != null, ct);
+        if (!sourceSensor.IsActive
+            || sourceSensor.DeviceId is not Guid deviceId
+            || sourceSensor.WaterSystemId is not Guid waterSystemId)
+            return;
+        var now = DateTime.UtcNow;
+        var nodes = await _uow.RasComponents.FindAsync(
+            c => c.WaterSystemId == waterSystemId
+                && c.ParamDefaultsJson != null, ct);
         foreach (var node in nodes)
         {
             System.Text.Json.JsonDocument doc;
@@ -206,28 +233,63 @@ public class IotService : IIotService
             if (group is "electric" or "pump") continue;
             var low = text("lowFloat");
             var high = text("highFloat");
-            if (low != code && high != code) continue;
+            if (low != sourceSensor.SensorCode
+                && high != sourceSensor.SensorCode) continue;
             var name = text("label");
             if (string.IsNullOrWhiteSpace(name)) name = node.Name;
-            var lowVal = low == code ? value : await LatestFloatAsync(low, ct);
-            var highVal = high == code ? value : await LatestFloatAsync(high, ct);
+            var lowVal = low == sourceSensor.SensorCode
+                ? FreshIncoming(value, measuredAt, now)
+                : await LatestFloatAsync(
+                    low, deviceId, waterSystemId, now, ct);
+            var highVal = high == sourceSensor.SensorCode
+                ? FreshIncoming(value, measuredAt, now)
+                : await LatestFloatAsync(
+                    high, deviceId, waterSystemId, now, ct);
             var level = TankLevel(low, text("lowWhen"), lowVal, high, text("highWhen"), highVal);
             var areaId = await AreaOfWaterSystemAsync(node.WaterSystemId, ct);
             var tokens = new Dictionary<string, string?> { ["name"] = name, ["code"] = node.Code };
-            if (level == "Tràn")
+            if (level == "Không an toàn")
             {
-                await _alerts.ClearAsync($"{name} đang cạn", ct);
-                await _alerts.RaiseOnceAsync($"{name} đang tràn", NotificationTypeCodes.TankOverflow, areaId, tokens, ct);
+                await _alerts.RaiseOnceAsync(
+                    "tank_sensor_conflict", "RasComponent",
+                    node.Id.ToString("N"),
+                    $"{name} có tín hiệu phao mâu thuẫn",
+                    NotificationTypeCodes.TankOverflow,
+                    areaId, tokens, ct);
+            }
+            else if (level == "Tràn")
+            {
+                await _alerts.ClearAsync(
+                    "tank_sensor_conflict", "RasComponent",
+                    node.Id.ToString("N"), ct);
+                await _alerts.ClearAsync(
+                    "tank_empty", "RasComponent", node.Id.ToString("N"), ct);
+                await _alerts.RaiseOnceAsync(
+                    "tank_overflow", "RasComponent", node.Id.ToString("N"),
+                    $"{name} đang tràn", NotificationTypeCodes.TankOverflow,
+                    areaId, tokens, ct);
             }
             else if (level == "Cạn")
             {
-                await _alerts.ClearAsync($"{name} đang tràn", ct);
-                await _alerts.RaiseOnceAsync($"{name} đang cạn", NotificationTypeCodes.TankEmpty, areaId, tokens, ct);
+                await _alerts.ClearAsync(
+                    "tank_sensor_conflict", "RasComponent",
+                    node.Id.ToString("N"), ct);
+                await _alerts.ClearAsync(
+                    "tank_overflow", "RasComponent", node.Id.ToString("N"), ct);
+                await _alerts.RaiseOnceAsync(
+                    "tank_empty", "RasComponent", node.Id.ToString("N"),
+                    $"{name} đang cạn", NotificationTypeCodes.TankEmpty,
+                    areaId, tokens, ct);
             }
             else if (level == "Bình thường")
             {
-                await _alerts.ClearAsync($"{name} đang tràn", ct);
-                await _alerts.ClearAsync($"{name} đang cạn", ct);
+                await _alerts.ClearAsync(
+                    "tank_sensor_conflict", "RasComponent",
+                    node.Id.ToString("N"), ct);
+                await _alerts.ClearAsync(
+                    "tank_overflow", "RasComponent", node.Id.ToString("N"), ct);
+                await _alerts.ClearAsync(
+                    "tank_empty", "RasComponent", node.Id.ToString("N"), ct);
             }
             }
         }
@@ -239,15 +301,54 @@ public class IotService : IIotService
         return (await _uow.WaterSystems.GetByIdAsync(id, ct))?.FarmingAreaId;
     }
 
-    private async Task<decimal?> LatestFloatAsync(string code, CancellationToken ct)
+    private decimal? FreshIncoming(
+        decimal value,
+        DateTime measuredAt,
+        DateTime now) =>
+        IsFreshMeasurement(measuredAt, now) ? value : null;
+
+    private async Task<decimal?> LatestFloatAsync(
+        string code,
+        Guid deviceId,
+        Guid waterSystemId,
+        DateTime now,
+        CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(code)) return null;
-        var sensor = await _uow.Sensors.FirstOrDefaultAsync(s => s.SensorCode == code, ct);
+        var sensor = await _uow.Sensors.FirstOrDefaultAsync(
+            s => s.SensorCode == code
+                && s.DeviceId == deviceId
+                && s.WaterSystemId == waterSystemId
+                && s.IsActive, ct);
         if (sensor is null) return null;
         var latest = (await _uow.WaterMeasurements.FindAsync(m => m.SensorId == sensor.Id, ct))
             .OrderByDescending(m => m.MeasuredAt)
             .FirstOrDefault();
-        return latest?.Value;
+        return latest is not null
+            && sensor.LastSeenAt is DateTime lastSeenAt
+            && IsFreshMeasurement(lastSeenAt, now)
+            && IsFreshMeasurement(latest.MeasuredAt, now)
+            ? latest.Value
+            : null;
+    }
+
+    private bool IsFreshMeasurement(DateTime measuredAt, DateTime now)
+    {
+        var maxAgeSeconds = Math.Clamp(
+            _configuration?.GetValue(
+                "RasAutomation:SensorFreshnessSeconds:Float",
+                _configuration?.GetValue(
+                    "RasAutomation:DefaultSensorFreshnessSeconds", 30) ?? 30)
+                ?? 30,
+            5,
+            3600);
+        var futureToleranceSeconds = Math.Clamp(
+            _configuration?.GetValue(
+                "RasAutomation:FutureTimestampToleranceSeconds", 5) ?? 5,
+            0,
+            60);
+        return measuredAt >= now.AddSeconds(-maxAgeSeconds)
+            && measuredAt <= now.AddSeconds(futureToleranceSeconds);
     }
 
     /// <summary>Cạn and tràn come from the two assigned floats. Bình thường is neither.</summary>
@@ -264,8 +365,11 @@ public class IotService : IIotService
             var wantOn = when != "off";
             return isOn == wantOn;
         }
-        if (hit(high, highWhen, highVal)) return "Tràn";
-        if (hit(low, lowWhen, lowVal)) return "Cạn";
+        var highHit = hit(high, highWhen, highVal);
+        var lowHit = hit(low, lowWhen, lowVal);
+        if (highHit && lowHit) return "Không an toàn";
+        if (highHit) return "Tràn";
+        if (lowHit) return "Cạn";
         if ((assigned(low) && lowVal is null) || (assigned(high) && highVal is null)) return null;
         return "Bình thường";
     }
