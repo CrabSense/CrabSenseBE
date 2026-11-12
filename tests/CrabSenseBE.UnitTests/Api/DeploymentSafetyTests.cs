@@ -42,6 +42,22 @@ public sealed class DeploymentSafetyTests
     }
 
     [Fact]
+    public void Deployment_TransfersArchiveThroughPrivateStaging_AndRetainsSecretPermissions()
+    {
+        var workflow = File.ReadAllText(Path.Combine(RepositoryRoot(), ".github", "workflows", "deploy-vps.yml"));
+        workflow.Should().Contain("mkdir -m 700");
+        workflow.Should().Contain("chmod 644 crabsense-api.tar.gz");
+        workflow.Should().Contain("tar_tmp_path:");
+        workflow.Should().Contain("chmod 600 \"$STAGING/crabsense-api.tar.gz\"");
+        workflow.Should().Contain("chmod 600 ./publish/appsettings.Local.json");
+        workflow.Should().Contain("steps.prepare_vps.outcome == 'success'");
+        workflow.Should().Contain("Remove runner package and secrets");
+        workflow.Should().NotContain("target: \"/tmp/\"");
+        workflow.IndexOf("Prepare private VPS staging directory", StringComparison.Ordinal)
+            .Should().BeLessThan(workflow.IndexOf("Upload package to VPS", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void DevBootstrap_RemainsDevelopmentOnly()
     {
         var root = RepositoryRoot();

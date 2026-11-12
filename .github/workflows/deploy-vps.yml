@@ -164,6 +164,29 @@ jobs:
             const main = await github.rest.repos.getBranch({owner: context.repo.owner, repo: context.repo.repo, branch: 'main'});
             if (main.data.commit.sha !== process.env.TARGET_SHA) core.setFailed('Main advanced while packaging; refusing stale deployment.');
 
+      # The SCP action runs in a container with a different UID. Allow the
+      # container to read only the outer archive on this ephemeral runner.
+      # The inner secrets retain mode 0600; the VPS staging directory is 0700.
+      - name: Prepare private VPS staging directory
+        id: prepare_vps
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          password: ${{ secrets.VPS_PASSWORD }}
+          port: 22
+          script: |
+            set -eu
+            umask 077
+            mkdir -m 700 "/tmp/crabsense-deploy-${{ github.run_id }}-${{ github.run_attempt }}"
+
+      - name: Make outer archive readable to SCP container
+        run: |
+          set -eu
+          chmod 644 crabsense-api.tar.gz
+          test "$(stat -c %a crabsense-api.tar.gz)" = 644
+          test "$(stat -c %a ./publish/appsettings.Local.json)" = 600
+
       - name: Upload package to VPS
         uses: appleboy/scp-action@v0.1.7
         with:
@@ -172,7 +195,8 @@ jobs:
           password: ${{ secrets.VPS_PASSWORD }}
           port: 22
           source: "crabsense-api.tar.gz"
-          target: "/tmp/"
+          target: "/tmp/crabsense-deploy-${{ github.run_id }}-${{ github.run_attempt }}/"
+          tar_tmp_path: "/tmp/crabsense-deploy-${{ github.run_id }}-${{ github.run_attempt }}/"
 
       - name: Backup, migrate, deploy and health-check
         uses: appleboy/ssh-action@v1.2.0
@@ -193,7 +217,14 @@ jobs:
             fi
             rm -rf /opt/crabsense-api.next
             mkdir -p /opt/crabsense-api.next
-            tar -xzf /tmp/crabsense-api.tar.gz -C /opt/crabsense-api.next
+            STAGING="/tmp/crabsense-deploy-${{ github.run_id }}-${{ github.run_attempt }}"
+            test -d "$STAGING"
+            test ! -L "$STAGING"
+            test "$(stat -c %a "$STAGING")" = 700
+            chmod 600 "$STAGING/crabsense-api.tar.gz"
+            tar -xzf "$STAGING/crabsense-api.tar.gz" -C /opt/crabsense-api.next
+            rm -f "$STAGING/crabsense-api.tar.gz"
+            test "$(stat -c %a /opt/crabsense-api.next/appsettings.Local.json)" = 600
             chmod 600 /opt/crabsense-api.next/secrets/google-drive-sa.json 2>/dev/null || true
             test -f /opt/crabsense-api.next/.hardware-control-disabled
             DB_CONNECTION="$(python3 - <<'PY'
@@ -453,3 +484,21 @@ jobs:
             curl -fsS http://127.0.0.1:5080/health/edge-control
             echo
             echo DEPLOY_OK
+
+      - name: Clean private VPS staging
+        if: always() && steps.prepare_vps.outcome == 'success'
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          password: ${{ secrets.VPS_PASSWORD }}
+          port: 22
+          script: |
+            set -eu
+            rm -rf -- "/tmp/crabsense-deploy-${{ github.run_id }}-${{ github.run_attempt }}"
+
+      - name: Remove runner package and secrets
+        if: always()
+        run: |
+          rm -f crabsense-api.tar.gz
+          rm -rf ./publish
