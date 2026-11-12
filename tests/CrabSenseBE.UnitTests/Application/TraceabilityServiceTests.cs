@@ -445,12 +445,12 @@ public class TraceabilityServiceTests
         voucherRepo.Setup(r => r.GetByIdAsync(voucherId, It.IsAny<CancellationToken>())).ReturnsAsync(voucher);
 
         var lotRepo = new Mock<IRepository<FrozenLot>>();
-        lotRepo.Setup(r => r.FirstOrDefaultAsync(It.IsAny<System.Linq.Expressions.Expression<Func<FrozenLot, bool>>>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(lot);
+        lotRepo.Setup(r => r.FindAsync(It.IsAny<System.Linq.Expressions.Expression<Func<FrozenLot, bool>>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new[] { lot });
 
         var lineRepo = new Mock<IRepository<HarvestLine>>();
-        lineRepo.Setup(r => r.FirstOrDefaultAsync(It.IsAny<System.Linq.Expressions.Expression<Func<HarvestLine, bool>>>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(firstLine);
+        lineRepo.Setup(r => r.FindAsync(It.IsAny<System.Linq.Expressions.Expression<Func<HarvestLine, bool>>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new[] { firstLine });
 
         _uow.Setup(u => u.QrCodes).Returns(qrRepo.Object);
         _uow.Setup(u => u.HarvestVouchers).Returns(voucherRepo.Object);
@@ -464,6 +464,15 @@ public class TraceabilityServiceTests
         result.Data!.HarvestVoucherCode.Should().Be("HV-TEST");
         result.Data.FrozenLotCode.Should().Be("FL-001");
         result.Data.Grade.Should().Be("L");
+        result.Data.FrozenLots.Should().ContainSingle();
+        result.Data.Grades.Should().Equal("L");
+
+        var second = new FrozenLot { LotCode = "FL-002", HarvestVoucherId = voucherId, Grade = "M" };
+        lotRepo.Setup(r => r.FindAsync(It.IsAny<System.Linq.Expressions.Expression<Func<FrozenLot, bool>>>(), It.IsAny<CancellationToken>())).ReturnsAsync(new[] { lot, second });
+        var mixed = await Create().GetTraceabilityAsync("HV-TEST-ABCDEF");
+        mixed.Data!.FrozenLotCode.Should().BeNull();
+        mixed.Data.Grade.Should().Be("Mixed");
+        mixed.Data.FrozenLots!.Select(l => l.LotCode).Should().Equal("FL-001", "FL-002");
     }
 
     // ─────────────────────────────────────────────────────────────────────────
