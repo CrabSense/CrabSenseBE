@@ -47,7 +47,7 @@ public class NotificationService : INotificationService
         Guid userId, bool unreadOnly = false, CancellationToken ct = default)
     {
         var list = await _uow.Notifications.FindAsync(
-            n => n.UserId == userId && (!unreadOnly || !n.IsRead), ct);
+            n => n.UserId == userId && n.Channel != "delivery" && (!unreadOnly || !n.IsRead), ct);
         return ApiResponse<IEnumerable<NotificationDto>>.Ok(
             list.OrderByDescending(n => n.CreatedAt).Select(Map));
     }
@@ -55,7 +55,7 @@ public class NotificationService : INotificationService
     public async Task<ApiResponse<AlertUnreadCountDto>> GetUnreadCountAsync(
         Guid userId, CancellationToken ct = default)
     {
-        var count = await _uow.Notifications.CountAsync(n => n.UserId == userId && !n.IsRead, ct);
+        var count = await _uow.Notifications.CountAsync(n => n.UserId == userId && n.Channel != "delivery" && !n.IsRead, ct);
         return ApiResponse<AlertUnreadCountDto>.Ok(new AlertUnreadCountDto(count, count));
     }
 
@@ -79,7 +79,7 @@ public class NotificationService : INotificationService
     public async Task<ApiResponse> MarkAllReadAsync(Guid userId, CancellationToken ct = default)
     {
         var unread = (await _uow.Notifications.FindAsync(
-            n => n.UserId == userId && !n.IsRead, ct)).ToList();
+            n => n.UserId == userId && n.Channel != "delivery" && !n.IsRead, ct)).ToList();
         if (unread.Count == 0) return ApiResponse.Ok("No unread notifications.");
 
         var now = DateTime.UtcNow;
@@ -420,9 +420,12 @@ public class NotificationService : INotificationService
         var scoped = NotificationTypeCodes.IsWarningType(code)
             || areaId.HasValue || rule?.ScopeByArea == true;
 
-        // Rule chưa seed (loại mới) → giữ hành vi cũ; rule bị tắt → không gửi gì.
-        if (rule is not null && !rule.IsEnabled) return;
-        if (!SeverityPasses(rule?.MinSeverity, severity)) return;
+        // Critical environmental warnings are mandatory for the assigned farm.
+        // Turning off optional notifications must never suppress them.
+        var critical = NotificationTypeCodes.IsWarningType(code)
+            && string.Equals(severity, nameof(AlertSeverity.Critical), StringComparison.OrdinalIgnoreCase);
+        if (!critical && rule is not null && !rule.IsEnabled) return;
+        if (!critical && !SeverityPasses(rule?.MinSeverity, severity)) return;
 
         var roles = SplitCsv(rule?.RecipientRoles ?? _fallback.FallbackRecipientRoles)
             .Select(r => UserRoleParsing.TryParse(r, out var v) ? (UserRole?)v : null)
@@ -430,6 +433,7 @@ public class NotificationService : INotificationService
             .Select(r => r!.Value)
             .Distinct()
             .ToArray();
+        if (critical) roles = [UserRole.FarmAdministrator, UserRole.FarmManager, UserRole.FarmStaff];
         if (roles.Length == 0) return;
 
         var recipients = (await _uow.Users.FindAsync(u => u.IsActive && roles.Contains(u.Role), ct)).ToList();
@@ -444,7 +448,8 @@ public class NotificationService : INotificationService
         var channels = (await _uow.NotificationChannels.FindAsync(
             c => c.IsEnabled && channelCodes.Contains(c.ChannelCode), ct)).ToList();
         var pushChannel = channels.FirstOrDefault(c => c.ChannelCode == "push");
-        var createInApp = channelCodes.Contains("in_app", StringComparer.OrdinalIgnoreCase);
+        var createInApp = critical || channelCodes.Contains("in_app", StringComparer.OrdinalIgnoreCase);
+        var external = scoped ? Array.Empty<NotificationChannel>() : channels.Where(c => c.ChannelCode is "telegram" or "zalo_oa" or "email").ToArray();
 
         Notification? anchor = null;
         foreach (var user in recipients)
@@ -452,7 +457,7 @@ public class NotificationService : INotificationService
             if (!PrefsAllow(user.NotificationPrefsJson, code, severity)) continue;
 
             Notification? own = null;
-            if (createInApp)
+            if (createInApp || pushChannel is not null || (anchor is null && external.Length > 0))
             {
                 own = new Notification
                 {
@@ -461,7 +466,8 @@ public class NotificationService : INotificationService
                     TypeCode = code,
                     Title = title,
                     Body = body,
-                    Channel = "in_app"
+                    Channel = createInApp ? "in_app" : "delivery",
+                    IsRead = !createInApp
                 };
                 await _uow.Notifications.AddAsync(own, ct);
                 anchor ??= own;
@@ -486,7 +492,7 @@ public class NotificationService : INotificationService
         // Telegram / Zalo / Email: một đích chung toàn hệ thống (ConfigJson), gắn vào notification đầu tiên.
         if (anchor is not null && !scoped)
         {
-            foreach (var ch in channels.Where(c => c.ChannelCode is "telegram" or "zalo_oa" or "email"))
+            foreach (var ch in external)
             {
                 var (ok, detail) = await DispatchChannelAsync(ch, title, body, null, ct);
                 await _uow.NotificationDeliveries.AddAsync(new NotificationDelivery
@@ -717,7 +723,7 @@ public class NotificationService : INotificationService
             return (false, "no registered device tokens");
 
         if (!_fcm.Enabled || string.IsNullOrWhiteSpace(_fcm.ServerKey))
-            return (true, $"queued-stub ({tokens.Count} token(s), FCM not configured)");
+            return (false, "FCM not configured; push was not sent.");
 
         var client = _httpClientFactory.CreateClient("fcm");
         client.DefaultRequestHeaders.TryAddWithoutValidation("Authorization", $"key={_fcm.ServerKey}");
