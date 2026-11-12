@@ -4,6 +4,8 @@ using CrabSenseBE.Application.Interfaces;
 using CrabSenseBE.Domain.Entities;
 using CrabSenseBE.Domain.Enums;
 using CrabSenseBE.Domain.Interfaces;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 
 namespace CrabSenseBE.Application.Services;
 
@@ -12,12 +14,30 @@ public sealed class EdgeCommandService : IEdgeCommandService
     private readonly IUnitOfWork _uow;
     private readonly FarmAreaScope _areas;
     private readonly ICurrentUserService? _currentUser;
+    private readonly int _maxAttempts;
+    private readonly TimeSpan _commandTtl;
+    private readonly TimeSpan _leaseDuration;
 
-    public EdgeCommandService(IUnitOfWork uow, ICurrentUserService? currentUser = null)
+    public EdgeCommandService(
+        IUnitOfWork uow,
+        ICurrentUserService? currentUser = null,
+        IConfiguration? configuration = null)
     {
         _uow = uow;
         _currentUser = currentUser;
         _areas = new FarmAreaScope(uow, currentUser);
+        _maxAttempts = Math.Clamp(
+            configuration?.GetValue("EdgeSync:CommandMaxAttempts", 3) ?? 3,
+            1,
+            10);
+        _commandTtl = TimeSpan.FromSeconds(Math.Clamp(
+            configuration?.GetValue("EdgeSync:CommandTtlSeconds", 300) ?? 300,
+            30,
+            3600));
+        _leaseDuration = TimeSpan.FromSeconds(Math.Clamp(
+            configuration?.GetValue("EdgeSync:CommandLeaseSeconds", 30) ?? 30,
+            5,
+            300));
     }
 
     public async Task<ApiResponse<EdgeCommandDto>> EnqueueManualAsync(
@@ -104,8 +124,17 @@ public sealed class EdgeCommandService : IEdgeCommandService
         var duplicate = await _uow.EdgeCommands.FirstOrDefaultAsync(
             c => c.DeviceCode == deviceCode && c.CorrelationId == correlationId, ct);
         if (duplicate is not null)
+        {
+            if (!string.Equals(duplicate.Command, command, StringComparison.Ordinal)
+                || !string.Equals(duplicate.Channel, channel, StringComparison.Ordinal)
+                || !string.Equals(duplicate.RequestSource, requestSource, StringComparison.Ordinal)
+                || duplicate.RequestedByUserId != actorId)
+                throw AppException.Conflict(
+                    "IdempotencyKey đã được dùng cho payload hoặc actor khác.");
             return ApiResponse<EdgeCommandDto>.Ok(Map(duplicate), "Command already queued.");
+        }
 
+        var now = DateTime.UtcNow;
         var entity = new EdgeCommand
         {
             DeviceCode = deviceCode,
@@ -113,7 +142,8 @@ public sealed class EdgeCommandService : IEdgeCommandService
             Channel = channel,
             CorrelationId = correlationId,
             RequestedByUserId = actorId,
-            RequestSource = requestSource
+            RequestSource = requestSource,
+            ExpiresAt = now.Add(_commandTtl)
         };
         await _uow.EdgeCommands.AddAsync(entity, ct);
 
@@ -156,11 +186,28 @@ public sealed class EdgeCommandService : IEdgeCommandService
         var commands = new List<EdgeCommand>();
         foreach (var command in candidates)
         {
+            if (command.ExpiresAt == default)
+                command.ExpiresAt = command.CreatedAt.Add(_commandTtl);
+            if (command.ExpiresAt <= now || command.AttemptCount >= _maxAttempts)
+            {
+                command.Status = "timedout";
+                command.FailedAt = now;
+                command.ResultMessage = command.ExpiresAt <= now
+                    ? "Command expired before acknowledgement."
+                    : "Maximum delivery attempts exceeded.";
+                command.LeaseExpiresAt = null;
+                command.DeliveryAttemptId = null;
+                command.ConcurrencyVersion++;
+                _uow.EdgeCommands.Update(command);
+                continue;
+            }
             if (command.Status == "delivered" && command.Command == "toggle")
             {
                 command.Status = "timedout";
                 command.FailedAt = now;
                 command.ResultMessage = "Toggle timed out; automatic retry is unsafe.";
+                command.LeaseExpiresAt = null;
+                command.DeliveryAttemptId = null;
                 command.ConcurrencyVersion++;
                 _uow.EdgeCommands.Update(command);
                 continue;
@@ -168,15 +215,26 @@ public sealed class EdgeCommandService : IEdgeCommandService
             command.Status = "delivered";
             command.DeliveredAt = now;
             command.LastAttemptAt = now;
-            command.LeaseExpiresAt = now.AddSeconds(30);
+            command.LeaseExpiresAt = now.Add(_leaseDuration);
             command.LeaseHolder = leaseHolder.Trim();
+            command.DeliveryAttemptId = Guid.NewGuid();
             command.AttemptCount++;
             command.ConcurrencyVersion++;
             _uow.EdgeCommands.Update(command);
             commands.Add(command);
         }
         if (candidates.Count > 0)
-            await _uow.SaveChangesAsync(ct);
+        {
+            try
+            {
+                await _uow.SaveChangesAsync(ct);
+            }
+            catch (DbUpdateConcurrencyException)
+            {
+                throw AppException.Conflict(
+                    "Command đã được lease bởi một poll đồng thời; hãy poll lại.");
+            }
+        }
 
         return ApiResponse<IReadOnlyList<EdgeCommandDto>>.Ok(commands.Select(Map).ToList());
     }
@@ -185,7 +243,8 @@ public sealed class EdgeCommandService : IEdgeCommandService
         Guid id,
         EdgeCommandAckRequest request,
         string authenticatedDeviceCode,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        bool requireDeliveryAttemptId = false)
     {
         var command = await _uow.EdgeCommands.GetByIdAsync(id, ct)
             ?? throw AppException.NotFound("EdgeCommand");
@@ -196,12 +255,18 @@ public sealed class EdgeCommandService : IEdgeCommandService
             throw AppException.Forbidden("Credential không sở hữu command này.");
         if (command.Status != "delivered" || command.LeaseExpiresAt < DateTime.UtcNow)
             throw AppException.Conflict("Command không có delivery lease hợp lệ.");
+        if (request.DeliveryAttemptId.HasValue
+            && request.DeliveryAttemptId != command.DeliveryAttemptId)
+            throw AppException.Conflict("Delivery attempt đã cũ hoặc không hợp lệ.");
+        if (requireDeliveryAttemptId && !request.DeliveryAttemptId.HasValue)
+            throw AppException.Conflict("DeliveryAttemptId là bắt buộc cho device credential này.");
 
         command.Status = status;
         command.AcknowledgedAt = DateTime.UtcNow;
         command.FailedAt = status == "failed" ? DateTime.UtcNow : null;
         command.ResultMessage = request.Message?.Trim();
         command.LeaseExpiresAt = null;
+        command.DeliveryAttemptId = null;
         command.ConcurrencyVersion++;
         _uow.EdgeCommands.Update(command);
         await _uow.SaveChangesAsync(ct);
@@ -211,7 +276,9 @@ public sealed class EdgeCommandService : IEdgeCommandService
     private static EdgeCommandDto Map(EdgeCommand command) =>
         new(command.Id, command.DeviceCode, command.Command, command.Channel,
             command.Status, command.CreatedAt, command.CorrelationId,
-            command.LeaseExpiresAt, command.AttemptCount);
+            command.LeaseExpiresAt, command.AttemptCount,
+            command.DeliveryAttemptId,
+            command.ExpiresAt == default ? null : command.ExpiresAt);
 
     private async Task<Guid> ResolveDeviceAreaAsync(Device device, CancellationToken ct)
     {

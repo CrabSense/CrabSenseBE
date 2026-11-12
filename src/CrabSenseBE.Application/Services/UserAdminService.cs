@@ -130,7 +130,9 @@ public class UserAdminService : IUserAdminService
         {
             // Thu hồi phiên: token cũ hết hạn theo access token, refresh token chết ngay.
             user.RefreshToken = null;
+            user.RefreshTokenHash = null;
             user.RefreshTokenExpiry = null;
+            user.RefreshTokenVersion++;
         }
 
         _uow.Users.Update(user);
@@ -159,7 +161,9 @@ public class UserAdminService : IUserAdminService
 
         user.PasswordHash = BCrypt.Net.BCrypt.HashPassword(newPassword);
         user.RefreshToken = null;
+        user.RefreshTokenHash = null;
         user.RefreshTokenExpiry = null;
+        user.RefreshTokenVersion++;
         user.TokenVersion++;
         user.UpdatedAt = DateTime.UtcNow;
 
@@ -306,7 +310,9 @@ public class UserAdminService : IUserAdminService
 
         // Invalidate the refresh token after role change.
         user.RefreshToken = null;
+        user.RefreshTokenHash = null;
         user.RefreshTokenExpiry = null;
+        user.RefreshTokenVersion++;
         user.TokenVersion++;
 
         _uow.Users.Update(user);

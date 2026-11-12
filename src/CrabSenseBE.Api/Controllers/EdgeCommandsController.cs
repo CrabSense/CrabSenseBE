@@ -74,7 +74,15 @@ public sealed class EdgeCommandsController : ControllerBase
                 Request, _configuration, _uow, command.DeviceCode, ct);
             if (denied is not null) return denied;
             return Ok(await _service.AcknowledgeAsync(
-                id, request, identity!.DeviceCode, ct));
+                id,
+                request,
+                identity!.DeviceCode,
+                ct,
+                requireDeliveryAttemptId:
+                    !identity.IsLegacyCredential
+                    && _configuration.GetValue(
+                        "EdgeSync:RequireDeliveryAttemptId",
+                        false)));
         });
 
     private static async Task<IActionResult> Execute(

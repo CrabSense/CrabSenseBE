@@ -88,10 +88,16 @@ public class GoogleDriveMediaStorageService : IMediaStorageService
         {
             if (publicRead)
             {
-                var viaScript = await TryWebhookUploadAsync(
-                    data, fileName, contentType, underProject, ct);
-                if (viaScript is not null)
-                    return viaScript;
+                // Apps Script uses a base64 JSON contract and therefore buffers.
+                // Keep that compatibility path only for small files; large media
+                // uses the streaming Drive API below.
+                if (data.CanSeek && data.Length - data.Position <= 10L * 1024 * 1024)
+                {
+                    var viaScript = await TryWebhookUploadAsync(
+                        data, fileName, contentType, underProject, ct);
+                    if (viaScript is not null)
+                        return viaScript;
+                }
             }
 
             var rootId = publicRead
@@ -107,10 +113,10 @@ public class GoogleDriveMediaStorageService : IMediaStorageService
             if (!publicRead && !string.Equals(targetFolderId, rootId, StringComparison.Ordinal))
                 await EnsurePrivateFolderAsync(targetFolderId, ct);
 
-            await using var buffer = new MemoryStream();
-            await data.CopyToAsync(buffer, ct);
-            buffer.Position = 0;
-            var size = buffer.Length;
+            if (!data.CanSeek)
+                throw AppException.BadRequest(
+                    "Google Drive upload requires a seekable stream.");
+            var size = data.Length - data.Position;
 
             var meta = new DriveFile
             {
@@ -119,7 +125,12 @@ public class GoogleDriveMediaStorageService : IMediaStorageService
                 Description = $"CrabSense {relative}"
             };
 
-            var request = _drive.Files.Create(meta, buffer, string.IsNullOrWhiteSpace(contentType) ? "application/octet-stream" : contentType);
+            var request = _drive.Files.Create(
+                meta,
+                data,
+                string.IsNullOrWhiteSpace(contentType)
+                    ? "application/octet-stream"
+                    : contentType);
             request.Fields = "id, webViewLink, webContentLink, size";
             request.SupportsAllDrives = true;
 
@@ -171,12 +182,30 @@ public class GoogleDriveMediaStorageService : IMediaStorageService
 
     public async Task<Stream> DownloadAsync(string storageKey, CancellationToken ct = default)
     {
-        var ms = new MemoryStream();
-        var request = _drive.Files.Get(storageKey);
-        request.SupportsAllDrives = true;
-        await request.DownloadAsync(ms, ct);
-        ms.Position = 0;
-        return ms;
+        var path = Path.GetTempFileName();
+        FileStream? file = null;
+        try
+        {
+            file = new FileStream(
+                path,
+                FileMode.Create,
+                FileAccess.ReadWrite,
+                FileShare.Read,
+                81_920,
+                FileOptions.Asynchronous | FileOptions.DeleteOnClose);
+            var request = _drive.Files.Get(storageKey);
+            request.SupportsAllDrives = true;
+            await request.DownloadAsync(file, ct);
+            file.Position = 0;
+            return file;
+        }
+        catch
+        {
+            if (file is not null)
+                await file.DisposeAsync();
+            try { System.IO.File.Delete(path); } catch (IOException) { }
+            throw;
+        }
     }
 
     public async Task EnsurePrivateAccessAsync(

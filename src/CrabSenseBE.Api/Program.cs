@@ -6,6 +6,7 @@ using Microsoft.OpenApi.Models;
 using Serilog;
 using CrabSenseBE.Api.Services;
 using CrabSenseBE.Application.Interfaces;
+using CrabSenseBE.Domain.Interfaces;
 
 var builder = WebApplication.CreateBuilder(args);
 LoadDotEnv(builder.Environment.ContentRootPath);
@@ -44,7 +45,7 @@ builder.Services.AddRateLimiter(options =>
     {
         context.HttpContext.Response.ContentType = "application/json";
         await context.HttpContext.Response.WriteAsync(
-            "{\"success\":false,\"message\":\"Quá nhiều lần thử đăng nhập. Vui lòng thử lại sau ít phút.\"}",
+            "{\"success\":false,\"message\":\"Quá nhiều yêu cầu xác thực. Vui lòng thử lại sau ít phút.\"}",
             ct);
     };
     options.AddPolicy("login", context =>
@@ -53,6 +54,15 @@ builder.Services.AddRateLimiter(options =>
             _ => new System.Threading.RateLimiting.FixedWindowRateLimiterOptions
             {
                 PermitLimit = 20,
+                Window = TimeSpan.FromMinutes(5),
+                QueueLimit = 0
+            }));
+    options.AddPolicy("refresh", context =>
+        System.Threading.RateLimiting.RateLimitPartition.GetFixedWindowLimiter(
+            context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+            _ => new System.Threading.RateLimiting.FixedWindowRateLimiterOptions
+            {
+                PermitLimit = 30,
                 Window = TimeSpan.FromMinutes(5),
                 QueueLimit = 0
             }));
@@ -160,6 +170,21 @@ if (builder.Configuration.GetValue("Swagger:Enabled", app.Environment.IsDevelopm
         c.RoutePrefix = "swagger";
     });
 }
+
+app.Use(async (context, next) =>
+{
+    var backups = context.RequestServices.GetRequiredService<IDatabaseBackupService>();
+    if (backups.IsMaintenanceMode)
+    {
+        context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+        context.Response.ContentType = "application/json";
+        await context.Response.WriteAsync(
+            "{\"success\":false,\"message\":\"Hệ thống đang ở maintenance mode để phục hồi dữ liệu.\"}",
+            context.RequestAborted);
+        return;
+    }
+    await next();
+});
 
 app.UseCors("AllowFrontend");
 app.UseRateLimiter();

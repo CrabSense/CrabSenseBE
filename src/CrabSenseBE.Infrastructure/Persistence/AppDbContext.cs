@@ -142,6 +142,13 @@ public class AppDbContext : DbContext
             .HasConversion(
                 v => v.ToString(),
                 v => UserRoleParsing.FromStorage(v));
+        modelBuilder.Entity<AppUser>()
+            .Property(u => u.RefreshTokenVersion)
+            .IsConcurrencyToken();
+        modelBuilder.Entity<AppUser>()
+            .HasIndex(u => u.RefreshTokenHash)
+            .IsUnique()
+            .HasFilter("\"RefreshTokenHash\" IS NOT NULL");
         // Một Farm Administrator quản lý nhiều khu; mỗi khu chỉ một Farm Administrator.
         modelBuilder.Entity<AppUser>()
             .HasMany(u => u.ManagedAreas)
@@ -206,6 +213,10 @@ public class AppDbContext : DbContext
 
         modelBuilder.Entity<WaterAnalysisRun>()
             .HasIndex(r => new { r.FarmingAreaId, r.StartedAt });
+        modelBuilder.Entity<WaterAnalysisRun>()
+            .HasIndex(r => r.FarmingAreaId)
+            .IsUnique()
+            .HasFilter("\"Status\" IN ('running', 'stopping')");
         modelBuilder.Entity<WaterAnalysisRun>()
             .HasOne(r => r.FarmingArea)
             .WithMany()

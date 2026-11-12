@@ -553,7 +553,9 @@ public class SystemPlatformService : ISystemPlatformService
         var user = await _db.AppUsers.FirstOrDefaultAsync(x => x.Id == userId, ct)
             ?? throw AppException.NotFound("User");
         user.RefreshToken = null;
+        user.RefreshTokenHash = null;
         user.RefreshTokenExpiry = null;
+        user.RefreshTokenVersion++;
         user.TokenVersion++;
         await AuditAsync(actorId, "TerminateSession", "AppUser", user.Id, user.Username, ip, ct);
         await _db.SaveChangesAsync(ct);

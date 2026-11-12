@@ -18,9 +18,15 @@ namespace CrabSenseBE.Api.Controllers;
 [Produces("application/json")]
 public class PriceListsController : ControllerBase
 {
-    /// <summary>[READ] List price lists (TODO)</summary>
+    /// <summary>[READ] Price lists are not implemented by the current sales domain.</summary>
     [HttpGet]
-    public IActionResult GetAll() => Ok(new { success = true, data = Array.Empty<object>() });
+    public IActionResult GetAll() => NotImplemented(
+        "Price lists require an approved pricing source and sales-order contract.");
+
+    private ObjectResult NotImplemented(string detail) => Problem(
+        statusCode: StatusCodes.Status501NotImplemented,
+        title: "Price lists are not implemented.",
+        detail: detail);
 }
 
 [ApiController]
@@ -30,9 +36,12 @@ public class PriceListsController : ControllerBase
 [Produces("application/json")]
 public class DeliveriesController : ControllerBase
 {
-    /// <summary>[READ] List deliveries (TODO)</summary>
+    /// <summary>[READ] Deliveries are not implemented by the current order domain.</summary>
     [HttpGet]
-    public IActionResult GetAll() => Ok(new { success = true, data = Array.Empty<object>() });
+    public IActionResult GetAll() => Problem(
+        statusCode: StatusCodes.Status501NotImplemented,
+        title: "Deliveries are not implemented.",
+        detail: "A delivery aggregate and its ownership contract have not been approved.");
 }
 
 [ApiController]
@@ -42,9 +51,12 @@ public class DeliveriesController : ControllerBase
 [Produces("application/json")]
 public class PaymentsController : ControllerBase
 {
-    /// <summary>[READ] List payments (TODO)</summary>
+    /// <summary>[READ] Payments are not implemented by the current order domain.</summary>
     [HttpGet]
-    public IActionResult GetAll() => Ok(new { success = true, data = Array.Empty<object>() });
+    public IActionResult GetAll() => Problem(
+        statusCode: StatusCodes.Status501NotImplemented,
+        title: "Payments are not implemented.",
+        detail: "A payment provider and authoritative payment ledger have not been approved.");
 }
 
 
@@ -191,11 +203,16 @@ public class AiController : ControllerBase
 {
     private readonly IDashboardService _dashboard;
     private readonly IAiOpsService _ai;
+    private readonly ICurrentUserService _currentUser;
 
-    public AiController(IDashboardService dashboard, IAiOpsService ai)
+    public AiController(
+        IDashboardService dashboard,
+        IAiOpsService ai,
+        ICurrentUserService currentUser)
     {
         _dashboard = dashboard;
         _ai = ai;
+        _currentUser = currentUser;
     }
 
     /// <summary>[READ] List AI detections — optional boxId / mediaId (videoId alias)</summary>
@@ -221,10 +238,10 @@ public class AiController : ControllerBase
     public async Task<IActionResult> Feedback(
         [FromBody] AiFeedbackRequest req, CancellationToken ct = default)
     {
-        var userIdClaim = User.FindFirst("sub")?.Value
-            ?? User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
-        _ = Guid.TryParse(userIdClaim, out var userId);
-        return Ok(await _ai.SubmitFeedbackAsync(req, userId, ct));
+        if (!_currentUser.IsAuthenticated || _currentUser.UserId == Guid.Empty)
+            throw AppException.Unauthorized();
+        return Ok(await _ai.SubmitFeedbackAsync(
+            req, _currentUser.UserId, ct));
     }
 
     /// <summary>[READ] AI recommendations for Home — optional farmingAreaId</summary>

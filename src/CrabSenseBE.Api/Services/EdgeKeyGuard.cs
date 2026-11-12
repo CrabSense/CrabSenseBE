@@ -57,6 +57,27 @@ public static class EdgeKeyGuard
             ? null
             : await uow.Devices.FirstOrDefaultAsync(
                 d => d.DeviceCode == code, ct);
+        return AuthenticateDevice(request, configuration, device);
+    }
+
+    public static async Task<(IActionResult? Denied, AuthenticatedEdgeDevice? Identity)> CheckDeviceAsync(
+        HttpRequest request,
+        IConfiguration configuration,
+        IUnitOfWork uow,
+        Guid deviceId,
+        CancellationToken ct)
+    {
+        var device = deviceId == Guid.Empty
+            ? null
+            : await uow.Devices.GetByIdAsync(deviceId, ct);
+        return AuthenticateDevice(request, configuration, device);
+    }
+
+    private static (IActionResult? Denied, AuthenticatedEdgeDevice? Identity) AuthenticateDevice(
+        HttpRequest request,
+        IConfiguration configuration,
+        Domain.Entities.Device? device)
+    {
         if (device is null)
             return (new NotFoundObjectResult(new { success = false, message = "Device không tồn tại." }), null);
         if (device.EdgeState is "Revoked" or "Rejected" or "Unprovisioned"

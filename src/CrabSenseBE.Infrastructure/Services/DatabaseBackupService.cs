@@ -41,7 +41,14 @@ public class DatabaseBackupService : IDatabaseBackupService
     private readonly string _username;
     private readonly string _password;
     private readonly string _sslMode;
+    private readonly int _retentionCount;
+    private readonly int _retentionDays;
+    private readonly long _minimumFreeBytes;
     private readonly ILogger<DatabaseBackupService> _logger;
+    private readonly SemaphoreSlim _operationLock = new(1, 1);
+    private volatile bool _maintenanceMode;
+
+    public bool IsMaintenanceMode => _maintenanceMode;
 
     public DatabaseBackupService(IConfiguration config, ILogger<DatabaseBackupService> logger)
     {
@@ -59,6 +66,13 @@ public class DatabaseBackupService : IDatabaseBackupService
         _username = cs.Username ?? throw new InvalidOperationException("Connection string thiếu Username.");
         _password = cs.Password ?? string.Empty;
         _sslMode = ToLibpqSslMode(cs.SslMode);
+        _retentionCount = Math.Clamp(
+            config.GetValue("Backup:RetentionCount", 30), 1, 365);
+        _retentionDays = Math.Clamp(
+            config.GetValue("Backup:RetentionDays", 30), 1, 3650);
+        _minimumFreeBytes = Math.Max(
+            config.GetValue<long>("Backup:MinimumFreeBytes", 268_435_456),
+            16 * 1024 * 1024);
     }
 
     /// <summary>
@@ -82,11 +96,28 @@ public class DatabaseBackupService : IDatabaseBackupService
 
     public async Task<DatabaseBackupResult> CreateAsync(CancellationToken ct = default)
     {
+        await _operationLock.WaitAsync(ct);
+        try
+        {
+            var result = await CreateCoreAsync(ct);
+            ApplyRetention(result.Info.FileName);
+            return result;
+        }
+        finally
+        {
+            _operationLock.Release();
+        }
+    }
+
+    private async Task<DatabaseBackupResult> CreateCoreAsync(CancellationToken ct)
+    {
         Directory.CreateDirectory(_directory);
+        EnsureFreeSpace();
         var pgDump = ResolveTool("pg_dump");
 
         // Tên theo UTC để không lệ thuộc timezone máy chủ.
-        var fileName = $"crabsense_{SchemaName}_{DateTime.UtcNow:yyyyMMdd_HHmmss}{BackupExtension}";
+        var fileName =
+            $"crabsense_{SchemaName}_{DateTime.UtcNow:yyyyMMdd_HHmmss_fff}_{Guid.NewGuid():N}{BackupExtension}";
         var path = Path.Combine(_directory, fileName);
 
         var args = new List<string>
@@ -153,35 +184,73 @@ public class DatabaseBackupService : IDatabaseBackupService
 
     public async Task RestoreAsync(string fileName, CancellationToken ct = default)
     {
-        var path = ResolvePath(fileName)
-            ?? throw new FileNotFoundException($"Không tìm thấy bản sao lưu '{fileName}'.");
-
-        var pgRestore = ResolveTool("pg_restore");
-
-        var args = new List<string>
+        await _operationLock.WaitAsync(ct);
+        try
         {
-            "--host", _host,
-            "--port", _port,
-            "--username", _username,
-            "--dbname", _database,
-            "--clean",              // xoá đối tượng cũ trước khi tạo lại
-            "--if-exists",
-            "--no-owner",
-            "--no-acl",
-            "--single-transaction", // lỗi giữa đường -> rollback, DB không bị hỏng dở
-            path,
-        };
+            var path = ResolvePath(fileName)
+                ?? throw new FileNotFoundException($"Không tìm thấy bản sao lưu '{fileName}'.");
+            var pgRestore = ResolveTool("pg_restore");
+            await ValidateArchiveAsync(pgRestore, path, ct);
 
-        _logger.LogWarning("Bắt đầu phục hồi DB từ {FileName}", fileName);
+            _maintenanceMode = true;
+            var safetyBackup = await CreateCoreAsync(ct);
+            _logger.LogWarning(
+                "Pre-restore backup {SafetyFile} created before restoring {FileName}",
+                safetyBackup.Info.FileName,
+                fileName);
 
-        var (exitCode, _, stdErr) = await RunAsync(pgRestore, args, ct);
-        if (exitCode != 0)
-        {
-            throw new InvalidOperationException(
-                $"pg_restore thất bại (exit {exitCode}): {SummarizeError(stdErr, pgRestore)}");
+            var args = new List<string>
+            {
+                "--host", _host,
+                "--port", _port,
+                "--username", _username,
+                "--dbname", _database,
+                "--schema", SchemaName,
+                "--clean",
+                "--if-exists",
+                "--no-owner",
+                "--no-acl",
+                "--single-transaction",
+                path,
+            };
+
+            _logger.LogWarning("Bắt đầu phục hồi schema {Schema} từ {FileName}", SchemaName, fileName);
+
+            var (exitCode, _, stdErr) = await RunAsync(pgRestore, args, ct);
+            if (exitCode != 0)
+            {
+                throw new InvalidOperationException(
+                    $"pg_restore thất bại (exit {exitCode}): {SummarizeError(stdErr, pgRestore)}");
+            }
+
+            _logger.LogWarning("Đã phục hồi schema {Schema} từ {FileName}", SchemaName, fileName);
         }
+        finally
+        {
+            _maintenanceMode = false;
+            _operationLock.Release();
+        }
+    }
 
-        _logger.LogWarning("Đã phục hồi DB từ {FileName}", fileName);
+    private async Task ValidateArchiveAsync(
+        string pgRestore,
+        string path,
+        CancellationToken ct)
+    {
+        var (exitCode, toc, stdErr) = await RunAsync(
+            pgRestore, ["--list", path], ct);
+        if (exitCode != 0)
+            throw new InvalidOperationException(
+                $"Backup archive không hợp lệ: {SummarizeError(stdErr, pgRestore)}");
+        if (!toc.Contains(" SCHEMA - be", StringComparison.Ordinal)
+            && !toc.Contains(" be ", StringComparison.Ordinal))
+            throw new InvalidOperationException(
+                "Backup archive không chứa schema be.");
+        if (toc.Contains(" SCHEMA - public", StringComparison.Ordinal)
+            || toc.Contains(" TABLE public ", StringComparison.Ordinal)
+            || toc.Contains(" TABLE DATA public ", StringComparison.Ordinal))
+            throw new InvalidOperationException(
+                "Backup archive chứa object ngoài schema be và bị từ chối.");
     }
 
     // ── Tìm công cụ ────────────────────────────────────────────────────────────
@@ -365,6 +434,44 @@ public class DatabaseBackupService : IDatabaseBackupService
         catch (Exception ex) when (ex is InvalidOperationException or NotSupportedException or System.ComponentModel.Win32Exception)
         {
             // tiến trình đã tự thoát — không cần làm gì
+        }
+    }
+
+    private void EnsureFreeSpace()
+    {
+        var root = Path.GetPathRoot(Path.GetFullPath(_directory));
+        if (string.IsNullOrWhiteSpace(root)) return;
+        try
+        {
+            var free = new DriveInfo(root).AvailableFreeSpace;
+            if (free < _minimumFreeBytes)
+                throw new IOException(
+                    $"Không đủ dung lượng backup. Còn {free} bytes, yêu cầu tối thiểu {_minimumFreeBytes} bytes.");
+        }
+        catch (ArgumentException)
+        {
+            // Some mounted/network paths do not expose DriveInfo.
+        }
+    }
+
+    private void ApplyRetention(string newestFile)
+    {
+        if (!Directory.Exists(_directory)) return;
+        var cutoff = DateTime.UtcNow.AddDays(-_retentionDays);
+        var files = Directory.EnumerateFiles(
+                _directory, $"*{BackupExtension}", SearchOption.TopDirectoryOnly)
+            .Where(path => SafeFileName.IsMatch(Path.GetFileName(path)))
+            .Select(path => new FileInfo(path))
+            .OrderByDescending(info => info.LastWriteTimeUtc)
+            .ToList();
+        for (var index = 0; index < files.Count; index++)
+        {
+            var info = files[index];
+            if (string.Equals(info.Name, newestFile, StringComparison.Ordinal))
+                continue;
+            if (index < _retentionCount && info.LastWriteTimeUtc >= cutoff)
+                continue;
+            TryDelete(info.FullName);
         }
     }
 

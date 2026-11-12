@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using CrabSenseBE.Application.Common;
 using CrabSenseBE.Application.DTOs.Auth;
@@ -5,6 +7,7 @@ using CrabSenseBE.Application.Interfaces;
 using CrabSenseBE.Domain.Entities;
 using CrabSenseBE.Domain.Enums;
 using CrabSenseBE.Domain.Interfaces;
+using Microsoft.EntityFrameworkCore;
 
 namespace CrabSenseBE.Application.Services;
 
@@ -52,8 +55,10 @@ public class AuthService : IAuthService
         var accessToken = _jwt.GenerateAccessToken(user);
         var refreshToken = _jwt.GenerateRefreshToken();
 
-        user.RefreshToken = refreshToken;
+        user.RefreshToken = null;
+        user.RefreshTokenHash = HashRefreshToken(refreshToken);
         user.RefreshTokenExpiry = DateTime.UtcNow.AddDays(30);
+        user.RefreshTokenVersion++;
         user.LastLoginAt = DateTime.UtcNow;
         user.LastLoginIp = ipAddress;
         user.LastUserAgent = userAgent;
@@ -82,8 +87,10 @@ public class AuthService : IAuthService
             || request.RefreshToken.StartsWith("mock_", StringComparison.OrdinalIgnoreCase))
             throw AppException.Unauthorized("Invalid or expired refresh token.");
 
+        var presentedHash = HashRefreshToken(request.RefreshToken);
         var user = await _uow.Users.FirstOrDefaultAsync(
-            u => u.RefreshToken == request.RefreshToken
+            u => (u.RefreshTokenHash == presentedHash
+                    || u.RefreshToken == request.RefreshToken)
                  && u.RefreshTokenExpiry > DateTime.UtcNow
                  && u.IsActive, ct);
 
@@ -92,10 +99,20 @@ public class AuthService : IAuthService
 
         var accessToken = _jwt.GenerateAccessToken(user);
         var newRefresh = _jwt.GenerateRefreshToken();
-        user.RefreshToken = newRefresh;
+        user.RefreshToken = null;
+        user.RefreshTokenHash = HashRefreshToken(newRefresh);
         user.RefreshTokenExpiry = DateTime.UtcNow.AddDays(30);
+        user.RefreshTokenVersion++;
         _uow.Users.Update(user);
-        await _uow.SaveChangesAsync(ct);
+        try
+        {
+            await _uow.SaveChangesAsync(ct);
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            throw AppException.Unauthorized(
+                "Refresh token đã được sử dụng hoặc bị thu hồi.");
+        }
 
         return ApiResponse<LoginResponse>.Ok(new LoginResponse(
             accessToken.Token,
@@ -109,7 +126,9 @@ public class AuthService : IAuthService
         var user = await _uow.Users.GetByIdAsync(userId, ct)
             ?? throw AppException.NotFound("User");
         user.RefreshToken = null;
+        user.RefreshTokenHash = null;
         user.RefreshTokenExpiry = null;
+        user.RefreshTokenVersion++;
         user.TokenVersion++;
         _uow.Users.Update(user);
         await _uow.SaveChangesAsync(ct);
@@ -314,7 +333,9 @@ public class AuthService : IAuthService
 
         user.PasswordHash = BCrypt.Net.BCrypt.HashPassword(request.NewPassword);
         user.RefreshToken = null;
+        user.RefreshTokenHash = null;
         user.RefreshTokenExpiry = null;
+        user.RefreshTokenVersion++;
         user.TokenVersion++;
         user.UpdatedAt = DateTime.UtcNow;
         _uow.Users.Update(user);
@@ -451,4 +472,7 @@ public class AuthService : IAuthService
 
         return dto;
     }
+
+    internal static string HashRefreshToken(string token) =>
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(token)));
 }

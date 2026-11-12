@@ -1149,10 +1149,28 @@ public class IotService : IIotService
     }
 
     public async Task<ApiResponse<string>> ProcessHdf5UploadAsync(
-        Hdf5UploadRequest req, Stream fileStream, CancellationToken ct = default)
+        Hdf5UploadRequest req,
+        Stream fileStream,
+        Guid authenticatedDeviceId,
+        string authenticatedDeviceCode,
+        CancellationToken ct = default)
     {
-        var device = await _uow.Devices.FirstOrDefaultAsync(d => d.DeviceCode == req.DeviceCode, ct)
+        if (authenticatedDeviceId == Guid.Empty
+            || string.IsNullOrWhiteSpace(authenticatedDeviceCode)
+            || !string.Equals(
+                req.DeviceCode?.Trim(),
+                authenticatedDeviceCode,
+                StringComparison.OrdinalIgnoreCase))
+            throw AppException.Forbidden(
+                "Device không được upload dữ liệu thay cho device khác.");
+
+        var device = await _uow.Devices.GetByIdAsync(authenticatedDeviceId, ct)
             ?? throw AppException.NotFound("Device");
+        if (!string.Equals(
+                device.DeviceCode,
+                authenticatedDeviceCode,
+                StringComparison.OrdinalIgnoreCase))
+            throw AppException.Forbidden("Device credential không khớp dữ liệu upload.");
 
         var objectName = $"hdf5/{device.DeviceCode}/{req.ChunkStartTime:yyyyMMddHHmmss}_{req.FileName}";
         var storagePath = await _storage.UploadAsync(

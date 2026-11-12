@@ -12,6 +12,8 @@ public class EdgeCommand : BaseEntity
     public DateTime? DeliveredAt { get; set; }
     public DateTime? LeaseExpiresAt { get; set; }
     public string? LeaseHolder { get; set; }
+    public Guid? DeliveryAttemptId { get; set; }
+    public DateTime ExpiresAt { get; set; }
     public int AttemptCount { get; set; }
     public DateTime? LastAttemptAt { get; set; }
     public DateTime? AcknowledgedAt { get; set; }

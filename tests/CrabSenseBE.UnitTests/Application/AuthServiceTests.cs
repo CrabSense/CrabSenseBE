@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using CrabSenseBE.Application.Common;
 using CrabSenseBE.Application.DTOs.Auth;
 using CrabSenseBE.Application.Services;
@@ -6,6 +8,7 @@ using CrabSenseBE.Domain.Enums;
 using CrabSenseBE.Domain.Interfaces;
 using Moq;
 using FluentAssertions;
+using Microsoft.EntityFrameworkCore;
 using Xunit;
 
 namespace CrabSenseBE.UnitTests.Application;
@@ -72,6 +75,10 @@ public class AuthServiceTests
         result.Data.Should().NotBeNull();
         result.Data!.AccessToken.Should().Be("access_token");
         result.Data.ExpiresAt.Should().Be(expiresAt);
+        user.RefreshToken.Should().BeNull();
+        user.RefreshTokenHash.Should().Be(
+            Hash("refresh_token"));
+        user.RefreshTokenHash.Should().NotBe("refresh_token");
     }
 
     [Fact]
@@ -208,10 +215,47 @@ public class AuthServiceTests
             new RefreshTokenRequest("old-refresh"));
         result.Data!.RefreshToken.Should().Be("new-refresh");
         result.Data.ExpiresAt.Should().Be(accessExpiresAt);
+        user.RefreshToken.Should().BeNull();
+        user.RefreshTokenHash.Should().Be(
+            Hash("new-refresh"));
 
         var reuse = () => service.RefreshTokenAsync(
             new RefreshTokenRequest("old-refresh"));
         (await reuse.Should().ThrowAsync<AppException>())
+            .Which.StatusCode.Should().Be(401);
+    }
+
+    [Fact]
+    public async Task Concurrent_refresh_loser_is_rejected_as_replay()
+    {
+        const string oldRefresh = "old-refresh";
+        var user = new AppUser
+        {
+            Id = Guid.NewGuid(),
+            Username = "manager",
+            IsActive = true,
+            RefreshTokenHash = Hash(oldRefresh),
+            RefreshTokenExpiry = DateTime.UtcNow.AddDays(1),
+            RefreshTokenVersion = 3
+        };
+        var users = new Mock<IRepository<AppUser>>();
+        users.Setup(repo => repo.FirstOrDefaultAsync(
+                It.IsAny<System.Linq.Expressions.Expression<Func<AppUser, bool>>>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(user);
+        _uowMock.Setup(unit => unit.Users).Returns(users.Object);
+        _uowMock.Setup(unit => unit.SaveChangesAsync(It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new DbUpdateConcurrencyException());
+        _jwtMock.Setup(jwt => jwt.GenerateAccessToken(user))
+            .Returns(new AccessTokenResult(
+                "discarded-access", DateTime.UtcNow.AddMinutes(15)));
+        _jwtMock.Setup(jwt => jwt.GenerateRefreshToken())
+            .Returns("discarded-refresh");
+
+        var act = () => CreateService().RefreshTokenAsync(
+            new RefreshTokenRequest(oldRefresh));
+
+        (await act.Should().ThrowAsync<AppException>())
             .Which.StatusCode.Should().Be(401);
     }
 
@@ -263,4 +307,7 @@ public class AuthServiceTests
         result.Success.Should().BeTrue();
         result.Data!.AccessToken.Should().Be("access");
     }
+
+    private static string Hash(string token) =>
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(token)));
 }

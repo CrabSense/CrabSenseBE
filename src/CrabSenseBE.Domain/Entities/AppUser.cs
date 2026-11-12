@@ -23,8 +23,15 @@ public class AppUser : BaseEntity
     public DateTime? LastLoginAt { get; set; }
     public string? LastLoginIp { get; set; }
     public string? LastUserAgent { get; set; }
+    /// <summary>
+    /// Legacy plaintext token retained only so existing sessions can rotate
+    /// once after deployment. New tokens are never stored here.
+    /// </summary>
     public string? RefreshToken { get; set; }
+    public string? RefreshTokenHash { get; set; }
     public DateTime? RefreshTokenExpiry { get; set; }
+    /// <summary>Optimistic-concurrency generation for refresh rotation/revocation.</summary>
+    public int RefreshTokenVersion { get; set; }
     /// <summary>Tăng để thu hồi ngay mọi access token đã phát hành trước đó.</summary>
     public int TokenVersion { get; set; }
 

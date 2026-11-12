@@ -171,10 +171,15 @@ public class DevicesController : ControllerBase
 {
     private readonly IIotService _service;
     private readonly IConfiguration _configuration;
-    public DevicesController(IIotService service, IConfiguration configuration)
+    private readonly IUnitOfWork _uow;
+    public DevicesController(
+        IIotService service,
+        IConfiguration configuration,
+        IUnitOfWork uow)
     {
         _service = service;
         _configuration = configuration;
+        _uow = uow;
     }
 
     /// <summary>[READ] List ESP32 / gateways — optional farmingAreaId</summary>
@@ -208,14 +213,16 @@ public class DevicesController : ControllerBase
     public async Task<IActionResult> Delete(Guid id, CancellationToken ct)
         => Ok(await _service.DeleteDeviceAsync(id, ct, UserId(), Ip()));
 
-    /// <summary>[UPDATE] Heartbeat / status from edge — yêu cầu X-Edge-Key</summary>
+    /// <summary>[UPDATE] Heartbeat / status from the authenticated device.</summary>
     [HttpPut("{id:guid}/status")]
     [AllowAnonymous]
     public async Task<IActionResult> UpdateStatus(Guid id, [FromBody] UpdateDeviceStatusRequest req, CancellationToken ct)
     {
-        var denied = EdgeKeyGuard.Check(Request, _configuration);
+        var (denied, identity) = await EdgeKeyGuard.CheckDeviceAsync(
+            Request, _configuration, _uow, id, ct);
         if (denied is not null) return denied;
-        return Ok(await _service.UpdateDeviceStatusAsync(id, req, ct));
+        return Ok(await _service.UpdateDeviceStatusAsync(
+            identity!.DeviceId, req, ct));
     }
 
     private Guid? UserId()
@@ -265,9 +272,14 @@ public class WaterSystemsController : ControllerBase
 public class SyncController : ControllerBase
 {
     private readonly IIotService _service;
-    public SyncController(IIotService service) => _service = service;
+    private readonly IUnitOfWork _uow;
+    public SyncController(IIotService service, IUnitOfWork uow)
+    {
+        _service = service;
+        _uow = uow;
+    }
 
-    /// <summary>[CREATE] Kiosk HDF5 upload — yêu cầu X-Edge-Key</summary>
+    /// <summary>[CREATE] Kiosk HDF5 upload — requires the device credential.</summary>
     [HttpPost("hdf5")]
     [AllowAnonymous]
     public async Task<IActionResult> UploadHdf5(
@@ -276,9 +288,11 @@ public class SyncController : ControllerBase
         CancellationToken ct,
         [FromServices] IConfiguration configuration)
     {
-        var denied = EdgeKeyGuard.Check(Request, configuration);
+        var (denied, identity) = await EdgeKeyGuard.CheckDeviceAsync(
+            Request, configuration, _uow, req.DeviceCode, ct);
         if (denied is not null) return denied;
         using var stream = file.OpenReadStream();
-        return Ok(await _service.ProcessHdf5UploadAsync(req, stream, ct));
+        return Ok(await _service.ProcessHdf5UploadAsync(
+            req, stream, identity!.DeviceId, identity.DeviceCode, ct));
     }
 }

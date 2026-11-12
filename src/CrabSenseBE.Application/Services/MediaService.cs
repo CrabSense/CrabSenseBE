@@ -4,6 +4,7 @@ using CrabSenseBE.Application.Interfaces;
 using CrabSenseBE.Domain.Entities;
 using CrabSenseBE.Domain.Enums;
 using CrabSenseBE.Domain.Interfaces;
+using Microsoft.EntityFrameworkCore;
 
 namespace CrabSenseBE.Application.Services;
 
@@ -15,6 +16,13 @@ public class MediaService : IMediaService
 {
     private static readonly HashSet<string> AllowedCategories =
         new(StringComparer.OrdinalIgnoreCase) { "image", "video", "log" };
+    private static readonly IReadOnlyDictionary<string, long> MaxBytes =
+        new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["image"] = 20L * 1024 * 1024,
+            ["video"] = 500L * 1024 * 1024,
+            ["log"] = 10L * 1024 * 1024
+        };
 
     private readonly IUnitOfWork _uow;
     private readonly IMediaStorageService _storage;
@@ -46,6 +54,9 @@ public class MediaService : IMediaService
 
         if (string.IsNullOrWhiteSpace(fileName))
             throw AppException.BadRequest("fileName is required.");
+        var safeFileName = ValidateFileName(fileName, category);
+        var validatedContentType = ValidateContent(
+            fileStream, category, contentType);
         if (meta.SharePublic)
             await EnsureCanPublishAsync(ct);
 
@@ -65,41 +76,61 @@ public class MediaService : IMediaService
         }, ct);
         var folder = await MediaFolderCodeResolver.ResolvePathAsync(_uow, entityType, entityId, ct);
         var uploaded = await _storage.UploadAsync(
-            fileStream, fileName, contentType, folder, ct, publicRead: meta.SharePublic);
+            fileStream, safeFileName, validatedContentType, folder, ct,
+            publicRead: meta.SharePublic);
 
-        string? shareLink = meta.SharePublic ? uploaded.ShareLink : null;
-        var isShared = meta.SharePublic && !string.IsNullOrWhiteSpace(shareLink);
-
-        if (meta.SharePublic && !isShared)
+        try
         {
-            shareLink = await _storage.EnsureShareLinkAsync(uploaded.StorageKey, ct);
-            isShared = !string.IsNullOrWhiteSpace(shareLink);
+            string? shareLink = meta.SharePublic ? uploaded.ShareLink : null;
+            var isShared = meta.SharePublic && !string.IsNullOrWhiteSpace(shareLink);
+
+            if (meta.SharePublic && !isShared)
+            {
+                shareLink = await _storage.EnsureShareLinkAsync(uploaded.StorageKey, ct);
+                isShared = !string.IsNullOrWhiteSpace(shareLink);
+            }
+
+            var asset = new MediaAsset
+            {
+                Category = category,
+                FileName = safeFileName,
+                ContentType = validatedContentType,
+                SizeBytes = uploaded.SizeBytes,
+                Provider = _storage.ProviderName,
+                StorageKey = uploaded.StorageKey,
+                WebViewLink = meta.SharePublic ? uploaded.WebViewLink : null,
+                WebContentLink = meta.SharePublic ? uploaded.WebContentLink : null,
+                ShareLink = shareLink,
+                IsShared = isShared,
+                BoxId = meta.BoxId,
+                CrabId = meta.CrabId,
+                DeviceId = meta.DeviceId,
+                RelatedEntityType = meta.RelatedEntityType,
+                RelatedEntityId = meta.RelatedEntityId,
+                Notes = meta.Notes,
+                UploadedBy = uploadedBy
+            };
+
+            await _uow.MediaAssets.AddAsync(asset, ct);
+            await _uow.SaveChangesAsync(ct);
+            return ApiResponse<MediaAssetDto>.Ok(Map(asset), "Uploaded.");
         }
-
-        var asset = new MediaAsset
+        catch (Exception original)
         {
-            Category = category,
-            FileName = fileName,
-            ContentType = contentType,
-            SizeBytes = uploaded.SizeBytes,
-            Provider = _storage.ProviderName,
-            StorageKey = uploaded.StorageKey,
-            WebViewLink = meta.SharePublic ? uploaded.WebViewLink : null,
-            WebContentLink = meta.SharePublic ? uploaded.WebContentLink : null,
-            ShareLink = shareLink,
-            IsShared = isShared,
-            BoxId = meta.BoxId,
-            CrabId = meta.CrabId,
-            DeviceId = meta.DeviceId,
-            RelatedEntityType = meta.RelatedEntityType,
-            RelatedEntityId = meta.RelatedEntityId,
-            Notes = meta.Notes,
-            UploadedBy = uploadedBy
-        };
-
-        await _uow.MediaAssets.AddAsync(asset, ct);
-        await _uow.SaveChangesAsync(ct);
-        return ApiResponse<MediaAssetDto>.Ok(Map(asset), "Uploaded.");
+            try
+            {
+                await _storage.DeleteAsync(
+                    uploaded.StorageKey, CancellationToken.None);
+            }
+            catch (Exception cleanup)
+            {
+                throw new AggregateException(
+                    "Media metadata failed and orphan cleanup also failed.",
+                    original,
+                    cleanup);
+            }
+            throw;
+        }
     }
 
     public async Task<ApiResponse<IEnumerable<MediaAssetDto>>> ListAsync(
@@ -108,18 +139,27 @@ public class MediaService : IMediaService
         Guid? crabId = null,
         CancellationToken ct = default)
     {
-        var all = await _uow.MediaAssets.GetAllAsync(ct);
-        var filtered = all.Where(a =>
-            (category is null || a.Category.Equals(category, StringComparison.OrdinalIgnoreCase))
-            && (boxId is null || a.BoxId == boxId)
-            && (crabId is null || a.CrabId == crabId)).ToList();
+        var query = _uow.MediaAssets.Query().AsNoTracking();
+        if (!string.IsNullOrWhiteSpace(category))
+        {
+            var normalizedCategory = category.Trim().ToLower();
+            query = query.Where(a => a.Category.ToLower() == normalizedCategory);
+        }
+        if (boxId.HasValue)
+            query = query.Where(a => a.BoxId == boxId);
+        if (crabId.HasValue)
+            query = query.Where(a => a.CrabId == crabId);
+
+        var filtered = await query
+            .OrderByDescending(a => a.CreatedAt)
+            .ToListAsync(ct);
         var visible = new List<MediaAsset>();
         foreach (var asset in filtered)
             if (await _areaGuard.CanAccessAsync(asset, ct))
                 visible.Add(asset);
 
         return ApiResponse<IEnumerable<MediaAssetDto>>.Ok(
-            visible.OrderByDescending(a => a.CreatedAt).Select(Map));
+            visible.Select(Map));
     }
 
     public async Task<ApiResponse<MediaAssetDto>> GetByIdAsync(Guid id, CancellationToken ct = default)
@@ -191,5 +231,91 @@ public class MediaService : IMediaService
         if (user.Role is not (UserRole.FarmAdministrator or UserRole.FarmManager))
             throw AppException.Forbidden(
                 "Chỉ Farm Administrator hoặc Farm Manager được công khai media.");
+    }
+
+    private static string ValidateFileName(string fileName, string category)
+    {
+        var trimmed = fileName.Trim();
+        if (trimmed.Length is 0 or > 180
+            || !string.Equals(
+                trimmed, Path.GetFileName(trimmed), StringComparison.Ordinal)
+            || trimmed.Any(char.IsControl))
+            throw AppException.BadRequest("FileName không hợp lệ.");
+
+        var extension = Path.GetExtension(trimmed).ToLowerInvariant();
+        var allowed = category switch
+        {
+            "image" => extension is ".jpg" or ".jpeg" or ".png" or ".webp",
+            "video" => extension is ".mp4" or ".webm",
+            "log" => extension is ".log" or ".txt" or ".json" or ".csv",
+            _ => false
+        };
+        if (!allowed)
+            throw AppException.BadRequest(
+                $"Phần mở rộng file không hợp lệ cho category {category}.");
+        return trimmed;
+    }
+
+    private static string ValidateContent(
+        Stream stream,
+        string category,
+        string claimedContentType)
+    {
+        if (!stream.CanSeek)
+            throw AppException.BadRequest(
+                "Upload stream phải hỗ trợ seek để xác minh kích thước và file signature.");
+        var length = stream.Length;
+        if (length <= 0 || length > MaxBytes[category])
+            throw AppException.BadRequest(
+                $"Kích thước {category} phải trong khoảng 1..{MaxBytes[category]} bytes.");
+
+        var claimed = claimedContentType?.Split(';', 2)[0]
+            .Trim()
+            .ToLowerInvariant();
+        var original = stream.Position;
+        Span<byte> prefix = stackalloc byte[16];
+        var read = stream.Read(prefix);
+        stream.Position = original;
+        var actual = DetectContentType(prefix[..read], category, claimed);
+        if (!string.Equals(actual, claimed, StringComparison.OrdinalIgnoreCase))
+            throw AppException.BadRequest(
+                $"Content-Type không khớp file signature; expected {actual}.");
+        return actual;
+    }
+
+    private static string DetectContentType(
+        ReadOnlySpan<byte> bytes,
+        string category,
+        string? claimed)
+    {
+        if (category == "image")
+        {
+            if (bytes.StartsWith(new byte[] { 0xFF, 0xD8, 0xFF }))
+                return "image/jpeg";
+            if (bytes.StartsWith(
+                    new byte[] { 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A }))
+                return "image/png";
+            if (bytes.Length >= 12
+                && bytes[..4].SequenceEqual("RIFF"u8)
+                && bytes.Slice(8, 4).SequenceEqual("WEBP"u8))
+                return "image/webp";
+        }
+        else if (category == "video")
+        {
+            if (bytes.Length >= 12
+                && bytes.Slice(4, 4).SequenceEqual("ftyp"u8))
+                return "video/mp4";
+            if (bytes.StartsWith(new byte[] { 0x1A, 0x45, 0xDF, 0xA3 }))
+                return "video/webm";
+        }
+        else if (category == "log"
+                 && !bytes.Contains((byte)0)
+                 && claimed is "text/plain" or "application/json" or "text/csv")
+        {
+            return claimed;
+        }
+
+        throw AppException.BadRequest(
+            $"File signature không được hỗ trợ cho category {category}.");
     }
 }

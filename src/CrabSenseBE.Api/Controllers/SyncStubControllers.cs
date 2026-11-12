@@ -876,18 +876,15 @@ public class SyncQueueStubController : ControllerBase
         }, "Sync queue"));
     }
 
-    /// <summary>[CREATE] Enqueue sync job (stub)</summary>
+    /// <summary>[CREATE] Legacy queue contract is not implemented.</summary>
     [HttpPost("/api/sync/queue")]
     [Authorize(Roles = AppRoles.Platform)]
-    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status501NotImplemented)]
     public IActionResult EnqueueSync([FromBody] object? body)
-        => Ok(ApiResponse<object>.Ok(new
-        {
-            id = Guid.Empty,
-            status = "queued",
-            received = body,
-            stub = true
-        }, "TODO: implement POST /api/sync/queue"));
+        => Problem(
+            statusCode: StatusCodes.Status501NotImplemented,
+            title: "Sync queue contract is not implemented",
+            detail: "Use POST /api/sync/batch with SyncBatchRequest. This endpoint does not enqueue fake jobs.");
 }
 
 public sealed class SyncBatchRequest
@@ -1064,23 +1061,17 @@ public class SyncV1StubController : ControllerBase
         return projected;
     }
 
-    /// <summary>[READ] Download artifact / file sync (stub)</summary>
+    /// <summary>[READ] Artifact download requires a typed artifact contract.</summary>
     [HttpGet("download")]
-    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status501NotImplemented)]
     public IActionResult Download(
         [FromQuery] Guid? id = null,
         [FromQuery] string? code = null,
         [FromQuery] string? type = null)
-        => Ok(ApiResponse<object>.Ok(new
-        {
-            id,
-            code,
-            type,
-            url = (string?)null,
-            contentType = (string?)null,
-            sizeBytes = 0,
-            stub = true
-        }, "TODO: implement /api/v1/sync/download — có thể đổi sang FileResult sau"));
+        => Problem(
+            statusCode: StatusCodes.Status501NotImplemented,
+            title: "Sync artifact download is not implemented",
+            detail: "No typed artifact ownership contract exists for id/code/type; no public URL is returned.");
 }
 
 [ApiController]
@@ -1129,15 +1120,12 @@ public class SynchronizationV1StubController : ControllerBase
             "Synchronization queue"));
     }
 
-    /// <summary>[CREATE] Enqueue synchronization job (stub)</summary>
+    /// <summary>[CREATE] Legacy synchronization queue contract is not implemented.</summary>
     [HttpPost("queue")]
-    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status501NotImplemented)]
     public IActionResult Enqueue([FromBody] object? body)
-        => Ok(ApiResponse<object>.Ok(new
-        {
-            id = Guid.Empty,
-            status = "queued",
-            received = body,
-            stub = true
-        }, "TODO: implement POST /api/v1/synchronization/queue"));
+        => Problem(
+            statusCode: StatusCodes.Status501NotImplemented,
+            title: "Synchronization queue contract is not implemented",
+            detail: "Use POST /api/sync/batch with SyncBatchRequest. This endpoint does not enqueue fake jobs.");
 }

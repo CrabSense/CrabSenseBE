@@ -66,6 +66,19 @@ jobs:
             --results-directory ./TestResults \
             -- DataCollectionRunSettings.DataCollectors.DataCollector.Configuration.Format=opencover
 
+      - name: PostgreSQL concurrency and integrity tests
+        shell: pwsh
+        run: ./tests/PostgresIntegration/run-hotfix-tests.ps1
+
+      - name: Upload test and coverage artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-${{ github.sha }}
+          path: TestResults/
+          if-no-files-found: warn
+          retention-days: 14
+
       - name: End SonarCloud
         if: env.SONAR_TOKEN != ''
         run: dotnet sonarscanner end /d:sonar.token="${{ env.SONAR_TOKEN }}"

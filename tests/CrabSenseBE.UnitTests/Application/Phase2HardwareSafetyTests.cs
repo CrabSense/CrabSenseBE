@@ -121,6 +121,98 @@ public sealed class Phase2HardwareSafetyTests
     }
 
     [Fact]
+    public async Task EdgeIdempotencyKey_CannotBeReusedForDifferentPayload()
+    {
+        var areaId = Guid.NewGuid();
+        var device = new Device
+        {
+            Id = Guid.NewGuid(),
+            DeviceCode = "esp-idempotent",
+            FarmingAreaId = areaId,
+            Status = DeviceStatus.Online,
+            EdgeState = "Approved"
+        };
+        var existing = new EdgeCommand
+        {
+            DeviceCode = device.DeviceCode,
+            Command = "off",
+            CorrelationId = "same-key",
+            RequestSource = "automation:scheduler",
+            ExpiresAt = DateTime.UtcNow.AddMinutes(5)
+        };
+        var uow = new Mock<IUnitOfWork>();
+        uow.Setup(x => x.Devices).Returns(Repository(device).Object);
+        uow.Setup(x => x.EdgeCommands).Returns(Repository(existing).Object);
+        var service = new EdgeCommandService(uow.Object);
+
+        var act = () => service.EnqueueAutomationAsync(
+            new EnqueueEdgeCommandRequest(
+                device.DeviceCode, "alloff", IdempotencyKey: "same-key"),
+            areaId,
+            "scheduler");
+
+        (await act.Should().ThrowAsync<AppException>())
+            .Which.StatusCode.Should().Be(409);
+    }
+
+    [Fact]
+    public async Task StaleDeliveryAttempt_CannotAcknowledgeNewLease()
+    {
+        var currentAttempt = Guid.NewGuid();
+        var command = new EdgeCommand
+        {
+            Id = Guid.NewGuid(),
+            DeviceCode = "esp-a",
+            Command = "off",
+            Status = "delivered",
+            LeaseExpiresAt = DateTime.UtcNow.AddMinutes(1),
+            DeliveryAttemptId = currentAttempt,
+            ExpiresAt = DateTime.UtcNow.AddMinutes(5)
+        };
+        var uow = new Mock<IUnitOfWork>();
+        uow.Setup(x => x.EdgeCommands).Returns(Repository(command).Object);
+        var service = new EdgeCommandService(uow.Object);
+
+        var act = () => service.AcknowledgeAsync(
+            command.Id,
+            new EdgeCommandAckRequest(
+                "acknowledged",
+                DeliveryAttemptId: Guid.NewGuid()),
+            command.DeviceCode);
+
+        (await act.Should().ThrowAsync<AppException>())
+            .Which.StatusCode.Should().Be(409);
+        command.Status.Should().Be("delivered");
+        uow.Verify(x => x.SaveChangesAsync(
+            It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task CommandAtRetryLimit_IsTimedOutAndNotRedelivered()
+    {
+        var command = new EdgeCommand
+        {
+            Id = Guid.NewGuid(),
+            DeviceCode = "esp-a",
+            Command = "off",
+            Status = "pending",
+            AttemptCount = 3,
+            ExpiresAt = DateTime.UtcNow.AddMinutes(5)
+        };
+        var uow = new Mock<IUnitOfWork>();
+        uow.Setup(x => x.EdgeCommands).Returns(Repository(command).Object);
+        uow.Setup(x => x.SaveChangesAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(1);
+
+        var result = await new EdgeCommandService(uow.Object)
+            .GetPendingAsync(command.DeviceCode, "device:test");
+
+        result.Data.Should().BeEmpty();
+        command.Status.Should().Be("timedout");
+        command.ResultMessage.Should().Contain("Maximum delivery attempts");
+    }
+
+    [Fact]
     public async Task ProvisionedDevice_WithoutCredential_IsRejected()
     {
         var device = new Device
@@ -403,6 +495,90 @@ public sealed class Phase2HardwareSafetyTests
             x => x.AddAsync(It.IsAny<WaterMeasurement>(), It.IsAny<CancellationToken>()),
             Times.Never);
     }
+
+    [Fact]
+    public async Task DeviceCredential_CannotAuthenticateHeartbeatForAnotherDeviceId()
+    {
+        const string secretA = "device-a-secret";
+        const string secretB = "device-b-secret";
+        var deviceA = new Device
+        {
+            Id = Guid.NewGuid(),
+            DeviceCode = "esp-a",
+            CredentialHash = Hash(secretA),
+            Status = DeviceStatus.Online,
+            EdgeState = "Approved"
+        };
+        var deviceB = new Device
+        {
+            Id = Guid.NewGuid(),
+            DeviceCode = "esp-b",
+            CredentialHash = Hash(secretB),
+            Status = DeviceStatus.Online,
+            EdgeState = "Approved"
+        };
+        var uow = new Mock<IUnitOfWork>();
+        uow.Setup(x => x.Devices).Returns(Repository(deviceA, deviceB).Object);
+        var context = new DefaultHttpContext();
+        context.Request.Headers[EdgeKeyGuard.DeviceHeaderName] = secretB;
+
+        var result = await EdgeKeyGuard.CheckDeviceAsync(
+            context.Request,
+            new ConfigurationBuilder().Build(),
+            uow.Object,
+            deviceA.Id,
+            CancellationToken.None);
+
+        result.Identity.Should().BeNull();
+        result.Denied.Should()
+            .BeOfType<Microsoft.AspNetCore.Mvc.UnauthorizedObjectResult>();
+    }
+
+    [Fact]
+    public async Task Hdf5Upload_CannotUseAuthenticatedIdentityForAnotherDevice()
+    {
+        var deviceA = new Device
+        {
+            Id = Guid.NewGuid(),
+            DeviceCode = "esp-a",
+            Status = DeviceStatus.Online,
+            EdgeState = "Approved"
+        };
+        var storage = new Mock<IStorageService>();
+        var uow = new Mock<IUnitOfWork>();
+        uow.Setup(x => x.Devices).Returns(Repository(deviceA).Object);
+        var service = new IotService(
+            uow.Object,
+            storage.Object,
+            Mock.Of<IAlertService>(),
+            Mock.Of<IRasFlowService>(),
+            NullLogger<IotService>.Instance);
+        var request = new Hdf5UploadRequest(
+            "esp-b",
+            "chunk.h5",
+            "checksum",
+            3,
+            DateTime.UtcNow.AddMinutes(-1),
+            DateTime.UtcNow);
+
+        var act = () => service.ProcessHdf5UploadAsync(
+            request,
+            new MemoryStream([1, 2, 3]),
+            deviceA.Id,
+            deviceA.DeviceCode);
+
+        (await act.Should().ThrowAsync<AppException>())
+            .Which.StatusCode.Should().Be(403);
+        storage.Verify(x => x.UploadAsync(
+            It.IsAny<string>(),
+            It.IsAny<string>(),
+            It.IsAny<Stream>(),
+            It.IsAny<string>(),
+            It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    private static string Hash(string secret) =>
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(secret)));
 
     private static Mock<IRepository<T>> Repository<T>(params T[] rows) where T : class
     {
