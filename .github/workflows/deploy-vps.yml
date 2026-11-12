@@ -14,9 +14,9 @@ concurrency:
 jobs:
   deploy:
     name: Publish & Deploy to VPS
-    # Protocol 2 migration is not compatible with the previous API/firmware.
-    # Merging to main must not actuate or cut over a live installation.
-    if: vars.EDGE_PROTOCOL_V2_READY == 'true' && (github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success')
+    # This VPS is FE/App-only (owner confirmed no connected physical devices).
+    # Always enforce hardware-control-disabled mode; live cutover needs a separate reviewed change.
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     permissions:
       actions: read
@@ -95,7 +95,7 @@ jobs:
               --project src/CrabSenseBE.Infrastructure/CrabSenseBE.Infrastructure.csproj \
               --startup-project src/CrabSenseBE.Api/CrabSenseBE.Api.csproj \
               --configuration Release |
-            awk '/^[0-9]{14}_/ {print $1}'
+            awk 'substr($1, 1, 14) ~ /^[0-9]+$/ && substr($1, 15, 1) == "_" {print $1}'
           )
           if [ "${#migrations[@]}" -lt 2 ]; then
             echo "Cannot determine the latest migration pair." >&2
@@ -136,6 +136,9 @@ jobs:
           p='./publish/appsettings.Local.json'
           d=json.load(open(p, encoding='utf-8-sig'))
           d['Urls']='http://0.0.0.0:5080'
+          d.setdefault('EdgeSync', {})['ControlDisabled']=True
+          d['EdgeSync']['AllowLegacySharedKey']=False
+          d.setdefault('RasAutomation', {})['FirmwareInterlockVerified']=False
           ms=d.setdefault('MediaStorage', {})
           if not ms.get('Provider'):
               ms['Provider']='GoogleDrive' if d.get('GoogleDrive') else 'Local'
@@ -148,7 +151,7 @@ jobs:
           json.dump(d, open(p,'w', encoding='utf-8'), indent=2)
           print('Local config ready, provider=', d.get('MediaStorage',{}).get('Provider'))
           PY
-          touch ./publish/.edge-protocol-v2
+          touch ./publish/.edge-protocol-v2 ./publish/.hardware-control-disabled
           chmod 600 ./publish/appsettings.Local.json
           tar -czf crabsense-api.tar.gz -C ./publish .
 
@@ -192,6 +195,7 @@ jobs:
             mkdir -p /opt/crabsense-api.next
             tar -xzf /tmp/crabsense-api.tar.gz -C /opt/crabsense-api.next
             chmod 600 /opt/crabsense-api.next/secrets/google-drive-sa.json 2>/dev/null || true
+            test -f /opt/crabsense-api.next/.hardware-control-disabled
             DB_CONNECTION="$(python3 - <<'PY'
             import json
             d=json.load(open('/opt/crabsense-api.next/appsettings.Local.json', encoding='utf-8-sig'))
@@ -406,6 +410,9 @@ jobs:
               'RestartSec=5' \
               'Environment=ASPNETCORE_ENVIRONMENT=Production' \
               'Environment=DOTNET_ENVIRONMENT=Production' \
+              'Environment=EdgeSync__ControlDisabled=true' \
+              'Environment=EdgeSync__AllowLegacySharedKey=false' \
+              'Environment=RasAutomation__FirmwareInterlockVerified=false' \
               'Environment=ASPNETCORE_URLS=http://0.0.0.0:5080' \
               'Environment=DOTNET_PRINT_TELEMETRY_MESSAGE=false' \
               '' \
@@ -422,7 +429,7 @@ jobs:
                 break
               fi
             done
-            if ! systemctl is-active --quiet crabsense-api || ! curl -fsS http://127.0.0.1:5080/health >/dev/null; then
+            if ! systemctl is-active --quiet crabsense-api || ! curl -fsS http://127.0.0.1:5080/health >/dev/null || ! curl -fsS http://127.0.0.1:5080/health/edge-control | python3 -c 'import json,sys; sys.exit(0 if json.load(sys.stdin).get("hardwareControlDisabled") is True else 1)'; then
               echo "Health check failed; restoring previous application package."
               echo "The migration gate requires this package to remain schema-compatible."
               echo "Database schema is retained; automatic production database restore is intentionally disabled."
@@ -430,7 +437,8 @@ jobs:
               systemctl stop crabsense-api || true
               rm -rf /opt/crabsense-api.failed
               mv /opt/crabsense-api /opt/crabsense-api.failed
-              if [ -f /opt/crabsense-api.previous/.edge-protocol-v2 ] && \
+              if [ -f /opt/crabsense-api.previous/.hardware-control-disabled ] && \
+                 [ -f /opt/crabsense-api.previous/.edge-protocol-v2 ] && \
                  [ -f /opt/crabsense-api.previous/.schema-migration ] && \
                  cmp -s /opt/crabsense-api.previous/.schema-migration /opt/crabsense-api.failed/.schema-migration; then
                 mv /opt/crabsense-api.previous /opt/crabsense-api
@@ -441,5 +449,7 @@ jobs:
               exit 1
             fi
             curl -fsS http://127.0.0.1:5080/health
+            echo
+            curl -fsS http://127.0.0.1:5080/health/edge-control
             echo
             echo DEPLOY_OK

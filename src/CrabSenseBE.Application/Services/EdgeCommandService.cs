@@ -14,6 +14,9 @@ public sealed class EdgeCommandService : IEdgeCommandService
     private readonly IUnitOfWork _uow;
     private readonly FarmAreaScope _areas;
     private readonly ICurrentUserService? _currentUser;
+    private readonly IConfiguration? _configuration;
+
+    private void RequireHardwareControl() => HardwareControlGuard.RequireEnabled(_configuration);
     private readonly int _maxAttempts;
     private readonly TimeSpan _commandTtl;
     private readonly TimeSpan _leaseDuration;
@@ -25,6 +28,7 @@ public sealed class EdgeCommandService : IEdgeCommandService
     {
         _uow = uow;
         _currentUser = currentUser;
+        _configuration = configuration;
         _areas = new FarmAreaScope(uow, currentUser);
         _maxAttempts = Math.Clamp(
             configuration?.GetValue("EdgeSync:CommandMaxAttempts", 3) ?? 3,
@@ -45,6 +49,7 @@ public sealed class EdgeCommandService : IEdgeCommandService
         Guid actorId,
         CancellationToken ct = default)
     {
+        RequireHardwareControl();
         if (actorId == Guid.Empty
             || _currentUser is null
             || !_currentUser.IsAuthenticated
@@ -64,6 +69,7 @@ public sealed class EdgeCommandService : IEdgeCommandService
         string automationSource,
         CancellationToken ct = default)
     {
+        RequireHardwareControl();
         if (farmingAreaId == Guid.Empty)
             throw AppException.Forbidden("Automation phải xác định FarmingArea.");
         if (string.IsNullOrWhiteSpace(automationSource))
@@ -175,6 +181,7 @@ public sealed class EdgeCommandService : IEdgeCommandService
         string leaseHolder,
         CancellationToken ct = default)
     {
+        RequireHardwareControl();
         var code = deviceCode?.Trim();
         if (string.IsNullOrWhiteSpace(code))
             throw AppException.BadRequest("deviceCode is required.");
@@ -254,6 +261,7 @@ public sealed class EdgeCommandService : IEdgeCommandService
         CancellationToken ct = default,
         bool requireDeliveryAttemptId = false)
     {
+        RequireHardwareControl();
         var command = await _uow.EdgeCommands.GetByIdAsync(id, ct)
             ?? throw AppException.NotFound("EdgeCommand");
         var status = request.Status?.Trim().ToLowerInvariant();

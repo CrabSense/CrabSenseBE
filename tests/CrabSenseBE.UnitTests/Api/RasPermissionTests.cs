@@ -6,6 +6,7 @@ using CrabSenseBE.Domain.Entities;
 using CrabSenseBE.Domain.Enums;
 using CrabSenseBE.Domain.Interfaces;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Configuration;
 using Moq;
 
 namespace CrabSenseBE.UnitTests.Api;
@@ -28,6 +29,7 @@ public sealed class RasPermissionTests : IAsyncLifetime
     private int _saves;
     private RasComponent _node = null!;
     private Mock<IEdgeCommandService> _edge = null!;
+    private IConfiguration _config = null!;
 
     public Task InitializeAsync()
     {
@@ -132,8 +134,13 @@ public sealed class RasPermissionTests : IAsyncLifetime
             .ReturnsAsync(1);
 
         _edge = new Mock<IEdgeCommandService>();
+        // Permission tests exercise the hypothetical enabled-control environment.
+        // This is an isolated mock, never the deployed configuration.
+        _config = new ConfigurationBuilder().AddInMemoryCollection(
+            new Dictionary<string, string?> { ["EdgeSync:ControlDisabled"] = "false" }).Build();
         _api = PermissionApiFactory.Create(services =>
         {
+            services.AddSingleton<IConfiguration>(_config);
             services.AddSingleton(uow.Object);
             services.AddSingleton(_edge.Object);
             services.AddScoped<IRasFlowService, RasFlowService>();
@@ -202,6 +209,22 @@ public sealed class RasPermissionTests : IAsyncLifetime
             It.Is<CrabSenseBE.Application.DTOs.IoT.EnqueueEdgeCommandRequest>(
                 req => req.Command == "on" && req.DeviceCode == "ESP-A"),
             StaffA, It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task DisabledControl_RejectsRasCommandWithoutQueueOrStateMutation()
+    {
+        _config["EdgeSync:ControlDisabled"] = "true";
+        _saves = 0;
+        using var body = new StringContent("{\"command\":\"on\"}", Encoding.UTF8, "application/json");
+        using var response = await _api.SendAsync(
+            AppRoles.FarmStaff, StaffA, HttpMethod.Post,
+            $"/api/areas/{AreaA}/ras-flow/nodes/{NodeId}/command", body);
+        Assert.Equal(503, (int)response.StatusCode);
+        Assert.False(_node.IsOn);
+        Assert.Null(_node.RunStartedAt);
+        Assert.Equal(0, _saves);
+        _edge.VerifyNoOtherCalls();
     }
 
     [Fact]
