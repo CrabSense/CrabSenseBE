@@ -188,10 +188,21 @@ public static class CrabConditions
         CrabCondition.Dead => CrabStatus.Dead,
         CrabCondition.Sold => CrabStatus.Sold,
         CrabCondition.Harvested => CrabStatus.Harvested,
-        CrabCondition.Problem => CrabStatus.Quarantined,
+        CrabCondition.Problem => CrabStatus.Alive,
         CrabCondition.Molting => CrabStatus.Molting,
         _ => CrabStatus.Alive
     };
+
+    // Condition updates must not resurrect terminal or missing crabs, and a
+    // health problem does not terminate an ongoing molt or imply quarantine.
+    public static CrabStatus ApplyCondition(CrabStatus current, CrabCondition condition)
+    {
+        if (current is CrabStatus.Dead or CrabStatus.Harvested or CrabStatus.Sold or CrabStatus.Missing)
+            return current;
+        if (condition is CrabCondition.Problem or CrabCondition.Weak)
+            return current == CrabStatus.Molting ? CrabStatus.Molting : CrabStatus.Alive;
+        return ToLifecycle(condition);
+    }
 
     public static string ToApi(CrabCondition condition) => condition switch
     {
