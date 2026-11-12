@@ -125,6 +125,7 @@ jobs:
           json.dump(d, open(p,'w', encoding='utf-8'), indent=2)
           print('Local config ready, provider=', d.get('MediaStorage',{}).get('Provider'))
           PY
+          touch ./publish/.edge-protocol-v2
           tar -czf crabsense-api.tar.gz -C ./publish .
 
       - name: Upload package to VPS
@@ -311,6 +312,8 @@ jobs:
             print('Database backup created and archive verified.')
             PY
             test -s "$BACKUP_FILE"
+            # Stop the old API before schema cutover; do not let protocol-1 code write the migrated DB.
+            systemctl stop crabsense-api || true
             chmod +x /opt/crabsense-api.next/efbundle
             # EF uses the startup application's configuration. Run from the
             # staged package so appsettings.Local.json and relative paths resolve.
@@ -368,9 +371,11 @@ jobs:
               systemctl stop crabsense-api || true
               rm -rf /opt/crabsense-api.failed
               mv /opt/crabsense-api /opt/crabsense-api.failed
-              if [ -d /opt/crabsense-api.previous ]; then
+              if [ -f /opt/crabsense-api.previous/.edge-protocol-v2 ]; then
                 mv /opt/crabsense-api.previous /opt/crabsense-api
                 systemctl restart crabsense-api
+              else
+                echo 'Protocol-1 application rollback is unsafe after v2 migration; manual recovery required.' >&2
               fi
               exit 1
             fi
