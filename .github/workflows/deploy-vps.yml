@@ -310,7 +310,18 @@ jobs:
             PY
             test -s "$BACKUP_FILE"
             chmod +x /opt/crabsense-api.next/efbundle
-            /opt/crabsense-api.next/efbundle --connection "$DB_CONNECTION"
+            # EF uses the startup application's configuration. Run from the
+            # staged package so appsettings.Local.json and relative paths resolve.
+            (
+              cd /opt/crabsense-api.next
+              export ASPNETCORE_ENVIRONMENT=Production
+              export DOTNET_ENVIRONMENT=Production
+              export ASPNETCORE_CONTENTROOT="$PWD"
+              export DOTNET_CONTENTROOT="$PWD"
+              test -r appsettings.Local.json
+              echo "Running EF migration bundle from staged application directory."
+              ./efbundle --connection "$DB_CONNECTION"
+            )
             unset DB_CONNECTION
             systemctl stop crabsense-api || true
             rm -rf /opt/crabsense-api.previous
