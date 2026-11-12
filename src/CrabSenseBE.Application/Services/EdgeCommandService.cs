@@ -88,8 +88,8 @@ public sealed class EdgeCommandService : IEdgeCommandService
         var command = request.Command?.Trim().ToLowerInvariant();
         if (string.IsNullOrWhiteSpace(deviceCode))
             throw AppException.BadRequest("DeviceCode is required.");
-        if (command is not ("on" or "off" or "toggle" or "alloff"))
-            throw AppException.BadRequest("Command must be on, off, toggle, or alloff.");
+        if (command is not ("on" or "off" or "alloff"))
+            throw AppException.BadRequest("Command must be on, off, or alloff. Use explicit desired state; toggle is unsafe.");
 
         var device = await _uow.Devices.FirstOrDefaultAsync(d => d.DeviceCode == deviceCode, ct)
             ?? throw AppException.NotFound($"Device '{deviceCode}'");
