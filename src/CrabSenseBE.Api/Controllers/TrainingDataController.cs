@@ -17,16 +17,19 @@ public class TrainingDataController : ControllerBase
     public TrainingDataController(ITrainingDataService service) => _service = service;
 
     [HttpPost("feeding-events")]
+    [Authorize(Roles = AppRoles.FarmStaff)]
     public async Task<IActionResult> CreateFeeding(
         CreateFeedingEventRequest request, CancellationToken ct)
         => Ok(await _service.CreateFeedingAsync(request, CurrentUserId(), ct));
 
     [HttpPost("observation-events")]
+    [Authorize(Roles = AppRoles.FarmStaff)]
     public async Task<IActionResult> CreateObservation(
         CreateObservationEventRequest request, CancellationToken ct)
         => Ok(await _service.CreateObservationAsync(request, ct));
 
     [HttpPost("labels")]
+    [Authorize(Roles = AppRoles.FarmManager)]
     public async Task<IActionResult> Label(
         SubmitTrainingLabelRequest request, CancellationToken ct)
         => Ok(await _service.LabelAsync(request, CurrentUserId(), ct));
