@@ -99,4 +99,23 @@ public sealed class CameraRecordingLibraryTests
         Assert.False(await db.MediaAssets.AnyAsync(x=>x.Id==video.Id));
         Assert.Contains(await db.OperationLogs.ToListAsync(),x=>x.Action=="DeleteCameraRecording"&&x.UserId==actor);
     }
+    [Fact]
+    public async Task Delete_refuses_shared_storage_key_and_wrong_provider()
+    {
+        await using var db=Context();
+        var camera=new Device { Id=Guid.NewGuid(), DeviceType="camera", DeviceCode="CAM" };
+        var video=Video(camera,"file.mp4",DateTime.UtcNow);
+        var duplicate=Video(camera,"duplicate.mp4",DateTime.UtcNow);
+        duplicate.StorageKey=video.StorageKey;
+        db.Devices.Add(camera);db.MediaAssets.AddRange(video,duplicate);await db.SaveChangesAsync();
+        var storage=new Mock<IMediaStorageService>(MockBehavior.Strict);
+        storage.SetupGet(x=>x.ProviderName).Returns("Local");
+        var library=Library(db,storage.Object);
+        Assert.Equal(409,(await Assert.ThrowsAsync<AppException>(()=>library.DeleteAsync(video.Id,Guid.NewGuid(),null))).StatusCode);
+        storage.SetupGet(x=>x.ProviderName).Returns("GoogleDrive");
+        Assert.Equal(409,(await Assert.ThrowsAsync<AppException>(()=>library.OpenAsync(video.Id))).StatusCode);
+        Assert.Equal(2,await db.MediaAssets.CountAsync());
+        Assert.Empty(await db.OperationLogs.ToListAsync());
+    }
+
 }

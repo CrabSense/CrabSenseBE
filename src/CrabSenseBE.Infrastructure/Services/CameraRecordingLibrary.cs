@@ -117,7 +117,8 @@ public sealed class CameraRecordingLibrary(AppDbContext db, IMediaStorageService
 
     public async Task DeleteAsync(Guid id, Guid actorId, string? ip, CancellationToken ct = default)
     {
-        var asset = await RequireAsync(id, ct);
+        var asset = await TechnicalVideos(db).AsTracking().FirstOrDefaultAsync(x => x.Id == id, ct)
+            ?? throw AppException.NotFound("Camera recording");
         ValidateProvider(asset);
         // Refuse deleting a physical object referenced by another metadata row.
         if (await db.MediaAssets.AnyAsync(x => x.Id != id && x.Provider == asset.Provider && x.StorageKey == asset.StorageKey, ct))
