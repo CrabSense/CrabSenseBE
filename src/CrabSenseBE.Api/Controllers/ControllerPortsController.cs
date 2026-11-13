@@ -92,6 +92,11 @@ public sealed class ControllerPortsController : ControllerBase
                 row = new ControllerPort { DeviceId = id, PortId = p.PortId };
                 _db.ControllerPorts.Add(row);
             }
+            if (!row.Present || row.Channel != p.Channel || row.Gpio != p.Gpio || row.HardwareUid != p.HardwareUid)
+            {
+                row.ObservedOn = null;
+                row.LastObservedAt = null;
+            }
             row.Channel = p.Channel;
             row.Gpio = p.Gpio;
             row.Kind = p.Kind;
@@ -107,6 +112,45 @@ public sealed class ControllerPortsController : ControllerBase
         return Ok(new { success = true, revision = report.Revision, changed = true });
     }
 
+    public sealed record RelayObservation(string Channel, bool On);
+    public sealed record ObservationReport(long Revision, IReadOnlyList<RelayObservation>? Outputs);
+
+    [HttpPut("{deviceCode}/ports/observations")]
+    [AllowAnonymous]
+    [RequestSizeLimit(16384)]
+    public async Task<IActionResult> Observe(string deviceCode, [FromBody] ObservationReport report, CancellationToken ct)
+    {
+        var (denied, identity) = await EdgeKeyGuard.CheckDeviceAsync(Request, _configuration, _uow, deviceCode, ct);
+        if (denied is not null) return denied;
+        if (identity!.IsLegacyCredential) return Unauthorized(new { message = "Dedicated device credential required." });
+        if (report.Outputs is null || report.Outputs.Count is < 1 or > 64
+            || report.Outputs.Any(x => x is null || !Token(x.Channel, 32))
+            || report.Outputs.Select(x => x.Channel).Distinct(StringComparer.Ordinal).Count() != report.Outputs.Count)
+            return BadRequest(new { message = "Invalid observations." });
+        var id = identity.DeviceId;
+        var inventory = await _db.ControllerPortInventories.SingleOrDefaultAsync(x => x.DeviceId == id, ct);
+        if (inventory is null || inventory.Revision != report.Revision)
+            return Conflict(new { message = "Inventory revision mismatch." });
+        var rows = await _db.ControllerPorts.Where(x => x.DeviceId == id && x.Present && x.Direction == "output"
+            && (x.Kind == "ssr" || x.Kind == "relay")).ToListAsync(ct);
+        if (rows.Count != report.Outputs.Count || rows.Any(x => x.Channel is null)
+            || !rows.Select(x => x.Channel!).ToHashSet(StringComparer.Ordinal).SetEquals(report.Outputs.Select(x => x.Channel)))
+            return BadRequest(new { message = "Observation must match the current output inventory." });
+        var values = report.Outputs.ToDictionary(x => x.Channel, x => x.On, StringComparer.Ordinal);
+        var now = DateTime.UtcNow;
+        foreach (var row in rows)
+        {
+            row.ObservedOn = values[row.Channel!];
+            row.LastObservedAt = now;
+        }
+        // Force the inventory concurrency token into the transaction so a
+        // concurrently replaced manifest cannot accept stale observations.
+        _db.Entry(inventory).Property(x => x.ReportedAt).IsModified = true;
+        try { await _db.SaveChangesAsync(ct); }
+        catch (DbUpdateException) { return Conflict(new { message = "Inventory changed; retry." }); }
+        return Ok(new { success = true });
+    }
+
     [HttpGet("{id:guid}/ports")]
     [Authorize(Roles = AppRoles.FarmPortal + "," + AppRoles.Platform)]
     public async Task<IActionResult> Get(Guid id, CancellationToken ct)
@@ -120,7 +164,7 @@ public sealed class ControllerPortsController : ControllerBase
         var ports = rows.Select(p => new
         {
             p.DeviceId, p.PortId, p.Channel, p.Gpio, p.Kind, p.Direction, p.Discovery,
-            p.HardwareUid, p.Present, p.RemoteControl, p.LastSeenAt,
+            p.HardwareUid, p.Present, p.RemoteControl, p.LastSeenAt, p.ObservedOn, p.LastObservedAt,
             // Existing RAS bindings are read-only here; no inferred equipment assignment.
             bindings = components.Where(x => p.Channel != null && x.RelayChannel == p.Channel).ToList()
         });

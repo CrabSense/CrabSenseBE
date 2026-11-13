@@ -1358,6 +1358,8 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.Property<bool>("Present").HasColumnType("boolean");
                     b.Property<bool>("RemoteControl").HasColumnType("boolean");
                     b.Property<DateTime>("LastSeenAt").HasColumnType("timestamp with time zone");
+                    b.Property<bool?>("ObservedOn").HasColumnType("boolean");
+                    b.Property<DateTime?>("LastObservedAt").HasColumnType("timestamp with time zone");
                     b.HasKey("DeviceId", "PortId");
                     b.ToTable("ControllerPorts", "be");
                 });

@@ -61,6 +61,19 @@ public sealed class ControllerPortInventoryTests
     }
 
     [Fact]
+    public async Task Observations_AreStoredOnlyForCurrentInventory()
+    {
+        var (db, api, device) = await SetupAsync();
+        await using var context = db;
+        Assert.IsType<OkObjectResult>(await api.Report(device.DeviceCode, new(1, 1, new[] { Port(1), Port(2) }), default));
+        var states = new[] { new ControllerPortsController.RelayObservation("1", false), new ControllerPortsController.RelayObservation("2", true) };
+        Assert.IsType<OkObjectResult>(await api.Observe(device.DeviceCode, new(1, states), default));
+        Assert.True((await db.ControllerPorts.SingleAsync(x => x.Channel == "2")).ObservedOn);
+        Assert.IsType<ConflictObjectResult>(await api.Observe(device.DeviceCode, new(2, states), default));
+        Assert.IsType<BadRequestObjectResult>(await api.Observe(device.DeviceCode, new(1, states.Take(1).ToArray()), default));
+    }
+
+    [Fact]
     public async Task InvalidManifest_OrWrongDeviceCredential_DoesNotWrite()
     {
         var (db, api, device) = await SetupAsync();

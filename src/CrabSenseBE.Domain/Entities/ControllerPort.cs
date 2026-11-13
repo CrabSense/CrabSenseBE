@@ -24,4 +24,6 @@ public sealed class ControllerPort
     public bool Present { get; set; }
     public bool RemoteControl { get; set; }
     public DateTime LastSeenAt { get; set; }
+    public bool? ObservedOn { get; set; }
+    public DateTime? LastObservedAt { get; set; }
 }
