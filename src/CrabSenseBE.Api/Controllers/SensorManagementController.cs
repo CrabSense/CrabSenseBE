@@ -26,12 +26,12 @@ public record SensorErrorReport(string DeviceCode, string ErrorCode, string? Mes
 [ApiController]
 [Authorize(Roles = AppRoles.Platform)]
 [Route("api/sensors")]
-public sealed class SensorManagementController(AppDbContext db, IIotService iot) : ControllerBase
+public sealed class SensorManagementController(AppDbContext db) : ControllerBase
 {
     private Guid Actor() => Guid.TryParse(User.FindFirstValue(ClaimTypes.NameIdentifier) ?? User.FindFirstValue("sub"), out var id)
         ? id : throw AppException.Unauthorized();
     private string? Ip() => HttpContext.Connection.RemoteIpAddress?.ToString();
-    private async Task<Sensor> Sensor(Guid id, CancellationToken ct) => await db.Sensors.FindAsync([id], ct)
+    private async Task<Sensor> RequireSensor(Guid id, CancellationToken ct) => await db.Sensors.FindAsync([id], ct)
         ?? throw AppException.NotFound("Sensor");
     private void Audit(Guid id, string action, string? details = null) => db.OperationLogs.Add(new OperationLog
     { UserId = Actor(), Action = action, EntityType = "Sensor", EntityId = id, IpAddress = Ip(), Details = details });
@@ -117,6 +117,7 @@ public sealed class SensorManagementController(AppDbContext db, IIotService iot)
     private async Task<ControllerPort> RequirePort(Guid deviceId, Guid portId, CancellationToken ct)
     {
         var d=await db.Devices.FindAsync([deviceId],ct)??throw AppException.NotFound("Controller");
+        if(CameraConfiguration.IsCamera(d))throw AppException.BadRequest("Camera is not a sensor controller.");
         var p=await db.ControllerPorts.FindAsync([portId],ct)??throw AppException.NotFound("Port");
         if(p.DeviceId!=deviceId||!p.IsPresent||p.ConfigVersion!=d.CapabilityVersion||p.PortType is not ("DIGITAL_INPUT" or "ANALOG_INPUT" or "I2C" or "RS485" or "UART"))
             throw AppException.Conflict("Port is not a current sensor input.");
@@ -166,8 +167,9 @@ public sealed class SensorManagementController(AppDbContext db, IIotService iot)
         if(s.FarmingAreaId is Guid area){if(!await db.FarmingAreas.AnyAsync(x=>x.Id==area,ct))throw AppException.NotFound("FarmingArea");a.Add(area);}
         if(s.FarmingRowId is Guid row){var r=await db.FarmingRows.FindAsync([row],ct)??throw AppException.NotFound("FarmingRow");a.Add(r.FarmingAreaId);}
         if(s.WaterSystemId is Guid ws){var w=await db.WaterSystems.FindAsync([ws],ct)??throw AppException.NotFound("WaterSystem");if(w.FarmingAreaId is Guid x)a.Add(x);}
-        if(s.DeviceId is Guid did){var d=await db.Devices.FindAsync([did],ct)??throw AppException.NotFound("Controller");if(d.FarmingAreaId is Guid x)a.Add(x);
+        if(s.DeviceId is Guid did){var d=await db.Devices.FindAsync([did],ct)??throw AppException.NotFound("Controller");if(CameraConfiguration.IsCamera(d)&&s.SourceType!="CameraAnalysis")throw AppException.BadRequest("Camera is not a sensor controller.");if(d.FarmingAreaId is Guid x)a.Add(x);
             if(d.FarmingRowId is Guid rid){var r=await db.FarmingRows.FindAsync([rid],ct)??throw AppException.NotFound("FarmingRow");a.Add(r.FarmingAreaId);}}
+        if(s.RasComponentId is Guid cid){var component=await db.RasComponents.FindAsync([cid],ct)??throw AppException.NotFound("RAS component");if(component.WaterSystemId!=s.WaterSystemId)throw AppException.BadRequest("RAS component must match water system.");}
         if(a.Count>1)throw AppException.BadRequest("Sensor and controller must belong to the same farming area.");
     }
     private async Task Save(CancellationToken ct){try{await db.SaveChangesAsync(ct);}catch(DbUpdateException){throw AppException.Conflict("Sensor configuration changed or conflicts with an existing binding.");}}
@@ -175,7 +177,7 @@ public sealed class SensorManagementController(AppDbContext db, IIotService iot)
     [HttpPut("{id:guid}/binding")]
     public async Task<IActionResult> Binding(Guid id,SensorBindingRequest req,CancellationToken ct)
     {
-        var s=await Sensor(id,ct);
+        var s=await RequireSensor(id,ct);
         if(req.PortId.HasValue){if(!req.DeviceId.HasValue)throw AppException.BadRequest("DeviceId required.");await Bind(s,await RequirePort(req.DeviceId.Value,req.PortId.Value,ct),req.BusAddress,req.BusRegister,ct);}
         else {s.DeviceId=req.DeviceId;s.ControllerPortId=null;s.BusPortId=null;s.BusAddress=null;s.BusRegister=null;s.LastSeenAt=null;s.AppliedConfigurationVersion=null;s.LastConfigurationAppliedAt=null;}
         await ValidateLocation(s,ct);Audit(id,"UpdateSensorBinding");await Save(ct);
@@ -188,7 +190,7 @@ public sealed class SensorManagementController(AppDbContext db, IIotService iot)
     public Task<IActionResult> Disable(Guid id,CancellationToken ct)=>SetActive(id,false,ct);
     private async Task<IActionResult> SetActive(Guid id,bool enabled,CancellationToken ct)
     {
-        var s=await Sensor(id,ct);s.IsActive=enabled;s.LastSeenAt=null;
+        var s=await RequireSensor(id,ct);s.IsActive=enabled;s.LastSeenAt=null;
         if(!enabled)
         {
             var alerts=await db.Alerts.Where(a=>a.SensorId==id&&a.IncidentType=="sensor_disconnect"&&(a.Status==AlertStatus.Active||a.Status==AlertStatus.Acknowledged||a.Status==AlertStatus.InProgress)).ToListAsync(ct);
@@ -201,7 +203,7 @@ public sealed class SensorManagementController(AppDbContext db, IIotService iot)
     [HttpGet("{id:guid}/health")]
     public async Task<IActionResult> Health(Guid id,CancellationToken ct)
     {
-        var s=await Sensor(id,ct);
+        var s=await RequireSensor(id,ct);
         var d=s.DeviceId is Guid did?await db.Devices.FindAsync([did],ct):null;
         var portId=s.ControllerPortId??s.BusPortId;
         var p=portId is Guid pid?await db.ControllerPorts.FindAsync([pid],ct):null;
@@ -214,7 +216,7 @@ public sealed class SensorManagementController(AppDbContext db, IIotService iot)
     [HttpPost("{id:guid}/test")]
     public async Task<IActionResult> Test(Guid id,CancellationToken ct)
     {
-        _=await Sensor(id,ct);Audit(id,"SensorTestRequested","No remote sample protocol integrated");await Save(ct);
+        _=await RequireSensor(id,ct);Audit(id,"SensorTestRequested","No remote sample protocol integrated");await Save(ct);
         return StatusCode(501,ApiResponse<object>.Fail("Remote sample test not integrated. Use health to inspect received telemetry."));
     }
 
@@ -226,7 +228,7 @@ public sealed class SensorManagementController(AppDbContext db, IIotService iot)
     [HttpGet("{id:guid}/measurements")]
     public async Task<IActionResult> History(Guid id,DateTimeOffset? from,DateTimeOffset? to,int page=1,int pageSize=100,CancellationToken ct=default)
     {
-        _=await Sensor(id,ct);
+        _=await RequireSensor(id,ct);
         if(page<1||pageSize is <1 or >2000||(long)(page-1)*pageSize>int.MaxValue)throw AppException.BadRequest("Invalid pagination.");
         var q=Measurements(id,from,to);var total=await q.CountAsync(ct);
         var items=await q.OrderByDescending(m=>m.MeasuredAt).ThenByDescending(m=>m.Id).Skip((page-1)*pageSize).Take(pageSize)
@@ -236,14 +238,14 @@ public sealed class SensorManagementController(AppDbContext db, IIotService iot)
     [HttpGet("{id:guid}/statistics")]
     public async Task<IActionResult> Statistics(Guid id,DateTimeOffset? from,DateTimeOffset? to,CancellationToken ct)
     {
-        _=await Sensor(id,ct);
+        _=await RequireSensor(id,ct);
         var groups=await Measurements(id,from,to).GroupBy(m=>m.Unit).Select(g=>new{unit=g.Key,count=g.Count(),min=g.Min(m=>m.Value),max=g.Max(m=>m.Value),average=g.Average(m=>m.Value)}).ToListAsync(ct);
         return Ok(ApiResponse<object>.Ok(new{sensorId=id,groups}));
     }
     [HttpGet("{id:guid}/chart")]
     public async Task<IActionResult> Chart(Guid id,DateTimeOffset? from,DateTimeOffset? to,int bucketMinutes=60,CancellationToken ct=default)
     {
-        _=await Sensor(id,ct);var end=to??DateTimeOffset.UtcNow;var start=from??end.AddHours(-24);
+        _=await RequireSensor(id,ct);var end=to??DateTimeOffset.UtcNow;var start=from??end.AddHours(-24);
         if(bucketMinutes<1||bucketMinutes>1440||end<=start||end-start>TimeSpan.FromDays(31)||(end-start).TotalMinutes/bucketMinutes>2000)
             throw AppException.BadRequest("Chart range max 31 days and 2000 buckets.");
         // Bound raw rows; clients may narrow range for higher-frequency sensors.
@@ -258,7 +260,7 @@ public sealed class SensorManagementController(AppDbContext db, IIotService iot)
     [HttpGet("{id:guid}/events")]
     public async Task<IActionResult> Events(Guid id,CancellationToken ct)
     {
-        _=await Sensor(id,ct);
+        _=await RequireSensor(id,ct);
         var alerts=await db.Alerts.AsNoTracking().Where(a=>a.SensorId==id&&a.SourceType=="Sensor"&&(a.IncidentType=="sensor_disconnect"||a.IncidentType=="sensor_read_error"))
             .OrderByDescending(a=>a.LastOccurredAt).Take(200).Select(a=>new{a.Id,a.IncidentType,a.Message,status=a.Status.ToString(),severity=a.Severity.ToString(),a.LastOccurredAt,a.ResolvedAt}).ToListAsync(ct);
         var logs=await db.OperationLogs.AsNoTracking().Where(l=>l.EntityId==id&&l.EntityType=="Sensor").OrderByDescending(l=>l.CreatedAt).Take(200)
@@ -269,11 +271,11 @@ public sealed class SensorManagementController(AppDbContext db, IIotService iot)
         s.ConfigurationVersion,s.AppliedConfigurationVersion,s.LastConfigurationAppliedAt,
         runtimeStatus=s.ConfigurationVersion==0?"NotConfigured":s.ConfigurationVersion==s.AppliedConfigurationVersion?"Applied":"Pending"};
     [HttpGet("{id:guid}/configuration")]
-    public async Task<IActionResult> Configuration(Guid id,CancellationToken ct)=>Ok(ApiResponse<object>.Ok(Config(await Sensor(id,ct))));
+    public async Task<IActionResult> Configuration(Guid id,CancellationToken ct)=>Ok(ApiResponse<object>.Ok(Config(await RequireSensor(id,ct))));
     [HttpPut("{id:guid}/configuration")]
     public async Task<IActionResult> Configuration(Guid id,SensorConfigurationRequest req,CancellationToken ct)
     {
-        var s=await Sensor(id,ct);
+        var s=await RequireSensor(id,ct);
         if(req.SamplingIntervalSeconds is <1 or >86400||req.DisconnectTimeoutSeconds<req.SamplingIntervalSeconds||req.DisconnectTimeoutSeconds>604800)
             throw AppException.BadRequest("Invalid sampling interval or timeout.");
         if(req.ExpectedVersion!=s.ConfigurationVersion)throw AppException.Conflict("Configuration version changed.");
@@ -284,12 +286,12 @@ public sealed class SensorManagementController(AppDbContext db, IIotService iot)
     [HttpGet("{id:guid}/calibrations")]
     public async Task<IActionResult> Calibrations(Guid id,CancellationToken ct)
     {
-        _=await Sensor(id,ct);return Ok(ApiResponse<object>.Ok(await db.SensorCalibrations.AsNoTracking().Where(c=>c.SensorId==id).OrderByDescending(c=>c.PerformedAt).Take(200).ToListAsync(ct)));
+        _=await RequireSensor(id,ct);return Ok(ApiResponse<object>.Ok(await db.SensorCalibrations.AsNoTracking().Where(c=>c.SensorId==id).OrderByDescending(c=>c.PerformedAt).Take(200).ToListAsync(ct)));
     }
     [HttpPost("{id:guid}/calibrations")]
     public async Task<IActionResult> Calibration(Guid id,SensorCalibrationRequest req,CancellationToken ct)
     {
-        var s=await Sensor(id,ct);
+        var s=await RequireSensor(id,ct);
         if(req.PerformedAt==default||req.PerformedAt>DateTimeOffset.UtcNow.AddMinutes(2)||string.IsNullOrWhiteSpace(req.Unit)||req.Unit.Length>32
             ||s.Unit!=null&&!string.Equals(s.Unit,req.Unit,StringComparison.OrdinalIgnoreCase)
             ||string.IsNullOrWhiteSpace(req.Method)||req.Method.Length>100||req.Result is not ("Passed" or "Failed")||req.Note?.Length>500)
@@ -298,5 +300,46 @@ public sealed class SensorManagementController(AppDbContext db, IIotService iot)
             ObservedValue=req.ObservedValue,Unit=req.Unit,Method=req.Method,Result=req.Result,Note=req.Note};
         db.SensorCalibrations.Add(c);Audit(id,"RecordSensorCalibration",req.Result);await Save(ct);
         return Ok(ApiResponse<object>.Ok(c,"Manual calibration recorded; no hardware adjustment was performed."));
+    }
+}
+
+[ApiController]
+[Route("api/iot/sensors")]
+public sealed class SensorEdgeConfigurationController(AppDbContext db, IConfiguration configuration, IUnitOfWork uow, IAlertService alerts) : ControllerBase
+{
+    private async Task<Sensor> Require(Guid id,string deviceCode,CancellationToken ct)
+    {
+        var (denied,identity)=await EdgeKeyGuard.CheckDeviceAsync(Request,configuration,uow,deviceCode,ct);
+        if(denied!=null||identity==null||identity.IsLegacyCredential||Request.Headers["X-Edge-Protocol"].ToString()!="2")
+            throw AppException.Unauthorized("Device-specific Edge V2 credential required.");
+        var sensor=await db.Sensors.FindAsync([id],ct)??throw AppException.NotFound("Sensor");
+        if(sensor.DeviceId!=identity.DeviceId)throw AppException.Forbidden("Sensor does not belong to this controller.");
+        return sensor;
+    }
+    [HttpGet("{id:guid}/configuration")]
+    [AllowAnonymous]
+    public async Task<IActionResult> Get(Guid id,[FromQuery]string deviceCode,CancellationToken ct)
+    {
+        var s=await Require(id,deviceCode,ct);
+        return Ok(ApiResponse<object>.Ok(new{s.Id,s.SensorCode,s.IsActive,s.SamplingIntervalSeconds,s.ConfigurationVersion}));
+    }
+    [HttpPut("{id:guid}/configuration/ack")]
+    [AllowAnonymous]
+    public async Task<IActionResult> Ack(Guid id,SensorConfigurationAck req,CancellationToken ct)
+    {
+        var s=await Require(id,req.DeviceCode,ct);
+        if(req.Version<1||req.Version!=s.ConfigurationVersion)throw AppException.Conflict("Configuration version is no longer current.");
+        s.AppliedConfigurationVersion=req.Version;s.LastConfigurationAppliedAt=DateTime.UtcNow;
+        await db.SaveChangesAsync(ct);return Ok(ApiResponse.Ok("Configuration application reported by controller."));
+    }
+    [HttpPost("{id:guid}/errors")]
+    [AllowAnonymous]
+    public async Task<IActionResult> Error(Guid id,SensorErrorReport req,CancellationToken ct)
+    {
+        var s=await Require(id,req.DeviceCode,ct);
+        if(!s.IsActive)throw AppException.Conflict("Sensor is disabled.");
+        if(req.ErrorCode is not ("ReadFailed" or "CommunicationFailed" or "InvalidData"))throw AppException.BadRequest("Unsupported sensor error code.");
+        await alerts.RaiseOnceAsync("sensor_read_error","Sensor",id.ToString("N"),"Sensor "+s.SensorCode+": "+req.ErrorCode,areaId:s.FarmingAreaId,ct:ct);
+        return Ok(ApiResponse.Ok("Sensor error reported."));
     }
 }

@@ -100,6 +100,7 @@ public class IotService : IIotService
         try
         {
             if (!fresh) return ApiResponse.Ok("Historical sensor data saved; automation not evaluated.");
+            await _alerts.ClearAsync("sensor_read_error","Sensor",sensor.Id.ToString("N"),ct);
             await _alerts.EvaluateMeasurementAsync(sensor, req.Value, ct);
             if (sensor.SensorCode.StartsWith("float_", StringComparison.Ordinal))
                 await EvaluateTanksAsync(
@@ -400,8 +401,8 @@ public class IotService : IIotService
         CancellationToken ct = default)
     {
         var list = req.Measurements?.ToList() ?? new List<SensorDataRequest>();
-        if (list.Count == 0)
-            throw AppException.BadRequest("Measurements are required.");
+        if (list.Count == 0 || list.Count > 1000)
+            throw AppException.BadRequest("Batch must contain 1–1000 measurements.");
 
         // Validate the complete ownership set before the first SaveChanges so a
         // foreign sensor cannot leave an earlier item partially persisted.
@@ -551,7 +552,7 @@ public class IotService : IIotService
                     || (d.FarmingRowId != null && rowIds.Contains(d.FarmingRowId.Value)));
             // Cảm biến thuộc khu: hệ nước khu, dãy của khu, hoặc thiết bị gắn khu/dãy.
             sensors = sensors.Where(s =>
-                (s.WaterSystemId != null && wsIds.Contains(s.WaterSystemId.Value))
+                s.FarmingAreaId == areaId || (s.WaterSystemId != null && wsIds.Contains(s.WaterSystemId.Value))
                 || (s.FarmingRowId != null && rowIds.Contains(s.FarmingRowId.Value))
                 || DeviceInArea(s.DeviceId));
         }
@@ -780,27 +781,32 @@ public class IotService : IIotService
                 s.FarmingRowId == rid
                 || (s.DeviceId is Guid did && devices.TryGetValue(did, out var d) && d.FarmingRowId == rid));
         }
-        else if (farmingAreaId is Guid areaId && areaId != Guid.Empty)
+        if (farmingAreaId is Guid areaId && areaId != Guid.Empty)
         {
             var wsIds = (await _uow.WaterSystems.FindAsync(w => w.FarmingAreaId == areaId, ct))
                 .Select(w => w.Id)
                 .ToHashSet();
             var rowIds = rows.Where(r => r.FarmingAreaId == areaId).Select(r => r.Id).ToHashSet();
             sensors = sensors.Where(s =>
-                (s.WaterSystemId != null && wsIds.Contains(s.WaterSystemId.Value))
+                s.FarmingAreaId == areaId || (s.WaterSystemId != null && wsIds.Contains(s.WaterSystemId.Value))
                 || (s.FarmingRowId != null && rowIds.Contains(s.FarmingRowId.Value))
                 || (s.DeviceId is Guid did && devices.TryGetValue(did, out var d) && (
                     d.FarmingAreaId == areaId
                     || (d.FarmingRowId != null && rowIds.Contains(d.FarmingRowId.Value)))));
         }
 
-        return ApiResponse<IEnumerable<SensorDto>>.Ok(sensors.Select(MapSensor));
+        var list=sensors.ToList();
+        var ids=list.Select(s=>s.Id).ToArray();
+        var latest=await _uow.WaterMeasurements.Query().AsNoTracking().Where(m=>ids.Contains(m.SensorId))
+            .GroupBy(m=>m.SensorId).Select(g=>g.OrderByDescending(m=>m.MeasuredAt).ThenByDescending(m=>m.Id).First()).ToDictionaryAsync(m=>m.SensorId,ct);
+        return ApiResponse<IEnumerable<SensorDto>>.Ok(list.Select(s=>MapSensor(s) with {LatestValue=latest.GetValueOrDefault(s.Id)?.Value,LatestMeasuredAt=latest.GetValueOrDefault(s.Id)?.MeasuredAt}));
     }
 
     public async Task<ApiResponse<SensorDto>> GetSensorAsync(Guid id, CancellationToken ct = default)
     {
         var s = await _uow.Sensors.GetByIdAsync(id, ct) ?? throw AppException.NotFound("Sensor");
-        return ApiResponse<SensorDto>.Ok(MapSensor(s));
+        var latest=await _uow.WaterMeasurements.Query().AsNoTracking().Where(m=>m.SensorId==id).OrderByDescending(m=>m.MeasuredAt).ThenByDescending(m=>m.Id).FirstOrDefaultAsync(ct);
+        return ApiResponse<SensorDto>.Ok(MapSensor(s) with {LatestValue=latest?.Value,LatestMeasuredAt=latest?.MeasuredAt});
     }
 
     public async Task<ApiResponse<SensorDto>> CreateSensorAsync(CreateSensorRequest req, CancellationToken ct = default)
@@ -810,6 +816,8 @@ public class IotService : IIotService
         if (string.IsNullOrWhiteSpace(req.SensorType))
             throw AppException.BadRequest("SensorType is required (pH, DO, Temperature, …).");
 
+        if (req.MinThreshold.HasValue || req.MaxThreshold.HasValue)
+            throw AppException.Forbidden("Use farm alert-threshold configuration for water-quality thresholds.");
         if (await _uow.Sensors.AnyAsync(s => s.SensorCode == req.SensorCode.Trim(), ct))
             throw AppException.Conflict($"SensorCode '{req.SensorCode}' already exists.");
 
@@ -841,6 +849,7 @@ public class IotService : IIotService
         };
         await ValidateSensorLinksAsync(sensor, ct);
         await _uow.Sensors.AddAsync(sensor, ct);
+        await SensorAuditAsync(sensor.Id,"CreateSensor",ct);
         await _uow.SaveChangesAsync(ct);
         return ApiResponse<SensorDto>.Ok(MapSensor(sensor), "Sensor created.");
     }
@@ -849,6 +858,8 @@ public class IotService : IIotService
         Guid id, UpdateSensorRequest req, CancellationToken ct = default)
     {
         var sensor = await _uow.Sensors.GetByIdAsync(id, ct) ?? throw AppException.NotFound("Sensor");
+        if (req.MinThreshold.HasValue && req.MinThreshold != sensor.MinThreshold || req.MaxThreshold.HasValue && req.MaxThreshold != sensor.MaxThreshold)
+            throw AppException.Forbidden("Use farm alert-threshold configuration for water-quality thresholds.");
         if (req.WaterSystemId.HasValue) sensor.WaterSystemId = req.WaterSystemId == Guid.Empty ? null : req.WaterSystemId;
         if (req.FarmingAreaId.HasValue) sensor.FarmingAreaId = req.FarmingAreaId == Guid.Empty ? null : req.FarmingAreaId;
         if (req.Name is not null) sensor.Name = req.Name.Trim();
@@ -876,11 +887,27 @@ public class IotService : IIotService
         if (req.Unit is not null) sensor.Unit = req.Unit;
         if (req.MinThreshold.HasValue) sensor.MinThreshold = req.MinThreshold;
         if (req.MaxThreshold.HasValue) sensor.MaxThreshold = req.MaxThreshold;
-        if (req.IsActive.HasValue) sensor.IsActive = req.IsActive.Value;
+        if (req.IsActive.HasValue && req.IsActive.Value != sensor.IsActive)
+        {
+            sensor.IsActive = req.IsActive.Value; sensor.LastSeenAt = null;
+            if (!sensor.IsActive)
+            {
+                var incidents = await _uow.Alerts.FindAsync(a=>a.SensorId==id && a.IncidentType=="sensor_disconnect"
+                    && (a.Status==AlertStatus.Active || a.Status==AlertStatus.Acknowledged || a.Status==AlertStatus.InProgress),ct);
+                foreach(var a in incidents){a.Status=AlertStatus.Recovered;a.ResolvedAt=DateTime.UtcNow;a.ResolutionReason="Sensor disabled by administrator.";_uow.Alerts.Update(a);}
+            }
+        }
         await ValidateSensorLinksAsync(sensor, ct);
         _uow.Sensors.Update(sensor);
+        await SensorAuditAsync(sensor.Id,"UpdateSensor",ct);
         await _uow.SaveChangesAsync(ct);
         return ApiResponse<SensorDto>.Ok(MapSensor(sensor), "Sensor updated.");
+    }
+
+    private async Task SensorAuditAsync(Guid id,string action,CancellationToken ct)
+    {
+        var user=await _areas.CurrentUserAsync(ct);
+        if(user!=null) await _uow.OperationLogs.AddAsync(new OperationLog{UserId=user.Id,Action=action,EntityType="Sensor",EntityId=id},ct);
     }
 
     private async Task ValidateSensorLinksAsync(Sensor sensor, CancellationToken ct)
@@ -917,6 +944,7 @@ public class IotService : IIotService
         {
             var device = await _uow.Devices.GetByIdAsync(deviceId, ct)
                 ?? throw AppException.NotFound("Device");
+            if (CameraConfiguration.IsCamera(device) && sensor.SourceType != "CameraAnalysis") throw AppException.BadRequest("Camera is not a sensor controller; use CameraAnalysis source.");
             if (device.FarmingAreaId is Guid areaId) areas.Add(areaId);
             if (device.FarmingRowId is Guid deviceRowId)
             {
@@ -937,7 +965,8 @@ public class IotService : IIotService
         if (hasData || sensor.ControllerPortId.HasValue || sensor.BusPortId.HasValue || await _uow.Alerts.AnyAsync(a => a.SensorId == id, ct))
             throw AppException.Conflict("Sensor has history or binding — deactivate instead of delete.");
         _uow.Sensors.Remove(sensor);
-        await _uow.SaveChangesAsync(ct);
+        await SensorAuditAsync(sensor.Id,"DeleteSensor",ct);
+        try { await _uow.SaveChangesAsync(ct); } catch (DbUpdateException) { throw AppException.Conflict("Sensor has linked history; deactivate instead."); }
         return ApiResponse.Ok("Sensor deleted.");
     }
 

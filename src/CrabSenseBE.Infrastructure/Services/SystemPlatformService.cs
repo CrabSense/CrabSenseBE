@@ -686,7 +686,7 @@ public class SystemPlatformService : ISystemPlatformService
 
     // Explicit technical incident allowlist. Do not infer authorization from free-text messages.
     private IQueryable<Alert> TechnicalAlerts() => _db.Alerts.AsNoTracking().Where(a =>
-        (a.IncidentType == "sensor_disconnect" && a.SourceType == "Sensor") ||
+        ((a.IncidentType == "sensor_disconnect" || a.IncidentType == "sensor_read_error") && a.SourceType == "Sensor") ||
         (a.IncidentType == "device_disconnect" && a.SourceType == "Device") ||
         (a.IncidentType == "kiosk_disconnect" && a.SourceType == "Kiosk"));
 
@@ -696,6 +696,7 @@ public class SystemPlatformService : ISystemPlatformService
         "TestConnection", "UpdateRecording", "CreateAiService", "RestartAiService", "StopAiService",
         "DeployAiModelRequested", "RollbackAiModelRequested", "UpdateBackupSchedule",
         "TerminateSession", "CreateApiKey", "RotateApiKey", "RevokeApiKey", "UpdateSecurityPolicy",
+        "CreateSensor", "UpdateSensor", "DeleteSensor", "RegisterSensorFromPort", "UpdateSensorBinding", "EnableSensor", "DisableSensor", "UpdateSensorConfiguration", "SensorTestRequested", "RecordSensorCalibration",
         "DeleteCameraRecordingRequested", "DeleteCameraRecordingFailed", "DeleteCameraRecording",
         "Login", "LoginFailed", "LoginFailureThresholdReached"
     ];

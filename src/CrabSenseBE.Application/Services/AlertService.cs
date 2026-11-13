@@ -252,7 +252,7 @@ public class AlertService : IAlertService
         {
             var candidates = await _uow.AlertThresholds.FindAsync(
                 t => t.IsActive && t.SensorType == sensor.SensorType, ct);
-            var areaId = await AreaOfWaterSystemAsync(sensor.WaterSystemId, ct);
+            var areaId = await AreaOfSensorAsync(sensor, ct);
             var thr = PickThreshold(candidates, areaId, sensor.WaterSystemId);
             if (thr is null) return;
             min = thr.MinValue;
@@ -261,8 +261,7 @@ public class AlertService : IAlertService
             thresholdId = thr.Id;
         }
 
-        var areaSnapshot = await AreaOfWaterSystemAsync(
-            sensor.WaterSystemId, ct);
+        var areaSnapshot = await AreaOfSensorAsync(sensor, ct);
         if (value >= min && value <= max)
         {
             await ClearAsync(
@@ -410,11 +409,11 @@ public class AlertService : IAlertService
         var created = 0;
 
         var sensors = await _uow.Sensors.FindAsync(
-            s => s.IsActive && s.LastSeenAt != null && s.LastSeenAt < cutoff, ct);
+            s => s.IsActive && s.LastSeenAt != null, ct);
+        sensors = sensors.Where(s => s.LastSeenAt < DateTime.UtcNow.AddSeconds(-(s.DisconnectTimeoutSeconds ?? timeoutMinutes*60)));
         foreach (var sensor in sensors)
         {
-            var areaId = await AreaOfWaterSystemAsync(
-                sensor.WaterSystemId, ct);
+            var areaId = await AreaOfSensorAsync(sensor, ct);
             var existing = (await _uow.Alerts.FindAsync(
                 a => a.SensorId == sensor.Id
                     && a.IncidentType == "sensor_disconnect"
@@ -941,6 +940,17 @@ public class AlertService : IAlertService
     }
 
     /// <summary>Khu của cảm biến: Sensor → WaterSystem → FarmingArea.</summary>
+    private async Task<Guid?> AreaOfSensorAsync(Sensor sensor,CancellationToken ct)
+    {
+        if(sensor.FarmingAreaId.HasValue)return sensor.FarmingAreaId;
+        var area=await AreaOfWaterSystemAsync(sensor.WaterSystemId,ct);
+        if(area.HasValue)return area;
+        if(sensor.FarmingRowId is Guid rowId){var row=await _uow.FarmingRows.GetByIdAsync(rowId,ct);if(row!=null)return row.FarmingAreaId;}
+        if(sensor.DeviceId is Guid did){var d=await _uow.Devices.GetByIdAsync(did,ct);if(d?.FarmingAreaId!=null)return d.FarmingAreaId;
+            if(d?.FarmingRowId is Guid rid)return (await _uow.FarmingRows.GetByIdAsync(rid,ct))?.FarmingAreaId;}
+        return null;
+    }
+
     private async Task<Guid?> AreaOfWaterSystemAsync(Guid? waterSystemId, CancellationToken ct)
     {
         if (waterSystemId is not Guid id || id == Guid.Empty) return null;

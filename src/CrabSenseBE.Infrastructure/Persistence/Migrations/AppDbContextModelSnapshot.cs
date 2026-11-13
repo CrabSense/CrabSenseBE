@@ -3792,7 +3792,7 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.Property<Guid?>("BusPortId").HasColumnType("uuid");
                     b.Property<string>("BusAddress").HasColumnType("text");
                     b.Property<string>("BusRegister").HasColumnType("text");
-                    b.Property<int>("ConfigurationVersion").HasColumnType("integer");
+                    b.Property<int>("ConfigurationVersion").IsConcurrencyToken().HasColumnType("integer");
                     b.Property<int?>("AppliedConfigurationVersion").HasColumnType("integer");
                     b.Property<DateTime?>("LastConfigurationAppliedAt").HasColumnType("timestamp with time zone");
                     b.HasIndex("FarmingAreaId");

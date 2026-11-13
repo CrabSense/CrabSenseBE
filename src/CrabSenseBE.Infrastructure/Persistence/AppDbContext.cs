@@ -123,6 +123,7 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<Sensor>().HasOne(x => x.ControllerPort).WithMany()
             .HasForeignKey(x => x.ControllerPortId).OnDelete(DeleteBehavior.Restrict);
         modelBuilder.Entity<Sensor>().HasIndex(x => x.ControllerPortId).IsUnique();
+        modelBuilder.Entity<Sensor>().Property(x=>x.ConfigurationVersion).IsConcurrencyToken();
         modelBuilder.Entity<Sensor>().HasOne<FarmingArea>().WithMany().HasForeignKey(x => x.FarmingAreaId).OnDelete(DeleteBehavior.Restrict);
         modelBuilder.Entity<Sensor>().HasOne<ControllerPort>().WithMany().HasForeignKey(x => x.BusPortId).OnDelete(DeleteBehavior.Restrict);
         modelBuilder.Entity<Sensor>().HasIndex(x => new { x.BusPortId, x.BusAddress, x.BusRegister }).IsUnique();
