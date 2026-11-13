@@ -1126,6 +1126,18 @@ public class IotService : IIotService
             _ = await _uow.FarmingAreas.GetByIdAsync(areaId, ct)
                 ?? throw AppException.NotFound("FarmingArea");
 
+        if (CameraConfiguration.IsCamera(req.DeviceType, req.StreamUrl, req.SnapshotUrl))
+        {
+            CameraConfiguration.ValidateMetadata(deviceIp, req.MacAddress, req.Resolution);
+            CameraConfiguration.ValidateUrl(req.StreamUrl);
+            CameraConfiguration.ValidateUrl(req.SnapshotUrl, snapshot: true);
+            if (!string.IsNullOrWhiteSpace(req.MacAddress))
+            {
+                var mac = req.MacAddress.Trim().ToLowerInvariant();
+                if (await _uow.Devices.AnyAsync(d => d.MacAddress != null && d.MacAddress.ToLower() == mac, ct))
+                    throw AppException.Conflict("MAC đã được đăng ký.");
+            }
+        }
         var device = new Device
         {
             DeviceCode = code,
@@ -1158,6 +1170,22 @@ public class IotService : IIotService
         Guid id, UpdateDeviceRequest req, CancellationToken ct = default, Guid? actorId = null, string? ip = null)
     {
         var device = await _uow.Devices.GetByIdAsync(id, ct) ?? throw AppException.NotFound("Device");
+        var camera = CameraConfiguration.IsCamera(device)
+            || CameraConfiguration.IsCamera(req.DeviceType, req.StreamUrl, req.SnapshotUrl);
+        if (camera)
+        {
+            CameraConfiguration.ValidateMetadata(req.IpAddress, req.MacAddress, req.Resolution);
+            CameraConfiguration.ValidateUrl(req.StreamUrl);
+            CameraConfiguration.ValidateUrl(req.SnapshotUrl, snapshot: true);
+            if (!string.IsNullOrWhiteSpace(req.MacAddress))
+            {
+                var mac = req.MacAddress.Trim().ToLowerInvariant();
+                if (await _uow.Devices.AnyAsync(d => d.Id != id && d.MacAddress != null && d.MacAddress.ToLower() == mac, ct))
+                    throw AppException.Conflict("MAC đã được đăng ký.");
+            }
+            if (string.Equals(req.Status, "Online", StringComparison.OrdinalIgnoreCase))
+                throw AppException.BadRequest("Camera chỉ Online sau heartbeat đã xác thực. Dùng Offline để kích hoạt lại.");
+        }
         if (req.DeviceType is not null) device.DeviceType = req.DeviceType.Trim().ToLowerInvariant();
         if (req.FirmwareVersion is not null) device.FirmwareVersion = req.FirmwareVersion;
         if (req.BatteryLevel.HasValue) device.BatteryLevel = req.BatteryLevel;
@@ -1224,6 +1252,10 @@ public class IotService : IIotService
     {
         var device = await _uow.Devices.GetByIdAsync(id, ct) ?? throw AppException.NotFound("Device");
         if (device.CapabilityVersion > 0) throw AppException.Conflict("Controller has discovered port history; revoke or disable instead of deleting.");
+        if (CameraConfiguration.IsCamera(device)
+            && (await _uow.MediaAssets.AnyAsync(x => x.DeviceId == id, ct)
+                || await _uow.AiDetections.AnyAsync(x => x.DeviceId == id, ct)))
+            throw AppException.Conflict("Camera có lịch sử media/AI; hãy ngừng sử dụng thay vì xóa.");
         foreach (var sensor in await _uow.Sensors.FindAsync(s => s.DeviceId == id, ct))
             sensor.DeviceId = null;
         foreach (var relay in await _uow.RasComponents.FindAsync(c => c.RelayDeviceId == id, ct))
@@ -1240,7 +1272,6 @@ public class IotService : IIotService
             row.DeviceId = null;
         foreach (var row in await _uow.AiDetections.FindAsync(x => x.DeviceId == id, ct))
             row.DeviceId = null;
-        await _uow.SaveChangesAsync(ct);
         await WriteDeviceAuditAsync(actorId, "DeleteDevice", device.Id, device.DeviceCode, ip, ct);
         _uow.Devices.Remove(device);
         await _uow.SaveChangesAsync(ct);
@@ -1522,28 +1553,9 @@ public class IotService : IIotService
     /// </summary>
     private static (string? stream, string? snapshot) ResolveCameraUrls(Device d)
     {
-        var isCamera = (d.DeviceType ?? "").Contains("cam", StringComparison.OrdinalIgnoreCase);
-        if (!isCamera) return (d.StreamUrl, d.SnapshotUrl);
-
-        var stream = d.StreamUrl;
-        if (string.IsNullOrWhiteSpace(stream) && !string.IsNullOrWhiteSpace(d.FirmwareVersion))
-        {
-            var fw = d.FirmwareVersion.Trim();
-            if (fw.StartsWith("rtsp://", StringComparison.OrdinalIgnoreCase)
-                || fw.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
-                || fw.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
-                stream = fw;
-        }
-
-        var snapshot = d.SnapshotUrl;
-        if (!string.IsNullOrWhiteSpace(d.IpAddress))
-        {
-            var ip = d.IpAddress.Trim();
-            var host = ip.StartsWith("http", StringComparison.OrdinalIgnoreCase) ? ip.TrimEnd('/') : $"http://{ip}";
-            stream ??= $"{host}/stream";
-            snapshot ??= $"{host}/capture";
-        }
-        return (stream, snapshot);
+        // No guessed /stream or /capture endpoints; legacy URLs with credentials remain
+        // in the database for migration, but must never be returned to clients.
+        return (CameraConfiguration.SafeUrl(d.StreamUrl), CameraConfiguration.SafeUrl(d.SnapshotUrl, snapshot: true));
     }
 
     private static DeviceDto MapDevice(
@@ -1551,8 +1563,8 @@ public class IotService : IIotService
     {
         var (stream, snapshot) = ResolveCameraUrls(d);
         return new(d.Id, d.DeviceCode, string.IsNullOrWhiteSpace(d.DeviceType) ? "esp32" : d.DeviceType,
-            d.FirmwareVersion, d.BatteryLevel, d.RssiDbm,
-            d.Status.ToString(), d.LastSeenAt, sensorCount,
+            CameraConfiguration.IsCamera(d) && d.FirmwareVersion?.Contains("://") == true ? null : d.FirmwareVersion, d.BatteryLevel, d.RssiDbm,
+            CameraConfiguration.IsCamera(d) ? CameraConfiguration.Status(d, DateTime.UtcNow) : d.Status.ToString(), d.LastSeenAt, sensorCount,
             string.IsNullOrWhiteSpace(d.Name) ? d.DeviceCode : d.Name,
             d.MacAddress, d.IpAddress, d.FarmingAreaId,
             area?.Name, area?.Code, actuatorCount,
@@ -1571,7 +1583,7 @@ public class IotService : IIotService
         var (stream, snapshot) = ResolveCameraUrls(d);
         return new(d.Id, d.DeviceCode,
             string.IsNullOrWhiteSpace(d.DeviceType) ? "esp32" : d.DeviceType,
-            d.FirmwareVersion, d.Status.ToString(), d.LastSeenAt,
+            CameraConfiguration.IsCamera(d) && d.FirmwareVersion?.Contains("://") == true ? null : d.FirmwareVersion, CameraConfiguration.IsCamera(d) ? CameraConfiguration.Status(d, DateTime.UtcNow) : d.Status.ToString(), d.LastSeenAt,
             sensors.Count, actuators.Count,
             string.IsNullOrWhiteSpace(d.Name) ? d.DeviceCode : d.Name,
             d.MacAddress, d.IpAddress, d.FarmingAreaId,

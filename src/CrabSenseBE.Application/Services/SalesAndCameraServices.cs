@@ -195,7 +195,7 @@ public class BoxCameraService : IBoxCameraService
 
         // Ưu tiên camera gắn đúng dãy của hộp → camera tổng quan khu → camera bất kỳ mới hoạt động nhất.
         var cameras = (await _uow.Devices.GetAllAsync(ct))
-            .Where(d => d.DeviceType.Contains("cam", StringComparison.OrdinalIgnoreCase))
+            .Where(CameraConfiguration.IsCamera)
             .OrderByDescending(d => d.LastSeenAt ?? d.CreatedAt)
             .ToList();
         var camera = cameras.FirstOrDefault(d => d.FarmingRowId == box.FarmingRowId)
@@ -223,43 +223,20 @@ public class BoxCameraService : IBoxCameraService
                     : "Chưa có camera live — đang hiện media gần nhất của hộp."));
         }
 
-        var online = camera.Status == DeviceStatus.Online
-            || (camera.LastSeenAt.HasValue && camera.LastSeenAt > DateTime.UtcNow.AddMinutes(-15));
+        var online = CameraConfiguration.Status(camera, DateTime.UtcNow) == "Online";
 
-        // Ưu tiên Device.StreamUrl; kế đến cách cũ: FirmwareVersion chứa "rtsp://..." hoặc "http...m3u8"
-        string? stream = null;
-        if (!string.IsNullOrWhiteSpace(camera.StreamUrl))
-        {
-            stream = camera.StreamUrl.Trim();
-        }
-        else if (!string.IsNullOrWhiteSpace(camera.FirmwareVersion) &&
-            (camera.FirmwareVersion.StartsWith("rtsp://", StringComparison.OrdinalIgnoreCase) ||
-             camera.FirmwareVersion.Contains(".m3u8", StringComparison.OrdinalIgnoreCase) ||
-             camera.FirmwareVersion.StartsWith("http", StringComparison.OrdinalIgnoreCase)))
-        {
-            stream = camera.FirmwareVersion.Trim();
-        }
-        else if (online)
-        {
-            // Dev-friendly HLS template; replace FirmwareVersion with real RTSP/HLS to go live.
-            stream = $"https://stream.crabsense.local/live/{Uri.EscapeDataString(camera.DeviceCode)}.m3u8?boxId={boxId}";
-        }
-
-        // Snapshot: ảnh chụp tĩnh của camera nếu khai báo, không thì media gần nhất của hộp.
-        var snapshot = string.IsNullOrWhiteSpace(camera.SnapshotUrl) ? preview : camera.SnapshotUrl.Trim();
-
+        var stream = CameraConfiguration.SafeUrl(camera.StreamUrl);
+        var snapshot = CameraConfiguration.SafeUrl(camera.SnapshotUrl, snapshot: true);
         return ApiResponse<BoxCameraDto>.Ok(new BoxCameraDto(
             boxId,
             camera.Id,
             camera.DeviceCode,
-            online ? "online" : camera.Status.ToString().ToLowerInvariant(),
+            CameraConfiguration.Status(camera, DateTime.UtcNow).ToLowerInvariant(),
             stream ?? preview,
-            snapshot,
+            snapshot ?? preview,
             camera.LastSeenAt ?? latestMedia?.CreatedAt,
             online
-                ? (stream != null && stream.Contains("stream.crabsense.local", StringComparison.OrdinalIgnoreCase)
-                    ? "Camera online — đặt StreamUrl = RTSP/HLS URL thật để phát live."
-                    : "Camera online — stream sẵn sàng.")
+                ? "Camera có heartbeat gần đây; luồng video chưa được xác minh."
                 : (preview != null
                     ? "Camera offline — đang hiện media gần nhất của hộp."
                     : "Camera offline hoặc mất kết nối.")));

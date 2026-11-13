@@ -264,8 +264,9 @@ public class SystemPlatformService : ISystemPlatformService
                 .Take(8)
                 .ToListAsync(ct);
         return ApiResponse<DeviceDiagnosticsDto>.Ok(new DeviceDiagnosticsDto(
-            device.Id, device.DeviceCode, device.Status.ToString(), device.LastSeenAt,
-            device.BatteryLevel, device.RssiDbm, device.IpAddress, device.FirmwareVersion,
+            device.Id, device.DeviceCode, CameraConfiguration.IsCamera(device) ? CameraConfiguration.Status(device, DateTime.UtcNow) : device.Status.ToString(), device.LastSeenAt,
+            device.BatteryLevel, device.RssiDbm, device.IpAddress,
+            CameraConfiguration.IsCamera(device) && device.FirmwareVersion?.Contains("://") == true ? null : device.FirmwareVersion,
             sensorIds.Count, pending, latest, recent));
     }
 
@@ -281,6 +282,13 @@ public class SystemPlatformService : ISystemPlatformService
                 device.Id, false, "Thiết bị chưa có địa chỉ IP để kiểm tra.", null, null, device.LastSeenAt, device.RssiDbm));
         }
 
+        if (CameraConfiguration.IsCamera(device))
+        {
+            // The VPS is not the camera LAN. Never probe arbitrary camera URLs from here.
+            return ApiResponse<DeviceConnectionTestDto>.Ok(new DeviceConnectionTestDto(
+                device.Id, false, "Camera Agent chưa tích hợp; chưa xác minh được kết nối/stream Camera.",
+                device.IpAddress, null, device.LastSeenAt, device.RssiDbm));
+        }
         var port = await ProbePortAsync(device.IpAddress, ct);
         var message = port is int open
             ? $"Đã kết nối TCP tới {device.IpAddress}:{open}."
@@ -322,13 +330,15 @@ public class SystemPlatformService : ISystemPlatformService
             .OrderByDescending(x => x.CreatedAt)
             .Take(100)
             .ToListAsync(ct);
+        var deviceSource = deviceId.ToString("N");
         var alerts = await _db.Alerts.AsNoTracking()
-            .Where(a => a.SensorId != null && sensorIds.Contains(a.SensorId.Value))
+            .Where(a => (a.SensorId != null && sensorIds.Contains(a.SensorId.Value) && a.IncidentType == "sensor_disconnect")
+                || (a.IncidentType == "device_disconnect" && a.SourceType == "Device" && a.SourceId == deviceSource))
             .OrderByDescending(a => a.CreatedAt)
             .Take(100)
             .ToListAsync(ct);
 
-        var rows = logs.Select(x => new SystemLogDto(x.Id, x.CreatedAt, "INFO", "device", x.Action + " " + (x.Details ?? ""), null, device.DeviceCode, x.IpAddress))
+        var rows = logs.Select(x => new SystemLogDto(x.Id, x.CreatedAt, "INFO", "device", x.Action, null, device.DeviceCode, x.IpAddress))
             .Concat(alerts.Select(a => new SystemLogDto(a.Id, a.CreatedAt, a.Severity.ToString(), "alert", a.Message, null, device.DeviceCode, null)))
             .OrderByDescending(x => x.At)
             .ToList();
@@ -339,10 +349,11 @@ public class SystemPlatformService : ISystemPlatformService
     {
         var devices = await CameraDevices(ct);
         var settings = await _db.CameraRecordingSettings.AsNoTracking().ToListAsync(ct);
+        var areas = await _db.FarmingAreas.AsNoTracking().ToDictionaryAsync(a => a.Id, a => a.Name, ct);
         var rows = devices.Select(device =>
         {
             var setting = settings.FirstOrDefault(x => x.DeviceId == device.Id);
-            return MapCamera(device, setting);
+            return MapCamera(device, setting, device.FarmingAreaId is Guid areaId ? areas.GetValueOrDefault(areaId) : null);
         }).ToList();
         return ApiResponse<IReadOnlyList<CameraRecordingDto>>.Ok(rows);
     }
@@ -354,18 +365,7 @@ public class SystemPlatformService : ISystemPlatformService
             throw AppException.BadRequest("Mode không hợp lệ.");
         if (request.RetentionDays is < 1 or > 3650 || request.Fps is < 1 or > 120 || request.MaxStorageGb is < 1)
             throw AppException.BadRequest("RetentionDays, FPS hoặc giới hạn dung lượng không hợp lệ.");
-        if (request.Mode == "Scheduled" && string.IsNullOrWhiteSpace(request.WeeklyScheduleJson))
-            throw AppException.BadRequest("Scheduled cần WeeklyScheduleJson.");
-        if (!string.IsNullOrWhiteSpace(request.WeeklyScheduleJson))
-        {
-            try
-            {
-                using var schedule = System.Text.Json.JsonDocument.Parse(request.WeeklyScheduleJson);
-                if (schedule.RootElement.ValueKind is not (System.Text.Json.JsonValueKind.Array or System.Text.Json.JsonValueKind.Object))
-                    throw AppException.BadRequest("WeeklyScheduleJson phải là JSON object hoặc array.");
-            }
-            catch (System.Text.Json.JsonException) { throw AppException.BadRequest("WeeklyScheduleJson không hợp lệ."); }
-        }
+        CameraConfiguration.ValidateSchedule(request.WeeklyScheduleJson, request.Mode == "Scheduled");
         var device = await RequireDevice(deviceId, ct);
         if (!IsCameraDevice(device)) throw AppException.BadRequest("Thiết bị không phải camera.");
         var setting = await _db.CameraRecordingSettings.FirstOrDefaultAsync(x => x.DeviceId == deviceId, ct);
@@ -382,7 +382,9 @@ public class SystemPlatformService : ISystemPlatformService
         setting.WeeklyScheduleJson = request.WeeklyScheduleJson;
         await AuditAsync(userId, "UpdateRecording", "Device", deviceId, request.Mode, ip, ct);
         await _db.SaveChangesAsync(ct);
-        return ApiResponse<CameraRecordingDto>.Ok(MapCamera(device, setting),
+        var areaName = device.FarmingAreaId is Guid areaId
+            ? await _db.FarmingAreas.Where(x => x.Id == areaId).Select(x => x.Name).FirstOrDefaultAsync(ct) : null;
+        return ApiResponse<CameraRecordingDto>.Ok(MapCamera(device, setting, areaName),
             "Đã lưu cấu hình; worker ghi hình chưa được tích hợp, chưa xác nhận đang ghi.");
     }
 
@@ -792,9 +794,10 @@ public class SystemPlatformService : ISystemPlatformService
     private static SystemDeploymentDto MapDeployment(SystemDeployment row) => new(
         row.Id, row.Component, row.Version, row.Environment, row.Status, row.DeployedBy, row.DeployedAt);
 
-    private static CameraRecordingDto MapCamera(Device device, CameraRecordingSetting? setting) => new(
-        setting?.Id, device.Id, device.DeviceCode, device.Name, device.InstallationLocation,
-        device.Status.ToString(), device.Resolution, device.SnapshotUrl, device.StreamUrl,
+    private static CameraRecordingDto MapCamera(Device device, CameraRecordingSetting? setting, string? areaName) => new(
+        setting?.Id, device.Id, device.DeviceCode, device.Name, areaName,
+        CameraConfiguration.Status(device, DateTime.UtcNow), device.Resolution,
+        CameraConfiguration.SafeUrl(device.SnapshotUrl, snapshot: true), CameraConfiguration.SafeUrl(device.StreamUrl),
         setting?.Mode ?? "Disabled", setting?.RetentionDays ?? 30, setting?.VideoQuality,
         setting?.Fps, setting?.MaxStorageGb, setting?.WeeklyScheduleJson,
         setting is null || setting.Mode == "Disabled" ? "Disabled" : "NotIntegrated");
