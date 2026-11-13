@@ -85,4 +85,23 @@ public sealed class CameraManagementTests
         var logs = (await service.GetDeviceLogsAsync(camera.Id)).Data!;
         Assert.Equal(own.Id, Assert.Single(logs).Id);
     }
+    [Fact]
+    public async Task Recording_history_excludes_non_camera_and_farm_media()
+    {
+        var options = new DbContextOptionsBuilder<AppDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options;
+        await using var db = new AppDbContext(options);
+        var camera = new Device { Id = Guid.NewGuid(), DeviceCode = "CAM-01", DeviceType = "camera" };
+        var controller = new Device { Id = Guid.NewGuid(), DeviceCode = "ESP-01", DeviceType = "esp32" };
+        var technical = new MediaAsset { Id = Guid.NewGuid(), DeviceId = camera.Id, Category = "video", FileName = "cam.mp4" };
+        db.Devices.AddRange(camera, controller);
+        db.MediaAssets.AddRange(technical,
+            new MediaAsset { Id = Guid.NewGuid(), DeviceId = controller.Id, Category = "video", FileName = "other.mp4" },
+            new MediaAsset { Id = Guid.NewGuid(), DeviceId = camera.Id, RelatedEntityType = "crab", RelatedEntityId = Guid.NewGuid(), Category = "video", FileName = "farm.mp4" },
+            new MediaAsset { Id = Guid.NewGuid(), Category = "video", FileName = "unlinked.mp4" });
+        await db.SaveChangesAsync();
+        var service = new SystemPlatformService(db, Mock.Of<IDatabaseBackupService>(), new ConfigurationBuilder().Build());
+        Assert.Equal(technical.Id, Assert.Single((await service.GetRecordingHistoryAsync(null)).Data!).Id);
+        Assert.Equal(404, (await Assert.ThrowsAsync<AppException>(() => service.GetRecordingHistoryAsync(controller.Id))).StatusCode);
+    }
+
 }

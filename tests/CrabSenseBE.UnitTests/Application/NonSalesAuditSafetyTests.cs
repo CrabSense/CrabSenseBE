@@ -50,4 +50,23 @@ public sealed class NonSalesAuditSafetyTests
         device.Status.Should().Be(Enum.Parse<DeviceStatus>(existing));
         uow.Verify(x => x.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Never);
     }
+    [Theory]
+    [InlineData("Online")]
+    [InlineData("online")]
+    [InlineData("0")]
+    public async Task Admin_cannot_mark_camera_online_without_observation(string status)
+    {
+        var device = new Device { Id = Guid.NewGuid(), DeviceType = "camera", Status = DeviceStatus.Offline };
+        var repo = new Mock<IRepository<Device>>();
+        repo.Setup(x => x.GetByIdAsync(device.Id, It.IsAny<CancellationToken>())).ReturnsAsync(device);
+        var uow = new Mock<IUnitOfWork>();
+        uow.Setup(x => x.Devices).Returns(repo.Object);
+        var service = new IotService(uow.Object, Mock.Of<IStorageService>(), Mock.Of<IAlertService>(),
+            Mock.Of<IRasFlowService>(), NullLogger<IotService>.Instance);
+        var req = new UpdateDeviceRequest(null, null, status, null, null, null);
+        Assert.Equal(400, (await Assert.ThrowsAsync<AppException>(() => service.UpdateDeviceAsync(device.Id, req))).StatusCode);
+        Assert.Equal(DeviceStatus.Offline, device.Status);
+        uow.Verify(x => x.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Never);
+    }
+
 }
