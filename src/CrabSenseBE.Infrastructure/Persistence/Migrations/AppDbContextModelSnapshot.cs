@@ -3842,6 +3842,7 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.HasKey("Id");
 
                     b.HasIndex("ControllerPortId").IsUnique();
+                    b.HasIndex("SensorCode").IsUnique();
 
                     b.HasIndex("DeviceId");
 

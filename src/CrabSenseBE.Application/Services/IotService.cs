@@ -60,7 +60,7 @@ public class IotService : IIotService
         if (!string.IsNullOrWhiteSpace(req.Unit) && !string.IsNullOrWhiteSpace(sensor.Unit)
             && !string.Equals(req.Unit.Trim(), sensor.Unit.Trim(), StringComparison.OrdinalIgnoreCase))
             throw AppException.BadRequest("Measurement unit differs from sensor unit.");
-        var fresh = measuredAt >= now.AddSeconds(-30) && measuredAt <= now;
+        var fresh = req.MeasuredAt != default && measuredAt >= now.AddSeconds(-30) && measuredAt <= now;
         var eventKey = string.IsNullOrWhiteSpace(req.EventId)
             ? null
             : $"edge:{req.EventId.Trim()}:{req.SensorCode.Trim()}";
@@ -83,7 +83,7 @@ public class IotService : IIotService
             Unit = sensor.Unit ?? req.Unit?.Trim(),
             MeasuredAt = measuredAt,
             ReceivedAt = now,
-            DataQuality = fresh ? "Realtime" : "Backfill",
+            DataQuality = fresh ? "Realtime" : req.MeasuredAt == default ? "Unknown" : "Backfill",
             Source = eventKey ?? "realtime",
             EdgeEventKey = edgeEventKey
         };
@@ -780,7 +780,7 @@ public class IotService : IIotService
         {
             sensors = sensors.Where(s =>
                 s.FarmingRowId == rid
-                || (s.DeviceId is Guid did && devices.TryGetValue(did, out var d) && d.FarmingRowId == rid));
+                || (s.FarmingRowId == null && s.DeviceId is Guid did && devices.TryGetValue(did, out var d) && d.FarmingRowId == rid));
         }
         if (farmingAreaId is Guid areaId && areaId != Guid.Empty)
         {
@@ -851,7 +851,7 @@ public class IotService : IIotService
         await ValidateSensorLinksAsync(sensor, ct);
         await _uow.Sensors.AddAsync(sensor, ct);
         await SensorAuditAsync(sensor.Id,"CreateSensor",ct);
-        await _uow.SaveChangesAsync(ct);
+        try { await _uow.SaveChangesAsync(ct); } catch (DbUpdateException) { throw AppException.Conflict("Sensor registration conflicts with existing code or binding."); }
         return ApiResponse<SensorDto>.Ok(MapSensor(sensor), "Sensor created.");
     }
 
@@ -895,7 +895,7 @@ public class IotService : IIotService
             sensor.IsActive = req.IsActive.Value; sensor.LastSeenAt = null; sensor.ConfigurationVersion++; sensor.AppliedConfigurationVersion=null; sensor.LastConfigurationAppliedAt=null;
             if (!sensor.IsActive)
             {
-                var incidents = await _uow.Alerts.FindAsync(a=>a.SensorId==id && a.IncidentType=="sensor_disconnect"
+                var incidents = await _uow.Alerts.FindAsync(a=>a.SensorId==id && (a.IncidentType=="sensor_disconnect" || a.IncidentType=="sensor_read_error")
                     && (a.Status==AlertStatus.Active || a.Status==AlertStatus.Acknowledged || a.Status==AlertStatus.InProgress),ct);
                 foreach(var a in incidents){a.Status=AlertStatus.Recovered;a.ResolvedAt=DateTime.UtcNow;a.ResolutionReason="Sensor disabled by administrator.";_uow.Alerts.Update(a);}
             }
@@ -903,7 +903,7 @@ public class IotService : IIotService
         await ValidateSensorLinksAsync(sensor, ct);
         _uow.Sensors.Update(sensor);
         await SensorAuditAsync(sensor.Id,"UpdateSensor",ct);
-        await _uow.SaveChangesAsync(ct);
+        try { await _uow.SaveChangesAsync(ct); } catch (DbUpdateException) { throw AppException.Conflict("Sensor configuration changed or conflicts with another record."); }
         return ApiResponse<SensorDto>.Ok(MapSensor(sensor), "Sensor updated.");
     }
 
@@ -919,6 +919,8 @@ public class IotService : IIotService
         if (string.IsNullOrWhiteSpace(sensor.SensorType) || sensor.SensorCode.Length > 128 || sensor.SensorType.Length > 64
             || sensor.Unit?.Length > 32 || sensor.Name?.Length > 200 || sensor.InstallationLocation?.Length > 200)
             throw AppException.BadRequest("Invalid sensor metadata.");
+        if (sensor.SourceType is not (null or "Controller" or "Kiosk" or "CameraAnalysis" or "Manual" or "Legacy"))
+            throw AppException.BadRequest("Unknown sensor source type.");
         if (sensor.MinThreshold.HasValue && sensor.MaxThreshold.HasValue && sensor.MinThreshold >= sensor.MaxThreshold)
             throw AppException.BadRequest("Minimum threshold must be less than maximum.");
         if (sensor.FarmingAreaId is Guid explicitArea)

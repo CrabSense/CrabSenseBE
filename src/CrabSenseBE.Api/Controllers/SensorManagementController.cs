@@ -35,11 +35,12 @@ public sealed class SensorManagementController(AppDbContext db) : ControllerBase
         ?? throw AppException.NotFound("Sensor");
     private void Audit(Guid id, string action, string? details = null) => db.OperationLogs.Add(new OperationLog
     { UserId = Actor(), Action = action, EntityType = "Sensor", EntityId = id, IpAddress = Ip(), Details = details });
-    private static string Status(Sensor s, Device? d, ControllerPort? p)
+    private static string Status(Sensor s, Device? d, ControllerPort? p, bool readError = false)
     {
         if (!s.IsActive) return "Disabled";
         if (s.DeviceId.HasValue && (d == null || d.Status == DeviceStatus.Maintenance || d.EdgeState == "Revoked")) return "Offline";
         if ((s.ControllerPortId.HasValue || s.BusPortId.HasValue) && (p == null || !p.IsPresent || d == null || p.ConfigVersion != d.CapabilityVersion)) return "Offline";
+        if (readError) return "Error";
         if (s.LastSeenAt is null) return "Unknown";
         return s.LastSeenAt < DateTime.UtcNow.AddSeconds(-(s.DisconnectTimeoutSeconds ?? 900)) ? "Offline" : "Online";
     }
@@ -50,6 +51,13 @@ public sealed class SensorManagementController(AppDbContext db) : ControllerBase
         var latest = await db.WaterMeasurements.AsNoTracking().Where(m => ids.Contains(m.SensorId))
             .GroupBy(m => m.SensorId).Select(g => g.OrderByDescending(m => m.MeasuredAt).ThenByDescending(m => m.Id).First()).ToListAsync(ct);
         var values = latest.ToDictionary(m => m.SensorId);
+        var received = await db.WaterMeasurements.AsNoTracking().Where(m=>ids.Contains(m.SensorId)&&m.ReceivedAt!=null)
+            .GroupBy(m=>m.SensorId).Select(g=>new{sensorId=g.Key,at=g.Max(m=>m.ReceivedAt)}).ToDictionaryAsync(x=>x.sensorId,x=>x.at,ct);
+        var calibrations=await db.SensorCalibrations.AsNoTracking().Where(c=>ids.Contains(c.SensorId))
+            .GroupBy(c=>c.SensorId).Select(g=>g.OrderByDescending(c=>c.PerformedAt).ThenByDescending(c=>c.Id).First()).ToDictionaryAsync(c=>c.SensorId,ct);
+        var errors=(await db.Alerts.AsNoTracking().Where(a=>a.SensorId.HasValue&&ids.Contains(a.SensorId.Value)&&a.IncidentType=="sensor_read_error"
+            &&(a.Status==AlertStatus.Active||a.Status==AlertStatus.Acknowledged||a.Status==AlertStatus.InProgress))
+            .Select(a=>a.SensorId!.Value).Distinct().ToListAsync(ct)).ToHashSet();
         var devices = await db.Devices.AsNoTracking().ToDictionaryAsync(d => d.Id, ct);
         var ports = await db.ControllerPorts.AsNoTracking().ToDictionaryAsync(p => p.Id, ct);
         var rows = await db.FarmingRows.AsNoTracking().ToDictionaryAsync(r => r.Id, ct);
@@ -72,8 +80,9 @@ public sealed class SensorManagementController(AppDbContext db) : ControllerBase
                 farmingRowId = row?.Id, rowName = row?.Name, s.InstallationLocation, s.SourceType,
                 s.SamplingIntervalSeconds, disconnectTimeoutSeconds = s.DisconnectTimeoutSeconds ?? 900,
                 s.ConfigurationVersion, s.AppliedConfigurationVersion, s.LastConfigurationAppliedAt,
-                latestValue = m?.Value, latestMeasuredAt = m?.MeasuredAt, lastReceivedAt = m?.ReceivedAt,
-                dataQuality = m?.DataQuality ?? "Unknown", status = Status(s,d,p), s.MinThreshold, s.MaxThreshold });
+                latestValue = m?.Value, latestMeasuredAt = m?.MeasuredAt, lastReceivedAt = received.GetValueOrDefault(s.Id),
+                dataQuality = m?.DataQuality ?? "Unknown", status = Status(s,d,p,errors.Contains(s.Id)),
+                calibrationStatus=calibrations.GetValueOrDefault(s.Id)?.Result??"Unknown",lastCalibratedAt=calibrations.GetValueOrDefault(s.Id)?.PerformedAt,s.MinThreshold,s.MaxThreshold });
         }
         return result;
     }
@@ -92,9 +101,11 @@ public sealed class SensorManagementController(AppDbContext db) : ControllerBase
         var sensors = await db.Sensors.AsNoTracking().ToListAsync(ct);
         var devices = await db.Devices.AsNoTracking().ToDictionaryAsync(d=>d.Id,ct);
         var ports = await db.ControllerPorts.AsNoTracking().ToDictionaryAsync(p=>p.Id,ct);
-        var states = sensors.Select(s => Status(s,devices.GetValueOrDefault(s.DeviceId ?? Guid.Empty),ports.GetValueOrDefault(s.ControllerPortId ?? s.BusPortId ?? Guid.Empty))).ToList();
+        var errors=(await db.Alerts.AsNoTracking().Where(a=>a.SensorId.HasValue&&a.IncidentType=="sensor_read_error"&&(a.Status==AlertStatus.Active||a.Status==AlertStatus.Acknowledged||a.Status==AlertStatus.InProgress))
+            .Select(a=>a.SensorId!.Value).Distinct().ToListAsync(ct)).ToHashSet();
+        var states = sensors.Select(s => Status(s,devices.GetValueOrDefault(s.DeviceId ?? Guid.Empty),ports.GetValueOrDefault(s.ControllerPortId ?? s.BusPortId ?? Guid.Empty),errors.Contains(s.Id))).ToList();
         return Ok(ApiResponse<object>.Ok(new { total=sensors.Count, online=states.Count(s=>s=="Online"), offline=states.Count(s=>s=="Offline"),
-            disabled=states.Count(s=>s=="Disabled"), unknown=states.Count(s=>s=="Unknown"), types=sensors.Select(s=>s.SensorType).Distinct().Count() }));
+            disabled=states.Count(s=>s=="Disabled"), unknown=states.Count(s=>s=="Unknown"), error=states.Count(s=>s=="Error"), types=sensors.Select(s=>s.SensorType).Distinct().Count() }));
     }
 
     [HttpGet("types")]
@@ -212,9 +223,11 @@ public sealed class SensorManagementController(AppDbContext db) : ControllerBase
         var portId=s.ControllerPortId??s.BusPortId;
         var p=portId is Guid pid?await db.ControllerPorts.FindAsync([pid],ct):null;
         var latest=await db.WaterMeasurements.AsNoTracking().Where(m=>m.SensorId==id).OrderByDescending(m=>m.MeasuredAt).FirstOrDefaultAsync(ct);
-        return Ok(ApiResponse<object>.Ok(new {s.Id,status=Status(s,d,p),s.IsActive,s.LastSeenAt,controllerStatus=d?.Status.ToString(),
+        var readError=await db.Alerts.AnyAsync(a=>a.SensorId==id&&a.IncidentType=="sensor_read_error"&&(a.Status==AlertStatus.Active||a.Status==AlertStatus.Acknowledged||a.Status==AlertStatus.InProgress),ct);
+        var lastReceived=await db.WaterMeasurements.AsNoTracking().Where(m=>m.SensorId==id).MaxAsync(m=>m.ReceivedAt,ct);
+        return Ok(ApiResponse<object>.Ok(new {s.Id,status=Status(s,d,p,readError),s.IsActive,s.LastSeenAt,controllerStatus=d?.Status.ToString(),
             portPresent=p?.IsPresent,portCurrent=p!=null&&d!=null&&p.ConfigVersion==d.CapabilityVersion,
-            latestValue=latest?.Value,latestMeasuredAt=latest?.MeasuredAt,lastReceivedAt=latest?.ReceivedAt,dataQuality=latest?.DataQuality??"Unknown",
+            latestValue=latest?.Value,latestMeasuredAt=latest?.MeasuredAt,lastReceivedAt=lastReceived,dataQuality=latest?.DataQuality??"Unknown",
             timeoutSeconds=s.DisconnectTimeoutSeconds??900,verification="TelemetryOnly"}));
     }
     private IQueryable<WaterMeasurement> Measurements(Guid id,DateTimeOffset? from,DateTimeOffset? to)

@@ -280,6 +280,15 @@ BEGIN
     INSERT INTO be."Sensors" ("Id","SensorCode","SensorType","IsActive","CreatedAt")
     VALUES (sensor_a,'schema-sensor-a','PH',true,now()),
            (sensor_b,'schema-sensor-b','PH',true,now());
+    BEGIN
+        INSERT INTO be."Sensors" ("Id","SensorCode","SensorType","IsActive","CreatedAt")
+        VALUES (gen_random_uuid(),'schema-sensor-a','PH',true,now());
+        RAISE EXCEPTION 'Duplicate SensorCode accepted';
+    EXCEPTION WHEN unique_violation THEN NULL;
+    END;
+    IF to_regclass('be."SensorCalibrations"') IS NULL OR to_regclass('be."SensorDiagnosticRuns"') IS NULL THEN
+        RAISE EXCEPTION 'Sensor management tables missing';
+    END IF;
     INSERT INTO be."WaterMeasurements" ("Id","SensorId","Value","MeasuredAt","Source","CreatedAt","EdgeEventKey")
     VALUES (gen_random_uuid(),sensor_a,7.2,now(),'edge:test',now(),repeat('A',64)),
            (gen_random_uuid(),sensor_b,7.3,now(),'edge:test',now(),repeat('A',64));

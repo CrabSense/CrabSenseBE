@@ -697,7 +697,7 @@ public class RasFlowService : IRasFlowService
                     .OrderByDescending(measurement => measurement.MeasuredAt)
                     .FirstOrDefault();
                 var maxAge = SensorFreshness(sensor.SensorType);
-                if (reading is null || reading.DataQuality == "Backfill"
+                if (reading is null || reading.DataQuality is "Backfill" or "Unknown"
                     || sensor.LastSeenAt is not DateTime sensorSeenAt
                     || sensorSeenAt > now.Add(futureTolerance)
                     || sensorSeenAt < now.Subtract(maxAge)
