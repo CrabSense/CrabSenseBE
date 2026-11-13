@@ -1183,9 +1183,13 @@ public class IotService : IIotService
                 if (await _uow.Devices.AnyAsync(d => d.Id != id && d.MacAddress != null && d.MacAddress.ToLower() == mac, ct))
                     throw AppException.Conflict("MAC đã được đăng ký.");
             }
-            if (string.Equals(req.Status, "Online", StringComparison.OrdinalIgnoreCase))
+            if (Enum.TryParse<DeviceStatus>(req.Status, true, out var requestedStatus) && requestedStatus == DeviceStatus.Online)
                 throw AppException.BadRequest("Camera chỉ Online sau heartbeat đã xác thực. Dùng Offline để kích hoạt lại.");
         }
+        if (CameraConfiguration.IsCamera(device) && req.DeviceType is not null
+            && !req.DeviceType.Contains("cam", StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(req.DeviceType.Trim(), device.DeviceType, StringComparison.OrdinalIgnoreCase))
+            throw AppException.BadRequest("Không thể đổi Camera thành Controller.");
         if (req.DeviceType is not null) device.DeviceType = req.DeviceType.Trim().ToLowerInvariant();
         if (req.FirmwareVersion is not null) device.FirmwareVersion = req.FirmwareVersion;
         if (req.BatteryLevel.HasValue) device.BatteryLevel = req.BatteryLevel;
@@ -1204,7 +1208,10 @@ public class IotService : IIotService
         if (req.FarmingAreaId.HasValue)
         {
             if (req.FarmingAreaId.Value == Guid.Empty)
+            {
                 device.FarmingAreaId = null;
+                if (camera) device.FarmingRowId = null;
+            }
             else
             {
                 _ = await _uow.FarmingAreas.GetByIdAsync(req.FarmingAreaId.Value, ct)
@@ -1292,6 +1299,16 @@ public class IotService : IIotService
         if (!string.IsNullOrWhiteSpace(req.MacAddress)
             && !string.Equals(req.MacAddress.Trim(), device.MacAddress, StringComparison.OrdinalIgnoreCase))
             throw AppException.Forbidden("MAC là định danh cấu hình; thiết bị không được tự thay đổi.");
+        if (CameraConfiguration.IsCamera(device))
+        {
+            CameraConfiguration.ValidateMetadata(req.IpAddress, req.MacAddress, null);
+            if (!string.IsNullOrWhiteSpace(req.IpAddress))
+            {
+                var nextIp = req.IpAddress.Trim();
+                if (await _uow.Devices.AnyAsync(d => d.Id != deviceId && d.IpAddress == nextIp, ct))
+                    throw AppException.Conflict("IP đã được thiết bị khác sử dụng.");
+            }
+        }
         device.Status = status;
         device.BatteryLevel = req.BatteryLevel ?? device.BatteryLevel;
         device.RssiDbm = req.RssiDbm ?? device.RssiDbm;

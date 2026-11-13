@@ -67,6 +67,7 @@ public sealed class CameraManagementTests
         Assert.Equal("Area A", Assert.Single((await service.GetRecordingSettingsAsync()).Data!).AreaName);
         var result = (await service.TestDeviceConnectionAsync(camera.Id, null, null)).Data!;
         Assert.False(result.Reachable);
+        Assert.Equal("NotIntegrated", result.VerificationStatus);
     }
 
     [Fact]

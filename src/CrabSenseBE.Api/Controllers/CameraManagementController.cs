@@ -28,8 +28,8 @@ public class CameraManagementController(IIotService iot, ISystemPlatformService 
     public async Task<IActionResult> List(Guid? farmingAreaId, Guid? farmingRowId, CancellationToken ct)
     {
         var result = await iot.GetDevicesAsync(farmingAreaId, farmingRowId, ct);
-        return Ok(ApiResponse<IEnumerable<DeviceDto>>.Ok((result.Data ?? [])
-            .Where(x => CameraConfiguration.IsCamera(x.DeviceType, x.StreamUrl, x.SnapshotUrl))));
+        var cameraIds = (await uow.Devices.GetAllAsync(ct)).Where(CameraConfiguration.IsCamera).Select(x => x.Id).ToHashSet();
+        return Ok(ApiResponse<IEnumerable<DeviceDto>>.Ok((result.Data ?? []).Where(x => cameraIds.Contains(x.Id))));
     }
 
     [HttpGet("{id:guid}")]
@@ -41,7 +41,7 @@ public class CameraManagementController(IIotService iot, ISystemPlatformService 
 
     [HttpPost]
     public async Task<IActionResult> Create(CreateDeviceRequest request, CancellationToken ct)
-        => Ok(await iot.CreateDeviceAsync(request with { DeviceType = "camera" }, ct, Actor(), Ip()));
+        => Ok(await iot.CreateDeviceAsync(request with { DeviceType = request.DeviceType?.Contains("cam", StringComparison.OrdinalIgnoreCase) == true ? request.DeviceType : "camera" }, ct, Actor(), Ip()));
 
     [HttpPut("{id:guid}")]
     public async Task<IActionResult> Update(Guid id, UpdateDeviceRequest request, CancellationToken ct)
@@ -95,7 +95,7 @@ public class CameraManagementController(IIotService iot, ISystemPlatformService 
         await RequireCamera(id, ct);
         var result = await platform.GetRecordingSettingsAsync(ct);
         return Ok(ApiResponse<CrabSenseBE.Application.DTOs.SystemPlatform.CameraRecordingDto>.Ok(
-            result.Data!.Single(x => x.DeviceId == id)));
+            result.Data!.SingleOrDefault(x => x.DeviceId == id) ?? throw AppException.NotFound("Camera")));
     }
 
     [HttpGet("{id:guid}/events")]

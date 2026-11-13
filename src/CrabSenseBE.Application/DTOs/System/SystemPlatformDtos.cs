@@ -59,7 +59,8 @@ public record DeviceConnectionTestDto(
     string? IpAddress,
     int? Port,
     DateTime? LastSeenAt,
-    decimal? RssiDbm);
+    decimal? RssiDbm,
+    string VerificationStatus = "TcpOnly");
 
 public record SystemTechnicalAlertDto(Guid Id, string Message, string Severity, string Status,
     DateTime CreatedAt, string Category, string? IncidentType, DateTime? LastOccurredAt);

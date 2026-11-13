@@ -274,6 +274,14 @@ public class SystemPlatformService : ISystemPlatformService
         Guid deviceId, Guid? userId, string? ip, CancellationToken ct = default)
     {
         var device = await RequireDevice(deviceId, ct);
+        if (CameraConfiguration.IsCamera(device))
+        {
+            await AuditAsync(userId, "TestConnection", "Device", device.Id, "Camera Agent not integrated", ip, ct);
+            await _db.SaveChangesAsync(ct);
+            return ApiResponse<DeviceConnectionTestDto>.Ok(new DeviceConnectionTestDto(
+                device.Id, false, "Camera Agent chưa tích hợp; chưa xác minh được kết nối/stream Camera.",
+                device.IpAddress, null, device.LastSeenAt, device.RssiDbm, "NotIntegrated"));
+        }
         if (string.IsNullOrWhiteSpace(device.IpAddress))
         {
             await AuditAsync(userId, "TestConnection", "Device", device.Id, "No IP", ip, ct);
@@ -282,13 +290,6 @@ public class SystemPlatformService : ISystemPlatformService
                 device.Id, false, "Thiết bị chưa có địa chỉ IP để kiểm tra.", null, null, device.LastSeenAt, device.RssiDbm));
         }
 
-        if (CameraConfiguration.IsCamera(device))
-        {
-            // The VPS is not the camera LAN. Never probe arbitrary camera URLs from here.
-            return ApiResponse<DeviceConnectionTestDto>.Ok(new DeviceConnectionTestDto(
-                device.Id, false, "Camera Agent chưa tích hợp; chưa xác minh được kết nối/stream Camera.",
-                device.IpAddress, null, device.LastSeenAt, device.RssiDbm));
-        }
         var port = await ProbePortAsync(device.IpAddress, ct);
         var message = port is int open
             ? $"Đã kết nối TCP tới {device.IpAddress}:{open}."
@@ -390,8 +391,15 @@ public class SystemPlatformService : ISystemPlatformService
 
     public async Task<ApiResponse<IReadOnlyList<RecordingHistoryDto>>> GetRecordingHistoryAsync(Guid? deviceId, CancellationToken ct = default)
     {
+        // System Admin sees technical camera media, not unrelated farm/crab videos.
+        var cameraIds = (await CameraDevices(ct)).Select(x => x.Id).ToArray();
+        if (deviceId.HasValue && !cameraIds.Contains(deviceId.Value))
+            throw AppException.NotFound("Camera");
         var query = _db.MediaAssets.AsNoTracking().Where(x =>
-            x.Category.ToLower().Contains("video") || x.ContentType.StartsWith("video/"));
+            x.DeviceId.HasValue && cameraIds.Contains(x.DeviceId.Value)
+            && x.BoxId == null && x.CrabId == null
+            && (x.RelatedEntityType == null || x.RelatedEntityType.ToLower() == "device")
+            && (x.Category.ToLower().Contains("video") || x.ContentType.StartsWith("video/")));
         if (deviceId.HasValue)
             query = query.Where(x => x.DeviceId == deviceId);
         var rows = await query.OrderByDescending(x => x.CreatedAt).Take(200).ToListAsync(ct);
