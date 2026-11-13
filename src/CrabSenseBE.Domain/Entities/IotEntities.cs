@@ -250,3 +250,18 @@ public class SensorCalibration : BaseEntity
     public string Result { get; set; } = "";
     public string? Note { get; set; }
 }
+
+public class SensorDiagnosticRun : BaseEntity
+{
+    public Guid SensorId { get; set; }
+    public Guid DeviceId { get; set; }
+    public Guid RequestedBy { get; set; }
+    public int ConfigurationVersion { get; set; }
+    public string Status { get; set; } = "Pending";
+    public DateTime ExpiresAt { get; set; }
+    public DateTime? CompletedAt { get; set; }
+    public DateTime? MeasuredAt { get; set; }
+    public decimal? Value { get; set; }
+    public string? Unit { get; set; }
+    public string? ResultMessage { get; set; }
+}

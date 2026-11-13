@@ -39,6 +39,7 @@ public class AppDbContext : DbContext
     public DbSet<WaterFlow> WaterFlows => Set<WaterFlow>();
     public DbSet<Sensor> Sensors => Set<Sensor>();
     public DbSet<SensorCalibration> SensorCalibrations => Set<SensorCalibration>();
+    public DbSet<SensorDiagnosticRun> SensorDiagnosticRuns => Set<SensorDiagnosticRun>();
     public DbSet<Device> Devices => Set<Device>();
     public DbSet<ControllerPort> ControllerPorts => Set<ControllerPort>();
     public DbSet<WaterMeasurement> WaterMeasurements => Set<WaterMeasurement>();
@@ -129,6 +130,11 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<Sensor>().HasIndex(x => new { x.BusPortId, x.BusAddress, x.BusRegister }).IsUnique();
         modelBuilder.Entity<SensorCalibration>().HasOne<Sensor>().WithMany().HasForeignKey(x => x.SensorId).OnDelete(DeleteBehavior.Restrict);
         modelBuilder.Entity<SensorCalibration>().HasIndex(x => new { x.SensorId, x.PerformedAt });
+        modelBuilder.Entity<SensorDiagnosticRun>().HasOne<Sensor>().WithMany().HasForeignKey(x=>x.SensorId).OnDelete(DeleteBehavior.Restrict);
+        modelBuilder.Entity<SensorDiagnosticRun>().HasIndex(x=>new{x.SensorId,x.CreatedAt});
+        modelBuilder.Entity<SensorDiagnosticRun>().HasIndex(x=>x.SensorId).IsUnique().HasFilter("\"Status\" = 'Pending'");
+        modelBuilder.Entity<SensorDiagnosticRun>().HasIndex(x=>new{x.DeviceId,x.Status,x.ExpiresAt});
+        modelBuilder.Entity<SensorDiagnosticRun>().Property(x=>x.Status).IsConcurrencyToken();
 
         // Apply all IEntityTypeConfiguration from this assembly
         modelBuilder.ApplyConfigurationsFromAssembly(typeof(AppDbContext).Assembly);

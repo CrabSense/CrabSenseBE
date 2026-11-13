@@ -217,13 +217,6 @@ public sealed class SensorManagementController(AppDbContext db) : ControllerBase
             latestValue=latest?.Value,latestMeasuredAt=latest?.MeasuredAt,lastReceivedAt=latest?.ReceivedAt,dataQuality=latest?.DataQuality??"Unknown",
             timeoutSeconds=s.DisconnectTimeoutSeconds??900,verification="TelemetryOnly"}));
     }
-    [HttpPost("{id:guid}/test")]
-    public async Task<IActionResult> Test(Guid id,CancellationToken ct)
-    {
-        _=await RequireSensor(id,ct);Audit(id,"SensorTestRequested","No remote sample protocol integrated");await Save(ct);
-        return StatusCode(501,ApiResponse<object>.Fail("Remote sample test not integrated. Use health to inspect received telemetry."));
-    }
-
     private IQueryable<WaterMeasurement> Measurements(Guid id,DateTimeOffset? from,DateTimeOffset? to)
     {
         if(from.HasValue&&to.HasValue&&from>=to)throw AppException.BadRequest("From must precede To.");

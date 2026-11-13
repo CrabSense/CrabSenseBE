@@ -3873,6 +3873,29 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.ToTable("SensorCalibrations", "be");
                 });
 
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.SensorDiagnosticRun", b =>
+                {
+                    b.Property<Guid>("Id").ValueGeneratedOnAdd().HasColumnType("uuid");
+                    b.Property<DateTime>("CreatedAt").HasColumnType("timestamp with time zone");
+                    b.Property<DateTime?>("UpdatedAt").HasColumnType("timestamp with time zone");
+                    b.Property<Guid>("SensorId").HasColumnType("uuid");
+                    b.Property<Guid>("DeviceId").HasColumnType("uuid");
+                    b.Property<Guid>("RequestedBy").HasColumnType("uuid");
+                    b.Property<int>("ConfigurationVersion").HasColumnType("integer");
+                    b.Property<string>("Status").IsRequired().IsConcurrencyToken().HasColumnType("text");
+                    b.Property<DateTime>("ExpiresAt").HasColumnType("timestamp with time zone");
+                    b.Property<DateTime?>("CompletedAt").HasColumnType("timestamp with time zone");
+                    b.Property<DateTime?>("MeasuredAt").HasColumnType("timestamp with time zone");
+                    b.Property<decimal?>("Value").HasColumnType("numeric");
+                    b.Property<string>("Unit").HasColumnType("text");
+                    b.Property<string>("ResultMessage").HasColumnType("text");
+                    b.HasKey("Id");
+                    b.HasIndex("SensorId").IsUnique().HasFilter("\"Status\" = 'Pending'");
+                    b.HasIndex("SensorId","CreatedAt");
+                    b.HasIndex("DeviceId","Status","ExpiresAt");
+                    b.ToTable("SensorDiagnosticRuns","be");
+                });
+
             modelBuilder.Entity("CrabSenseBE.Domain.Entities.ServiceApiKey", b =>
                 {
                     b.Property<Guid>("Id")
@@ -5495,6 +5518,11 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                 });
 
             modelBuilder.Entity("CrabSenseBE.Domain.Entities.SensorCalibration", b =>
+                {
+                    b.HasOne("CrabSenseBE.Domain.Entities.Sensor", null).WithMany().HasForeignKey("SensorId").OnDelete(DeleteBehavior.Restrict).IsRequired();
+                });
+
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.SensorDiagnosticRun", b =>
                 {
                     b.HasOne("CrabSenseBE.Domain.Entities.Sensor", null).WithMany().HasForeignKey("SensorId").OnDelete(DeleteBehavior.Restrict).IsRequired();
                 });
