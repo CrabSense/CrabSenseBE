@@ -39,6 +39,8 @@ public class AppDbContext : DbContext
     public DbSet<WaterFlow> WaterFlows => Set<WaterFlow>();
     public DbSet<Sensor> Sensors => Set<Sensor>();
     public DbSet<Device> Devices => Set<Device>();
+    public DbSet<ControllerPort> ControllerPorts => Set<ControllerPort>();
+    public DbSet<ControllerPortInventory> ControllerPortInventories => Set<ControllerPortInventory>();
     public DbSet<WaterMeasurement> WaterMeasurements => Set<WaterMeasurement>();
     public DbSet<WaterAnalysisRun> WaterAnalysisRuns => Set<WaterAnalysisRun>();
     public DbSet<Hdf5Upload> Hdf5Uploads => Set<Hdf5Upload>();
@@ -210,6 +212,14 @@ public class AppDbContext : DbContext
                 + "AND \"IncidentType\" IS NOT NULL "
                 + "AND \"Status\" IN ('Active', 'Acknowledged', 'InProgress')");
 
+        modelBuilder.Entity<ControllerPortInventory>().HasKey(x => x.DeviceId);
+        modelBuilder.Entity<ControllerPortInventory>().Property(x => x.Revision).IsConcurrencyToken();
+        modelBuilder.Entity<ControllerPortInventory>().HasOne<Device>().WithMany()
+            .HasForeignKey(x => x.DeviceId).OnDelete(DeleteBehavior.Cascade);
+        modelBuilder.Entity<ControllerPort>().HasKey(x => new { x.DeviceId, x.PortId });
+        modelBuilder.Entity<ControllerPort>().Property(x => x.PortId).HasMaxLength(64);
+        modelBuilder.Entity<ControllerPort>().HasOne<Device>().WithMany()
+            .HasForeignKey(x => x.DeviceId).OnDelete(DeleteBehavior.Cascade);
         modelBuilder.Entity<Device>()
             .Property(d => d.Status)
             .HasConversion<string>();

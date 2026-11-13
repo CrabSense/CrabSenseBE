@@ -1335,6 +1335,33 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.ToTable("Deliveries", "be");
                 });
 
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.ControllerPortInventory", b =>
+                {
+                    b.Property<Guid>("DeviceId").HasColumnType("uuid");
+                    b.Property<long>("Revision").IsConcurrencyToken().HasColumnType("bigint");
+                    b.Property<string>("ManifestHash").IsRequired().HasColumnType("text");
+                    b.Property<DateTime>("ReportedAt").HasColumnType("timestamp with time zone");
+                    b.HasKey("DeviceId");
+                    b.ToTable("ControllerPortInventories", "be");
+                });
+
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.ControllerPort", b =>
+                {
+                    b.Property<Guid>("DeviceId").HasColumnType("uuid");
+                    b.Property<string>("PortId").HasMaxLength(64).HasColumnType("character varying(64)");
+                    b.Property<string>("Channel").HasColumnType("text");
+                    b.Property<int?>("Gpio").HasColumnType("integer");
+                    b.Property<string>("Kind").IsRequired().HasColumnType("text");
+                    b.Property<string>("Direction").IsRequired().HasColumnType("text");
+                    b.Property<string>("Discovery").IsRequired().HasColumnType("text");
+                    b.Property<string>("HardwareUid").HasColumnType("text");
+                    b.Property<bool>("Present").HasColumnType("boolean");
+                    b.Property<bool>("RemoteControl").HasColumnType("boolean");
+                    b.Property<DateTime>("LastSeenAt").HasColumnType("timestamp with time zone");
+                    b.HasKey("DeviceId", "PortId");
+                    b.ToTable("ControllerPorts", "be");
+                });
+
             modelBuilder.Entity("CrabSenseBE.Domain.Entities.Device", b =>
                 {
                     b.Property<Guid>("Id")
@@ -4620,6 +4647,18 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                         .IsRequired();
 
                     b.Navigation("SalesOrder");
+                });
+
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.ControllerPortInventory", b =>
+                {
+                    b.HasOne("CrabSenseBE.Domain.Entities.Device", null).WithMany()
+                        .HasForeignKey("DeviceId").OnDelete(DeleteBehavior.Cascade).IsRequired();
+                });
+
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.ControllerPort", b =>
+                {
+                    b.HasOne("CrabSenseBE.Domain.Entities.Device", null).WithMany()
+                        .HasForeignKey("DeviceId").OnDelete(DeleteBehavior.Cascade).IsRequired();
                 });
 
             modelBuilder.Entity("CrabSenseBE.Domain.Entities.Device", b =>
