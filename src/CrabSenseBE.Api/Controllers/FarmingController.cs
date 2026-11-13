@@ -438,6 +438,12 @@ public class CrabsController : ControllerBase
     public async Task<IActionResult> Update(Guid id, [FromBody] UpdateCrabRequest req, CancellationToken ct)
         => Ok(await _service.UpdateCrabAsync(id, req, ct));
 
+    /// <summary>Farm Manager starts or releases quarantine with a reason and current version.</summary>
+    [HttpPost("{id:guid}/quarantine")]
+    [Authorize(Roles = AppRoles.FarmManager)]
+    public async Task<IActionResult> SetQuarantine(Guid id, [FromBody] SetCrabQuarantineRequest req, CancellationToken ct)
+        => Ok(await _service.SetCrabQuarantineAsync(id, req, ct));
+
     /// <summary>[CREATE] Upload more photos to S3 and append URLs on this crab.</summary>
     [HttpPost("{id:guid}/images")]
     [Authorize(Roles = AppRoles.FarmStaff)]

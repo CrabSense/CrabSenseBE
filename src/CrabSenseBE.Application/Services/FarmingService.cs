@@ -1462,6 +1462,77 @@ public class FarmingService : IFarmingService
         return ApiResponse<CrabDto>.Ok(MapCrab(crab, ctx));
     }
 
+    public async Task<ApiResponse<CrabQuarantineDto>> SetCrabQuarantineAsync(Guid id, SetCrabQuarantineRequest req, CancellationToken ct = default)
+    {
+        var actor = await _areas.CurrentUserAsync(ct) ?? throw AppException.Unauthorized();
+        if (actor.Role != UserRole.FarmManager) throw AppException.Forbidden("Chỉ Farm Manager được quyết định cách ly.");
+        if (req.Enabled is not bool enabled || req.ExpectedVersion is not long version || version < 0
+            || string.IsNullOrWhiteSpace(req.Reason) || req.Reason.Trim().Length > 500)
+            throw AppException.BadRequest("Cần Enabled, ExpectedVersion và lý do từ 1 đến 500 ký tự.");
+        var crab = await _uow.Crabs.GetByIdAsync(id, ct) ?? throw AppException.NotFound("Crab");
+        await EnsureCrabAreaAsync(crab, ct);
+        if (crab.ConcurrencyVersion != version) throw AppException.Conflict("Hồ sơ cua đã đổi; tải lại dữ liệu.");
+        if (enabled ? crab.Status is not (CrabStatus.Alive or CrabStatus.Molting) : crab.Status != CrabStatus.Quarantined)
+            throw AppException.Conflict("Trạng thái cua không phù hợp với thao tác cách ly.");
+        if (crab.BoxId is not Guid boxId || boxId == Guid.Empty)
+            throw AppException.Conflict("Cần xác định hộp hiện tại trước khi cách ly.");
+        var box = await _uow.Boxes.GetByIdAsync(boxId, ct) ?? throw AppException.NotFound("Box");
+        await _areas.EnsureBoxAsync(boxId, false, ct);
+        var open = (await _uow.CrabBoxAllocations.FindAsync(a => a.BoxId == boxId && a.EndTime == null, ct)).ToList();
+        if (open.Count != 1 || open[0].CrabId != crab.Id || !box.IsOccupied ||
+            await _uow.Crabs.AnyAsync(c => c.BoxId == boxId && c.Id != crab.Id &&
+                (c.Status == CrabStatus.Alive || c.Status == CrabStatus.Molting || c.Status == CrabStatus.Quarantined), ct))
+            throw AppException.Conflict("Phân bổ cua/hộp không nhất quán; cần đối soát trước khi cách ly.");
+        var oldCondition = crab.Condition;
+        var oldStatus = crab.Status;
+        var oldBoxStatus = box.Status;
+        var oldOccupied = box.IsOccupied;
+        if (enabled)
+        {
+            if (!string.IsNullOrWhiteSpace(req.ReleaseCondition)) throw AppException.BadRequest("Không gửi ReleaseCondition khi bắt đầu cách ly.");
+            crab.Status = CrabStatus.Quarantined;
+            crab.Condition = CrabCondition.Problem;
+            box.Status = BoxStatuses.Quarantine;
+        }
+        else
+        {
+            var condition = (req.ReleaseCondition ?? "").Trim().ToLowerInvariant() switch
+            {
+                "normal" => CrabCondition.Normal,
+                "premolt" => CrabCondition.Premolt,
+                "molting" => CrabCondition.Molting,
+                "softshell" => CrabCondition.Softshell,
+                _ => throw AppException.BadRequest("Cần xác nhận tình trạng thực tế: normal, premolt, molting hoặc softshell.")
+            };
+            crab.Condition = condition;
+            crab.Status = CrabConditions.ToLifecycle(condition);
+            crab.MoltingStage = condition switch
+            {
+                CrabCondition.Premolt => "premolt",
+                CrabCondition.Molting => "molting",
+                CrabCondition.Softshell => "softshell",
+                _ => "hard-shell"
+            };
+            box.Status = condition is CrabCondition.Molting or CrabCondition.Softshell ? BoxStatuses.Molting : BoxStatuses.Active;
+        }
+        var now = DateTime.UtcNow;
+        crab.UpdatedAt = now;
+        box.UpdatedAt = now;
+        _uow.Crabs.Update(crab);
+        _uow.Boxes.Update(box);
+        var reason = (enabled ? "QUARANTINE_START: " : "QUARANTINE_RELEASE: ") + req.Reason.Trim();
+        await _uow.CrabStatusHistories.AddAsync(new CrabStatusHistory
+        {
+            CrabId = crab.Id, OldStatus = oldStatus, NewStatus = crab.Status, OldCondition = oldCondition,
+            NewCondition = crab.Condition, ChangedAt = now, ChangedByUserId = actor.Id,
+            Source = "manual", Reason = reason
+        }, ct);
+        await RecordBoxStateChangeAsync(box, oldBoxStatus, oldOccupied, reason, ct);
+        await _uow.SaveChangesAsync(ct);
+        return ApiResponse<CrabQuarantineDto>.Ok(new(crab.Id, box.Id, crab.Status.ToString(),
+            CrabConditions.ToApi(crab.Condition), box.Status, crab.ConcurrencyVersion));
+    }
+
     public async Task<ApiResponse> DeleteCrabAsync(Guid id, CancellationToken ct = default)
     {
         var crab = await _uow.Crabs.GetByIdAsync(id, ct) ?? throw AppException.NotFound("Crab");
@@ -3325,7 +3396,8 @@ public class FarmingService : IFarmingService
             AiRecommendation: FirstNonEmpty(
                 latestAi?.AnomalyNote,
                 RecommendFromPrediction(c.AiPrediction ?? latestAi?.Prediction)),
-            AvatarUrl: JsonStringList.Parse(c.ImageUrlsJson).FirstOrDefault());
+            AvatarUrl: JsonStringList.Parse(c.ImageUrlsJson).FirstOrDefault(),
+            ConcurrencyVersion: c.ConcurrencyVersion);
     }
 
     private async Task<IReadOnlyList<CrabTimelineEventDto>> BuildCrabTimelineAsync(

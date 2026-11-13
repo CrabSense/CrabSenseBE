@@ -300,7 +300,11 @@ public record CrabDto(
     DateTime? ImportDate = null,
     DateTime? AiAnalyzedAt = null,
     string? AiRecommendation = null,
-    string? AvatarUrl = null);
+    string? AvatarUrl = null,
+    long ConcurrencyVersion = 0);
+
+public record SetCrabQuarantineRequest(bool? Enabled, long? ExpectedVersion, string Reason, string? ReleaseCondition = null);
+public record CrabQuarantineDto(Guid CrabId, Guid BoxId, string Status, string Condition, string BoxStatus, long ConcurrencyVersion);
 
 /// <summary>Hồ sơ vòng đời cua — gom snapshot + lịch sử, không ghi đè bảng Crabs.</summary>
 public record CrabProfileDto(

@@ -197,7 +197,7 @@ public static class CrabConditions
     // health problem does not terminate an ongoing molt or imply quarantine.
     public static CrabStatus ApplyCondition(CrabStatus current, CrabCondition condition)
     {
-        if (current is CrabStatus.Dead or CrabStatus.Harvested or CrabStatus.Sold or CrabStatus.Missing)
+        if (current is CrabStatus.Dead or CrabStatus.Harvested or CrabStatus.Sold or CrabStatus.Missing or CrabStatus.Quarantined)
             return current;
         if (condition is CrabCondition.Problem or CrabCondition.Weak)
             return current == CrabStatus.Molting ? CrabStatus.Molting : CrabStatus.Alive;
