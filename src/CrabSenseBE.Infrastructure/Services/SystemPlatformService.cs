@@ -696,6 +696,7 @@ public class SystemPlatformService : ISystemPlatformService
         "TestConnection", "UpdateRecording", "CreateAiService", "RestartAiService", "StopAiService",
         "DeployAiModelRequested", "RollbackAiModelRequested", "UpdateBackupSchedule",
         "TerminateSession", "CreateApiKey", "RotateApiKey", "RevokeApiKey", "UpdateSecurityPolicy",
+        "DeleteCameraRecordingRequested", "DeleteCameraRecordingFailed", "DeleteCameraRecording",
         "Login", "LoginFailed", "LoginFailureThresholdReached"
     ];
 

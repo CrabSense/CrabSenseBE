@@ -12,11 +12,14 @@ namespace CrabSenseBE.Infrastructure.Services;
 public sealed class CameraRecordingLibrary(AppDbContext db, IMediaStorageService storage, ILogger<CameraRecordingLibrary> logger)
 {
     public static IQueryable<Device> CameraDevices(AppDbContext db) => db.Devices.AsNoTracking().Where(d =>
-        d.DeviceType.ToLower().Contains("cam") || (d.StreamUrl != null && d.StreamUrl.Trim() != "")
+        (d.DeviceType != null && d.DeviceType.ToLower().Contains("cam")) || (d.StreamUrl != null && d.StreamUrl.Trim() != "")
         || (d.SnapshotUrl != null && d.SnapshotUrl.Trim() != ""));
 
-    public static IQueryable<MediaAsset> TechnicalVideos(AppDbContext db) => db.MediaAssets.AsNoTracking().Where(x =>
-        x.DeviceId.HasValue && CameraDevices(db).Any(d => d.Id == x.DeviceId.Value)
+    public static IQueryable<MediaAsset> TechnicalVideos(AppDbContext db)
+    {
+        var cameras = CameraDevices(db);
+        return db.MediaAssets.AsNoTracking().Where(x =>
+        x.DeviceId.HasValue && cameras.Any(d => d.Id == x.DeviceId.Value)
         && x.BoxId == null && x.CrabId == null
         && ((x.RelatedEntityType == null && x.RelatedEntityId == null)
             || (x.RelatedEntityType != null && x.RelatedEntityType.ToLower() == "device" && x.RelatedEntityId == x.DeviceId))
@@ -24,6 +27,7 @@ public sealed class CameraRecordingLibrary(AppDbContext db, IMediaStorageService
         && !db.AiDetections.Any(a => a.MediaId == x.Id)
         && !db.Inspections.Any(a => a.RelatedMediaId == x.Id)
         && !db.ObservationEvents.Any(a => a.VideoMediaId == x.Id));
+    }
 
     public async Task<RecordingLibraryPage> ListAsync(RecordingLibraryQuery request, CancellationToken ct = default)
     {
@@ -91,15 +95,18 @@ public sealed class CameraRecordingLibrary(AppDbContext db, IMediaStorageService
         var asset = await RequireAsync(id, ct);
         ValidateProvider(asset);
         if (!asset.IsShared) await storage.EnsurePrivateAccessAsync(asset.StorageKey, ct);
-        var stream = await storage.DownloadAsync(asset.StorageKey, ct);
+        Stream stream;
+        try { stream = await storage.DownloadAsync(asset.StorageKey, ct); }
+        catch (FileNotFoundException) { throw AppException.NotFound("Camera recording file"); }
+        catch (DirectoryNotFoundException) { throw AppException.NotFound("Camera recording file"); }
         // A provider must supply seekable data for reliable HTTP range playback.
-        if (!stream.CanSeek)
+        if (!stream.CanSeek || (asset.SizeBytes > 0 && stream.Length != asset.SizeBytes))
         {
             await stream.DisposeAsync();
-            throw new AppException("Kho media chưa hỗ trợ đọc video dạng seekable.", 503);
+            throw new AppException("Không thể xác minh nội dung file video trong kho media.", 502);
         }
         stream.Position = 0;
-        var contentType = asset.ContentType.ToLowerInvariant() switch
+        var contentType = (asset.ContentType ?? "").ToLowerInvariant() switch
         {
             "video/mp4" => "video/mp4", "video/webm" => "video/webm",
             "video/quicktime" => "video/quicktime", "video/x-msvideo" => "video/x-msvideo",

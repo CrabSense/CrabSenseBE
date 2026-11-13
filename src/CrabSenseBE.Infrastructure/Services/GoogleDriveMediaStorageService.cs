@@ -195,7 +195,9 @@ public class GoogleDriveMediaStorageService : IMediaStorageService
                 FileOptions.Asynchronous | FileOptions.DeleteOnClose);
             var request = _drive.Files.Get(storageKey);
             request.SupportsAllDrives = true;
-            await request.DownloadAsync(file, ct);
+            var progress = await request.DownloadAsync(file, ct);
+            if (progress.Status != Google.Apis.Download.DownloadStatus.Completed)
+                throw new IOException("Google Drive download did not complete.", progress.Exception);
             file.Position = 0;
             return file;
         }
