@@ -1478,7 +1478,11 @@ public class IotService : IIotService
     private static SensorDto MapSensor(Sensor s) =>
         new(s.Id, s.WaterSystemId, s.DeviceId, s.SensorCode, s.SensorType, s.Unit,
             s.MinThreshold, s.MaxThreshold, s.IsActive, s.LastSeenAt, s.RasComponentId,
-            s.FarmingRowId);
+            s.FarmingRowId, Status: SensorConnectionStatus(s));
+
+    private static string SensorConnectionStatus(Sensor sensor) => !sensor.IsActive ? "Disabled"
+        : sensor.LastSeenAt is null ? "Unknown"
+        : sensor.LastSeenAt.Value < DateTime.UtcNow.AddMinutes(-15) ? "Offline" : "Online";
 
     private static (string Type, string Unit)? MeterSpec(string? code) => code?.Trim() switch
     {

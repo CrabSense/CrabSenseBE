@@ -15,7 +15,8 @@ public record SensorDto(
     Guid? RasComponentId = null,
     Guid? FarmingRowId = null,
     decimal? LatestValue = null,
-    DateTime? LatestMeasuredAt = null);
+    DateTime? LatestMeasuredAt = null,
+    string? Status = null);
 
 public record CreateSensorRequest(
     Guid? WaterSystemId,
