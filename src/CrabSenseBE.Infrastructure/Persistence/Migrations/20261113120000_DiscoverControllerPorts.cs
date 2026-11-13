@@ -27,7 +27,7 @@ public partial class DiscoverControllerPorts : Migration
             LastReportedAt=t.Column<DateTime>(type:"timestamp with time zone",nullable:false),
             CreatedAt=t.Column<DateTime>(type:"timestamp with time zone",nullable:false),
             UpdatedAt=t.Column<DateTime>(type:"timestamp with time zone",nullable:true)
-        },constraints:t=>{t.PrimaryKey("PK_ControllerPorts",x=>x.Id);t.ForeignKey("FK_ControllerPorts_Devices_DeviceId",x=>x.DeviceId,"be","Devices","Id",onDelete:ReferentialAction.Restrict);});
+        },constraints:t=>{t.PrimaryKey("PK_ControllerPorts",x=>x.Id);t.ForeignKey("FK_ControllerPorts_Devices_DeviceId",x=>x.DeviceId,principalTable:"Devices",principalColumn:"Id",principalSchema:"be",onDelete:ReferentialAction.Restrict);});
         m.CreateIndex("IX_ControllerPorts_DeviceId_PortCode","ControllerPorts",new[]{"DeviceId","PortCode"},schema:"be",unique:true);
         foreach(var table in new[]{"RasComponents","Sensors"})
         {

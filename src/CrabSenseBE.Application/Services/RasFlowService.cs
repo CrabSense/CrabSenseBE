@@ -86,7 +86,7 @@ public class RasFlowService : IRasFlowService
             IconKey = RasComponentCatalog.DefaultIcon(type, code),
             ControllerPortId = discoveredPort?.Id,
             RelayDeviceId = req.RelayDeviceId,
-            RelayChannel = string.IsNullOrWhiteSpace(req.RelayChannel) ? null : req.RelayChannel.Trim(),
+            RelayChannel = discoveredPort?.Channel?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? (string.IsNullOrWhiteSpace(req.RelayChannel) ? null : req.RelayChannel.Trim()),
             ParamDefaultsJson = SerializeParams(req.ParamDefaults, req.ParamDefaultsJson),
             HasRelay = req.RelayDeviceId.HasValue || !string.IsNullOrWhiteSpace(req.RelayChannel),
             IsOn = false

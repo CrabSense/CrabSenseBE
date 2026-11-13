@@ -17,6 +17,7 @@ public record PortManifestItem(string PortCode, string Type, int? Channel, int G
     string? ActiveLevel = null, string? SensorCode = null, bool? On = null);
 public record ControllerManifest(string DeviceCode, string HardwareModel, string FirmwareVersion, int ConfigVersion,
     IReadOnlyList<PortManifestItem> Ports);
+public record BindSensorPortRequest(Guid? SensorId);
 public record PortInventoryItem(Guid Id, string PortCode, string Type, int? Channel, int Gpio, int? SecondaryGpio,
     string? ActiveLevel, string? SensorCode, int ConfigVersion, bool IsPresent, bool? ReportedOn,
     string CommissioningStatus, DateTime LastReportedAt);
@@ -89,8 +90,38 @@ public sealed class ControllerPortsController(IUnitOfWork uow, IConfiguration co
             await scope.EnsureReadAsync(area, ct);
         }
         var ports = await uow.ControllerPorts.FindAsync(p => p.DeviceId == id, ct);
+        var equipment = await uow.RasComponents.FindAsync(x => x.RelayDeviceId == id, ct);
+        var sensors = await uow.Sensors.FindAsync(x => x.DeviceId == id, ct);
         return Ok(ApiResponse<object>.Ok(new { deviceId = id, device.DeviceCode, device.CapabilityVersion,
-            device.HardwareModel, ports = ports.OrderBy(p => p.PortCode).Select(Map) }));
+            device.HardwareModel, ports = ports.OrderBy(p => p.PortCode).Select(Map),
+            equipment = equipment.Select(x => new { x.Id, x.Name, x.RelayChannel, x.ControllerPortId }),
+            sensors = sensors.Select(x => new { x.Id, x.SensorCode, x.SensorType, x.ControllerPortId }) }));
+    }
+
+    // Link a registered sensor to a discovered input. A bus can serve many
+    // devices, but a direct input may only have a single sensor binding.
+    [HttpPut("{id:guid}/ports/{portId:guid}/sensor")]
+    [Authorize(Roles = AppRoles.Platform)]
+    public async Task<IActionResult> BindSensor(Guid id, Guid portId, [FromBody] BindSensorPortRequest req, CancellationToken ct)
+    {
+        var scope = new FarmAreaScope(uow, currentUser);
+        var actor = await scope.CurrentUserAsync(ct);
+        if (actor?.Role != UserRole.SystemAdministrator) throw AppException.Forbidden("System Administrator required.");
+        var device = await uow.Devices.GetByIdAsync(id, ct) ?? throw AppException.NotFound("Controller");
+        var port = await uow.ControllerPorts.GetByIdAsync(portId, ct) ?? throw AppException.NotFound("Port");
+        if (port.DeviceId != id || !port.IsPresent || port.ConfigVersion != device.CapabilityVersion ||
+            port.PortType is not ("DIGITAL_INPUT" or "ANALOG_INPUT"))
+            throw AppException.Conflict("Only a current direct input can be bound here; bus devices require their own addressing.");
+        if (req.SensorId is not Guid sensorId) throw AppException.BadRequest("SensorId required.");
+        var sensor = await uow.Sensors.GetByIdAsync(sensorId, ct) ?? throw AppException.NotFound("Sensor");
+        if (sensor.DeviceId != id || port.SensorCode is not null && !string.Equals(sensor.SensorCode, port.SensorCode, StringComparison.Ordinal))
+            throw AppException.Conflict("Sensor is not the registered input of this controller.");
+        if (await uow.Sensors.AnyAsync(s => s.Id != sensorId && s.ControllerPortId == portId, ct))
+            throw AppException.Conflict("Input already has a sensor.");
+        sensor.ControllerPortId = portId;
+        uow.Sensors.Update(sensor);
+        await uow.SaveChangesAsync(ct);
+        return Ok(ApiResponse<object>.Ok(new { sensorId, portId }));
     }
 
     public static PortManifestItem[] Validate(ControllerManifest req)
@@ -99,7 +130,7 @@ public sealed class ControllerPortsController(IUnitOfWork uow, IConfiguration co
             string.IsNullOrWhiteSpace(req.FirmwareVersion) || req.FirmwareVersion.Length > 64 ||
             req.Ports is null || req.Ports.Count is < 1 or > 64) throw AppException.BadRequest("Invalid capability manifest.");
         var codes = new HashSet<string>(StringComparer.Ordinal); var pins = new HashSet<int>();
-        var channels = new HashSet<(string,int)>();
+        var channels = new HashSet<(string,int)>(); var sensorCodes = new HashSet<string>(StringComparer.Ordinal);
         foreach (var p in req.Ports)
         {
             if (p is null || string.IsNullOrWhiteSpace(p.PortCode) || p.PortCode.Length > 64 ||
@@ -107,7 +138,7 @@ public sealed class ControllerPortsController(IUnitOfWork uow, IConfiguration co
                 p.Gpio is < 0 or > 48 || !pins.Add(p.Gpio) ||
                 p.SecondaryGpio is int secondary && (secondary is < 0 or > 48 || !pins.Add(secondary)) ||
                 p.Type is not ("DIGITAL_OUTPUT" or "DIGITAL_INPUT" or "ANALOG_INPUT" or "RS485" or "I2C" or "UART") ||
-                p.SensorCode?.Length > 128) throw AppException.BadRequest("Invalid or duplicate port/pin.");
+                (p.SensorCode is not null && (string.IsNullOrWhiteSpace(p.SensorCode) || p.SensorCode.Length > 128 || !sensorCodes.Add(p.SensorCode)))) throw AppException.BadRequest("Invalid or duplicate port/pin.");
             var digital = p.Type is "DIGITAL_OUTPUT" or "DIGITAL_INPUT";
             if (digital && (p.Channel is not int ch || ch is < 1 or > 32 || !channels.Add((p.Type,ch)) ||
                 p.ActiveLevel is not ("HIGH" or "LOW") || p.SecondaryGpio.HasValue) ||
