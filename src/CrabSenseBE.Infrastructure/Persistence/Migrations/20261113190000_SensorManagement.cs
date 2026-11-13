@@ -10,9 +10,9 @@ public sealed class SensorManagementMigration : Migration
     {
         m.Sql("""
             ALTER TABLE be."Sensors" ADD COLUMN "Name" text, ADD COLUMN "InstallationLocation" text,
-                ADD COLUMN "FarmingAreaId" uuid REFERENCES be."FarmingAreas"("Id") ON DELETE RESTRICT,
+                ADD COLUMN "FarmingAreaId" uuid CONSTRAINT "FK_Sensors_FarmingAreas_FarmingAreaId" REFERENCES be."FarmingAreas"("Id") ON DELETE RESTRICT,
                 ADD COLUMN "SamplingIntervalSeconds" integer, ADD COLUMN "DisconnectTimeoutSeconds" integer,
-                ADD COLUMN "SourceType" text, ADD COLUMN "BusPortId" uuid REFERENCES be."ControllerPorts"("Id") ON DELETE RESTRICT,
+                ADD COLUMN "SourceType" text, ADD COLUMN "BusPortId" uuid CONSTRAINT "FK_Sensors_ControllerPorts_BusPortId" REFERENCES be."ControllerPorts"("Id") ON DELETE RESTRICT,
                 ADD COLUMN "BusAddress" text, ADD COLUMN "BusRegister" text,
                 ADD COLUMN "ConfigurationVersion" integer NOT NULL DEFAULT 0,
                 ADD COLUMN "AppliedConfigurationVersion" integer, ADD COLUMN "LastConfigurationAppliedAt" timestamptz;
@@ -21,7 +21,7 @@ public sealed class SensorManagementMigration : Migration
             ALTER TABLE be."WaterMeasurements" ADD COLUMN "ReceivedAt" timestamptz, ADD COLUMN "DataQuality" text;
             CREATE TABLE be."SensorCalibrations" (
                 "Id" uuid PRIMARY KEY, "CreatedAt" timestamptz NOT NULL, "UpdatedAt" timestamptz,
-                "SensorId" uuid NOT NULL REFERENCES be."Sensors"("Id") ON DELETE RESTRICT,
+                "SensorId" uuid NOT NULL CONSTRAINT "FK_SensorCalibrations_Sensors_SensorId" REFERENCES be."Sensors"("Id") ON DELETE RESTRICT,
                 "ActorId" uuid NOT NULL, "PerformedAt" timestamptz NOT NULL,
                 "ReferenceValue" numeric NOT NULL, "ObservedValue" numeric NOT NULL,
                 "Unit" text NOT NULL, "Method" text NOT NULL, "Result" text NOT NULL, "Note" text

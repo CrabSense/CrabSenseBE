@@ -80,7 +80,7 @@ public class IotService : IIotService
             SensorId = sensor.Id,
             WaterSystemId = sensor.WaterSystemId,
             Value = req.Value,
-            Unit = req.Unit ?? sensor.Unit,
+            Unit = sensor.Unit ?? req.Unit?.Trim(),
             MeasuredAt = measuredAt,
             ReceivedAt = now,
             DataQuality = fresh ? "Realtime" : "Backfill",
@@ -625,7 +625,8 @@ public class IotService : IIotService
             var wsIds = (await _uow.WaterSystems.FindAsync(w => w.FarmingAreaId == areaId, ct))
                 .Select(w => w.Id)
                 .ToHashSet();
-            sensors = sensors.Where(s => s.WaterSystemId != null && wsIds.Contains(s.WaterSystemId.Value));
+            var allowed = await SensorIdsInAreasAsync([areaId],ct);
+            sensors = sensors.Where(s => allowed.Contains(s.Id));
         }
 
         var sensorList = sensors.ToList();
@@ -869,7 +870,7 @@ public class IotService : IIotService
         {
             sensor.ControllerPortId = null; sensor.BusPortId = null; sensor.BusAddress = null; sensor.BusRegister = null;
             sensor.DeviceId = req.DeviceId == Guid.Empty ? null : req.DeviceId;
-            sensor.LastSeenAt = null; sensor.AppliedConfigurationVersion = null; sensor.LastConfigurationAppliedAt = null;
+            sensor.LastSeenAt = null; sensor.AppliedConfigurationVersion = null; sensor.LastConfigurationAppliedAt = null; sensor.ConfigurationVersion++;
         }
         if (req.RasComponentId.HasValue) sensor.RasComponentId = req.RasComponentId == Guid.Empty ? null : req.RasComponentId;
         if (req.FarmingRowId.HasValue)
@@ -883,13 +884,15 @@ public class IotService : IIotService
                 sensor.FarmingRowId = req.FarmingRowId;
             }
         }
+        if ((req.SensorType is not null && req.SensorType.Trim()!=sensor.SensorType || req.Unit is not null && req.Unit.Trim()!=sensor.Unit)
+            && await _uow.WaterMeasurements.AnyAsync(m=>m.SensorId==id,ct)) throw AppException.Conflict("Sensor has measurements; type/unit cannot be reinterpreted. Register a new sensor.");
         if (req.SensorType is not null) sensor.SensorType = req.SensorType.Trim();
-        if (req.Unit is not null) sensor.Unit = req.Unit;
+        if (req.Unit is not null) sensor.Unit = req.Unit.Trim();
         if (req.MinThreshold.HasValue) sensor.MinThreshold = req.MinThreshold;
         if (req.MaxThreshold.HasValue) sensor.MaxThreshold = req.MaxThreshold;
         if (req.IsActive.HasValue && req.IsActive.Value != sensor.IsActive)
         {
-            sensor.IsActive = req.IsActive.Value; sensor.LastSeenAt = null;
+            sensor.IsActive = req.IsActive.Value; sensor.LastSeenAt = null; sensor.ConfigurationVersion++; sensor.AppliedConfigurationVersion=null; sensor.LastConfigurationAppliedAt=null;
             if (!sensor.IsActive)
             {
                 var incidents = await _uow.Alerts.FindAsync(a=>a.SensorId==id && a.IncidentType=="sensor_disconnect"

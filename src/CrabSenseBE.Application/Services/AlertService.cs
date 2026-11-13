@@ -361,6 +361,7 @@ public class AlertService : IAlertService
         var alert = new Alert
         {
             FarmingAreaId = areaId,
+            SensorId = sourceType == "Sensor" && Guid.TryParse(sourceId,out var sensorId) ? sensorId : null,
             IncidentType = incidentType,
             SourceType = sourceType,
             SourceId = sourceId,

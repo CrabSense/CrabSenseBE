@@ -43,9 +43,9 @@ public sealed class SensorManagementController(AppDbContext db) : ControllerBase
         if (s.LastSeenAt is null) return "Unknown";
         return s.LastSeenAt < DateTime.UtcNow.AddSeconds(-(s.DisconnectTimeoutSeconds ?? 900)) ? "Offline" : "Online";
     }
-    private async Task<IReadOnlyList<object>> Inventory(Guid? deviceId, Guid? areaId, Guid? rowId, CancellationToken ct)
+    private async Task<IReadOnlyList<object>> Inventory(Guid? deviceId, Guid? areaId, Guid? rowId, CancellationToken ct, Guid? sensorId = null)
     {
-        var sensors = await db.Sensors.AsNoTracking().Where(s => deviceId == null || s.DeviceId == deviceId).ToListAsync(ct);
+        var sensors = await db.Sensors.AsNoTracking().Where(s => (deviceId == null || s.DeviceId == deviceId) && (sensorId == null || s.Id == sensorId)).ToListAsync(ct);
         var ids = sensors.Select(s => s.Id).ToArray();
         var latest = await db.WaterMeasurements.AsNoTracking().Where(m => ids.Contains(m.SensorId))
             .GroupBy(m => m.SensorId).Select(g => g.OrderByDescending(m => m.MeasuredAt).ThenByDescending(m => m.Id).First()).ToListAsync(ct);
@@ -81,6 +81,10 @@ public sealed class SensorManagementController(AppDbContext db) : ControllerBase
     [HttpGet("inventory")]
     public async Task<IActionResult> InventoryList(Guid? deviceId, Guid? farmingAreaId, Guid? farmingRowId, CancellationToken ct)
         => Ok(ApiResponse<IReadOnlyList<object>>.Ok(await Inventory(deviceId,farmingAreaId,farmingRowId,ct)));
+
+    [HttpGet("{id:guid}/inventory")]
+    public async Task<IActionResult> InventoryDetail(Guid id,CancellationToken ct)
+        => Ok(ApiResponse<object>.Ok((await Inventory(null,null,null,ct,id)).SingleOrDefault() ?? throw AppException.NotFound("Sensor")));
 
     [HttpGet("summary")]
     public async Task<IActionResult> Summary(CancellationToken ct)
@@ -141,7 +145,7 @@ public sealed class SensorManagementController(AppDbContext db) : ControllerBase
             if(await db.Sensors.AnyAsync(x=>x.Id!=s.Id&&x.ControllerPortId==p.Id,ct))throw AppException.Conflict("Port already bound.");
             s.ControllerPortId=p.Id;s.BusPortId=null;s.BusAddress=null;s.BusRegister=null;
         }
-        s.DeviceId=p.DeviceId;s.LastSeenAt=null;s.AppliedConfigurationVersion=null;s.LastConfigurationAppliedAt=null;
+        s.DeviceId=p.DeviceId;s.LastSeenAt=null;s.AppliedConfigurationVersion=null;s.LastConfigurationAppliedAt=null;s.ConfigurationVersion++;
     }
 
     [HttpPost("register-from-port")]
@@ -179,7 +183,7 @@ public sealed class SensorManagementController(AppDbContext db) : ControllerBase
     {
         var s=await RequireSensor(id,ct);
         if(req.PortId.HasValue){if(!req.DeviceId.HasValue)throw AppException.BadRequest("DeviceId required.");await Bind(s,await RequirePort(req.DeviceId.Value,req.PortId.Value,ct),req.BusAddress,req.BusRegister,ct);}
-        else {s.DeviceId=req.DeviceId;s.ControllerPortId=null;s.BusPortId=null;s.BusAddress=null;s.BusRegister=null;s.LastSeenAt=null;s.AppliedConfigurationVersion=null;s.LastConfigurationAppliedAt=null;}
+        else {s.DeviceId=req.DeviceId;s.ControllerPortId=null;s.BusPortId=null;s.BusAddress=null;s.BusRegister=null;s.LastSeenAt=null;s.AppliedConfigurationVersion=null;s.LastConfigurationAppliedAt=null;s.ConfigurationVersion++;}
         await ValidateLocation(s,ct);Audit(id,"UpdateSensorBinding");await Save(ct);
         return Ok(ApiResponse<object>.Ok(new{s.Id,s.DeviceId,s.ControllerPortId,s.BusPortId,s.BusAddress,s.BusRegister}));
     }
@@ -190,10 +194,10 @@ public sealed class SensorManagementController(AppDbContext db) : ControllerBase
     public Task<IActionResult> Disable(Guid id,CancellationToken ct)=>SetActive(id,false,ct);
     private async Task<IActionResult> SetActive(Guid id,bool enabled,CancellationToken ct)
     {
-        var s=await RequireSensor(id,ct);s.IsActive=enabled;s.LastSeenAt=null;
+        var s=await RequireSensor(id,ct);if(s.IsActive!=enabled){s.IsActive=enabled;s.LastSeenAt=null;s.ConfigurationVersion++;s.AppliedConfigurationVersion=null;s.LastConfigurationAppliedAt=null;}
         if(!enabled)
         {
-            var alerts=await db.Alerts.Where(a=>a.SensorId==id&&a.IncidentType=="sensor_disconnect"&&(a.Status==AlertStatus.Active||a.Status==AlertStatus.Acknowledged||a.Status==AlertStatus.InProgress)).ToListAsync(ct);
+            var alerts=await db.Alerts.Where(a=>a.SensorId==id&&(a.IncidentType=="sensor_disconnect"||a.IncidentType=="sensor_read_error")&&(a.Status==AlertStatus.Active||a.Status==AlertStatus.Acknowledged||a.Status==AlertStatus.InProgress)).ToListAsync(ct);
             foreach(var a in alerts){a.Status=AlertStatus.Recovered;a.ResolvedAt=DateTime.UtcNow;a.ResolutionReason="Sensor disabled by administrator.";a.ResolvedBy=Actor();}
         }
         Audit(id,enabled?"EnableSensor":"DisableSensor");await Save(ct);
@@ -339,7 +343,13 @@ public sealed class SensorEdgeConfigurationController(AppDbContext db, IConfigur
         var s=await Require(id,req.DeviceCode,ct);
         if(!s.IsActive)throw AppException.Conflict("Sensor is disabled.");
         if(req.ErrorCode is not ("ReadFailed" or "CommunicationFailed" or "InvalidData"))throw AppException.BadRequest("Unsupported sensor error code.");
-        await alerts.RaiseOnceAsync("sensor_read_error","Sensor",id.ToString("N"),"Sensor "+s.SensorCode+": "+req.ErrorCode,areaId:s.FarmingAreaId,ct:ct);
+        var area=s.FarmingAreaId;
+        if(area==null&&s.WaterSystemId is Guid ws)area=(await db.WaterSystems.FindAsync([ws],ct))?.FarmingAreaId;
+        if(area==null&&s.FarmingRowId is Guid rid)area=(await db.FarmingRows.FindAsync([rid],ct))?.FarmingAreaId;
+        if(area==null&&s.DeviceId is Guid did)area=(await db.Devices.FindAsync([did],ct))?.FarmingAreaId;
+        s.LastSeenAt=null;
+        await db.SaveChangesAsync(ct);
+        await alerts.RaiseOnceAsync("sensor_read_error","Sensor",id.ToString("N"),"Sensor "+s.SensorCode+": "+req.ErrorCode,areaId:area,ct:ct);
         return Ok(ApiResponse.Ok("Sensor error reported."));
     }
 }
