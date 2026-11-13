@@ -144,6 +144,27 @@ VALUES
 INSERT INTO be."EdgeCommands" ("Id","DeviceCode","Command","Channel","Status","CreatedAt","ExpiresAt","AttemptCount","ConcurrencyVersion","RequestSource")
 VALUES ('60000000-0000-0000-0000-000000000003','legacy-esp','on','1','pending',now(),now()+interval '5 minutes',0,0,'manual');
 '@ | Out-Null
+    # Simulate the historical DevDbBootstrap column drift on a disposable DB.
+    Update-Database "legacy_migration" "20261113120000_DiscoverControllerPorts"
+    Invoke-Psql "legacy_migration" @'
+ALTER TABLE be."Alerts" ALTER COLUMN "IncidentId" TYPE varchar(64);
+INSERT INTO be."Alerts" ("Id","IncidentId","Message","Severity","Status","OccurrenceCount","CreatedAt")
+VALUES ('60000000-0000-0000-0000-000000000004','legacy-incident','legacy alert','Warning','Active',1,now());
+'@ | Out-Null
+    Update-Database "legacy_migration"
+    $incidentType = Invoke-Psql "legacy_migration" 'SELECT data_type FROM information_schema.columns WHERE table_schema = ''be'' AND table_name = ''Alerts'' AND column_name = ''IncidentId'';'
+    if ($incidentType -ne "text") { throw "Legacy IncidentId was not repaired: $incidentType" }
+    $legacyIncident = Invoke-Psql "legacy_migration" 'SELECT "IncidentId" FROM be."Alerts" WHERE "Id" = ''60000000-0000-0000-0000-000000000004'';'
+    if ($legacyIncident -ne "legacy-incident") { throw "Incident repair lost existing data." }
+    Invoke-Psql "legacy_migration" @'
+UPDATE be."Alerts" SET "IncidentId" = repeat('x', 120)
+WHERE "Id" = '60000000-0000-0000-0000-000000000004';
+'@ | Out-Null
+    $longIncident = Invoke-Psql "legacy_migration" 'SELECT length("IncidentId") FROM be."Alerts" WHERE "Id" = ''60000000-0000-0000-0000-000000000004'';'
+    if ($longIncident -ne "120") { throw "Long incident identity failed after repair." }
+    Update-Database "legacy_migration" "20261113120000_DiscoverControllerPorts"
+    $rollbackIncident = Invoke-Psql "legacy_migration" 'SELECT length("IncidentId") FROM be."Alerts" WHERE "Id" = ''60000000-0000-0000-0000-000000000004'';'
+    if ($rollbackIncident -ne "120") { throw "Incident repair rollback narrowed the column." }
     Update-Database "legacy_migration"
     $legacyCommand = Invoke-Psql "legacy_migration" 'SELECT "Status" || ''|'' || ("CommandSequence" > 0)::text FROM be."EdgeCommands" WHERE "Id" = ''60000000-0000-0000-0000-000000000003'';'
     if ($legacyCommand -ne "superseded|true") { throw "Legacy pending command was not safely retired: $legacyCommand" }

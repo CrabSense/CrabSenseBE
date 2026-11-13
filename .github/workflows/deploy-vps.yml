@@ -108,7 +108,14 @@ jobs:
             --project src/CrabSenseBE.Infrastructure/CrabSenseBE.Infrastructure.csproj \
             --startup-project src/CrabSenseBE.Api/CrabSenseBE.Api.csproj \
             --configuration Release --output latest-migration.sql
-          if grep -Eiq '\b(DROP (TABLE|COLUMN)|RENAME (TABLE|COLUMN)|ALTER COLUMN|TRUNCATE|DELETE FROM)\b' latest-migration.sql; then
+          # The only reviewed exception is widening the legacy IncidentId to its
+          # existing EF text contract. Strip that exact statement only for this migration;
+          # every other destructive statement still fails the gate.
+          cp latest-migration.sql latest-migration.checked.sql
+          if [ "$latest" = "20261113123000_RepairAlertIncidentIdText" ]; then
+            sed -E '/^[[:space:]]*ALTER TABLE be\."Alerts" ALTER COLUMN "IncidentId" TYPE text;[[:space:]]*$/d' latest-migration.sql > latest-migration.checked.sql
+          fi
+          if grep -Eiq '\b(DROP (TABLE|COLUMN)|RENAME (TABLE|COLUMN)|ALTER COLUMN|TRUNCATE|DELETE FROM)\b' latest-migration.checked.sql; then
             echo "Latest migration is destructive and cannot use app-only rollback." >&2
             exit 1
           fi

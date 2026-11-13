@@ -1059,7 +1059,7 @@ public static class DevDbBootstrap
             ALTER TABLE be."Alerts" ADD COLUMN IF NOT EXISTS "ResolutionNote" character varying(1000) NULL;
             ALTER TABLE be."Alerts" ADD COLUMN IF NOT EXISTS "OccurrenceCount" integer NOT NULL DEFAULT 1;
             ALTER TABLE be."Alerts" ADD COLUMN IF NOT EXISTS "LastOccurredAt" timestamp with time zone NULL;
-            ALTER TABLE be."Alerts" ADD COLUMN IF NOT EXISTS "IncidentId" character varying(64) NULL;
+            ALTER TABLE be."Alerts" ADD COLUMN IF NOT EXISTS "IncidentId" text NULL;
             """).ConfigureAwait(false);
         logger.LogInformation("Ensured Alert workflow columns.");
     }
