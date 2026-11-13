@@ -35,6 +35,18 @@ public class Sensor : BaseEntity
     public Guid? RasComponentId { get; set; }
     public string SensorCode { get; set; } = string.Empty;
     public string SensorType { get; set; } = string.Empty; // pH, DO, Temperature, Salinity, etc.
+    public string? Name { get; set; }
+    public string? InstallationLocation { get; set; }
+    public Guid? FarmingAreaId { get; set; }
+    public int? SamplingIntervalSeconds { get; set; }
+    public int? DisconnectTimeoutSeconds { get; set; }
+    public string? SourceType { get; set; }
+    public Guid? BusPortId { get; set; }
+    public string? BusAddress { get; set; }
+    public string? BusRegister { get; set; }
+    public int ConfigurationVersion { get; set; }
+    public int? AppliedConfigurationVersion { get; set; }
+    public DateTime? LastConfigurationAppliedAt { get; set; }
     public string? Unit { get; set; }
     public decimal? MinThreshold { get; set; }
     public decimal? MaxThreshold { get; set; }
@@ -184,6 +196,8 @@ public class WaterMeasurement : BaseEntity
     public DateTime MeasuredAt { get; set; }
     public string? Source { get; set; } // realtime, hdf5
     public string? EdgeEventKey { get; set; } // SHA-256 of edge event ID, scoped to SensorId
+    public DateTime? ReceivedAt { get; set; }
+    public string? DataQuality { get; set; }
 
     // Navigation
     public Sensor? Sensor { get; set; }
@@ -222,4 +236,17 @@ public class ControllerPort : BaseEntity
     public bool? ReportedOn { get; set; }
     public string CommissioningStatus { get; set; } = "Pending";
     public DateTime LastReportedAt { get; set; }
+}
+
+public class SensorCalibration : BaseEntity
+{
+    public Guid SensorId { get; set; }
+    public Guid ActorId { get; set; }
+    public DateTime PerformedAt { get; set; }
+    public decimal ReferenceValue { get; set; }
+    public decimal ObservedValue { get; set; }
+    public string Unit { get; set; } = "";
+    public string Method { get; set; } = "";
+    public string Result { get; set; } = "";
+    public string? Note { get; set; }
 }

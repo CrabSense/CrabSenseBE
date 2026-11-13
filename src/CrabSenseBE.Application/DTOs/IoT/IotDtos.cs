@@ -16,7 +16,11 @@ public record SensorDto(
     Guid? FarmingRowId = null,
     decimal? LatestValue = null,
     DateTime? LatestMeasuredAt = null,
-    string? Status = null);
+    string? Status = null,
+    string? Name = null, Guid? ControllerPortId = null, Guid? BusPortId = null,
+    Guid? FarmingAreaId = null, string? InstallationLocation = null,
+    int? SamplingIntervalSeconds = null, int? DisconnectTimeoutSeconds = null,
+    string? SourceType = null);
 
 public record CreateSensorRequest(
     Guid? WaterSystemId,
@@ -27,7 +31,8 @@ public record CreateSensorRequest(
     decimal? MinThreshold,
     decimal? MaxThreshold,
     Guid? RasComponentId = null,
-    Guid? FarmingRowId = null);
+    Guid? FarmingRowId = null, string? Name = null, Guid? FarmingAreaId = null,
+    string? InstallationLocation = null, string? SourceType = null);
 
 /// <remarks>FarmingRowId = Guid.Empty → gỡ khỏi dãy (về cảm biến chung của khu).</remarks>
 public record UpdateSensorRequest(
@@ -39,7 +44,8 @@ public record UpdateSensorRequest(
     decimal? MaxThreshold,
     bool? IsActive,
     Guid? RasComponentId = null,
-    Guid? FarmingRowId = null);
+    Guid? FarmingRowId = null, string? Name = null, Guid? FarmingAreaId = null,
+    string? InstallationLocation = null, string? SourceType = null);
 
 // --- Device = Controller (một ESP32). Sensor + relay/actuator thuộc Device. ---
 public record DeviceDto(

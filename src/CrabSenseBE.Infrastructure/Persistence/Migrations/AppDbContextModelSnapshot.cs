@@ -3783,6 +3783,20 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                         .HasColumnType("uuid");
 
                     b.Property<Guid?>("ControllerPortId").HasColumnType("uuid");
+                    b.Property<string>("Name").HasColumnType("text");
+                    b.Property<string>("InstallationLocation").HasColumnType("text");
+                    b.Property<Guid?>("FarmingAreaId").HasColumnType("uuid");
+                    b.Property<int?>("SamplingIntervalSeconds").HasColumnType("integer");
+                    b.Property<int?>("DisconnectTimeoutSeconds").HasColumnType("integer");
+                    b.Property<string>("SourceType").HasColumnType("text");
+                    b.Property<Guid?>("BusPortId").HasColumnType("uuid");
+                    b.Property<string>("BusAddress").HasColumnType("text");
+                    b.Property<string>("BusRegister").HasColumnType("text");
+                    b.Property<int>("ConfigurationVersion").HasColumnType("integer");
+                    b.Property<int?>("AppliedConfigurationVersion").HasColumnType("integer");
+                    b.Property<DateTime?>("LastConfigurationAppliedAt").HasColumnType("timestamp with time zone");
+                    b.HasIndex("FarmingAreaId");
+                    b.HasIndex("BusPortId", "BusAddress", "BusRegister").IsUnique();
 
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("timestamp with time zone");
@@ -3838,6 +3852,25 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.HasIndex("WaterSystemId");
 
                     b.ToTable("Sensors", "be");
+                });
+
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.SensorCalibration", b =>
+                {
+                    b.Property<Guid>("Id").ValueGeneratedOnAdd().HasColumnType("uuid");
+                    b.Property<DateTime>("CreatedAt").HasColumnType("timestamp with time zone");
+                    b.Property<DateTime?>("UpdatedAt").HasColumnType("timestamp with time zone");
+                    b.Property<Guid>("SensorId").HasColumnType("uuid");
+                    b.Property<Guid>("ActorId").HasColumnType("uuid");
+                    b.Property<DateTime>("PerformedAt").HasColumnType("timestamp with time zone");
+                    b.Property<decimal>("ReferenceValue").HasColumnType("numeric");
+                    b.Property<decimal>("ObservedValue").HasColumnType("numeric");
+                    b.Property<string>("Unit").IsRequired().HasColumnType("text");
+                    b.Property<string>("Method").IsRequired().HasColumnType("text");
+                    b.Property<string>("Result").IsRequired().HasColumnType("text");
+                    b.Property<string>("Note").HasColumnType("text");
+                    b.HasKey("Id");
+                    b.HasIndex("SensorId", "PerformedAt");
+                    b.ToTable("SensorCalibrations", "be");
                 });
 
             modelBuilder.Entity("CrabSenseBE.Domain.Entities.ServiceApiKey", b =>
@@ -4296,6 +4329,9 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
 
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTime?>("ReceivedAt").HasColumnType("timestamp with time zone");
+                    b.Property<string>("DataQuality").HasColumnType("text");
 
                     b.Property<string>("EdgeEventKey")
                         .HasMaxLength(64)
@@ -5450,10 +5486,17 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
             modelBuilder.Entity("CrabSenseBE.Domain.Entities.Sensor", b =>
                 {
                     b.HasOne("CrabSenseBE.Domain.Entities.ControllerPort", "ControllerPort").WithMany().HasForeignKey("ControllerPortId").OnDelete(DeleteBehavior.Restrict);
+                    b.HasOne("CrabSenseBE.Domain.Entities.FarmingArea", null).WithMany().HasForeignKey("FarmingAreaId").OnDelete(DeleteBehavior.Restrict);
+                    b.HasOne("CrabSenseBE.Domain.Entities.ControllerPort", null).WithMany().HasForeignKey("BusPortId").OnDelete(DeleteBehavior.Restrict);
 
                     b.Navigation("ControllerPort");
 
                     b.Navigation("Measurements");
+                });
+
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.SensorCalibration", b =>
+                {
+                    b.HasOne("CrabSenseBE.Domain.Entities.Sensor", null).WithMany().HasForeignKey("SensorId").OnDelete(DeleteBehavior.Restrict).IsRequired();
                 });
 
             modelBuilder.Entity("CrabSenseBE.Domain.Entities.WaterSystem", b =>

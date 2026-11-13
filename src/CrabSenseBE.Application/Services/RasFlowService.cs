@@ -683,12 +683,21 @@ public class RasFlowService : IRasFlowService
                     evidenceInvalid = true;
                     break;
                 }
+                if (sensor.ControllerPortId.HasValue || sensor.BusPortId.HasValue)
+                {
+                    var port = await _uow.ControllerPorts.GetByIdAsync(sensor.ControllerPortId ?? sensor.BusPortId!.Value, ct);
+                    if (port is null || !port.IsPresent || port.DeviceId != deviceId || port.ConfigVersion != device!.CapabilityVersion
+                        || (sensor.ControllerPortId.HasValue && (port.PortType is not ("DIGITAL_INPUT" or "ANALOG_INPUT")
+                            || port.SensorCode != null && port.SensorCode != sensor.SensorCode))
+                        || (sensor.BusPortId.HasValue && port.PortType is not ("I2C" or "RS485" or "UART")))
+                    { evidenceInvalid = true; break; }
+                }
                 var reading = (await _uow.WaterMeasurements.FindAsync(
                         measurement => measurement.SensorId == sensor.Id, ct))
                     .OrderByDescending(measurement => measurement.MeasuredAt)
                     .FirstOrDefault();
                 var maxAge = SensorFreshness(sensor.SensorType);
-                if (reading is null
+                if (reading is null || reading.DataQuality == "Backfill"
                     || sensor.LastSeenAt is not DateTime sensorSeenAt
                     || sensorSeenAt > now.Add(futureTolerance)
                     || sensorSeenAt < now.Subtract(maxAge)

@@ -72,10 +72,10 @@ public sealed class ControllerPortsController(IUnitOfWork uow, IConfiguration co
         }
         // Match already registered metadata only; passive loads are never invented.
         var sensors = (await uow.Sensors.FindAsync(s => s.DeviceId == device.Id, ct)).ToList();
-        foreach (var port in existing.Where(p => p.IsPresent && p.PortType == "DIGITAL_INPUT" && p.SensorCode is not null))
+        foreach (var port in existing.Where(p => p.IsPresent && (p.PortType == "DIGITAL_INPUT" || p.PortType == "ANALOG_INPUT") && p.SensorCode is not null))
         {
             var matches = sensors.Where(s => s.SensorCode == port.SensorCode).ToList();
-            if (matches.Count == 1 && matches[0].ControllerPortId is null && !sensors.Any(s => s.ControllerPortId == port.Id))
+            if (matches.Count == 1 && matches[0].ControllerPortId is null && matches[0].BusPortId is null && !sensors.Any(s => s.ControllerPortId == port.Id))
             {
                 matches[0].ControllerPortId = port.Id;
                 uow.Sensors.Update(matches[0]);
@@ -191,6 +191,8 @@ public sealed class ControllerPortsController(IUnitOfWork uow, IConfiguration co
         if (await uow.Sensors.AnyAsync(s => s.Id != sensorId && s.ControllerPortId == portId, ct))
             throw AppException.Conflict("Input already has a sensor.");
         sensor.ControllerPortId = portId;
+        sensor.BusPortId = null; sensor.BusAddress = null; sensor.BusRegister = null;
+        sensor.LastSeenAt = null; sensor.AppliedConfigurationVersion = null;
         uow.Sensors.Update(sensor);
         try { await uow.SaveChangesAsync(ct); }
         catch (DbUpdateException) { throw AppException.Conflict("Concurrent input binding; reload inventory."); }

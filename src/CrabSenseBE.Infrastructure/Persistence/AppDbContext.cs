@@ -38,6 +38,7 @@ public class AppDbContext : DbContext
     public DbSet<RasComponent> RasComponents => Set<RasComponent>();
     public DbSet<WaterFlow> WaterFlows => Set<WaterFlow>();
     public DbSet<Sensor> Sensors => Set<Sensor>();
+    public DbSet<SensorCalibration> SensorCalibrations => Set<SensorCalibration>();
     public DbSet<Device> Devices => Set<Device>();
     public DbSet<ControllerPort> ControllerPorts => Set<ControllerPort>();
     public DbSet<WaterMeasurement> WaterMeasurements => Set<WaterMeasurement>();
@@ -122,6 +123,11 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<Sensor>().HasOne(x => x.ControllerPort).WithMany()
             .HasForeignKey(x => x.ControllerPortId).OnDelete(DeleteBehavior.Restrict);
         modelBuilder.Entity<Sensor>().HasIndex(x => x.ControllerPortId).IsUnique();
+        modelBuilder.Entity<Sensor>().HasOne<FarmingArea>().WithMany().HasForeignKey(x => x.FarmingAreaId).OnDelete(DeleteBehavior.Restrict);
+        modelBuilder.Entity<Sensor>().HasOne<ControllerPort>().WithMany().HasForeignKey(x => x.BusPortId).OnDelete(DeleteBehavior.Restrict);
+        modelBuilder.Entity<Sensor>().HasIndex(x => new { x.BusPortId, x.BusAddress, x.BusRegister }).IsUnique();
+        modelBuilder.Entity<SensorCalibration>().HasOne<Sensor>().WithMany().HasForeignKey(x => x.SensorId).OnDelete(DeleteBehavior.Restrict);
+        modelBuilder.Entity<SensorCalibration>().HasIndex(x => new { x.SensorId, x.PerformedAt });
 
         // Apply all IEntityTypeConfiguration from this assembly
         modelBuilder.ApplyConfigurationsFromAssembly(typeof(AppDbContext).Assembly);
