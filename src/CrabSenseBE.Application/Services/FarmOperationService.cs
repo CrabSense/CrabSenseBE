@@ -145,6 +145,7 @@ public class FarmOperationService : IFarmOperationService
         var crabIds = await ResolveCrabIdsAsync(req.CrabIds, req.BoxIds, timestamp, ct);
         await EnsureRequestedCrabsAsync(crabIds, ct);
         var boxIds = NormalizeIds(req.BoxIds);
+        await ValidateOperationCrabBoxesAsync(crabIds, boxIds, timestamp, ct);
         if (boxIds.Count == 0 && crabIds.Count == 0)
             throw AppException.BadRequest(
                 "Farm operation phải gắn với ít nhất một box hoặc crab trong khu được phân công.");
@@ -596,6 +597,25 @@ public class FarmOperationService : IFarmOperationService
         "weak" => CrabCondition.Weak,
         _ => null
     };
+
+    private async Task ValidateOperationCrabBoxesAsync(IReadOnlyList<string> crabs, IReadOnlyList<string> boxes, DateTime at, CancellationToken ct)
+    {
+        var selectedBoxes = boxes.Select(Guid.Parse).ToHashSet();
+        foreach (var id in crabs.Select(Guid.Parse))
+        {
+            var crab = await _uow.Crabs.GetByIdAsync(id, ct) ?? throw AppException.NotFound("Crab");
+            if (at < crab.StockedAt) throw AppException.BadRequest("Thời điểm công việc không được trước khi thả cua.");
+            Guid? boxId;
+            if (at >= DateTime.UtcNow.AddMinutes(-5)) boxId = crab.BoxId;
+            else
+                boxId = (await _uow.CrabBoxAllocations.FindAsync(a => a.CrabId == id && a.StartTime <= at
+                    && (a.EndTime == null || a.EndTime > at), ct)).OrderByDescending(a => a.StartTime)
+                    .Select(a => (Guid?)a.BoxId).FirstOrDefault();
+            if (boxId is not Guid actual || selectedBoxes.Count > 0 && !selectedBoxes.Contains(actual))
+                throw AppException.Conflict("Cua không thuộc hộp của phiếu tại thời điểm ghi nhận.");
+            await _areas.EnsureBoxAsync(actual, false, ct);
+        }
+    }
 
     private async Task ValidateEvidenceAsync(IReadOnlyList<string>? urls, IReadOnlyList<string> boxes, IReadOnlyList<string> crabs, CancellationToken ct)
     {

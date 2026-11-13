@@ -246,6 +246,23 @@ public class AlertServiceTests
     }
 
     [Fact]
+    public async Task Acknowledge_or_start_retry_does_not_regress_in_progress_incident()
+    {
+        var at = DateTime.UtcNow.AddMinutes(-10);
+        var alert = new Alert { Id = Guid.NewGuid(), Status = AlertStatus.InProgress,
+            ProcessingStartedAt = at, ProcessingBy = Guid.NewGuid() };
+        var actor = alert.ProcessingBy;
+        _uow.SetupGet(x => x.Alerts).Returns(Repository(alert).Object);
+        _uow.SetupGet(x => x.AlertThresholds).Returns(Repository<AlertThreshold>().Object);
+        await Create().AcknowledgeAsync(alert.Id, null!);
+        await Create().StartProcessingAsync(alert.Id, null);
+        alert.Status.Should().Be(AlertStatus.InProgress);
+        alert.ProcessingStartedAt.Should().Be(at);
+        alert.ProcessingBy.Should().Be(actor);
+        _uow.Verify(x => x.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
     public async Task Resolve_DeviceRecoveredWithoutTelemetry_IsRejected()
     {
         var alert = new Alert
