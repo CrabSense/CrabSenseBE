@@ -1,6 +1,5 @@
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Migrations;
-
 namespace CrabSenseBE.Infrastructure.Persistence.Migrations;
 
 [DbContext(typeof(AppDbContext))]

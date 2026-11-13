@@ -829,7 +829,11 @@ public class IotService : IIotService
     {
         var sensor = await _uow.Sensors.GetByIdAsync(id, ct) ?? throw AppException.NotFound("Sensor");
         if (req.WaterSystemId.HasValue) sensor.WaterSystemId = req.WaterSystemId;
-        if (req.DeviceId.HasValue) sensor.DeviceId = req.DeviceId;
+        if (req.DeviceId.HasValue && req.DeviceId != sensor.DeviceId)
+        {
+            sensor.ControllerPortId = null;
+            sensor.DeviceId = req.DeviceId;
+        }
         if (req.RasComponentId.HasValue) sensor.RasComponentId = req.RasComponentId;
         if (req.FarmingRowId.HasValue)
         {
@@ -1219,6 +1223,7 @@ public class IotService : IIotService
         Guid id, CancellationToken ct = default, Guid? actorId = null, string? ip = null)
     {
         var device = await _uow.Devices.GetByIdAsync(id, ct) ?? throw AppException.NotFound("Device");
+        if (device.CapabilityVersion > 0) throw AppException.Conflict("Controller has discovered port history; revoke or disable instead of deleting.");
         foreach (var sensor in await _uow.Sensors.FindAsync(s => s.DeviceId == id, ct))
             sensor.DeviceId = null;
         foreach (var relay in await _uow.RasComponents.FindAsync(c => c.RelayDeviceId == id, ct))

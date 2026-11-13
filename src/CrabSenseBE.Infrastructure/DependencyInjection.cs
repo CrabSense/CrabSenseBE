@@ -29,7 +29,6 @@ public static class DependencyInjection
         // Repositories
         services.AddScoped(typeof(IRepository<>), typeof(GenericRepository<>));
         services.AddScoped<IUnitOfWork, UnitOfWork>();
-        services.AddScoped<IControllerPortPolicy, ControllerPortPolicy>();
 
         // JWT
         services.AddScoped<IJwtService, JwtService>();

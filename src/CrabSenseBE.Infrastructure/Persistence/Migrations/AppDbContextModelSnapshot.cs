@@ -1335,32 +1335,26 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.ToTable("Deliveries", "be");
                 });
 
-            modelBuilder.Entity("CrabSenseBE.Domain.Entities.ControllerPortInventory", b =>
-                {
-                    b.Property<Guid>("DeviceId").HasColumnType("uuid");
-                    b.Property<long>("Revision").IsConcurrencyToken().HasColumnType("bigint");
-                    b.Property<string>("ManifestHash").IsRequired().HasColumnType("text");
-                    b.Property<DateTime>("ReportedAt").HasColumnType("timestamp with time zone");
-                    b.HasKey("DeviceId");
-                    b.ToTable("ControllerPortInventories", "be");
-                });
-
             modelBuilder.Entity("CrabSenseBE.Domain.Entities.ControllerPort", b =>
                 {
+                    b.Property<Guid>("Id").ValueGeneratedOnAdd().HasColumnType("uuid");
+                    b.Property<string>("ActiveLevel").HasMaxLength(8).HasColumnType("character varying(8)");
+                    b.Property<int?>("Channel").HasColumnType("integer");
+                    b.Property<string>("CommissioningStatus").IsRequired().HasMaxLength(16).HasColumnType("character varying(16)");
+                    b.Property<int>("ConfigVersion").HasColumnType("integer");
+                    b.Property<DateTime>("CreatedAt").HasColumnType("timestamp with time zone");
                     b.Property<Guid>("DeviceId").HasColumnType("uuid");
-                    b.Property<string>("PortId").HasMaxLength(64).HasColumnType("character varying(64)");
-                    b.Property<string>("Channel").HasColumnType("text");
-                    b.Property<int?>("Gpio").HasColumnType("integer");
-                    b.Property<string>("Kind").IsRequired().HasColumnType("text");
-                    b.Property<string>("Direction").IsRequired().HasColumnType("text");
-                    b.Property<string>("Discovery").IsRequired().HasColumnType("text");
-                    b.Property<string>("HardwareUid").HasColumnType("text");
-                    b.Property<bool>("Present").HasColumnType("boolean");
-                    b.Property<bool>("RemoteControl").HasColumnType("boolean");
-                    b.Property<DateTime>("LastSeenAt").HasColumnType("timestamp with time zone");
-                    b.Property<bool?>("ObservedOn").HasColumnType("boolean");
-                    b.Property<DateTime?>("LastObservedAt").HasColumnType("timestamp with time zone");
-                    b.HasKey("DeviceId", "PortId");
+                    b.Property<int>("Gpio").HasColumnType("integer");
+                    b.Property<bool>("IsPresent").HasColumnType("boolean");
+                    b.Property<DateTime>("LastReportedAt").HasColumnType("timestamp with time zone");
+                    b.Property<string>("PortCode").IsRequired().HasMaxLength(64).HasColumnType("character varying(64)");
+                    b.Property<string>("PortType").IsRequired().HasMaxLength(32).HasColumnType("character varying(32)");
+                    b.Property<bool?>("ReportedOn").HasColumnType("boolean");
+                    b.Property<int?>("SecondaryGpio").HasColumnType("integer");
+                    b.Property<string>("SensorCode").HasMaxLength(128).HasColumnType("character varying(128)");
+                    b.Property<DateTime?>("UpdatedAt").HasColumnType("timestamp with time zone");
+                    b.HasKey("Id");
+                    b.HasIndex("DeviceId", "PortCode").IsUnique();
                     b.ToTable("ControllerPorts", "be");
                 });
 
@@ -1375,6 +1369,11 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
 
                     b.Property<decimal?>("BatteryLevel")
                         .HasColumnType("numeric");
+
+                    b.Property<string>("CapabilityHash").HasColumnType("text");
+                    b.Property<int>("CapabilityVersion")
+                        .IsConcurrencyToken().IsConcurrencyToken().ValueGeneratedOnAdd().HasColumnType("integer").HasDefaultValue(0);
+                    b.Property<string>("HardwareModel").HasColumnType("text");
 
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("timestamp with time zone");
@@ -3432,6 +3431,8 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.Property<string>("ControlMode")
                         .HasColumnType("text");
 
+                    b.Property<Guid?>("ControllerPortId").HasColumnType("uuid");
+
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("timestamp with time zone");
 
@@ -3493,6 +3494,8 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                         .HasColumnType("uuid");
 
                     b.HasKey("Id");
+
+                    b.HasIndex("ControllerPortId").IsUnique();
 
                     b.HasIndex("RelayDeviceId");
 
@@ -3779,6 +3782,8 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uuid");
 
+                    b.Property<Guid?>("ControllerPortId").HasColumnType("uuid");
+
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("timestamp with time zone");
 
@@ -3821,6 +3826,8 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                         .HasColumnType("uuid");
 
                     b.HasKey("Id");
+
+                    b.HasIndex("ControllerPortId").IsUnique();
 
                     b.HasIndex("DeviceId");
 
@@ -4654,18 +4661,6 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.Navigation("SalesOrder");
                 });
 
-            modelBuilder.Entity("CrabSenseBE.Domain.Entities.ControllerPortInventory", b =>
-                {
-                    b.HasOne("CrabSenseBE.Domain.Entities.Device", null).WithMany()
-                        .HasForeignKey("DeviceId").OnDelete(DeleteBehavior.Cascade).IsRequired();
-                });
-
-            modelBuilder.Entity("CrabSenseBE.Domain.Entities.ControllerPort", b =>
-                {
-                    b.HasOne("CrabSenseBE.Domain.Entities.Device", null).WithMany()
-                        .HasForeignKey("DeviceId").OnDelete(DeleteBehavior.Cascade).IsRequired();
-                });
-
             modelBuilder.Entity("CrabSenseBE.Domain.Entities.Device", b =>
                 {
                     b.HasOne("CrabSenseBE.Domain.Entities.FarmingArea", "FarmingArea")
@@ -5383,6 +5378,12 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.Navigation("SalesOrders");
                 });
 
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.ControllerPort", b =>
+                {
+                    b.HasOne("CrabSenseBE.Domain.Entities.Device", "Device").WithMany().HasForeignKey("DeviceId").OnDelete(DeleteBehavior.Restrict).IsRequired();
+                    b.Navigation("Device");
+                });
+
             modelBuilder.Entity("CrabSenseBE.Domain.Entities.Device", b =>
                 {
                     b.Navigation("Sensors");
@@ -5424,6 +5425,10 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
 
             modelBuilder.Entity("CrabSenseBE.Domain.Entities.RasComponent", b =>
                 {
+                    b.HasOne("CrabSenseBE.Domain.Entities.ControllerPort", "ControllerPort").WithMany().HasForeignKey("ControllerPortId").OnDelete(DeleteBehavior.Restrict);
+
+                    b.Navigation("ControllerPort");
+
                     b.Navigation("IncomingFlows");
 
                     b.Navigation("OutgoingFlows");
@@ -5444,6 +5449,10 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
 
             modelBuilder.Entity("CrabSenseBE.Domain.Entities.Sensor", b =>
                 {
+                    b.HasOne("CrabSenseBE.Domain.Entities.ControllerPort", "ControllerPort").WithMany().HasForeignKey("ControllerPortId").OnDelete(DeleteBehavior.Restrict);
+
+                    b.Navigation("ControllerPort");
+
                     b.Navigation("Measurements");
                 });
 

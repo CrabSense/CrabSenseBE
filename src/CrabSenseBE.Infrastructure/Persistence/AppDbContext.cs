@@ -40,7 +40,6 @@ public class AppDbContext : DbContext
     public DbSet<Sensor> Sensors => Set<Sensor>();
     public DbSet<Device> Devices => Set<Device>();
     public DbSet<ControllerPort> ControllerPorts => Set<ControllerPort>();
-    public DbSet<ControllerPortInventory> ControllerPortInventories => Set<ControllerPortInventory>();
     public DbSet<WaterMeasurement> WaterMeasurements => Set<WaterMeasurement>();
     public DbSet<WaterAnalysisRun> WaterAnalysisRuns => Set<WaterAnalysisRun>();
     public DbSet<Hdf5Upload> Hdf5Uploads => Set<Hdf5Upload>();
@@ -106,6 +105,23 @@ public class AppDbContext : DbContext
 
         // Schema riêng — không đụng bảng Cap_Ras snake_case trong public
         modelBuilder.HasDefaultSchema("be");
+        modelBuilder.Entity<Device>().Property(x => x.CapabilityVersion).HasDefaultValue(0).IsConcurrencyToken();
+        modelBuilder.Entity<ControllerPort>(b =>
+        {
+            b.Property(x => x.PortCode).HasMaxLength(64);
+            b.Property(x => x.PortType).HasMaxLength(32);
+            b.Property(x => x.ActiveLevel).HasMaxLength(8);
+            b.Property(x => x.SensorCode).HasMaxLength(128);
+            b.Property(x => x.CommissioningStatus).HasMaxLength(16);
+            b.HasIndex(x => new { x.DeviceId, x.PortCode }).IsUnique();
+            b.HasOne(x => x.Device).WithMany().HasForeignKey(x => x.DeviceId).OnDelete(DeleteBehavior.Restrict);
+        });
+        modelBuilder.Entity<RasComponent>().HasOne(x => x.ControllerPort).WithMany()
+            .HasForeignKey(x => x.ControllerPortId).OnDelete(DeleteBehavior.Restrict);
+        modelBuilder.Entity<RasComponent>().HasIndex(x => x.ControllerPortId).IsUnique();
+        modelBuilder.Entity<Sensor>().HasOne(x => x.ControllerPort).WithMany()
+            .HasForeignKey(x => x.ControllerPortId).OnDelete(DeleteBehavior.Restrict);
+        modelBuilder.Entity<Sensor>().HasIndex(x => x.ControllerPortId).IsUnique();
 
         // Apply all IEntityTypeConfiguration from this assembly
         modelBuilder.ApplyConfigurationsFromAssembly(typeof(AppDbContext).Assembly);
@@ -212,14 +228,7 @@ public class AppDbContext : DbContext
                 + "AND \"IncidentType\" IS NOT NULL "
                 + "AND \"Status\" IN ('Active', 'Acknowledged', 'InProgress')");
 
-        modelBuilder.Entity<ControllerPortInventory>().HasKey(x => x.DeviceId);
-        modelBuilder.Entity<ControllerPortInventory>().Property(x => x.Revision).IsConcurrencyToken();
-        modelBuilder.Entity<ControllerPortInventory>().HasOne<Device>().WithMany()
-            .HasForeignKey(x => x.DeviceId).OnDelete(DeleteBehavior.Cascade);
-        modelBuilder.Entity<ControllerPort>().HasKey(x => new { x.DeviceId, x.PortId });
-        modelBuilder.Entity<ControllerPort>().Property(x => x.PortId).HasMaxLength(64);
-        modelBuilder.Entity<ControllerPort>().HasOne<Device>().WithMany()
-            .HasForeignKey(x => x.DeviceId).OnDelete(DeleteBehavior.Cascade);
+        modelBuilder.Entity<Device>().Property(d => d.CapabilityVersion).IsConcurrencyToken();
         modelBuilder.Entity<Device>()
             .Property(d => d.Status)
             .HasConversion<string>();
