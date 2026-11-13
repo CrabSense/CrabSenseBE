@@ -136,6 +136,14 @@ jobs:
           p='./publish/appsettings.Local.json'
           d=json.load(open(p, encoding='utf-8-sig'))
           d['Urls']='http://0.0.0.0:5080'
+          # Required public FE origins must survive a stale deployment secret.
+          origins=d.get('AllowedOrigins', [])
+          if not isinstance(origins, list) or not all(isinstance(o, str) for o in origins):
+              raise SystemExit('AllowedOrigins must be a list of strings.')
+          for origin in ('https://crabsense.khanhtn45.id.vn', 'https://crabsense.github.io'):
+              if origin not in origins:
+                  origins.append(origin)
+          d['AllowedOrigins']=origins
           d.setdefault('EdgeSync', {})['ControlDisabled']=True
           d['EdgeSync']['AllowLegacySharedKey']=False
           d.setdefault('RasAutomation', {})['FirmwareInterlockVerified']=False
@@ -483,6 +491,32 @@ jobs:
             echo
             curl -fsS http://127.0.0.1:5080/health/edge-control
             echo
+            # Readiness alone does not prove that a browser can call the API.
+            python3 - <<'PY'
+            import urllib.request
+
+            origin = 'https://crabsense.khanhtn45.id.vn'
+            class NoRedirect(urllib.request.HTTPRedirectHandler):
+                def redirect_request(self, req, fp, code, msg, headers, newurl):
+                    return None
+            opener = urllib.request.build_opener(NoRedirect())
+            for base in ('http://127.0.0.1:5080', 'https://api.khanhtn45.id.vn'):
+                for path, method in (('/api/auth/login', 'POST'), ('/api/system/health', 'GET'), ('/api/sensors', 'GET')):
+                    req = urllib.request.Request(base + path, method='OPTIONS', headers={
+                        'Origin': origin,
+                        'Access-Control-Request-Method': method,
+                        'Access-Control-Request-Headers': 'authorization, content-type',
+                    })
+                    with opener.open(req, timeout=15) as response:
+                        methods = {s.strip().upper() for s in response.headers.get('Access-Control-Allow-Methods', '').split(',')}
+                        headers = {s.strip().lower() for s in response.headers.get('Access-Control-Allow-Headers', '').split(',')}
+                        if (response.status not in (200, 204)
+                            or response.headers.get('Access-Control-Allow-Origin') != origin
+                            or method not in methods
+                            or not {'authorization', 'content-type'}.issubset(headers)):
+                            raise SystemExit('CORS preflight failed: ' + base + path)
+                    print('CORS OK:', base + path)
+            PY
             echo DEPLOY_OK
 
       - name: Clean private VPS staging
