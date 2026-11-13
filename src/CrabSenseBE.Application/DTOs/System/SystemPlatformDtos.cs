@@ -12,7 +12,12 @@ public record SystemMetricsDto(
     long StorageTotalBytes,
     long NetworkBytesReceived,
     long NetworkBytesSent,
-    DateTime SampledAtUtc);
+    DateTime SampledAtUtc,
+    long? ApiUptimeSeconds = null,
+    long? HostUptimeSeconds = null,
+    double? HostCpuPercent = null,
+    long? HostMemoryUsedBytes = null,
+    long? HostMemoryTotalBytes = null);
 
 public record SystemVersionDto(string Component, string Version, string Status, string Source);
 
@@ -55,6 +60,9 @@ public record DeviceConnectionTestDto(
     int? Port,
     DateTime? LastSeenAt,
     decimal? RssiDbm);
+
+public record SystemTechnicalAlertDto(Guid Id, string Message, string Severity, string Status,
+    DateTime CreatedAt, string Category, string? IncidentType, DateTime? LastOccurredAt);
 
 public record SystemLogDto(
     Guid Id,
@@ -113,7 +121,8 @@ public record AiServiceDto(
     int BatchSize,
     string DetectionClassesJson,
     DateTime? StartedAt,
-    int DetectionCount);
+    int DetectionCount,
+    string RuntimeStatus = "NotIntegrated");
 
 public record UpsertAiServiceRequest(
     string Name,

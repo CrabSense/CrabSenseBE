@@ -48,6 +48,7 @@ public interface ISystemPlatformService
     Task<ApiResponse<SecurityPolicyDto>> GetPolicyAsync(CancellationToken ct = default);
     Task<ApiResponse<SecurityPolicyDto>> UpdatePolicyAsync(SecurityPolicyDto request, Guid? userId, string? ip, CancellationToken ct = default);
 
+    Task<ApiResponse<IReadOnlyList<SystemTechnicalAlertDto>>> GetTechnicalAlertsAsync(bool activeOnly, CancellationToken ct = default);
     Task<ApiResponse<IReadOnlyList<SystemLogDto>>> GetLogsAsync(string? source, string? severity, string? search, DateTime? from, DateTime? to, CancellationToken ct = default);
     Task<ApiResponse<IReadOnlyList<SystemLogDto>>> GetAuditLogsAsync(CancellationToken ct = default);
 }

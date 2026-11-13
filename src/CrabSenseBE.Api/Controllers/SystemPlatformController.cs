@@ -43,6 +43,10 @@ public class SystemPlatformController : ControllerBase
     public async Task<IActionResult> Restart([FromQuery] string? component, CancellationToken ct)
         => Ok(await _platform.RequestRestartAsync(component ?? "Backend API", UserId(), Actor(), ct));
 
+    [HttpGet("api/system/alerts")]
+    public async Task<IActionResult> Alerts([FromQuery] bool activeOnly = true, CancellationToken ct = default)
+        => Ok(await _platform.GetTechnicalAlertsAsync(activeOnly, ct));
+
     [HttpGet("api/system/logs")]
     public async Task<IActionResult> Logs(
         [FromQuery] string? source,

@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.Net.NetworkInformation;
 using System.Net.Sockets;
 using System.Security.Cryptography;
@@ -62,7 +63,8 @@ public class SystemPlatformService : ISystemPlatformService
 
     public async Task<ApiResponse<SystemMetricsDto>> GetMetricsAsync(CancellationToken ct = default)
     {
-        var process = Process.GetCurrentProcess();
+        using var process = Process.GetCurrentProcess();
+        var hostCpuStart = ReadHostCpu();
         var cpuStart = process.TotalProcessorTime;
         var wallStart = Stopwatch.GetTimestamp();
         await Task.Delay(150, ct);
@@ -72,6 +74,11 @@ public class SystemPlatformService : ISystemPlatformService
             ? 0
             : (process.TotalProcessorTime - cpuStart).TotalMilliseconds / (elapsedMs * Environment.ProcessorCount) * 100;
 
+        var hostCpuEnd = ReadHostCpu();
+        double? hostCpu = null;
+        if (hostCpuStart is { } start && hostCpuEnd is { } end && end.Total > start.Total && end.Idle >= start.Idle)
+            hostCpu = Math.Round(Math.Clamp(100d * (1d - (double)(end.Idle - start.Idle) / (end.Total - start.Total)), 0, 100), 1);
+        var hostMemory = ReadHostMemory();
         var memory = GC.GetGCMemoryInfo();
         long received = 0;
         long sent = 0;
@@ -92,7 +99,9 @@ public class SystemPlatformService : ISystemPlatformService
             drive is { IsReady: true } ? drive.TotalSize : 0,
             received,
             sent,
-            DateTime.UtcNow));
+            DateTime.UtcNow,
+            Math.Max(0, (long)(DateTime.UtcNow - process.StartTime.ToUniversalTime()).TotalSeconds),
+            ReadHostUptime(), hostCpu, hostMemory?.Used, hostMemory?.Total));
     }
 
     public async Task<ApiResponse<IReadOnlyList<SystemVersionDto>>> GetVersionsAsync(CancellationToken ct = default)
@@ -669,77 +678,83 @@ public class SystemPlatformService : ISystemPlatformService
         return ApiResponse<SecurityPolicyDto>.Ok(request);
     }
 
+    // Explicit technical incident allowlist. Do not infer authorization from free-text messages.
+    private IQueryable<Alert> TechnicalAlerts() => _db.Alerts.AsNoTracking().Where(a =>
+        (a.IncidentType == "sensor_disconnect" && a.SourceType == "Sensor") ||
+        (a.IncidentType == "device_disconnect" && a.SourceType == "Device") ||
+        (a.IncidentType == "kiosk_disconnect" && a.SourceType == "Kiosk"));
+
+    private static readonly string[] TechnicalActions =
+    [
+        "Deploy", "Rollback", "RestartRequested", "FirmwareUpdateRequested", "DisableDevice",
+        "TestConnection", "UpdateRecording", "CreateAiService", "RestartAiService", "StopAiService",
+        "DeployAiModelRequested", "RollbackAiModelRequested", "UpdateBackupSchedule",
+        "TerminateSession", "CreateApiKey", "RotateApiKey", "RevokeApiKey", "UpdateSecurityPolicy",
+        "Login", "LoginFailed", "LoginFailureThresholdReached"
+    ];
+
+    private IQueryable<OperationLog> TechnicalOperations() => _db.OperationLogs.AsNoTracking()
+        .Where(x => TechnicalActions.Contains(x.Action));
+
+    public async Task<ApiResponse<IReadOnlyList<SystemTechnicalAlertDto>>> GetTechnicalAlertsAsync(
+        bool activeOnly, CancellationToken ct = default)
+    {
+        var query = TechnicalAlerts();
+        if (activeOnly) query = query.Where(a => a.Status == AlertStatus.Active ||
+            a.Status == AlertStatus.Acknowledged || a.Status == AlertStatus.InProgress);
+        var rows = await query.OrderByDescending(a => a.LastOccurredAt ?? a.CreatedAt)
+            .Take(200).ToListAsync(ct);
+        return ApiResponse<IReadOnlyList<SystemTechnicalAlertDto>>.Ok(rows.Select(a =>
+            new SystemTechnicalAlertDto(a.Id, a.Message, a.Severity.ToString(), a.Status.ToString(),
+                a.CreatedAt, "Device", a.IncidentType, a.LastOccurredAt)).ToList());
+    }
+
     public async Task<ApiResponse<IReadOnlyList<SystemLogDto>>> GetLogsAsync(
         string? source, string? severity, string? search, DateTime? from, DateTime? to, CancellationToken ct = default)
     {
         var logs = new List<SystemLogDto>();
-        if (source is null or "" or "system" or "audit")
+        if (source is null or "" or "system" or "audit" or "security" or "ai")
         {
-            var query = _db.OperationLogs.AsNoTracking().AsQueryable();
+            var query = TechnicalOperations();
+            if (source == "security") query = query.Where(x => x.Action == "Login" || x.Action == "LoginFailed" ||
+                x.Action == "LoginFailureThresholdReached" || x.EntityType == "ServiceApiKey" ||
+                x.EntityType == "SecurityPolicy" || x.Action == "TerminateSession");
+            else if (source == "ai") query = query.Where(x => x.EntityType == "AiManagedService");
             if (from.HasValue) query = query.Where(x => x.CreatedAt >= from);
             if (to.HasValue) query = query.Where(x => x.CreatedAt <= to);
             var rows = await query.OrderByDescending(x => x.CreatedAt).Take(300).ToListAsync(ct);
-            logs.AddRange(rows.Select(x => new SystemLogDto(
-                x.Id, x.CreatedAt, "INFO", "system", $"{x.Action} {x.Details}".Trim(), x.UserId.ToString(), x.EntityType, x.IpAddress)));
+            logs.AddRange(rows.Select(x => new SystemLogDto(x.Id, x.CreatedAt,
+                x.Action == "LoginFailed" || x.Action == "LoginFailureThresholdReached" ? "WARNING" : "INFO",
+                x.Action == "Login" || x.Action == "LoginFailed" || x.Action == "LoginFailureThresholdReached" ||
+                    x.EntityType == "ServiceApiKey" || x.EntityType == "SecurityPolicy" || x.Action == "TerminateSession"
+                    ? "security" : x.EntityType == "AiManagedService" ? "ai" : "system",
+                x.Action, x.UserId.ToString(), x.EntityType, x.IpAddress)));
         }
         if (source is null or "" or "device" or "alert")
         {
-            var query = _db.Alerts.AsNoTracking().AsQueryable();
+            var query = TechnicalAlerts();
             if (from.HasValue) query = query.Where(x => x.CreatedAt >= from);
             if (to.HasValue) query = query.Where(x => x.CreatedAt <= to);
             var rows = await query.OrderByDescending(x => x.CreatedAt).Take(300).ToListAsync(ct);
-            logs.AddRange(rows.Select(a => new SystemLogDto(
-                a.Id, a.CreatedAt, a.Severity.ToString(), "alert", a.Message, null, a.SensorId?.ToString(), null)));
+            logs.AddRange(rows.Select(a => new SystemLogDto(a.Id, a.CreatedAt, a.Severity.ToString(),
+                "alert", a.Message, null, a.SourceId, null)));
         }
-        if (source is null or "" or "ai")
-        {
-            var rows = await _db.AiDetections.AsNoTracking()
-                .OrderByDescending(x => x.DetectedAt)
-                .Take(200)
-                .ToListAsync(ct);
-            logs.AddRange(rows.Select(x => new SystemLogDto(
-                x.Id, x.DetectedAt, x.Status == "failed" ? "ERROR" : "INFO", "ai",
-                $"{x.DetectionType} {x.ModelVersion}", null, x.DeviceId?.ToString(), null)));
-        }
-        if (source is null or "" or "security")
-        {
-            var rows = await _db.OperationLogs.AsNoTracking()
-                .Where(x => x.Action == "Login" || x.Action == "LoginFailed")
-                .OrderByDescending(x => x.CreatedAt)
-                .Take(200)
-                .ToListAsync(ct);
-            logs.AddRange(rows.Select(x => new SystemLogDto(
-                x.Id, x.CreatedAt, x.Action == "LoginFailed" ? "WARNING" : "INFO", "security",
-                x.Action, x.Details, null, x.IpAddress)));
-        }
-
         IEnumerable<SystemLogDto> filtered = logs;
         if (!string.IsNullOrWhiteSpace(severity))
             filtered = filtered.Where(x => string.Equals(x.Severity, severity, StringComparison.OrdinalIgnoreCase));
         if (!string.IsNullOrWhiteSpace(search))
-            filtered = filtered.Where(x =>
-                x.Message.Contains(search, StringComparison.OrdinalIgnoreCase)
+            filtered = filtered.Where(x => x.Message.Contains(search, StringComparison.OrdinalIgnoreCase)
                 || (x.Actor?.Contains(search, StringComparison.OrdinalIgnoreCase) ?? false));
         return ApiResponse<IReadOnlyList<SystemLogDto>>.Ok(filtered.OrderByDescending(x => x.At).Take(400).ToList());
     }
 
     public async Task<ApiResponse<IReadOnlyList<SystemLogDto>>> GetAuditLogsAsync(CancellationToken ct = default)
     {
-        var rows = await _db.OperationLogs.AsNoTracking()
-            .OrderByDescending(x => x.CreatedAt)
-            .Take(300)
-            .ToListAsync(ct);
+        var rows = await TechnicalOperations().OrderByDescending(x => x.CreatedAt).Take(300).ToListAsync(ct);
         var users = await _db.AppUsers.AsNoTracking().Select(x => new { x.Id, x.Username }).ToListAsync(ct);
-        var mapped = rows.Select(x => new SystemLogDto(
-            x.Id,
-            x.CreatedAt,
-            "INFO",
-            "audit",
-            x.Action,
-            users.FirstOrDefault(u => u.Id == x.UserId)?.Username,
-            x.EntityType,
-            x.IpAddress)).ToList();
-        return ApiResponse<IReadOnlyList<SystemLogDto>>.Ok(mapped);
+        return ApiResponse<IReadOnlyList<SystemLogDto>>.Ok(rows.Select(x => new SystemLogDto(
+            x.Id, x.CreatedAt, "INFO", "audit", x.Action,
+            users.FirstOrDefault(u => u.Id == x.UserId)?.Username, x.EntityType, x.IpAddress)).ToList());
     }
 
     private async Task<Device> RequireDevice(Guid id, CancellationToken ct)
@@ -805,6 +820,52 @@ public class SystemPlatformService : ISystemPlatformService
 
     private static string Hash(string value)
         => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value))).ToLowerInvariant();
+
+    // Linux host metrics; unavailable on unsupported hosts rather than returning fake zeroes.
+    private static (long Total, long Idle)? ReadHostCpu()
+    {
+        if (!OperatingSystem.IsLinux()) return null;
+        try
+        {
+            var line = File.ReadLines("/proc/stat").First();
+            var fields = line.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            if (fields.Length < 9 || fields[0] != "cpu") return null;
+            var values = fields.Skip(1).Take(8).Select(v => long.Parse(v, CultureInfo.InvariantCulture)).ToArray();
+            return (values.Sum(), values[3] + values[4]);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or FormatException or OverflowException or InvalidOperationException) { return null; }
+    }
+
+    private static (long Used, long Total)? ReadHostMemory()
+    {
+        if (!OperatingSystem.IsLinux()) return null;
+        try
+        {
+            long? total = null, available = null;
+            foreach (var line in File.ReadLines("/proc/meminfo"))
+            {
+                var fields = line.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                if (fields.Length < 2) continue;
+                if (fields[0] == "MemTotal:") total = checked(long.Parse(fields[1], CultureInfo.InvariantCulture) * 1024);
+                if (fields[0] == "MemAvailable:") available = checked(long.Parse(fields[1], CultureInfo.InvariantCulture) * 1024);
+            }
+            return total is > 0 && available is >= 0 && available <= total
+                ? (total.Value - available.Value, total.Value) : null;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or FormatException or OverflowException) { return null; }
+    }
+
+    private static long? ReadHostUptime()
+    {
+        if (!OperatingSystem.IsLinux()) return null;
+        try
+        {
+            var field = File.ReadAllText("/proc/uptime").Split(' ', StringSplitOptions.RemoveEmptyEntries)[0];
+            return double.TryParse(field, NumberStyles.Float, CultureInfo.InvariantCulture, out var seconds)
+                && double.IsFinite(seconds) && seconds >= 0 && seconds < long.MaxValue ? (long)seconds : null;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or IndexOutOfRangeException) { return null; }
+    }
 
     private static DriveInfo? CurrentDrive()
     {
