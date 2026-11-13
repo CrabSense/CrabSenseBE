@@ -59,6 +59,26 @@ public sealed class HarvestApprovalSnapshotTests
         fixture.ApprovedLines.Should().OnlyContain(line => line.ApprovalVersion == 1);
     }
 
+    [Theory]
+    [InlineData(CrabStatus.Dead)]
+    [InlineData(CrabStatus.Quarantined)]
+    [InlineData(CrabStatus.Missing)]
+    public async Task Confirmation_rechecks_lifecycle_after_staff_execution(CrabStatus changedStatus)
+    {
+        var fixture = Fixture();
+        await fixture.Service.ExecuteAsync(fixture.Voucher.Id, new ExecuteHarvestRequest(
+            [Result(fixture.CrabA.Id, 250), Result(fixture.CrabB.Id, 270)]));
+        fixture.CrabB.Status = changedStatus;
+        fixture.ActiveUser = fixture.ManagerId;
+        var saves = fixture.SaveCount;
+        var act = () => fixture.Service.ConfirmAsync(fixture.Voucher.Id, new ConfirmHarvestRequest());
+        (await act.Should().ThrowAsync<AppException>()).Which.StatusCode.Should().Be(409);
+        fixture.Voucher.Status.Should().Be(HarvestStatus.InProgress);
+        fixture.CrabA.Status.Should().Be(CrabStatus.Alive);
+        fixture.CrabB.Status.Should().Be(changedStatus);
+        fixture.SaveCount.Should().Be(saves);
+    }
+
     [Fact]
     public async Task Extra_crab_is_rejected_before_any_harvest_state_changes()
     {
