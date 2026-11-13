@@ -64,6 +64,14 @@ public class RasFlowService : IRasFlowService
         if (position <= 0 && existing.Count > 0)
             position = existing.Max(c => c.Position) + 1;
 
+        ControllerPort? discoveredPort = null;
+        if (req.RelayDeviceId.HasValue || !string.IsNullOrWhiteSpace(req.RelayChannel))
+        {
+            if (req.RelayDeviceId is not Guid relayId) throw AppException.BadRequest("Controller is required.");
+            var relay = await _uow.Devices.GetByIdAsync(relayId, ct) ?? throw AppException.NotFound("Controller");
+            EnsureDeviceArea(relay, area.Id);
+            discoveredPort = await ControllerPortPolicy.ResolveOutputAsync(_uow, relay, req.RelayChannel, null, ct);
+        }
         var node = new RasComponent
         {
             WaterSystemId = ws.Id,
@@ -76,6 +84,7 @@ public class RasFlowService : IRasFlowService
             Description = req.Description,
             NodeType = string.IsNullOrWhiteSpace(req.NodeType) ? "equipment" : req.NodeType.Trim(),
             IconKey = RasComponentCatalog.DefaultIcon(type, code),
+            ControllerPortId = discoveredPort?.Id,
             RelayDeviceId = req.RelayDeviceId,
             RelayChannel = string.IsNullOrWhiteSpace(req.RelayChannel) ? null : req.RelayChannel.Trim(),
             ParamDefaultsJson = SerializeParams(req.ParamDefaults, req.ParamDefaultsJson),
@@ -111,6 +120,7 @@ public class RasFlowService : IRasFlowService
 
         if (relayDeviceId is null || string.IsNullOrWhiteSpace(req.RelayChannel))
         {
+            node.ControllerPortId = null;
             node.RelayDeviceId = null;
             node.RelayChannel = null;
             node.HasRelay = false;
@@ -126,8 +136,10 @@ public class RasFlowService : IRasFlowService
             EnsureDeviceArea(device, area.Id);
             if (!int.TryParse(req.RelayChannel.Trim(), out var channelNo) || channelNo < 1)
                 throw AppException.BadRequest("SSR channel must be a positive number.");
+            var port = await ControllerPortPolicy.ResolveOutputAsync(_uow, device, req.RelayChannel, node.Id, ct);
+            node.ControllerPortId = port?.Id;
             node.RelayDeviceId = device.Id;
-            node.RelayChannel = req.RelayChannel.Trim();
+            node.RelayChannel = channelNo.ToString(System.Globalization.CultureInfo.InvariantCulture);
             node.HasRelay = true;
             node.IsOn = false;
             node.LastReportedAt = null;
