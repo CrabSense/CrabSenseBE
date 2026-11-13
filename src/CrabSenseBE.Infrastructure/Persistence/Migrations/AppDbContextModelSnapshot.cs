@@ -1508,6 +1508,9 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.Property<DateTime?>("FailedAt")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<long?>("InventoryRevision")
+                        .HasColumnType("bigint");
+
                     b.Property<DateTime?>("LastAttemptAt")
                         .HasColumnType("timestamp with time zone");
 

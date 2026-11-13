@@ -15,6 +15,7 @@ public sealed class EdgeCommandService : IEdgeCommandService
     private readonly FarmAreaScope _areas;
     private readonly ICurrentUserService? _currentUser;
     private readonly IConfiguration? _configuration;
+    private readonly IControllerPortPolicy? _ports;
 
     private void RequireHardwareControl() => HardwareControlGuard.RequireEnabled(_configuration);
     private readonly int _maxAttempts;
@@ -24,11 +25,13 @@ public sealed class EdgeCommandService : IEdgeCommandService
     public EdgeCommandService(
         IUnitOfWork uow,
         ICurrentUserService? currentUser = null,
-        IConfiguration? configuration = null)
+        IConfiguration? configuration = null,
+        IControllerPortPolicy? ports = null)
     {
         _uow = uow;
         _currentUser = currentUser;
         _configuration = configuration;
+        _ports = ports;
         _areas = new FarmAreaScope(uow, currentUser);
         _maxAttempts = Math.Clamp(
             configuration?.GetValue("EdgeSync:CommandMaxAttempts", 3) ?? 3,
@@ -114,14 +117,20 @@ public sealed class EdgeCommandService : IEdgeCommandService
             throw AppException.Conflict("Thiết bị chưa online hoặc chưa được phê duyệt.");
 
         var channel = command == "alloff" || string.IsNullOrWhiteSpace(request.Channel) ? null : request.Channel.Trim();
-        if (command is "on" or "off" or "toggle")
+        var inventory = _ports is null ? null : await _ports.CheckAsync(device.Id, channel, command, ct);
+        if (inventory is not null && !inventory.Allowed)
+            throw AppException.Conflict("Port is missing, stale or not permitted for this command.");
+        if (command is "on" or "off")
         {
             if (channel is null)
                 throw AppException.BadRequest("Channel is required for relay commands.");
             var validChannel = await _uow.RasComponents.AnyAsync(
                 component => component.RelayDeviceId == device.Id
                              && component.RelayChannel == channel, ct);
-            if (!validChannel)
+            // A discovered SSR can be switched OFF without a RAS assignment.
+            // ON still requires the existing equipment binding and a declared
+            // remote-control capability. Inventory alone cannot commission a pump.
+            if (!validChannel && !(command == "off" && inventory?.Allowed == true))
                 throw AppException.BadRequest("Channel không thuộc thiết bị này.");
         }
 
@@ -137,7 +146,8 @@ public sealed class EdgeCommandService : IEdgeCommandService
             if (!string.Equals(duplicate.Command, command, StringComparison.Ordinal)
                 || !string.Equals(duplicate.Channel, channel, StringComparison.Ordinal)
                 || !string.Equals(duplicate.RequestSource, requestSource, StringComparison.Ordinal)
-                || duplicate.RequestedByUserId != actorId)
+                || duplicate.RequestedByUserId != actorId
+                || duplicate.InventoryRevision != inventory?.Revision)
                 throw AppException.Conflict(
                     "IdempotencyKey đã được dùng cho payload hoặc actor khác.");
             return ApiResponse<EdgeCommandDto>.Ok(Map(duplicate), "Command already queued.");
@@ -149,6 +159,7 @@ public sealed class EdgeCommandService : IEdgeCommandService
             DeviceCode = deviceCode,
             Command = command,
             Channel = channel,
+            InventoryRevision = inventory?.Revision,
             CorrelationId = correlationId,
             RequestedByUserId = actorId,
             RequestSource = requestSource,
@@ -199,6 +210,7 @@ public sealed class EdgeCommandService : IEdgeCommandService
             .ToList();
 
         var commands = new List<EdgeCommand>();
+        var inventoryDevice = _ports is null ? null : await _uow.Devices.FirstOrDefaultAsync(d => d.DeviceCode == code, ct);
         foreach (var command in candidates)
         {
             if (command.ExpiresAt == default)
@@ -226,6 +238,22 @@ public sealed class EdgeCommandService : IEdgeCommandService
                 command.ConcurrencyVersion++;
                 _uow.EdgeCommands.Update(command);
                 continue;
+            }
+            if (_ports is not null && inventoryDevice is not null)
+            {
+                var inventory = await _ports.CheckAsync(inventoryDevice.Id, command.Channel, command.Command, ct);
+                if ((inventory is not null && (!inventory.Allowed || command.InventoryRevision != inventory.Revision))
+                    || (inventory is null && command.InventoryRevision.HasValue))
+                {
+                    command.Status = "failed";
+                    command.FailedAt = now;
+                    command.ResultMessage = "Controller inventory changed or port is no longer permitted.";
+                    command.LeaseExpiresAt = null;
+                    command.DeliveryAttemptId = null;
+                    command.ConcurrencyVersion++;
+                    _uow.EdgeCommands.Update(command);
+                    continue;
+                }
             }
             command.Status = "delivered";
             command.DeliveredAt = now;
@@ -299,7 +327,7 @@ public sealed class EdgeCommandService : IEdgeCommandService
             command.LeaseExpiresAt, command.AttemptCount,
             command.DeliveryAttemptId,
             command.ExpiresAt == default ? null : command.ExpiresAt,
-            command.CommandSequence, command.SupersededAt, command.SupersededByCommandId);
+            command.CommandSequence, command.SupersededAt, command.SupersededByCommandId, command.InventoryRevision);
 
     private async Task<Guid> ResolveDeviceAreaAsync(Device device, CancellationToken ct)
     {

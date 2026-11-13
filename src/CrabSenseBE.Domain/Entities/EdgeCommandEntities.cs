@@ -24,6 +24,7 @@ public class EdgeCommand : BaseEntity
     public string RequestSource { get; set; } = "manual";
     public uint ConcurrencyVersion { get; set; }
     public long CommandSequence { get; set; }
+    public long? InventoryRevision { get; set; }
     public DateTime? SupersededAt { get; set; }
     public Guid? SupersededByCommandId { get; set; }
 }
