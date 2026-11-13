@@ -1371,7 +1371,8 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                         .HasColumnType("numeric");
 
                     b.Property<string>("CapabilityHash").HasColumnType("text");
-                    b.Property<int>("CapabilityVersion").IsConcurrencyToken().ValueGeneratedOnAdd().HasColumnType("integer").HasDefaultValue(0);
+                    b.Property<int>("CapabilityVersion")
+                        .IsConcurrencyToken().IsConcurrencyToken().ValueGeneratedOnAdd().HasColumnType("integer").HasDefaultValue(0);
                     b.Property<string>("HardwareModel").HasColumnType("text");
 
                     b.Property<DateTime>("CreatedAt")
@@ -1507,6 +1508,9 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
 
                     b.Property<DateTime?>("FailedAt")
                         .HasColumnType("timestamp with time zone");
+
+                    b.Property<long?>("InventoryRevision")
+                        .HasColumnType("bigint");
 
                     b.Property<DateTime?>("LastAttemptAt")
                         .HasColumnType("timestamp with time zone");

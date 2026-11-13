@@ -228,6 +228,7 @@ public class AppDbContext : DbContext
                 + "AND \"IncidentType\" IS NOT NULL "
                 + "AND \"Status\" IN ('Active', 'Acknowledged', 'InProgress')");
 
+        modelBuilder.Entity<Device>().Property(d => d.CapabilityVersion).IsConcurrencyToken();
         modelBuilder.Entity<Device>()
             .Property(d => d.Status)
             .HasConversion<string>();

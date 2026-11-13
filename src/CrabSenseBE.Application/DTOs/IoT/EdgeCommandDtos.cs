@@ -14,7 +14,8 @@ public record EdgeCommandDto(
     DateTime? ExpiresAt = null,
     long CommandSequence = 0,
     DateTime? SupersededAt = null,
-    Guid? SupersededByCommandId = null);
+    Guid? SupersededByCommandId = null,
+    long? InventoryRevision = null);
 
 public record EnqueueEdgeCommandRequest(
     string DeviceCode,

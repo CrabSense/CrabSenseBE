@@ -46,7 +46,8 @@ public sealed class ControllerPortsController(IUnitOfWork uow, IConfiguration co
             throw AppException.Conflict("Stale or changed capability layout; increment configVersion.");
         var existing = (await uow.ControllerPorts.FindAsync(p => p.DeviceId == device.Id, ct)).ToList();
         var now = DateTime.UtcNow;
-        var changed = device.CapabilityVersion != req.ConfigVersion;
+        if (existing.Count + ports.Count(p => !existing.Any(x => x.PortCode == p.PortCode)) > 256)
+            throw AppException.BadRequest("Controller port history limit reached.");
         foreach (var old in existing.Where(p => !ports.Any(x => x.PortCode == p.PortCode)))
         {
             old.IsPresent = false; old.ReportedOn = null; old.CommissioningStatus = "Disabled";
@@ -57,7 +58,12 @@ public sealed class ControllerPortsController(IUnitOfWork uow, IConfiguration co
             var port = existing.SingleOrDefault(p => p.PortCode == item.PortCode);
             var fresh = port is null;
             port ??= new ControllerPort { DeviceId = device.Id, PortCode = item.PortCode };
-            if (changed || !port.IsPresent) port.CommissioningStatus = "Pending";
+            // A newly added channel must not reset commissioning of unchanged
+            // existing outputs; a changed wiring descriptor always does.
+            if (fresh || !port.IsPresent || port.PortType != item.Type || port.Channel != item.Channel
+                || port.Gpio != item.Gpio || port.SecondaryGpio != item.SecondaryGpio
+                || port.ActiveLevel != item.ActiveLevel || port.SensorCode != item.SensorCode)
+                port.CommissioningStatus = "Pending";
             port.PortType = item.Type; port.Channel = item.Channel; port.Gpio = item.Gpio;
             port.SecondaryGpio = item.SecondaryGpio; port.ActiveLevel = item.ActiveLevel; port.SensorCode = item.SensorCode;
             port.ConfigVersion = req.ConfigVersion; port.IsPresent = true; port.ReportedOn = item.On; port.LastReportedAt = now;
@@ -99,6 +105,48 @@ public sealed class ControllerPortsController(IUnitOfWork uow, IConfiguration co
             c.RelayChannel == p.Channel.Value.ToString()) == 1).Select(p => p.Channel!.Value).ToArray();
         return Ok(ApiResponse<object>.Ok(new { configVersion = device.CapabilityVersion, ports = existing.Select(Map),
             boundOutputChannels = bound, hardwareControlDisabled = HardwareControlGuard.IsDisabled(configuration) }));
+    }
+
+    public sealed record RelayObservation(int Channel, bool On);
+    public sealed record ObservationReport(int ConfigVersion, IReadOnlyList<RelayObservation>? Outputs);
+
+    [HttpPut("{deviceCode}/ports/observations")]
+    [AllowAnonymous]
+    [RequestSizeLimit(16384)]
+    public async Task<IActionResult> Observe(string deviceCode, [FromBody] ObservationReport req, CancellationToken ct)
+    {
+        var (denied, identity) = await EdgeKeyGuard.CheckDeviceAsync(Request, configuration, uow, deviceCode, ct);
+        if (denied is not null) return denied;
+        if (identity!.IsLegacyCredential || Request.Headers["X-Edge-Protocol"].ToString() != "2")
+            return Unauthorized(new { success = false, message = "Device-specific Edge V2 credential required." });
+        var device = await uow.Devices.GetByIdAsync(identity.DeviceId, ct) ?? throw AppException.NotFound("Controller");
+        if (req.ConfigVersion != device.CapabilityVersion || req.ConfigVersion < 1)
+            throw AppException.Conflict("Inventory revision mismatch.");
+        if (req.Outputs is null || req.Outputs.Count is < 1 or > 32 ||
+            req.Outputs.Any(x => x is null || x.Channel is < 1 or > 32) ||
+            req.Outputs.Select(x => x.Channel).Distinct().Count() != req.Outputs.Count)
+            throw AppException.BadRequest("Invalid output observations.");
+        var rows = (await uow.ControllerPorts.FindAsync(p => p.DeviceId == device.Id && p.IsPresent
+            && p.ConfigVersion == req.ConfigVersion && p.PortType == "DIGITAL_OUTPUT", ct)).ToList();
+        if (rows.Count != req.Outputs.Count || rows.Any(x => !x.Channel.HasValue)
+            || !rows.Select(x => x.Channel!.Value).ToHashSet().SetEquals(req.Outputs.Select(x => x.Channel)))
+            throw AppException.BadRequest("Observation must match current output inventory.");
+        var states = req.Outputs.ToDictionary(x => x.Channel, x => x.On);
+        var now = DateTime.UtcNow;
+        foreach (var row in rows)
+        {
+            row.ReportedOn = states[row.Channel!.Value];
+            row.LastReportedAt = now;
+            uow.ControllerPorts.Update(row);
+        }
+        // Device capability version is a concurrency token; this update
+        // guards against an inventory replacement while saving observations.
+        device.LastSeenAt = now;
+        device.Status = DeviceStatus.Online;
+        uow.Devices.Update(device);
+        try { await uow.SaveChangesAsync(ct); }
+        catch (DbUpdateException) { throw AppException.Conflict("Inventory changed; retry."); }
+        return Ok(ApiResponse<object>.Ok(new { configVersion = req.ConfigVersion }));
     }
 
     [HttpGet("{id:guid}/ports")]
