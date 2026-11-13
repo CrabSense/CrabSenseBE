@@ -99,6 +99,8 @@ public class UnitOfWork : IUnitOfWork
     private IRepository<Sensor>? _sensors;
     public IRepository<Sensor> Sensors => _sensors ??= new GenericRepository<Sensor>(_context);
 
+    private IRepository<ControllerPort>? _controllerPorts;
+    public IRepository<ControllerPort> ControllerPorts => _controllerPorts ??= new GenericRepository<ControllerPort>(_context);
     private IRepository<Device>? _devices;
     public IRepository<Device> Devices => _devices ??= new GenericRepository<Device>(_context);
 

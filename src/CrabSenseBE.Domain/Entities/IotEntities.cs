@@ -29,6 +29,8 @@ public class Sensor : BaseEntity
 {
     public Guid? WaterSystemId { get; set; }
     public Guid? DeviceId { get; set; }
+    public Guid? ControllerPortId { get; set; }
+    public ControllerPort? ControllerPort { get; set; }
     /// <summary>Gắn cảm biến vào 1 thành phần RAS (drum, skimmer…); null = cả hệ thống.</summary>
     public Guid? RasComponentId { get; set; }
     public string SensorCode { get; set; } = string.Empty;
@@ -75,6 +77,8 @@ public class RasComponent : BaseEntity
     public string? IconKey { get; set; }
     public Guid? RelayDeviceId { get; set; }
     public string? RelayChannel { get; set; }
+    public Guid? ControllerPortId { get; set; }
+    public ControllerPort? ControllerPort { get; set; }
     public string? ParamDefaultsJson { get; set; }
     public bool HasRelay { get; set; }
     public bool IsOn { get; set; }
@@ -144,6 +148,9 @@ public class Device : BaseEntity
     public string? Notes { get; set; }
 
     public string? FirmwareVersion { get; set; }
+    public int CapabilityVersion { get; set; }
+    public string? CapabilityHash { get; set; }
+    public string? HardwareModel { get; set; }
     public decimal? BatteryLevel { get; set; }
     public decimal? RssiDbm { get; set; }
     public DeviceStatus Status { get; set; } = DeviceStatus.Offline;
@@ -197,4 +204,22 @@ public class Hdf5Upload : BaseEntity
 
     // Navigation
     public Device? Device { get; set; }
+}
+
+public class ControllerPort : BaseEntity
+{
+    public Guid DeviceId { get; set; }
+    public Device Device { get; set; } = null!;
+    public string PortCode { get; set; } = "";
+    public string PortType { get; set; } = "";
+    public int? Channel { get; set; }
+    public int Gpio { get; set; }
+    public int? SecondaryGpio { get; set; }
+    public string? ActiveLevel { get; set; }
+    public string? SensorCode { get; set; }
+    public int ConfigVersion { get; set; }
+    public bool IsPresent { get; set; }
+    public bool? ReportedOn { get; set; }
+    public string CommissioningStatus { get; set; } = "Pending";
+    public DateTime LastReportedAt { get; set; }
 }

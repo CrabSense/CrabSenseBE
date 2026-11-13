@@ -118,6 +118,13 @@ public sealed class EdgeCommandService : IEdgeCommandService
         {
             if (channel is null)
                 throw AppException.BadRequest("Channel is required for relay commands.");
+            if (device.CapabilityVersion > 0)
+            {
+                var port = await ControllerPortPolicy.ResolveOutputAsync(_uow, device, channel, null, ct, checkBinding: false);
+                if (port is null || port.CommissioningStatus != "Verified" ||
+                    !await _uow.RasComponents.AnyAsync(c => c.ControllerPortId == port.Id && c.RelayDeviceId == device.Id && c.RelayChannel == channel, ct))
+                    throw AppException.Conflict("Port chưa được nghiệm thu điều khiển.");
+            }
             var validChannel = await _uow.RasComponents.AnyAsync(
                 component => component.RelayDeviceId == device.Id
                              && component.RelayChannel == channel, ct);
