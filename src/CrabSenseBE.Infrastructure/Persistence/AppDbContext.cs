@@ -121,6 +121,7 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<RasComponent>().HasIndex(x => x.ControllerPortId).IsUnique();
         modelBuilder.Entity<Sensor>().HasOne(x => x.ControllerPort).WithMany()
             .HasForeignKey(x => x.ControllerPortId).OnDelete(DeleteBehavior.Restrict);
+        modelBuilder.Entity<Sensor>().HasIndex(x => x.ControllerPortId).IsUnique();
 
         // Apply all IEntityTypeConfiguration from this assembly
         modelBuilder.ApplyConfigurationsFromAssembly(typeof(AppDbContext).Assembly);

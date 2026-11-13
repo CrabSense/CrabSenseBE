@@ -64,15 +64,39 @@ public sealed class ControllerPortsController(IUnitOfWork uow, IConfiguration co
             if (fresh) { await uow.ControllerPorts.AddAsync(port, ct); existing.Add(port); }
             else uow.ControllerPorts.Update(port);
         }
+        // Match already registered metadata only; passive loads are never invented.
+        var sensors = (await uow.Sensors.FindAsync(s => s.DeviceId == device.Id, ct)).ToList();
+        foreach (var port in existing.Where(p => p.IsPresent && p.PortType == "DIGITAL_INPUT" && p.SensorCode is not null))
+        {
+            var matches = sensors.Where(s => s.SensorCode == port.SensorCode).ToList();
+            if (matches.Count == 1 && matches[0].ControllerPortId is null && !sensors.Any(s => s.ControllerPortId == port.Id))
+            {
+                matches[0].ControllerPortId = port.Id;
+                uow.Sensors.Update(matches[0]);
+            }
+        }
+        var bindings = (await uow.RasComponents.FindAsync(c => c.RelayDeviceId == device.Id, ct)).ToList();
+        if (device.CapabilityVersion == 0)
+        {
+            foreach (var port in existing.Where(p => p.IsPresent && p.PortType == "DIGITAL_OUTPUT" && p.Channel.HasValue))
+            {
+                var matches = bindings.Where(b => b.RelayChannel == port.Channel!.Value.ToString()).ToList();
+                if (matches.Count == 1 && matches[0].ControllerPortId is null && !bindings.Any(b => b.ControllerPortId == port.Id))
+                {
+                    matches[0].ControllerPortId = port.Id;
+                    uow.RasComponents.Update(matches[0]);
+                }
+            }
+        }
         device.CapabilityVersion = req.ConfigVersion; device.CapabilityHash = hash;
         device.HardwareModel = req.HardwareModel; device.FirmwareVersion = req.FirmwareVersion;
         device.LastSeenAt = now; device.Status = DeviceStatus.Online;
         uow.Devices.Update(device);
         try { await uow.SaveChangesAsync(ct); }
         catch (DbUpdateException) { throw AppException.Conflict("Concurrent capability update; retry the current manifest."); }
-        var bindings = await uow.RasComponents.FindAsync(c => c.RelayDeviceId == device.Id, ct);
         var bound = existing.Where(p => p.IsPresent && p.PortType == "DIGITAL_OUTPUT" && p.Channel.HasValue &&
-            bindings.Count(c => c.RelayChannel == p.Channel.Value.ToString()) == 1).Select(p => p.Channel!.Value).ToArray();
+            p.CommissioningStatus == "Verified" && bindings.Count(c => c.ControllerPortId == p.Id &&
+            c.RelayChannel == p.Channel.Value.ToString()) == 1).Select(p => p.Channel!.Value).ToArray();
         return Ok(ApiResponse<object>.Ok(new { configVersion = device.CapabilityVersion, ports = existing.Select(Map),
             boundOutputChannels = bound, hardwareControlDisabled = HardwareControlGuard.IsDisabled(configuration) }));
     }
@@ -120,7 +144,8 @@ public sealed class ControllerPortsController(IUnitOfWork uow, IConfiguration co
             throw AppException.Conflict("Input already has a sensor.");
         sensor.ControllerPortId = portId;
         uow.Sensors.Update(sensor);
-        await uow.SaveChangesAsync(ct);
+        try { await uow.SaveChangesAsync(ct); }
+        catch (DbUpdateException) { throw AppException.Conflict("Concurrent input binding; reload inventory."); }
         return Ok(ApiResponse<object>.Ok(new { sensorId, portId }));
     }
 

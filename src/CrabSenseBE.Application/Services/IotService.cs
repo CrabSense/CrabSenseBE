@@ -829,7 +829,11 @@ public class IotService : IIotService
     {
         var sensor = await _uow.Sensors.GetByIdAsync(id, ct) ?? throw AppException.NotFound("Sensor");
         if (req.WaterSystemId.HasValue) sensor.WaterSystemId = req.WaterSystemId;
-        if (req.DeviceId.HasValue) sensor.DeviceId = req.DeviceId;
+        if (req.DeviceId.HasValue && req.DeviceId != sensor.DeviceId)
+        {
+            sensor.ControllerPortId = null;
+            sensor.DeviceId = req.DeviceId;
+        }
         if (req.RasComponentId.HasValue) sensor.RasComponentId = req.RasComponentId;
         if (req.FarmingRowId.HasValue)
         {

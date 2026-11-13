@@ -32,7 +32,7 @@ public partial class DiscoverControllerPorts : Migration
         foreach(var table in new[]{"RasComponents","Sensors"})
         {
             m.AddColumn<Guid>("ControllerPortId",table,schema:"be",type:"uuid",nullable:true);
-            m.CreateIndex("IX_"+table+"_ControllerPortId",table,"ControllerPortId",schema:"be",unique:table=="RasComponents");
+            m.CreateIndex("IX_"+table+"_ControllerPortId",table,"ControllerPortId",schema:"be",unique:true);
             m.AddForeignKey("FK_"+table+"_ControllerPorts_ControllerPortId",table,"ControllerPortId","ControllerPorts",principalColumn:"Id",schema:"be",principalSchema:"be",onDelete:ReferentialAction.Restrict);
         }
     }

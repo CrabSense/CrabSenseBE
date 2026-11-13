@@ -3823,7 +3823,7 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasIndex("ControllerPortId");
+                    b.HasIndex("ControllerPortId").IsUnique();
 
                     b.HasIndex("DeviceId");
 
