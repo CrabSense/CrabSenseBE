@@ -15,7 +15,8 @@ public static class SyncMutationPolicy
     public static bool IsBoxStatusConsistent(string status, bool occupied)
     {
         if (status is BoxStatuses.Empty or BoxStatuses.Harvested) return !occupied;
-        if (status is BoxStatuses.Active or BoxStatuses.Molting or BoxStatuses.Quarantine) return occupied;
+        // Quarantine is a legacy read-only state, not a supported new operation.
+        if (status is BoxStatuses.Active or BoxStatuses.Molting) return occupied;
         return status is BoxStatuses.Watch or BoxStatuses.Maintenance;
     }
 }

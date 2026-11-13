@@ -38,6 +38,19 @@ public class TrainingDataIntegrityTests
     }
 
     [Fact]
+    public async Task Feeding_rejects_future_time_before_write()
+    {
+        var crab = new Crab { Id = Guid.NewGuid(), BoxId = Guid.NewGuid() };
+        var uow = new Mock<IUnitOfWork>();
+        uow.SetupGet(x => x.Crabs).Returns(Repository(crab).Object);
+        var act = () => new TrainingDataService(uow.Object).CreateFeedingAsync(
+            new CreateFeedingEventRequest(crab.Id, crab.BoxId, DateTime.UtcNow.AddDays(1), "feed", 10, null),
+            Guid.NewGuid(), CancellationToken.None);
+        (await act.Should().ThrowAsync<AppException>()).Which.StatusCode.Should().Be(400);
+        uow.Verify(x => x.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
     public async Task Label_WhenBothSourcesProvided_IsRejected()
     {
         var uow = new Mock<IUnitOfWork>();

@@ -214,6 +214,9 @@ public class HarvestServiceTests
                 CancellationToken _) => lines.Where(predicate.Compile()).ToList());
         lineRepo.Setup(repo => repo.Remove(It.IsAny<HarvestLine>()))
             .Callback<HarvestLine>(item => lines.Remove(item));
+        lineRepo.Setup(repo => repo.AddAsync(It.IsAny<HarvestLine>(), It.IsAny<CancellationToken>()))
+            .Callback<HarvestLine, CancellationToken>((item, _) => lines.Add(item))
+            .Returns(Task.CompletedTask);
         var approvedLineRepo = new Mock<IRepository<HarvestApprovedLine>>();
         approvedLineRepo.Setup(repo => repo.FindAsync(
                 It.IsAny<System.Linq.Expressions.Expression<Func<HarvestApprovedLine, bool>>>(),

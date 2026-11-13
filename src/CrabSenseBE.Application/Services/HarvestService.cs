@@ -511,13 +511,15 @@ public class HarvestService : IHarvestService
     {
         var voucher = await GetVoucherOrThrowAsync(id, ct);
         await EnsureVoucherAreaAsync(voucher, ct);
-        await EnsureVoucherLinesAreaAsync(
-            voucher,
-            await _uow.HarvestLines.FindAsync(line => line.HarvestVoucherId == id, ct),
-            ct);
+        var actualLines = (await _uow.HarvestLines.FindAsync(line => line.HarvestVoucherId == id, ct)).ToList();
+        await EnsureVoucherLinesAreaAsync(voucher, actualLines, ct);
         if (voucher.Status != HarvestStatus.InProgress || voucher.ExecutionCompletedAt is null)
             throw AppException.Conflict("Chỉ kết quả do Farm Staff đã thực hiện mới được xác nhận.");
-        await ApplyHarvestToCrabsAsync(voucher, ct);
+        if (actualLines.Count == 0 || voucher.FarmingAreaId is not Guid areaId)
+            throw AppException.Conflict("Không có kết quả thu hoạch hợp lệ để xác nhận.");
+        await ValidateCrabsAsync(actualLines.Where(x => x.CrabId.HasValue).Select(x => x.CrabId!.Value).ToList(),
+            areaId, checkAlreadyHarvested: true, currentVoucherId: voucher.Id, ct: ct);
+        await ApplyHarvestToCrabsAsync(voucher, actualLines, ct);
         voucher.Status = HarvestStatus.Completed;
         voucher.ConfirmedByUserId = _currentUser.UserId;
         voucher.ConfirmedAt = DateTime.UtcNow;
@@ -829,10 +831,7 @@ public class HarvestService : IHarvestService
                 ?? throw AppException.BadRequest(
                     $"Crab '{crabId}' does not exist.");
 
-            if (crab.Status is CrabStatus.Dead
-                or CrabStatus.Harvested
-                or CrabStatus.Sold
-                or CrabStatus.Missing)
+            if (crab.Status is not (CrabStatus.Alive or CrabStatus.Molting))
             {
                 throw AppException.Conflict(
                     $"Crab '{crabId}' is not alive and cannot be harvested.");
@@ -1356,14 +1355,14 @@ public class HarvestService : IHarvestService
             : grade.Trim().ToUpperInvariant();
     }
 
-    private async Task ApplyHarvestToCrabsAsync(HarvestVoucher voucher, CancellationToken ct)
+    private async Task ApplyHarvestToCrabsAsync(HarvestVoucher voucher, IReadOnlyCollection<HarvestLine> actualLines, CancellationToken ct)
     {
-        foreach (var line in voucher.Lines.Where(l => l.CrabId.HasValue))
+        foreach (var line in actualLines.Where(l => l.CrabId.HasValue))
         {
-            var crab = await _uow.Crabs.GetByIdAsync(line.CrabId!.Value, ct);
-            if (crab is null) continue;
-            if (crab.Status is CrabStatus.Harvested or CrabStatus.Sold)
-                continue;
+            var crab = await _uow.Crabs.GetByIdAsync(line.CrabId!.Value, ct)
+                ?? throw AppException.Conflict("Cua không còn tồn tại; cần đối soát phiếu.");
+            if (crab.Status is not (CrabStatus.Alive or CrabStatus.Molting))
+                throw AppException.Conflict("Cua không còn đủ điều kiện thu hoạch; cần đối soát phiếu.");
 
             var oldStatus = crab.Status;
             var oldCondition = crab.Condition;

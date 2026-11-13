@@ -17,6 +17,7 @@ public sealed class CrabLifecycleConditionTests
     [InlineData(CrabStatus.Harvested)]
     [InlineData(CrabStatus.Sold)]
     [InlineData(CrabStatus.Missing)]
+    [InlineData(CrabStatus.Quarantined)]
     public void HealthObservation_CannotResurrectCrab(CrabStatus status)
     {
         Assert.Equal(status, CrabConditions.ApplyCondition(status, CrabCondition.Normal));

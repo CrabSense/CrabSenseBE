@@ -29,6 +29,10 @@ public class ManualInspectionService : IManualInspectionService
         _ = await _uow.Boxes.GetByIdAsync(req.BoxId, ct) ?? throw AppException.NotFound("Box");
         await _areas.EnsureBoxAsync(req.BoxId, manage: false, ct);
 
+        var actor = await _areas.CurrentUserAsync(ct);
+        if (req.Weight is <= 0) throw AppException.BadRequest("Trọng lượng kiểm tra phải lớn hơn 0.");
+        if (req.Timestamp?.ToUniversalTime() > DateTime.UtcNow.AddMinutes(5))
+            throw AppException.BadRequest("Thời điểm kiểm tra không được ở tương lai.");
         // Evidence must be a registered media asset for this exact box.
         var guard = new MediaAssetAreaGuard(_uow, _currentUser);
         if (req.RelatedVideoId is Guid videoId)
@@ -72,7 +76,7 @@ public class ManualInspectionService : IManualInspectionService
         entity.InspectorId = _currentUser is { IsAuthenticated: true }
             ? _currentUser.UserId
             : req.OperatorId ?? Guid.Empty;
-        entity.OperatorName = req.OperatorName ?? "Operator";
+        entity.OperatorName = actor is null ? "Operator" : string.IsNullOrWhiteSpace(actor.FullName) ? actor.Username : actor.FullName;
         entity.AiAgreement = req.AiAgreement;
         entity.InspectionType = "manual";
         entity.Result = req.HealthStatus ?? "unknown";

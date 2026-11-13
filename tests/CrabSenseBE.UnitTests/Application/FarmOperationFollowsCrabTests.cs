@@ -1,3 +1,5 @@
+using CrabSenseBE.Application.DTOs.Ops;
+using CrabSenseBE.Application.Common;
 using System.Text.Json;
 using CrabSenseBE.Application.Interfaces;
 using CrabSenseBE.Application.Services;
@@ -90,6 +92,39 @@ public class FarmOperationFollowsCrabTests
             .ListByCrabAsync(crabId);
 
         result.Data.Should().ContainSingle(o => o.Id == op.Id);
+    }
+
+    [Fact]
+    public async Task Feeding_does_not_clear_quarantine_or_change_observed_condition()
+    {
+        var box = Guid.NewGuid();
+        var crab = new Crab { Id = Guid.NewGuid(), BoxId = box, Status = CrabStatus.Quarantined,
+            Condition = CrabCondition.Problem, StockedAt = DateTime.UtcNow.AddDays(-1) };
+        var uow = new Mock<IUnitOfWork>();
+        var current = ConfigureScope(uow, box);
+        var crabs = new Mock<IRepository<Crab>>();
+        crabs.Setup(r => r.GetByIdAsync(crab.Id, It.IsAny<CancellationToken>())).ReturnsAsync(crab);
+        uow.Setup(x => x.Crabs).Returns(crabs.Object);
+        var ops = new Mock<IRepository<FarmOperation>>();
+        ops.Setup(r => r.AddAsync(It.IsAny<FarmOperation>(), It.IsAny<CancellationToken>())).Returns(Task.CompletedTask);
+        uow.Setup(x => x.FarmOperations).Returns(ops.Object);
+        var result = await new FarmOperationService(uow.Object, current.Object).CreateAsync(
+            new CreateFarmOperationRequest("feeding", BoxIds: new[] { box.ToString() },
+                CrabIds: new[] { crab.Id.ToString() }, Condition: "normal", Quantity: 10));
+        result.Success.Should().BeTrue();
+        crab.Status.Should().Be(CrabStatus.Quarantined);
+        crab.Condition.Should().Be(CrabCondition.Problem);
+        crabs.Verify(r => r.Update(It.IsAny<Crab>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task Feeding_future_timestamp_rejected_before_database_access()
+    {
+        var uow = new Mock<IUnitOfWork>(MockBehavior.Strict);
+        var act = () => new FarmOperationService(uow.Object, Mock.Of<ICurrentUserService>()).CreateAsync(
+            new CreateFarmOperationRequest("feeding", Timestamp: DateTime.UtcNow.AddHours(1)));
+        (await act.Should().ThrowAsync<AppException>()).Which.StatusCode.Should().Be(400);
+        uow.VerifyNoOtherCalls();
     }
 
     private static Mock<ICurrentUserService> ConfigureScope(

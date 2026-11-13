@@ -26,6 +26,8 @@ public sealed class SyncMutationPolicyTests
     [InlineData("active", true, true)]
     [InlineData("empty", false, true)]
     [InlineData("watch", true, true)]
+    [InlineData("quarantine", true, false)]
+    [InlineData("quarantine", false, false)]
     public void Box_status_must_match_occupancy(string status, bool occupied, bool allowed)
         => Assert.Equal(allowed, SyncMutationPolicy.IsBoxStatusConsistent(status, occupied));
 }
