@@ -89,9 +89,6 @@ public class SystemPlatformController : ControllerBase
     public async Task<IActionResult> SaveRecording(Guid id, [FromBody] UpsertCameraRecordingRequest request, CancellationToken ct)
         => Ok(await _platform.UpsertRecordingAsync(id, request, UserId(), Ip(), ct));
 
-    [HttpGet("api/cameras/recordings")]
-    public async Task<IActionResult> Recordings([FromQuery] Guid? deviceId, CancellationToken ct)
-        => Ok(await _platform.GetRecordingHistoryAsync(deviceId, ct));
 
     [HttpGet("api/ai/services")]
     public async Task<IActionResult> AiServices(CancellationToken ct) => Ok(await _platform.GetAiServicesAsync(ct));

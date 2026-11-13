@@ -391,17 +391,13 @@ public class SystemPlatformService : ISystemPlatformService
 
     public async Task<ApiResponse<IReadOnlyList<RecordingHistoryDto>>> GetRecordingHistoryAsync(Guid? deviceId, CancellationToken ct = default)
     {
-        // System Admin sees technical camera media, not unrelated farm/crab videos.
-        var cameraIds = (await CameraDevices(ct)).Select(x => x.Id).ToArray();
-        if (deviceId.HasValue && !cameraIds.Contains(deviceId.Value))
-            throw AppException.NotFound("Camera");
-        var query = _db.MediaAssets.AsNoTracking().Where(x =>
-            x.DeviceId.HasValue && cameraIds.Contains(x.DeviceId.Value)
-            && x.BoxId == null && x.CrabId == null
-            && (x.RelatedEntityType == null || x.RelatedEntityType.ToLower() == "device")
-            && (x.Category.ToLower().Contains("video") || x.ContentType.StartsWith("video/")));
+        var query = CameraRecordingLibrary.TechnicalVideos(_db);
         if (deviceId.HasValue)
+        {
+            if (!await CameraRecordingLibrary.CameraDevices(_db).AnyAsync(x => x.Id == deviceId.Value, ct))
+                throw AppException.NotFound("Camera");
             query = query.Where(x => x.DeviceId == deviceId);
+        }
         var rows = await query.OrderByDescending(x => x.CreatedAt).Take(200).ToListAsync(ct);
         return ApiResponse<IReadOnlyList<RecordingHistoryDto>>.Ok(rows.Select(x =>
             new RecordingHistoryDto(x.Id, x.DeviceId, x.FileName, x.Category, x.SizeBytes, x.CreatedAt)).ToList());

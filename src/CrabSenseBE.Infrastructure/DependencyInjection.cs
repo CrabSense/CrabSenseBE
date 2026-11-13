@@ -64,6 +64,7 @@ public static class DependencyInjection
         services.AddSingleton<IDatabaseBackupService>(sp => sp.GetRequiredService<DatabaseBackupService>());
         services.AddHostedService<DatabaseBackupScheduler>();
         services.AddScoped<ISystemPlatformService, SystemPlatformService>();
+        services.AddScoped<CameraRecordingLibrary>();
 
         return services;
     }
