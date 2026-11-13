@@ -137,8 +137,12 @@ public class FarmOperationService : IFarmOperationService
         if (string.IsNullOrWhiteSpace(req.Type))
             throw AppException.BadRequest("Type is required.");
 
+        var timestamp = req.Timestamp?.ToUniversalTime() ?? DateTime.UtcNow;
+        if (timestamp > DateTime.UtcNow.AddMinutes(5)) throw AppException.BadRequest("Thời điểm công việc không được ở tương lai.");
+        if (req.FeedingDurationMinutes is < 0) throw AppException.BadRequest("Thời lượng cho ăn không được âm.");
         await EnsureRequestedBoxesAsync(req.BoxIds, ct);
-        var crabIds = await ResolveCrabIdsAsync(req.CrabIds, req.BoxIds, ct);
+        await EnsureRequestedCrabsAsync(req.CrabIds, ct);
+        var crabIds = await ResolveCrabIdsAsync(req.CrabIds, req.BoxIds, timestamp, ct);
         await EnsureRequestedCrabsAsync(crabIds, ct);
         var boxIds = NormalizeIds(req.BoxIds);
         if (boxIds.Count == 0 && crabIds.Count == 0)
@@ -149,6 +153,7 @@ public class FarmOperationService : IFarmOperationService
         if (actor.Role != UserRole.FarmStaff) throw AppException.Forbidden("Chỉ Farm Staff ghi nhận công việc.");
         var condition = NormalizeConditionKey(req.Condition);
         ValidateFeedingAmounts(req.Quantity, req.EatenQuantity);
+        await ValidateEvidenceAsync(req.PhotoUrls, boxIds, crabIds, ct);
 
         var op = new FarmOperation
         {
@@ -167,19 +172,19 @@ public class FarmOperationService : IFarmOperationService
             CameraId = string.IsNullOrWhiteSpace(req.CameraId) ? null : req.CameraId.Trim(),
             Notes = req.Notes ?? "",
             PhotoUrlsJson = JsonSerializer.Serialize(req.PhotoUrls ?? Array.Empty<string>(), JsonOpts),
-            Timestamp = req.Timestamp ?? DateTime.UtcNow,
+            Timestamp = timestamp,
             OperatorId = actor.Id,
             OperatorName = string.IsNullOrWhiteSpace(actor.FullName)
                 ? actor.Username
                 : actor.FullName,
-            Source = string.IsNullOrWhiteSpace(req.Source) ? "manual" : req.Source.Trim(),
+            Source = "manual",
             LocationLabel = req.LocationLabel
         };
         await _uow.FarmOperations.AddAsync(op, ct);
 
         // Đánh dấu tình trạng khi cho ăn → cập nhật luôn con cua, để hộp/hồ sơ/
         // cảnh báo thấy ngay. Ghi chung 1 SaveChanges với phiếu: hoặc cả hai, hoặc không.
-        await ApplyConditionToCrabsAsync(crabIds, condition, op.Timestamp, ct);
+        await ApplyConditionToCrabsAsync(crabIds, condition, op.Timestamp, actor.Id, ct);
         await TouchBoxesAsync(req.BoxIds, op.Timestamp, ct);
 
         await _uow.SaveChangesAsync(ct);
@@ -209,6 +214,11 @@ public class FarmOperationService : IFarmOperationService
         if (proposedBoxIds.Count == 0 && proposedCrabIds.Count == 0)
             throw AppException.BadRequest(
                 "Farm operation phải gắn với ít nhất một box hoặc crab trong khu được phân công.");
+        if (req.BoxIds is not null && !proposedBoxIds.SequenceEqual(ParseStringList(op.BoxIdsJson))
+            || req.CrabIds is not null && !proposedCrabIds.SequenceEqual(ParseStringList(op.CrabIdsJson)))
+            throw AppException.Conflict("Không đổi cua/hộp của phiếu đã ghi nhận; tạo phiếu bổ sung.");
+        if (req.FeedingDurationMinutes is < 0) throw AppException.BadRequest("Thời lượng cho ăn không được âm.");
+        await ValidateEvidenceAsync(req.PhotoUrls, proposedBoxIds, proposedCrabIds, ct);
         if (!string.IsNullOrWhiteSpace(req.Type)) op.Type = req.Type.Trim();
         if (req.BoxIds is not null)
             op.BoxIdsJson = JsonSerializer.Serialize(proposedBoxIds, JsonOpts);
@@ -587,6 +597,25 @@ public class FarmOperationService : IFarmOperationService
         _ => null
     };
 
+    private async Task ValidateEvidenceAsync(IReadOnlyList<string>? urls, IReadOnlyList<string> boxes, IReadOnlyList<string> crabs, CancellationToken ct)
+    {
+        if (urls is null) return;
+        var boxIds = boxes.Select(Guid.Parse).ToHashSet();
+        var crabIds = crabs.Select(Guid.Parse).ToHashSet();
+        foreach (var url in urls)
+        {
+            MediaAsset? asset;
+            if (MediaReferenceGuard.TryParseContentId(url, out var id)) asset = await _uow.MediaAssets.GetByIdAsync(id, ct);
+            else asset = await _uow.MediaAssets.FirstOrDefaultAsync(m => m.ShareLink == url || m.WebViewLink == url || m.WebContentLink == url, ct);
+            if (asset is null || !string.Equals(asset.Category, "image", StringComparison.OrdinalIgnoreCase)
+                || (asset.CrabId.HasValue && !crabIds.Contains(asset.CrabId.Value))
+                || (boxIds.Count > 0 && asset.BoxId.HasValue && !boxIds.Contains(asset.BoxId.Value))
+                || !(asset.CrabId.HasValue && crabIds.Contains(asset.CrabId.Value) || asset.BoxId.HasValue && boxIds.Contains(asset.BoxId.Value)))
+                throw AppException.Forbidden("Ảnh không thuộc cua/hộp của phiếu hoặc chưa đăng ký media.");
+            if (asset.BoxId is Guid boxId) await _areas.EnsureBoxAsync(boxId, false, ct);
+        }
+    }
+
     private async Task TouchBoxesAsync(IEnumerable<string>? boxIds, DateTime at, CancellationToken ct)
     {
         if (boxIds is null) return;
@@ -605,7 +634,7 @@ public class FarmOperationService : IFarmOperationService
     /// hồ sơ cua / cảnh báo thấy được. Không đổi nếu tình trạng y hệt (tránh rác lịch sử).
     /// </summary>
     private async Task ApplyConditionToCrabsAsync(
-        IReadOnlyList<string> crabIds, string? conditionKey, DateTime at, CancellationToken ct)
+        IReadOnlyList<string> crabIds, string? conditionKey, DateTime at, Guid actorId, CancellationToken ct)
     {
         var next = ConditionFromKey(conditionKey);
         if (next is null || crabIds.Count == 0) return;
@@ -615,7 +644,8 @@ public class FarmOperationService : IFarmOperationService
             if (!Guid.TryParse(raw, out var crabId)) continue;
             var crab = await _uow.Crabs.GetByIdAsync(crabId, ct);
             if (crab is null || crab.Status is CrabStatus.Dead or CrabStatus.Harvested
-                or CrabStatus.Sold or CrabStatus.Missing) continue;
+                or CrabStatus.Sold or CrabStatus.Missing or CrabStatus.Quarantined) continue;
+            if (at < (crab.UpdatedAt ?? crab.CreatedAt) || at < crab.StockedAt) continue;
 
             var oldCondition = crab.Condition;
             var oldStatus = crab.Status;
@@ -635,13 +665,14 @@ public class FarmOperationService : IFarmOperationService
                 NewStatus = crab.Status,
                 ChangedAt = at,
                 Source = "manual",
+                ChangedByUserId = actorId,
                 Reason = "Ghi nhận khi cho ăn"
             }, ct);
         }
     }
 
     private async Task<IReadOnlyList<string>> ResolveCrabIdsAsync(
-        IReadOnlyList<string>? requested, IReadOnlyList<string>? boxIds, CancellationToken ct)
+        IReadOnlyList<string>? requested, IReadOnlyList<string>? boxIds, DateTime at, CancellationToken ct)
     {
         var crabIds = NormalizeIds(requested);
         if (crabIds.Count > 0 || boxIds is null || boxIds.Count == 0)
@@ -651,10 +682,12 @@ public class FarmOperationService : IFarmOperationService
         foreach (var raw in boxIds)
         {
             if (!Guid.TryParse(raw, out var boxId)) continue;
-            var occupants = await _uow.Crabs.FindAsync(c => c.BoxId == boxId, ct);
-            foreach (var crab in occupants)
+            var occupantIds = at < DateTime.UtcNow.AddMinutes(-5)
+                ? (await _uow.CrabBoxAllocations.FindAsync(a => a.BoxId == boxId && a.StartTime <= at && (a.EndTime == null || a.EndTime > at), ct)).Select(a => a.CrabId)
+                : (await _uow.Crabs.FindAsync(c => c.BoxId == boxId, ct)).Select(c => c.Id);
+            foreach (var crabId in occupantIds)
             {
-                var id = crab.Id.ToString();
+                var id = crabId.ToString();
                 if (!filled.Contains(id, StringComparer.OrdinalIgnoreCase))
                     filled.Add(id);
             }
