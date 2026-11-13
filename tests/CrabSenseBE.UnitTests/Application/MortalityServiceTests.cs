@@ -137,6 +137,32 @@ public class MortalityServiceTests
         await act.Should().ThrowAsync<CrabSenseBE.Application.Common.AppException>();
     }
 
+    [Theory]
+    [InlineData(CrabStatus.Sold)]
+    [InlineData(CrabStatus.Harvested)]
+    [InlineData(CrabStatus.Missing)]
+    public async Task Terminal_crab_cannot_be_recorded_as_mortality(CrabStatus status)
+    {
+        var crab = GivenCrab();
+        crab.Status = status;
+        var act = () => Create().RecordMortalityAsync(Guid.NewGuid(),
+            new RecordMortalityRequest(crab.Id, null, MortalityCause.Unknown, null));
+        (await act.Should().ThrowAsync<CrabSenseBE.Application.Common.AppException>()).Which.StatusCode.Should().Be(409);
+        crab.Status.Should().Be(status);
+        _uow.Verify(x => x.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task Mortality_rejects_future_and_negative_measurement()
+    {
+        var crab = GivenCrab();
+        var act = () => Create().RecordMortalityAsync(Guid.NewGuid(),
+            new RecordMortalityRequest(crab.Id, DateTime.UtcNow.AddDays(1), MortalityCause.Unknown, null, -1));
+        (await act.Should().ThrowAsync<CrabSenseBE.Application.Common.AppException>()).Which.StatusCode.Should().Be(400);
+        crab.Status.Should().Be(CrabStatus.Alive);
+        _uow.Verify(x => x.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Never);
+    }
+
     [Fact]
     public void CauseAcceptsStringAndNumber()
     {

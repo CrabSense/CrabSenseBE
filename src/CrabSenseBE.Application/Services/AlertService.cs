@@ -170,7 +170,7 @@ public class AlertService : IAlertService
         await EnsureAlertAreaAsync(alert, ct);
         if (alert.Status is AlertStatus.Resolved or AlertStatus.Recovered)
             throw AppException.Conflict("Không thể acknowledge sự cố đã đóng.");
-        if (alert.Status == AlertStatus.Acknowledged)
+        if (alert.Status is AlertStatus.Acknowledged or AlertStatus.InProgress)
             return ApiResponse<AlertDto>.Ok(
                 (await MapAlertsAsync(new[] { alert }, ct)).First());
         var actorId = (await _areas.CurrentUserAsync(ct))?.Id;
@@ -193,6 +193,8 @@ public class AlertService : IAlertService
         await EnsureAlertAreaAsync(alert, ct);
         if (alert.Status is AlertStatus.Resolved or AlertStatus.Recovered)
             throw AppException.Conflict("Không thể xử lý lại sự cố đã đóng.");
+        if (alert.Status == AlertStatus.InProgress)
+            return ApiResponse<AlertDto>.Ok((await MapAlertsAsync(new[] { alert }, ct)).First());
         var actorId = (await _areas.CurrentUserAsync(ct))?.Id;
         alert.Status = AlertStatus.InProgress;
         alert.ProcessingStartedAt = DateTime.UtcNow;

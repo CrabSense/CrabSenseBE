@@ -28,6 +28,7 @@ public class TrainingDataService : ITrainingDataService
         var crab = await _uow.Crabs.GetByIdAsync(request.CrabId, ct)
             ?? throw AppException.NotFound("Crab");
         var fedAt = request.FedAt ?? DateTime.UtcNow;
+        if (request.InitialFoodGram is < 0) throw AppException.BadRequest("InitialFoodGram không được âm.");
         var boxId = await ValidateCrabBoxAtAsync(
             crab, request.BoxId, fedAt, ct);
 
@@ -54,13 +55,14 @@ public class TrainingDataService : ITrainingDataService
         var crab = await _uow.Crabs.GetByIdAsync(request.CrabId, ct)
             ?? throw AppException.NotFound("Crab");
         var observedAt = request.ObservedAt ?? DateTime.UtcNow;
+        if (request.DurationSeconds is < 0) throw AppException.BadRequest("DurationSeconds không được âm.");
         var boxId = await ValidateCrabBoxAtAsync(
             crab, request.BoxId, observedAt, ct);
         if (request.FeedingEventId is Guid feedingId)
         {
             var feeding = await _uow.FeedingEvents.GetByIdAsync(feedingId, ct)
                 ?? throw AppException.NotFound("FeedingEvent");
-            if (feeding.CrabId != crab.Id || feeding.BoxId != boxId)
+            if (feeding.CrabId != crab.Id || feeding.BoxId != boxId || observedAt < feeding.FedAt)
                 throw AppException.Conflict(
                     "FeedingEvent không thuộc cùng cua và hộp của observation.");
         }
@@ -107,6 +109,7 @@ public class TrainingDataService : ITrainingDataService
             _ = await ValidateCrabBoxAtAsync(
                 crab, observation.BoxId, observation.ObservedAt, ct);
         }
+        if (request.ActualWeightGram is <= 0) throw AppException.BadRequest("ActualWeightGram phải lớn hơn 0.");
         var entity = new TrainingLabel
         {
             FeedingEventId = request.FeedingEventId,
@@ -175,6 +178,8 @@ public class TrainingDataService : ITrainingDataService
         var effectiveAt = eventAt.Kind == DateTimeKind.Unspecified
             ? DateTime.SpecifyKind(eventAt, DateTimeKind.Utc)
             : eventAt.ToUniversalTime();
+        if (effectiveAt > DateTime.UtcNow.AddMinutes(5) || effectiveAt < crab.StockedAt)
+            throw AppException.BadRequest("Thời điểm sự kiện không hợp lệ.");
         Guid? evidenceBoxId;
         if (effectiveAt >= DateTime.UtcNow.AddMinutes(-5))
         {

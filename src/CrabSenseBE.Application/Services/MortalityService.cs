@@ -40,8 +40,8 @@ public class MortalityService : IMortalityService
         if (crab is null)
             throw AppException.NotFoundMessage("Không tìm thấy cá thể cua.");
 
-        if (crab.Status is CrabStatus.Dead or CrabStatus.Harvested or CrabStatus.Missing)
-            throw AppException.BadRequest("Cá thể cua này đã được ghi nhận là đã chết trước đó.");
+        if (crab.Status is not (CrabStatus.Alive or CrabStatus.Molting or CrabStatus.Quarantined))
+            throw AppException.Conflict("Không ghi tử vong cho cua đã kết thúc vòng đời hoặc mất dấu.");
 
         var boxId = ResolveBoxId(crab);
         if (boxId == Guid.Empty)
@@ -51,6 +51,10 @@ public class MortalityService : IMortalityService
         }
         if (boxId != Guid.Empty)
             await _areas.EnsureBoxAsync(boxId, manage: false, cancellationToken);
+
+        ValidateMortality(request.MortalityDate, request.Cause, request.WeightGram, request.CarapaceWidthMm, request.CarapaceLengthMm);
+        if (request.MortalityDate is DateTime at && at < crab.StockedAt)
+            throw AppException.BadRequest("Thời điểm tử vong không được trước khi thả cua.");
 
         // 2. Tạo bản ghi mortality kèm snapshot lúc chết.
         //    Client không gửi thì lấy số đo hiện tại của cua.
@@ -180,6 +184,7 @@ public class MortalityService : IMortalityService
             : request.Reason.Trim();
         if (reason is null)
             throw AppException.BadRequest("Cần ghi lý do chỉnh sửa sự kiện tử vong.");
+        ValidateMortality(request.MortalityDate, request.Cause, request.WeightGram, request.CarapaceWidthMm, request.CarapaceLengthMm);
         var previous = JsonSerializer.Serialize(record);
 
         if (request.MortalityDate.HasValue) record.MortalityDate = request.MortalityDate.Value;
@@ -220,6 +225,16 @@ public class MortalityService : IMortalityService
             row?.FarmingAreaId ?? Guid.Empty, area?.Name ?? string.Empty,
             record.MortalityDate, record.Cause, record.Notes, record.RecordedBy,
             record.WeightGram, record.CarapaceWidthMm, record.CarapaceLengthMm);
+    }
+
+    private static void ValidateMortality(DateTime? at, MortalityCause? cause, params decimal?[] measurements)
+    {
+        if (at?.ToUniversalTime() > DateTime.UtcNow.AddMinutes(5))
+            throw AppException.BadRequest("Thời điểm tử vong không được ở tương lai.");
+        if (cause.HasValue && !Enum.IsDefined(cause.Value))
+            throw AppException.BadRequest("Nguyên nhân tử vong không hợp lệ.");
+        if (measurements.Any(x => x is <= 0))
+            throw AppException.BadRequest("Số đo tử vong phải lớn hơn 0.");
     }
 
     private static Guid ResolveBoxId(Crab crab)
