@@ -60,10 +60,21 @@ public sealed class ControllerPortsController : ControllerBase
         if (header is not null && (report.Revision < header.Revision
             || (report.Revision == header.Revision && hash != header.ManifestHash)))
             return Conflict(new { message = "Stale or conflicting revision.", revision = header.Revision });
-        if (header is not null && report.Revision == header.Revision)
-            return Ok(new { success = true, revision = header.Revision, changed = false });
-
         var now = DateTime.UtcNow;
+        var existing = await _db.ControllerPorts.Where(p => p.DeviceId == id).ToDictionaryAsync(p => p.PortId, ct);
+        // Bound retained history as well as each individual report.
+        if (existing.Count + ports.Count(p => !existing.ContainsKey(p.PortId)) > 256)
+            return BadRequest(new { message = "Controller port history limit reached." });
+        if (header is not null && report.Revision == header.Revision)
+        {
+            header.ReportedAt = now;
+            foreach (var p in ports)
+                if (existing.TryGetValue(p.PortId, out var row) && p.Present)
+                    row.LastSeenAt = now;
+            try { await _db.SaveChangesAsync(ct); }
+            catch (DbUpdateException) { return Conflict(new { message = "Concurrent inventory report; retry." }); }
+            return Ok(new { success = true, revision = header.Revision, changed = false });
+        }
         if (header is null)
         {
             header = new ControllerPortInventory { DeviceId = id };
@@ -72,7 +83,6 @@ public sealed class ControllerPortsController : ControllerBase
         header.Revision = report.Revision;
         header.ManifestHash = hash;
         header.ReportedAt = now;
-        var existing = await _db.ControllerPorts.Where(p => p.DeviceId == id).ToDictionaryAsync(p => p.PortId, ct);
         // Keep missing ports for diagnostics; do not delete RAS mappings or actuators.
         foreach (var p in existing.Values) p.Present = false;
         foreach (var p in ports)
@@ -104,7 +114,16 @@ public sealed class ControllerPortsController : ControllerBase
         // Reuse existing farm scope and device read authorization.
         await _iot.GetDeviceAsync(id, ct);
         var inventory = await _db.ControllerPortInventories.AsNoTracking().SingleOrDefaultAsync(x => x.DeviceId == id, ct);
-        var ports = await _db.ControllerPorts.AsNoTracking().Where(p => p.DeviceId == id).OrderBy(p => p.PortId).ToListAsync(ct);
+        var rows = await _db.ControllerPorts.AsNoTracking().Where(p => p.DeviceId == id).OrderBy(p => p.PortId).ToListAsync(ct);
+        var components = await _db.RasComponents.AsNoTracking().Where(x => x.RelayDeviceId == id)
+            .Select(x => new { x.Id, x.Code, x.Name, x.RelayChannel }).ToListAsync(ct);
+        var ports = rows.Select(p => new
+        {
+            p.DeviceId, p.PortId, p.Channel, p.Gpio, p.Kind, p.Direction, p.Discovery,
+            p.HardwareUid, p.Present, p.RemoteControl, p.LastSeenAt,
+            // Existing RAS bindings are read-only here; no inferred equipment assignment.
+            bindings = components.Where(x => p.Channel != null && x.RelayChannel == p.Channel).ToList()
+        });
         return Ok(new { success = true, data = new { revision = inventory?.Revision, reportedAt = inventory?.ReportedAt, ports } });
     }
 
