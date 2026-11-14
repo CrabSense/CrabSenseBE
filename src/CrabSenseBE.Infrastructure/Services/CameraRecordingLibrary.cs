@@ -75,9 +75,14 @@ public sealed class CameraRecordingLibrary(AppDbContext db, IMediaStorageService
         var rowIds = rows.Select(x => x.camera.FarmingRowId).OfType<Guid>().Distinct().ToArray();
         var areas = await db.FarmingAreas.AsNoTracking().Where(a => areaIds.Contains(a.Id)).ToDictionaryAsync(a => a.Id, a => a.Name, ct);
         var locations = await db.FarmingRows.AsNoTracking().Where(r => rowIds.Contains(r.Id)).ToDictionaryAsync(r => r.Id, r => r.Name, ct);
-        return new RecordingLibraryPage(rows.Select(x => Map(x.asset, x.camera,
+        var assets=rows.Select(x=>x.asset.Id).ToArray();
+        var executionRows=await db.CameraRecordingExecutions.AsNoTracking().Where(x=>x.MediaAssetId.HasValue&&assets.Contains(x.MediaAssetId.Value)&&x.Status=="Completed").ToListAsync(ct);
+        var scheduleIds=executionRows.Select(e=>e.ScheduleId).Distinct().ToArray();
+        var schedules=await db.CameraSchedules.AsNoTracking().Where(x=>scheduleIds.Contains(x.Id)).ToDictionaryAsync(x=>x.Id,ct);
+        var executions=executionRows.GroupBy(x=>x.MediaAssetId!.Value).ToDictionary(g=>g.Key,g=>g.OrderByDescending(e=>e.EndedAt).First());
+        return new RecordingLibraryPage(rows.Select(x => Enrich(Map(x.asset, x.camera,
             x.camera.FarmingAreaId is Guid a ? areas.GetValueOrDefault(a) : null,
-            x.camera.FarmingRowId is Guid r ? locations.GetValueOrDefault(r) : null)).ToList(),
+            x.camera.FarmingRowId is Guid r ? locations.GetValueOrDefault(r) : null), executions.GetValueOrDefault(x.asset.Id),schedules)).ToList(),
             total, request.Page, request.PageSize, bytes, cameraCount);
     }
 
@@ -87,7 +92,9 @@ public sealed class CameraRecordingLibrary(AppDbContext db, IMediaStorageService
         var camera = await CameraDevices(db).SingleAsync(d => d.Id == asset.DeviceId, ct);
         var area = await db.FarmingAreas.AsNoTracking().Where(a => a.Id == camera.FarmingAreaId).Select(a => a.Name).FirstOrDefaultAsync(ct);
         var row = await db.FarmingRows.AsNoTracking().Where(r => r.Id == camera.FarmingRowId).Select(r => r.Name).FirstOrDefaultAsync(ct);
-        return Map(asset, camera, area, row);
+        var execution=await db.CameraRecordingExecutions.AsNoTracking().Where(x=>x.MediaAssetId==id&&x.Status=="Completed").OrderByDescending(x=>x.EndedAt).FirstOrDefaultAsync(ct);
+        var schedules=execution is null?new Dictionary<Guid,CameraSchedule>():await db.CameraSchedules.AsNoTracking().Where(x=>x.Id==execution.ScheduleId).ToDictionaryAsync(x=>x.Id,ct);
+        return Enrich(Map(asset,camera,area,row),execution,schedules);
     }
 
     public async Task<(Stream Content, string ContentType, string FileName)> OpenAsync(Guid id, CancellationToken ct = default)
@@ -160,6 +167,16 @@ public sealed class CameraRecordingLibrary(AppDbContext db, IMediaStorageService
         UserId = actor, Action = action, EntityType = "CameraRecording", EntityId = id, IpAddress = ip
     };
 
+    private static RecordingLibraryItem Enrich(RecordingLibraryItem item,CameraRecordingExecution? execution,IReadOnlyDictionary<Guid,CameraSchedule> schedules)
+    {
+        if(execution is null||execution.DeviceId!=item.DeviceId)return item;
+        schedules.TryGetValue(execution.ScheduleId,out var schedule);
+        // Execution timestamps are server-confirmed, not frame-accurate media duration.
+        return item with { StartedAt=execution.StartedAt,EndedAt=execution.EndedAt,
+            RecordingMode=schedule?.Version==execution.ScheduleVersion?schedule.Mode:null,
+            Source="RecordingAgent",ExecutionId=execution.Id,ScheduleId=execution.ScheduleId,
+            ScheduleName=schedule?.Name,ScheduleVersion=execution.ScheduleVersion };
+    }
     private static RecordingLibraryItem Map(MediaAsset asset, Device camera, string? area, string? row) => new(
         asset.Id, camera.Id, camera.DeviceCode, camera.Name, camera.FarmingAreaId, area,
         camera.FarmingRowId, row, asset.FileName, asset.Category, asset.ContentType, asset.SizeBytes,

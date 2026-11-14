@@ -127,8 +127,8 @@ public sealed class CameraRecordingRuntimeController(AppDbContext db, IConfigura
     {
         Authenticate(deviceId);var row=await Execution(deviceId,executionId,ct);
         if(row.Status is "Uploading" or "Completed")return Result(row);
-        if(row.Status!="Recording")throw AppException.Conflict("Execution already closed.");
-        row.Status="Uploading";row.EndedAt=DateTime.UtcNow;await Save(ct);return Result(row);
+        if(row.Status!="Recording"&&!(row.Status=="Failed"&&row.Error=="Agent heartbeat expired."))throw AppException.Conflict("Execution already closed.");
+        row.Status="Uploading";row.Error=null;row.EndedAt??=DateTime.UtcNow;await Save(ct);return Result(row);
     }
     [AllowAnonymous]
     [HttpPut("executions/{executionId:guid}/finish")]
@@ -156,6 +156,7 @@ public sealed class CameraRecordingRuntimeController(AppDbContext db, IConfigura
     {
         Authenticate(deviceId);
         await using var tx=db.Database.IsRelational()?await db.Database.BeginTransactionAsync(ct):null;
+        if(tx!=null) _=await db.Devices.FromSqlInterpolated($"SELECT * FROM be.\"Devices\" WHERE \"Id\"={deviceId} FOR UPDATE").ToListAsync(ct);
         var row=tx is null?await Execution(deviceId,executionId,ct):
             (await db.CameraRecordingExecutions.FromSqlInterpolated($"SELECT * FROM be.\"CameraRecordingExecutions\" WHERE \"Id\"={executionId} AND \"DeviceId\"={deviceId} FOR UPDATE").ToListAsync(ct)).SingleOrDefault()
                 ??throw AppException.NotFound("Recording execution");
@@ -198,6 +199,9 @@ public sealed class CameraRecordingRuntimeController(AppDbContext db, IConfigura
         var runtimeStatus=fresh?"Recording":row?.Status=="Recording"?"Unknown":row?.Status??"NotIntegrated";
         var usedBytes=await CameraRecordingRetentionService.UsedBytes(db,deviceId,ct);
         var limitBytes=s is null?null:CameraRecordingRetentionService.LimitBytes(s);
-        return Result(new {deviceId,scheduleId=s?.Id,scheduledNow=s!=null&&camera.Status!=DeviceStatus.Maintenance&&await Due(s,ct),runtimeStatus,lastExecution=row,usedBytes,limitBytes,agentConfigured=!string.IsNullOrWhiteSpace(config[$"CameraRecording:AgentKeys:{deviceId:D}"])});
+        var slots=s is null?new List<CameraScheduleSlot>():await db.CameraScheduleSlots.Where(x=>x.ScheduleId==s.Id).ToListAsync(ct);
+        var now=DateTime.UtcNow;
+        var nextRecordingAt=s is null||camera.Status==DeviceStatus.Maintenance?null:CameraSchedulesController.NextDue(s,slots,now);
+        return Result(new {deviceId,scheduleId=s?.Id,scheduleName=s?.Name,scheduledNow=s!=null&&camera.Status!=DeviceStatus.Maintenance&&CameraSchedulesController.IsDue(s,slots,now),nextRecordingAt,runtimeStatus,lastExecution=row,usedBytes,limitBytes,agentConfigured=!string.IsNullOrWhiteSpace(config[$"CameraRecording:AgentKeys:{deviceId:D}"])});
     }
 }

@@ -86,6 +86,31 @@ public sealed class CameraSchedulesController(AppDbContext db, CameraRecordingRe
         var minute = local.Hour * 60 + local.Minute;
         return slots.Any(x => x.Day == day && minute >= x.StartMinute && minute < x.EndMinute);
     }
+    public static DateTime? NextDue(CameraSchedule s, IReadOnlyCollection<CameraScheduleSlot> slots, DateTime utc)
+    {
+        if (!s.Enabled || s.Deleted) return null;
+        if (IsDue(s, slots, utc)) return utc;
+        var zone=TimeZoneInfo.FindSystemTimeZoneById(s.Timezone);
+        var local=TimeZoneInfo.ConvertTimeFromUtc(utc,zone);
+        DateTime? next=null;
+        for(var offset=0;offset<=7;offset++)
+        {
+            var date=local.Date.AddDays(offset);
+            var day=((int)date.DayOfWeek+6)%7+1;
+            foreach(var slot in slots.Where(x=>x.Day==day))
+            {
+                var start=DateTime.SpecifyKind(date.AddMinutes(slot.StartMinute),DateTimeKind.Unspecified);
+                while(zone.IsInvalidTime(start)&&start<date.AddMinutes(slot.EndMinute))start=start.AddMinutes(1);
+                if(start>=date.AddMinutes(slot.EndMinute))continue;
+                IEnumerable<DateTime> instants=zone.IsAmbiguousTime(start)
+                    ?zone.GetAmbiguousTimeOffsets(start).Select(o=>new DateTimeOffset(start,o).UtcDateTime)
+                    :new[]{TimeZoneInfo.ConvertTimeToUtc(start,zone)};
+                foreach(var candidate in instants)
+                    if(candidate>=utc&&(!next.HasValue||candidate<next.Value))next=candidate;
+            }
+        }
+        return next;
+    }
     private async Task<List<CameraScheduleSlot>> ValidateRequest(ScheduleRequest r, Guid? id, CancellationToken ct)
     {
         var slots = Normalize(r);
@@ -103,7 +128,7 @@ public sealed class CameraSchedulesController(AppDbContext db, CameraRecordingRe
         var recording = await db.CameraRecordingExecutions.CountAsync(x => x.ScheduleId == s.Id && x.Status == "Recording" && x.LastHeartbeatAt >= cutoff, ct);
         return new { s.Id, s.Name, s.Mode, s.Enabled, s.Timezone, s.RetentionDays, s.VideoQuality, s.Fps, s.MaxStorageGb,
             s.Version, s.CreatedAt, s.UpdatedAt, s.AutoDeleteExpired, cameraIds = ids, slots = slots.Select(x => new Slot(x.Day, Clock(x.StartMinute), Clock(x.EndMinute))),
-            scheduledNow = IsDue(s, slots, DateTime.UtcNow), recordingCount = recording };
+            scheduledNow = IsDue(s, slots, DateTime.UtcNow), nextRecordingAt=NextDue(s,slots,DateTime.UtcNow), recordingCount = recording };
     }
     private async Task Project(CameraSchedule s, Guid[] ids, List<CameraScheduleSlot> slots, CancellationToken ct)
     {
@@ -199,11 +224,12 @@ public sealed class CameraSchedulesController(AppDbContext db, CameraRecordingRe
             failedExecutions=await db.CameraRecordingExecutions.CountAsync(x=>x.Status=="Failed",ct) });
     }
     [HttpGet("calendar")]
-    public async Task<IActionResult> Calendar(Guid? cameraId,CancellationToken ct)
+    public async Task<IActionResult> Calendar(Guid? cameraId,CancellationToken ct,Guid? farmingAreaId=null)
     {
         var q=db.CameraSchedules.AsNoTracking().Where(x=>!x.Deleted);
         if(cameraId.HasValue) q=q.Where(x=>db.CameraScheduleAssignments.Any(a=>a.ScheduleId==x.Id&&a.DeviceId==cameraId));
-        var items=new List<object>();foreach(var s in await q.OrderBy(x=>x.Name).Take(500).ToListAsync(ct)) items.Add(await Map(s,ct));
+        if(farmingAreaId.HasValue)q=q.Where(x=>db.CameraScheduleAssignments.Any(a=>a.ScheduleId==x.Id&&db.Devices.Any(d=>d.Id==a.DeviceId&&d.FarmingAreaId==farmingAreaId)));
+        var items=new List<object>();foreach(var s in await q.OrderBy(x=>x.Name).ThenBy(x=>x.Id).Take(500).ToListAsync(ct)) items.Add(await Map(s,ct));
         return Result(new { items, truncated=await q.CountAsync(ct)>500 });
     }
     [HttpGet("{id:guid}/retention")]

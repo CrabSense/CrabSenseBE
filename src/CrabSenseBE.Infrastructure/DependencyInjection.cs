@@ -67,6 +67,7 @@ public static class DependencyInjection
         services.AddScoped<CameraRecordingLibrary>();
         services.AddScoped<CameraRecordingRetentionService>();
         services.AddHostedService<CameraRecordingRetentionWorker>();
+        services.AddHostedService<CameraRecordingMonitor>();
 
         return services;
     }

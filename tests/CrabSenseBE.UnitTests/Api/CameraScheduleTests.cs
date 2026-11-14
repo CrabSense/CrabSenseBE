@@ -25,6 +25,7 @@ public sealed class CameraScheduleTests
         var schedule=new CameraSchedule{Enabled=true,Mode="Scheduled",Timezone=r.Timezone};
         Assert.True(CameraSchedulesController.IsDue(schedule,slots,new DateTime(2026,11,15,22,0,0,DateTimeKind.Utc)));
         Assert.False(CameraSchedulesController.IsDue(schedule,slots,new DateTime(2026,11,15,23,0,0,DateTimeKind.Utc)));
+        Assert.Equal(new DateTime(2026,11,22,11,0,0,DateTimeKind.Utc),CameraSchedulesController.NextDue(schedule,slots,new DateTime(2026,11,15,23,0,0,DateTimeKind.Utc)));
     }
     [Fact]
     public async Task CRUD_projects_legacy_config_and_preserves_media()
