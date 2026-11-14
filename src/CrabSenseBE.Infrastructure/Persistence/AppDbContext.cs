@@ -96,6 +96,10 @@ public class AppDbContext : DbContext
     public DbSet<KioskProvisioningCode> KioskProvisioningCodes => Set<KioskProvisioningCode>();
     public DbSet<KioskCredential> KioskCredentials => Set<KioskCredential>();
     public DbSet<CameraRecordingSetting> CameraRecordingSettings => Set<CameraRecordingSetting>();
+    public DbSet<CameraSchedule> CameraSchedules => Set<CameraSchedule>();
+    public DbSet<CameraScheduleAssignment> CameraScheduleAssignments => Set<CameraScheduleAssignment>();
+    public DbSet<CameraScheduleSlot> CameraScheduleSlots => Set<CameraScheduleSlot>();
+    public DbSet<CameraRecordingExecution> CameraRecordingExecutions => Set<CameraRecordingExecution>();
     public DbSet<AiManagedService> AiManagedServices => Set<AiManagedService>();
     public DbSet<BackupScheduleSetting> BackupScheduleSettings => Set<BackupScheduleSetting>();
     public DbSet<SystemDeployment> SystemDeployments => Set<SystemDeployment>();
@@ -840,6 +844,33 @@ public class AppDbContext : DbContext
         .OnDelete(DeleteBehavior.Restrict);
 });
 
+        modelBuilder.Entity<CameraSchedule>(b =>
+        {
+
+
+            b.Property(x => x.Version).IsConcurrencyToken();
+        });
+        modelBuilder.Entity<CameraScheduleAssignment>(b =>
+        {
+            b.HasIndex(x => x.DeviceId).IsUnique();
+            b.HasIndex(x => x.ScheduleId);
+            b.HasOne<CameraSchedule>().WithMany().HasForeignKey(x => x.ScheduleId).OnDelete(DeleteBehavior.Cascade);
+            b.HasOne<Device>().WithMany().HasForeignKey(x => x.DeviceId).OnDelete(DeleteBehavior.Restrict);
+        });
+        modelBuilder.Entity<CameraScheduleSlot>(b =>
+        {
+            b.HasIndex(x => x.ScheduleId);
+            b.HasOne<CameraSchedule>().WithMany().HasForeignKey(x => x.ScheduleId).OnDelete(DeleteBehavior.Cascade);
+        });
+        modelBuilder.Entity<CameraRecordingExecution>(b =>
+        {
+            b.HasIndex(x => x.ScheduleId);
+            b.HasIndex(x => x.DeviceId);
+            b.HasIndex(x => x.MediaAssetId);
+            b.HasOne<CameraSchedule>().WithMany().HasForeignKey(x => x.ScheduleId).OnDelete(DeleteBehavior.Restrict);
+            b.HasOne<Device>().WithMany().HasForeignKey(x => x.DeviceId).OnDelete(DeleteBehavior.Restrict);
+            b.HasOne<MediaAsset>().WithMany().HasForeignKey(x => x.MediaAssetId).OnDelete(DeleteBehavior.SetNull);
+        });
         modelBuilder.Entity<CameraRecordingSetting>()
             .HasIndex(x => x.DeviceId)
             .IsUnique();

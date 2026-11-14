@@ -369,6 +369,8 @@ public class SystemPlatformService : ISystemPlatformService
         CameraConfiguration.ValidateSchedule(request.WeeklyScheduleJson, request.Mode == "Scheduled");
         var device = await RequireDevice(deviceId, ct);
         if (!IsCameraDevice(device)) throw AppException.BadRequest("Thiết bị không phải camera.");
+        if (await _db.CameraScheduleAssignments.AnyAsync(x => x.DeviceId == deviceId, ct))
+            throw AppException.Conflict("Camera thuộc lịch dùng chung; cập nhật qua Camera Schedules.");
         var setting = await _db.CameraRecordingSettings.FirstOrDefaultAsync(x => x.DeviceId == deviceId, ct);
         if (setting is null)
         {

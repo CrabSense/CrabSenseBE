@@ -571,6 +571,74 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.ToTable("BoxStatusHistories", "be");
                 });
 
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.CameraSchedule", b =>
+                {
+                    b.Property<Guid>("Id").ValueGeneratedOnAdd().HasColumnType("uuid");
+                    b.Property<DateTime>("CreatedAt").HasColumnType("timestamp with time zone");
+                    b.Property<DateTime?>("UpdatedAt").HasColumnType("timestamp with time zone");
+                    b.Property<string>("Name").IsRequired().HasColumnType("text");
+                    b.Property<string>("Mode").IsRequired().HasColumnType("text");
+                    b.Property<bool>("Enabled").HasColumnType("boolean");
+                    b.Property<string>("Timezone").IsRequired().HasColumnType("text");
+                    b.Property<int>("RetentionDays").HasColumnType("integer");
+                    b.Property<string>("VideoQuality").HasColumnType("text");
+                    b.Property<int?>("Fps").HasColumnType("integer");
+                    b.Property<int?>("MaxStorageGb").HasColumnType("integer");
+                    b.Property<int>("Version").IsConcurrencyToken().HasColumnType("integer");
+                    b.Property<bool>("Deleted").HasColumnType("boolean");
+                    b.HasKey("Id");
+
+                    b.ToTable("CameraSchedules", "be");
+                });
+
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.CameraScheduleAssignment", b =>
+                {
+                    b.Property<Guid>("Id").ValueGeneratedOnAdd().HasColumnType("uuid");
+                    b.Property<DateTime>("CreatedAt").HasColumnType("timestamp with time zone");
+                    b.Property<DateTime?>("UpdatedAt").HasColumnType("timestamp with time zone");
+                    b.Property<Guid>("ScheduleId").HasColumnType("uuid");
+                    b.Property<Guid>("DeviceId").HasColumnType("uuid");
+                    b.HasKey("Id");
+                    b.HasIndex("DeviceId").IsUnique();
+                    b.HasIndex("ScheduleId");
+                    b.ToTable("CameraScheduleAssignments", "be");
+                });
+
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.CameraScheduleSlot", b =>
+                {
+                    b.Property<Guid>("Id").ValueGeneratedOnAdd().HasColumnType("uuid");
+                    b.Property<DateTime>("CreatedAt").HasColumnType("timestamp with time zone");
+                    b.Property<DateTime?>("UpdatedAt").HasColumnType("timestamp with time zone");
+                    b.Property<Guid>("ScheduleId").HasColumnType("uuid");
+                    b.Property<int>("Day").HasColumnType("integer");
+                    b.Property<int>("StartMinute").HasColumnType("integer");
+                    b.Property<int>("EndMinute").HasColumnType("integer");
+                    b.HasKey("Id");
+                    b.HasIndex("ScheduleId");
+                    b.ToTable("CameraScheduleSlots", "be");
+                });
+
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.CameraRecordingExecution", b =>
+                {
+                    b.Property<Guid>("Id").ValueGeneratedOnAdd().HasColumnType("uuid");
+                    b.Property<DateTime>("CreatedAt").HasColumnType("timestamp with time zone");
+                    b.Property<DateTime?>("UpdatedAt").HasColumnType("timestamp with time zone");
+                    b.Property<Guid>("ScheduleId").HasColumnType("uuid");
+                    b.Property<Guid>("DeviceId").HasColumnType("uuid");
+                    b.Property<int>("ScheduleVersion").HasColumnType("integer");
+                    b.Property<string>("Status").IsRequired().HasColumnType("text");
+                    b.Property<DateTime>("StartedAt").HasColumnType("timestamp with time zone");
+                    b.Property<DateTime>("LastHeartbeatAt").HasColumnType("timestamp with time zone");
+                    b.Property<DateTime?>("EndedAt").HasColumnType("timestamp with time zone");
+                    b.Property<string>("Error").HasColumnType("text");
+                    b.Property<Guid?>("MediaAssetId").HasColumnType("uuid");
+                    b.HasKey("Id");
+                    b.HasIndex("ScheduleId");
+                    b.HasIndex("DeviceId");
+                    b.HasIndex("MediaAssetId");
+                    b.ToTable("CameraRecordingExecutions", "be");
+                });
+
             modelBuilder.Entity("CrabSenseBE.Domain.Entities.CameraRecordingSetting", b =>
                 {
                     b.Property<Guid>("Id")
@@ -4552,6 +4620,24 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.Navigation("Box");
 
                     b.Navigation("ChangedByUser");
+                });
+
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.CameraScheduleAssignment", b =>
+                {
+                    b.HasOne("CrabSenseBE.Domain.Entities.CameraSchedule", null).WithMany().HasForeignKey("ScheduleId").OnDelete(DeleteBehavior.Cascade).IsRequired();
+                    b.HasOne("CrabSenseBE.Domain.Entities.Device", null).WithMany().HasForeignKey("DeviceId").OnDelete(DeleteBehavior.Restrict).IsRequired();
+                });
+
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.CameraScheduleSlot", b =>
+                {
+                    b.HasOne("CrabSenseBE.Domain.Entities.CameraSchedule", null).WithMany().HasForeignKey("ScheduleId").OnDelete(DeleteBehavior.Cascade).IsRequired();
+                });
+
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.CameraRecordingExecution", b =>
+                {
+                    b.HasOne("CrabSenseBE.Domain.Entities.CameraSchedule", null).WithMany().HasForeignKey("ScheduleId").OnDelete(DeleteBehavior.Restrict).IsRequired();
+                    b.HasOne("CrabSenseBE.Domain.Entities.Device", null).WithMany().HasForeignKey("DeviceId").OnDelete(DeleteBehavior.Restrict).IsRequired();
+                    b.HasOne("CrabSenseBE.Domain.Entities.MediaAsset", null).WithMany().HasForeignKey("MediaAssetId").OnDelete(DeleteBehavior.SetNull);
                 });
 
             modelBuilder.Entity("CrabSenseBE.Domain.Entities.CameraRecordingSetting", b =>
