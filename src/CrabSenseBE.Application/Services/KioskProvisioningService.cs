@@ -173,6 +173,15 @@ public sealed class KioskProvisioningService : IKioskProvisioningService
         foreach (var credential in await _uow.KioskCredentials.FindAsync(
                      c => c.KioskId == kiosk.Id && c.RevokedAt == null, ct))
             credential.RevokedAt = now;
+        // Revoking a gateway must also revoke credentials already issued to its controllers.
+        // This is authorization only, not a physical emergency stop.
+        foreach (var device in await _uow.Devices.FindAsync(d => d.KioskId == kiosk.Id, ct))
+        {
+            device.EdgeState = "Revoked";
+            device.CredentialHash = null;
+            device.PendingSecret = null;
+            device.Status = DeviceStatus.Offline;
+        }
         await _uow.SaveChangesAsync(ct);
         return ApiResponse<KioskListItemDto>.Ok(MapItem(kiosk, null), "Kiosk revoked.");
     }
@@ -304,7 +313,7 @@ public sealed class KioskProvisioningService : IKioskProvisioningService
             device.PendingSecret = null;
         await _uow.SaveChangesAsync(ct);
         return ApiResponse<RegisterControllerDto>.Ok(
-            new RegisterControllerDto(device.Id, device.DeviceCode, device.EdgeState, oneTime));
+            new RegisterControllerDto(device.Id, device.DeviceCode, device.Status == DeviceStatus.Maintenance ? "Maintenance" : device.EdgeState, oneTime));
     }
 
     public async Task<ApiResponse<IReadOnlyList<EdgeControllerDto>>> ListControllersAsync(
@@ -378,6 +387,7 @@ public sealed class KioskProvisioningService : IKioskProvisioningService
 
     private static string LinkStatus(Device device)
     {
+        if (device.Status == DeviceStatus.Maintenance) return "Maintenance";
         if (device.EdgeState is "Pending" or "Rejected" or "Revoked" or "Approved")
             return device.EdgeState;
         if (device.LastSeenAt is not DateTime seen)
