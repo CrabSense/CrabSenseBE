@@ -17,6 +17,7 @@ namespace CrabSenseBE.Api.Controllers;
 public sealed class CameraRecordingRuntimeController(AppDbContext db, IConfiguration config, IMediaStorageService? storage = null) : ControllerBase
 {
     public record StartRequest(Guid ExecutionId, Guid ScheduleId, int ScheduleVersion);
+    public record FailureRequest(Guid ExecutionId, Guid ScheduleId, int ScheduleVersion, string Error);
     public record FinishRequest(string Status, string? Error, Guid? MediaAssetId);
     private static IActionResult Result(object value) => new OkObjectResult(ApiResponse<object>.Ok(value));
     private void Authenticate(Guid deviceId)
@@ -85,6 +86,28 @@ public sealed class CameraRecordingRuntimeController(AppDbContext db, IConfigura
         await using var tx=db.Database.IsRelational()?await db.Database.BeginTransactionAsync(ct):null;
         await Save(ct);db.CameraRecordingExecutions.Add(row);await Save(ct);if(tx!=null) await tx.CommitAsync(ct);
         return Result(row);
+    }
+    [AllowAnonymous]
+    [HttpPost("failures")]
+    public async Task<IActionResult> Failure(Guid deviceId,FailureRequest r,CancellationToken ct)
+    {
+        Authenticate(deviceId);await Camera(deviceId,ct);
+        if(r.ExecutionId==Guid.Empty||string.IsNullOrWhiteSpace(r.Error)||r.Error.Length>1000)
+            throw AppException.BadRequest("Invalid failure report.");
+        var existing=await db.CameraRecordingExecutions.SingleOrDefaultAsync(x=>x.Id==r.ExecutionId,ct);
+        if(existing!=null)
+        {
+            if(existing.DeviceId!=deviceId||existing.ScheduleId!=r.ScheduleId||existing.ScheduleVersion!=r.ScheduleVersion)
+                throw AppException.Conflict("Execution identity mismatch.");
+            return Result(existing);
+        }
+        var s=await Schedule(deviceId,ct);
+        if(s is null||s.Id!=r.ScheduleId||s.Version!=r.ScheduleVersion)
+            throw AppException.Conflict("Schedule changed.");
+        var now=DateTime.UtcNow;
+        var row=new CameraRecordingExecution{Id=r.ExecutionId,DeviceId=deviceId,ScheduleId=s.Id,ScheduleVersion=s.Version,
+            Status="Failed",StartedAt=now,EndedAt=now,LastHeartbeatAt=now,Error=r.Error.Trim()};
+        db.CameraRecordingExecutions.Add(row);await Save(ct);return Result(row);
     }
     [AllowAnonymous]
     [HttpPost("executions/{executionId:guid}/heartbeat")]
@@ -173,6 +196,8 @@ public sealed class CameraRecordingRuntimeController(AppDbContext db, IConfigura
         var row=await db.CameraRecordingExecutions.AsNoTracking().Where(x=>x.DeviceId==deviceId).OrderByDescending(x=>x.StartedAt).FirstOrDefaultAsync(ct);
         var fresh=row?.Status=="Recording"&&row.LastHeartbeatAt>=DateTime.UtcNow.AddSeconds(-90);
         var runtimeStatus=fresh?"Recording":row?.Status=="Recording"?"Unknown":row?.Status??"NotIntegrated";
-        return Result(new {deviceId,scheduleId=s?.Id,scheduledNow=s!=null&&camera.Status!=DeviceStatus.Maintenance&&await Due(s,ct),runtimeStatus,lastExecution=row});
+        var usedBytes=await CameraRecordingRetentionService.UsedBytes(db,deviceId,ct);
+        var limitBytes=s is null?null:CameraRecordingRetentionService.LimitBytes(s);
+        return Result(new {deviceId,scheduleId=s?.Id,scheduledNow=s!=null&&camera.Status!=DeviceStatus.Maintenance&&await Due(s,ct),runtimeStatus,lastExecution=row,usedBytes,limitBytes,agentConfigured=!string.IsNullOrWhiteSpace(config[$"CameraRecording:AgentKeys:{deviceId:D}"])});
     }
 }

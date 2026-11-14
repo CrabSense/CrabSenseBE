@@ -71,5 +71,10 @@ public sealed class CameraScheduleTests
         await Assert.ThrowsAsync<AppException>(()=>api.Start(camera.Id,new(Guid.NewGuid(),schedule.Id,1),default));
         await api.Finish(camera.Id,id,new("Failed","test recording failure",null),default);
         Assert.Equal("Failed",(await db.CameraRecordingExecutions.SingleAsync()).Status);
+        var failedId=Guid.NewGuid();
+        await api.Failure(camera.Id,new(failedId,schedule.Id,1,"FFmpeg failed"),default);
+        await api.Failure(camera.Id,new(failedId,schedule.Id,1,"FFmpeg failed"),default);
+        Assert.Equal(2,await db.CameraRecordingExecutions.CountAsync());
+        Assert.Equal("Failed",(await db.CameraRecordingExecutions.SingleAsync(x=>x.Id==failedId)).Status);
     }
 }
