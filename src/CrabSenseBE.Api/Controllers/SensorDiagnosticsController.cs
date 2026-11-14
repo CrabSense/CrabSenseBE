@@ -114,7 +114,12 @@ public sealed class SensorDiagnosticEdgeController(AppDbContext db,IConfiguratio
         var result=new List<object>();
         foreach(var x in rows)
             if(await SensorDiagnosticsController.CurrentPort(db,x.s,d,ct))
-                result.Add(new{x.run.Id,x.run.SensorId,x.s.SensorCode,x.s.SensorType,x.s.Unit,x.s.ControllerPortId,x.s.BusPortId,x.s.BusAddress,x.s.BusRegister,x.run.ConfigurationVersion,x.run.ExpiresAt});
+                {
+                var portId=x.s.ControllerPortId??x.s.BusPortId;
+                var port=portId.HasValue?await db.ControllerPorts.FindAsync([portId.Value],ct):null;
+                result.Add(new{x.run.Id,x.run.SensorId,x.s.SensorCode,x.s.SensorType,x.s.Unit,x.s.ControllerPortId,x.s.BusPortId,x.s.BusAddress,x.s.BusRegister,
+                    portCode=port?.PortCode,portType=port?.PortType,x.run.ConfigurationVersion,x.run.ExpiresAt});
+            }
         return Ok(ApiResponse<object>.Ok(result));
     }
     [HttpPut("{testId:guid}/result")]

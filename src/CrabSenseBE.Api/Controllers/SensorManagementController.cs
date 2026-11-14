@@ -355,6 +355,28 @@ public sealed class SensorEdgeConfigurationController(AppDbContext db, IConfigur
         if(sensor.DeviceId!=identity.DeviceId)throw AppException.Forbidden("Sensor does not belong to this controller.");
         return sensor;
     }
+    [HttpGet("configuration")]
+    [AllowAnonymous]
+    public async Task<IActionResult> ListConfiguration([FromQuery]string deviceCode,CancellationToken ct)
+    {
+        var (denied,identity)=await EdgeKeyGuard.CheckDeviceAsync(Request,configuration,uow,deviceCode,ct);
+        if(denied!=null||identity==null||identity.IsLegacyCredential||Request.Headers["X-Edge-Protocol"].ToString()!="2")
+            throw AppException.Unauthorized("Device-specific Edge V2 credential required.");
+        var device=await db.Devices.FindAsync([identity.DeviceId],ct)??throw AppException.NotFound("Controller");
+        var sensors=await db.Sensors.AsNoTracking().Where(s=>s.DeviceId==device.Id).OrderBy(s=>s.SensorCode).ToListAsync(ct);
+        var ports=await db.ControllerPorts.AsNoTracking().Where(p=>p.DeviceId==device.Id&&p.IsPresent&&p.ConfigVersion==device.CapabilityVersion).ToDictionaryAsync(p=>p.Id,ct);
+        var result=new List<object>();
+        foreach(var s in sensors)
+        {
+            if(!await SensorDiagnosticsController.CurrentPort(db,s,device,ct))continue;
+            var p=ports.GetValueOrDefault(s.ControllerPortId??s.BusPortId??Guid.Empty);
+            // No implicit mapping of legacy unbound sensors to GPIO.
+            if(p==null)continue;
+            result.Add(new{s.Id,s.SensorCode,s.SensorType,s.Unit,s.IsActive,s.SamplingIntervalSeconds,s.ConfigurationVersion,s.AppliedConfigurationVersion,
+                portCode=p.PortCode,portType=p.PortType,s.BusAddress,s.BusRegister});
+        }
+        return Ok(ApiResponse<object>.Ok(result));
+    }
     [HttpGet("{id:guid}/configuration")]
     [AllowAnonymous]
     public async Task<IActionResult> Get(Guid id,[FromQuery]string deviceCode,CancellationToken ct)
