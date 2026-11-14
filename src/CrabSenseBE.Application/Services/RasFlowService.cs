@@ -45,6 +45,9 @@ public class RasFlowService : IRasFlowService
     {
         if (string.IsNullOrWhiteSpace(req.NodeCode))
             throw AppException.BadRequest("nodeCode is required.");
+        if ((req.RelayDeviceId.HasValue || !string.IsNullOrWhiteSpace(req.RelayChannel)) &&
+            await _areas.CurrentUserAsync(ct) is not null)
+            throw AppException.Forbidden("Create the RAS node first; System Administrator configures hardware mapping separately.");
         if (string.IsNullOrWhiteSpace(req.DisplayLabel))
             throw AppException.BadRequest("displayLabel is required.");
 
@@ -285,6 +288,8 @@ public class RasFlowService : IRasFlowService
             ?? throw AppException.NotFound("RasComponent");
         if (node.WaterSystemId != ws.Id)
             throw AppException.BadRequest("Node does not belong to this area RAS.");
+        if (node.RelayDeviceId.HasValue || node.ControllerPortId.HasValue || node.HasRelay)
+            throw AppException.Conflict("Unbind the controller output safely before deleting the RAS node.");
 
         var flows = (await _uow.WaterFlows.FindAsync(
             f => f.FromComponentId == nodeId || f.ToComponentId == nodeId, ct)).ToList();
