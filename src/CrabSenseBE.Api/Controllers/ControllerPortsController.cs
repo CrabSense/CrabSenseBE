@@ -102,7 +102,7 @@ public sealed class ControllerPortsController(IUnitOfWork uow, IConfiguration co
             await uow.ControllerEvents.AddAsync(new ControllerEvent
             {
                 DeviceId = device.Id, EventKey = versionKey, Kind = "manifest", InventoryRevision = req.ConfigVersion,
-                CreatedAt = now, Summary = $"Accepted manifest revision {req.ConfigVersion}; {ports.Count} current ports",
+                CreatedAt = now, Summary = $"Accepted manifest revision {req.ConfigVersion}; {ports.Length} current ports",
                 DetailsJson = JsonSerializer.Serialize(new { req.HardwareModel, req.FirmwareVersion,
                     req.ConfigVersion, ports = ports.Select(p => p with { On = null }) })
             }, ct);
