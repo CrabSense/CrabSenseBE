@@ -16,7 +16,7 @@ public sealed class CameraScheduleTests
     [Fact]
     public void Overnight_wraps_Sunday_to_Monday_and_rejects_overlap()
     {
-        var r=Request(Guid.NewGuid(),new(7,"18:00","06:00"));
+        var r=Request(Guid.NewGuid(),new CameraSchedulesController.Slot(7,"18:00","06:00"));
         var slots=CameraSchedulesController.Normalize(r);
         Assert.Equal(2,slots.Count);
         Assert.Contains(slots,x=>x.Day==1&&x.StartMinute==0&&x.EndMinute==360);
@@ -35,7 +35,7 @@ public sealed class CameraScheduleTests
         db.Devices.AddRange(camera,other);await db.SaveChangesAsync();
         var api=new CameraSchedulesController(db){ControllerContext=new ControllerContext{HttpContext=new DefaultHttpContext()}};
         api.HttpContext.User=new ClaimsPrincipal(new ClaimsIdentity(new[]{new Claim(ClaimTypes.NameIdentifier,Guid.NewGuid().ToString())},"test"));
-        var req=Request(camera.Id,new(1,"06:00","18:00")) with {CameraIds=new[]{camera.Id,other.Id}};
+        var req=Request(camera.Id,new CameraSchedulesController.Slot(1,"06:00","18:00")) with {CameraIds=new[]{camera.Id,other.Id}};
         Assert.IsType<OkObjectResult>(await api.Create(req,default));
         var schedule=await db.CameraSchedules.SingleAsync();
         Assert.Equal(2,await db.CameraScheduleAssignments.CountAsync());
