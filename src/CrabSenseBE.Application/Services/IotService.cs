@@ -1339,6 +1339,12 @@ public class IotService : IIotService
     {
         var device = await _uow.Devices.GetByIdAsync(id, ct) ?? throw AppException.NotFound("Device");
         if (device.CapabilityVersion > 0) throw AppException.Conflict("Controller has discovered port history; revoke or disable instead of deleting.");
+        if (!CameraConfiguration.IsCamera(device) &&
+            (device.KioskId.HasValue ||
+             await _uow.Sensors.AnyAsync(s => s.DeviceId == id, ct) ||
+             await _uow.RasComponents.AnyAsync(x => x.RelayDeviceId == id, ct) ||
+             await _uow.EdgeCommands.AnyAsync(x => x.DeviceCode == device.DeviceCode, ct)))
+            throw AppException.Conflict("Controller has ownership, linked equipment or command history; unbind safely or disable instead of deleting.");
         if (CameraConfiguration.IsCamera(device)
             && (await _uow.MediaAssets.AnyAsync(x => x.DeviceId == id, ct)
                 || await _uow.AiDetections.AnyAsync(x => x.DeviceId == id, ct)))
