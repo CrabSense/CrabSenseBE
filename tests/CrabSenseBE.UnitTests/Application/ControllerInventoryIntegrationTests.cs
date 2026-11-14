@@ -41,6 +41,9 @@ public sealed class ControllerInventoryIntegrationTests
         Assert.Equal("Verified", (await db.ControllerPorts.SingleAsync(x => x.Id == first.Id)).CommissioningStatus);
         Assert.Equal("Pending", (await db.ControllerPorts.SingleAsync(x => x.Channel == 5)).CommissioningStatus);
         Assert.IsType<OkObjectResult>(await api.Discover(Manifest(2,5), default));
+        Assert.Equal(2, await db.ControllerEvents.CountAsync(x => x.Kind == "manifest"));
+        Assert.InRange(await db.ControllerEvents.CountAsync(x => x.Kind == "heartbeat"), 1, 2);
+        Assert.Contains("SSR_5", (await db.ControllerEvents.SingleAsync(x => x.EventKey == "manifest:2")).DetailsJson);
         await Assert.ThrowsAsync<AppException>(() => api.Discover(Manifest(1,4), default));
         var states = Enumerable.Range(1,5).Select(n => new ControllerPortsController.RelayObservation(n, n==5)).ToArray();
         Assert.IsType<OkObjectResult>(await api.Observe(device.DeviceCode, new(2,states), default));

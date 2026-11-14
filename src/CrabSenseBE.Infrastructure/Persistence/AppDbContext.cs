@@ -42,6 +42,7 @@ public class AppDbContext : DbContext
     public DbSet<SensorDiagnosticRun> SensorDiagnosticRuns => Set<SensorDiagnosticRun>();
     public DbSet<Device> Devices => Set<Device>();
     public DbSet<ControllerPort> ControllerPorts => Set<ControllerPort>();
+    public DbSet<ControllerEvent> ControllerEvents => Set<ControllerEvent>();
     public DbSet<WaterMeasurement> WaterMeasurements => Set<WaterMeasurement>();
     public DbSet<WaterAnalysisRun> WaterAnalysisRuns => Set<WaterAnalysisRun>();
     public DbSet<Hdf5Upload> Hdf5Uploads => Set<Hdf5Upload>();
@@ -108,6 +109,15 @@ public class AppDbContext : DbContext
         // Schema riêng — không đụng bảng Cap_Ras snake_case trong public
         modelBuilder.HasDefaultSchema("be");
         modelBuilder.Entity<Device>().Property(x => x.CapabilityVersion).HasDefaultValue(0).IsConcurrencyToken();
+        modelBuilder.Entity<ControllerEvent>(b =>
+        {
+            b.Property(x => x.EventKey).HasMaxLength(64);
+            b.Property(x => x.Kind).HasMaxLength(24);
+            b.Property(x => x.Summary).HasMaxLength(300);
+            b.HasIndex(x => new { x.DeviceId, x.EventKey }).IsUnique();
+            b.HasIndex(x => new { x.DeviceId, x.Kind, x.CreatedAt });
+            b.HasOne<Device>().WithMany().HasForeignKey(x => x.DeviceId).OnDelete(DeleteBehavior.Restrict);
+        });
         modelBuilder.Entity<ControllerPort>(b =>
         {
             b.Property(x => x.PortCode).HasMaxLength(64);

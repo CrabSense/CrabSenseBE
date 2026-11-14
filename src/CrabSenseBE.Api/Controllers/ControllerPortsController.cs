@@ -95,6 +95,25 @@ public sealed class ControllerPortsController(IUnitOfWork uow, IConfiguration co
                 }
             }
         }
+        // Store a durable revision snapshot and at most one authenticated heartbeat sample per 5-minute bucket.
+        // No credential, secret, or unsigned registration payload is recorded.
+        var versionKey = "manifest:" + req.ConfigVersion;
+        if (!await uow.ControllerEvents.AnyAsync(x => x.DeviceId == device.Id && x.EventKey == versionKey, ct))
+            await uow.ControllerEvents.AddAsync(new ControllerEvent
+            {
+                DeviceId = device.Id, EventKey = versionKey, Kind = "manifest", InventoryRevision = req.ConfigVersion,
+                CreatedAt = now, Summary = $"Accepted manifest revision {req.ConfigVersion}; {ports.Count} current ports",
+                DetailsJson = JsonSerializer.Serialize(new { req.HardwareModel, req.FirmwareVersion,
+                    req.ConfigVersion, ports = ports.Select(p => p with { On = null }) })
+            }, ct);
+        var bucket = new DateTime(now.Year, now.Month, now.Day, now.Hour, now.Minute / 5 * 5, 0, DateTimeKind.Utc);
+        var sampleKey = "heartbeat:" + bucket.ToString("yyyyMMddHHmm", System.Globalization.CultureInfo.InvariantCulture);
+        if (!await uow.ControllerEvents.AnyAsync(x => x.DeviceId == device.Id && x.EventKey == sampleKey, ct))
+            await uow.ControllerEvents.AddAsync(new ControllerEvent
+            {
+                DeviceId = device.Id, EventKey = sampleKey, Kind = "heartbeat", InventoryRevision = req.ConfigVersion,
+                CreatedAt = now, Summary = "Authenticated Edge V2 manifest received"
+            }, ct);
         device.CapabilityVersion = req.ConfigVersion; device.CapabilityHash = hash;
         device.HardwareModel = req.HardwareModel; device.FirmwareVersion = req.FirmwareVersion;
         device.LastSeenAt = now; device.Status = DeviceStatus.Online;
@@ -170,6 +189,31 @@ public sealed class ControllerPortsController(IUnitOfWork uow, IConfiguration co
             ports = ports.OrderBy(p => p.PortCode).Select(Map),
             equipment = equipment.Select(x => new { x.Id, x.Name, x.RelayChannel, x.ControllerPortId }),
             sensors = sensors.Select(x => new { x.Id, x.SensorCode, x.SensorType, x.ControllerPortId, x.BusPortId, x.BusAddress, x.BusRegister }) }));
+    }
+
+    [HttpGet("{id:guid}/history")]
+    [Authorize(Roles = AppRoles.Platform)]
+    public async Task<IActionResult> History(Guid id, [FromQuery] string? kind = null,
+        [FromQuery] int page = 1, [FromQuery] int pageSize = 25,
+        [FromQuery] DateTimeOffset? from = null, [FromQuery] DateTimeOffset? to = null, CancellationToken ct = default)
+    {
+        var actor = await new FarmAreaScope(uow, currentUser).CurrentUserAsync(ct);
+        if (actor?.Role != UserRole.SystemAdministrator) return Forbid();
+        if (page is < 1 or > 100000 || pageSize is < 1 or > 50 ||
+            (kind is not null && kind is not ("manifest" or "heartbeat")) ||
+            (from.HasValue && to.HasValue && from.Value >= to.Value))
+            throw AppException.BadRequest("Invalid history filters.");
+        _ = await uow.Devices.GetByIdAsync(id, ct) ?? throw AppException.NotFound("Controller");
+        var query = uow.ControllerEvents.Query().AsNoTracking().Where(x => x.DeviceId == id);
+        if (kind is not null) query = query.Where(x => x.Kind == kind);
+        if (from.HasValue) query = query.Where(x => x.CreatedAt >= from.Value.UtcDateTime);
+        if (to.HasValue) query = query.Where(x => x.CreatedAt < to.Value.UtcDateTime);
+        var totalCount = await query.CountAsync(ct);
+        var items = await query.OrderByDescending(x => x.CreatedAt).ThenByDescending(x => x.Id)
+            .Skip((page - 1) * pageSize).Take(pageSize)
+            .Select(x => new { x.Id, x.Kind, x.InventoryRevision, x.CreatedAt, x.Summary, x.DetailsJson })
+            .ToListAsync(ct);
+        return Ok(ApiResponse<object>.Ok(new { items, totalCount, page, pageSize }));
     }
 
     public sealed record CommissioningRequest(int ExpectedConfigVersion, string ExpectedStatus,

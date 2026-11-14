@@ -1335,6 +1335,23 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.ToTable("Deliveries", "be");
                 });
 
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.ControllerEvent", b =>
+                {
+                    b.Property<Guid>("Id").ValueGeneratedOnAdd().HasColumnType("uuid");
+                    b.Property<DateTime>("CreatedAt").HasColumnType("timestamp with time zone");
+                    b.Property<string>("DetailsJson").HasColumnType("text");
+                    b.Property<Guid>("DeviceId").HasColumnType("uuid");
+                    b.Property<string>("EventKey").IsRequired().HasMaxLength(64).HasColumnType("character varying(64)");
+                    b.Property<int>("InventoryRevision").HasColumnType("integer");
+                    b.Property<string>("Kind").IsRequired().HasMaxLength(24).HasColumnType("character varying(24)");
+                    b.Property<string>("Summary").IsRequired().HasMaxLength(300).HasColumnType("character varying(300)");
+                    b.Property<DateTime?>("UpdatedAt").HasColumnType("timestamp with time zone");
+                    b.HasKey("Id");
+                    b.HasIndex("DeviceId", "EventKey").IsUnique();
+                    b.HasIndex("DeviceId", "Kind", "CreatedAt");
+                    b.ToTable("ControllerEvents", "be");
+                });
+
             modelBuilder.Entity("CrabSenseBE.Domain.Entities.ControllerPort", b =>
                 {
                     b.Property<Guid>("Id").ValueGeneratedOnAdd().HasColumnType("uuid");
@@ -5436,6 +5453,12 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
             modelBuilder.Entity("CrabSenseBE.Domain.Entities.Customer", b =>
                 {
                     b.Navigation("SalesOrders");
+                });
+
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.ControllerEvent", b =>
+                {
+                    b.HasOne("CrabSenseBE.Domain.Entities.Device", null).WithMany()
+                        .HasForeignKey("DeviceId").OnDelete(DeleteBehavior.Restrict).IsRequired();
                 });
 
             modelBuilder.Entity("CrabSenseBE.Domain.Entities.ControllerPort", b =>

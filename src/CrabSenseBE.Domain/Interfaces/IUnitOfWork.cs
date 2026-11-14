@@ -30,6 +30,7 @@ public interface IUnitOfWork : IDisposable
     IRepository<Sensor> Sensors { get; }
     IRepository<Device> Devices { get; }
     IRepository<ControllerPort> ControllerPorts { get; }
+    IRepository<ControllerEvent> ControllerEvents { get; }
     IRepository<WaterMeasurement> WaterMeasurements { get; }
     IRepository<WaterAnalysisRun> WaterAnalysisRuns { get; }
     IRepository<Hdf5Upload> Hdf5Uploads { get; }
