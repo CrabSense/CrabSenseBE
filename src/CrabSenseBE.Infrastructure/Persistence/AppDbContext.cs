@@ -864,6 +864,9 @@ public class AppDbContext : DbContext
         });
         modelBuilder.Entity<CameraRecordingExecution>(b =>
         {
+            b.Property(x => x.Status).IsConcurrencyToken();
+            b.Property(x => x.LastHeartbeatAt).IsConcurrencyToken();
+            b.HasIndex(x => x.DeviceId, "IX_CameraRecordingExecutions_ActiveDevice").IsUnique().HasFilter("\"Status\" = 'Recording'");
             b.HasIndex(x => x.ScheduleId);
             b.HasIndex(x => x.DeviceId);
             b.HasIndex(x => x.MediaAssetId);

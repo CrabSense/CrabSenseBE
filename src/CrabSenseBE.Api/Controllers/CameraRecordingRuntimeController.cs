@@ -77,8 +77,8 @@ public sealed class CameraRecordingRuntimeController(AppDbContext db, IConfigura
         var row=new CameraRecordingExecution{Id=r.ExecutionId,DeviceId=deviceId,ScheduleId=s.Id,ScheduleVersion=s.Version,
             StartedAt=now,LastHeartbeatAt=now,Status="Recording"};
         // Save expired rows before inserting the new lease; transaction preserves atomicity.
-        await using var tx=await db.Database.BeginTransactionAsync(ct);
-        await Save(ct);db.CameraRecordingExecutions.Add(row);await Save(ct);await tx.CommitAsync(ct);
+        await using var tx=db.Database.IsRelational()?await db.Database.BeginTransactionAsync(ct):null;
+        await Save(ct);db.CameraRecordingExecutions.Add(row);await Save(ct);if(tx!=null) await tx.CommitAsync(ct);
         return Result(row);
     }
     [AllowAnonymous]

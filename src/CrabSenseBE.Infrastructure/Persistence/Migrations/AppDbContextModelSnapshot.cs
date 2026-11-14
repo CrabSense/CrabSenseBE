@@ -626,15 +626,16 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.Property<Guid>("ScheduleId").HasColumnType("uuid");
                     b.Property<Guid>("DeviceId").HasColumnType("uuid");
                     b.Property<int>("ScheduleVersion").HasColumnType("integer");
-                    b.Property<string>("Status").IsRequired().HasColumnType("text");
+                    b.Property<string>("Status").IsRequired().IsConcurrencyToken().HasColumnType("text");
                     b.Property<DateTime>("StartedAt").HasColumnType("timestamp with time zone");
-                    b.Property<DateTime>("LastHeartbeatAt").HasColumnType("timestamp with time zone");
+                    b.Property<DateTime>("LastHeartbeatAt").IsConcurrencyToken().HasColumnType("timestamp with time zone");
                     b.Property<DateTime?>("EndedAt").HasColumnType("timestamp with time zone");
                     b.Property<string>("Error").HasColumnType("text");
                     b.Property<Guid?>("MediaAssetId").HasColumnType("uuid");
                     b.HasKey("Id");
                     b.HasIndex("ScheduleId");
                     b.HasIndex("DeviceId");
+                    b.HasIndex(new[] { "DeviceId" }, "IX_CameraRecordingExecutions_ActiveDevice").IsUnique().HasFilter("\"Status\" = 'Recording'");
                     b.HasIndex("MediaAssetId");
                     b.ToTable("CameraRecordingExecutions", "be");
                 });
