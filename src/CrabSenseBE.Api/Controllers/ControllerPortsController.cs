@@ -116,7 +116,7 @@ public sealed class ControllerPortsController(IUnitOfWork uow, IConfiguration co
             }, ct);
         device.CapabilityVersion = req.ConfigVersion; device.CapabilityHash = hash;
         device.HardwareModel = req.HardwareModel; device.FirmwareVersion = req.FirmwareVersion;
-        device.LastSeenAt = now; device.Status = DeviceStatus.Online;
+        device.LastSeenAt = now; device.Status = DeviceStatus.Online; device.EdgeState = "Online";
         uow.Devices.Update(device);
         try { await uow.SaveChangesAsync(ct); }
         catch (DbUpdateException) { throw AppException.Conflict("Concurrent capability update; retry the current manifest."); }
@@ -163,6 +163,7 @@ public sealed class ControllerPortsController(IUnitOfWork uow, IConfiguration co
         // guards against an inventory replacement while saving observations.
         device.LastSeenAt = now;
         device.Status = DeviceStatus.Online;
+        device.EdgeState = "Online";
         uow.Devices.Update(device);
         try { await uow.SaveChangesAsync(ct); }
         catch (DbUpdateException) { throw AppException.Conflict("Inventory changed; retry."); }
