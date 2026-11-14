@@ -216,6 +216,43 @@ public sealed class ControllerPortsController(IUnitOfWork uow, IConfiguration co
         return Ok(ApiResponse<object>.Ok(new { items, totalCount, page, pageSize }));
     }
 
+    [HttpGet("{id:guid}/alerts")]
+    [Authorize(Roles = AppRoles.Platform)]
+    public async Task<IActionResult> Alerts(Guid id, CancellationToken ct)
+    {
+        var actor = await new FarmAreaScope(uow, currentUser).CurrentUserAsync(ct);
+        if (actor?.Role != UserRole.SystemAdministrator) return Forbid();
+        _ = await uow.Devices.GetByIdAsync(id, ct) ?? throw AppException.NotFound("Controller");
+        var source = id.ToString("N");
+        var rows = await uow.Alerts.Query().AsNoTracking()
+            .Where(x => x.SourceType == "Device" && x.SourceId == source && x.IncidentType == "device_disconnect")
+            .OrderByDescending(x => x.CreatedAt).Take(200)
+            .Select(x => new { x.Id, x.Message, status = x.Status.ToString(), severity = x.Severity.ToString(),
+                x.CreatedAt, x.LastOccurredAt, x.AcknowledgedAt, x.ResolvedAt, x.OccurrenceCount }).ToListAsync(ct);
+        return Ok(ApiResponse<object>.Ok(rows));
+    }
+
+    [HttpPost("{id:guid}/alerts/{alertId:guid}/acknowledge")]
+    [Authorize(Roles = AppRoles.Platform)]
+    public async Task<IActionResult> AcknowledgeAlert(Guid id, Guid alertId, CancellationToken ct)
+    {
+        var actor = await new FarmAreaScope(uow, currentUser).CurrentUserAsync(ct);
+        if (actor?.Role != UserRole.SystemAdministrator) return Forbid();
+        _ = await uow.Devices.GetByIdAsync(id, ct) ?? throw AppException.NotFound("Controller");
+        var source = id.ToString("N");
+        var alert = await uow.Alerts.FirstOrDefaultAsync(x => x.Id == alertId && x.SourceType == "Device" &&
+            x.SourceId == source && x.IncidentType == "device_disconnect", ct) ?? throw AppException.NotFound("Controller technical alert");
+        if (alert.Status == AlertStatus.Acknowledged)
+            return Ok(ApiResponse<object>.Ok(new { alert.Id, status = alert.Status.ToString() }));
+        if (alert.Status != AlertStatus.Active) throw AppException.Conflict("Only active alerts may be acknowledged.");
+        alert.Status = AlertStatus.Acknowledged;
+        alert.AcknowledgedAt = DateTime.UtcNow; alert.AcknowledgedBy = actor.Id;
+        await uow.OperationLogs.AddAsync(new OperationLog { UserId = actor.Id, EntityType = "Device",
+            EntityId = id, Action = "AcknowledgeControllerAlert", Details = alertId.ToString("N") }, ct);
+        await uow.SaveChangesAsync(ct);
+        return Ok(ApiResponse<object>.Ok(new { alert.Id, status = alert.Status.ToString() }));
+    }
+
     public sealed record CommissioningRequest(int ExpectedConfigVersion, string ExpectedStatus,
         string Status, bool PhysicalCheckConfirmed, string? Note);
 
