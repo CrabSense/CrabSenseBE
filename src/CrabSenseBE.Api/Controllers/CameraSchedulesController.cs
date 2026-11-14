@@ -14,12 +14,12 @@ namespace CrabSenseBE.Api.Controllers;
 [ApiController]
 [Authorize(Roles = AppRoles.Platform)]
 [Route("api/camera-schedules")]
-public sealed class CameraSchedulesController(AppDbContext db) : ControllerBase
+public sealed class CameraSchedulesController(AppDbContext db, CameraRecordingRetentionService? retention = null) : ControllerBase
 {
     public record Slot(int Day, string Start, string End);
     public record ScheduleRequest(string Name, string Mode, bool Enabled, string Timezone,
         int RetentionDays, string? VideoQuality, int? Fps, int? MaxStorageGb,
-        Guid[] CameraIds, Slot[]? Slots, int? ExpectedVersion = null);
+        Guid[] CameraIds, Slot[]? Slots, int? ExpectedVersion = null, bool AutoDeleteExpired = false);
     public record StatusRequest(bool Enabled, int ExpectedVersion);
     public record DuplicateRequest(string Name, Guid[] CameraIds);
 
@@ -102,7 +102,7 @@ public sealed class CameraSchedulesController(AppDbContext db) : ControllerBase
         var cutoff = DateTime.UtcNow.AddSeconds(-90);
         var recording = await db.CameraRecordingExecutions.CountAsync(x => x.ScheduleId == s.Id && x.Status == "Recording" && x.LastHeartbeatAt >= cutoff, ct);
         return new { s.Id, s.Name, s.Mode, s.Enabled, s.Timezone, s.RetentionDays, s.VideoQuality, s.Fps, s.MaxStorageGb,
-            s.Version, s.CreatedAt, s.UpdatedAt, cameraIds = ids, slots = slots.Select(x => new Slot(x.Day, Clock(x.StartMinute), Clock(x.EndMinute))),
+            s.Version, s.CreatedAt, s.UpdatedAt, s.AutoDeleteExpired, cameraIds = ids, slots = slots.Select(x => new Slot(x.Day, Clock(x.StartMinute), Clock(x.EndMinute))),
             scheduledNow = IsDue(s, slots, DateTime.UtcNow), recordingCount = recording };
     }
     private async Task Project(CameraSchedule s, Guid[] ids, List<CameraScheduleSlot> slots, CancellationToken ct)
@@ -161,7 +161,7 @@ public sealed class CameraSchedulesController(AppDbContext db) : ControllerBase
         db.CameraScheduleSlots.RemoveRange(await db.CameraScheduleSlots.Where(x => x.ScheduleId == s.Id).ToListAsync(ct));
         foreach(var slot in slots) { slot.ScheduleId = s.Id; db.CameraScheduleSlots.Add(slot); }
         s.Name=r.Name.Trim(); s.Mode=r.Mode; s.Enabled=r.Enabled; s.Timezone=r.Timezone;
-        s.RetentionDays=r.RetentionDays; s.VideoQuality=r.VideoQuality; s.Fps=r.Fps; s.MaxStorageGb=r.MaxStorageGb;
+        s.RetentionDays=r.RetentionDays; s.AutoDeleteExpired=r.AutoDeleteExpired; s.VideoQuality=r.VideoQuality; s.Fps=r.Fps; s.MaxStorageGb=r.MaxStorageGb;
         if(id.HasValue) s.Version++; else db.CameraSchedules.Add(s);
         await Project(s,r.CameraIds,slots,ct); Audit(s.Id,id.HasValue?"UpdateCameraSchedule":"CreateCameraSchedule"); await Save(ct);
         return Result(await Map(s,ct));
@@ -188,7 +188,7 @@ public sealed class CameraSchedulesController(AppDbContext db) : ControllerBase
     {
         var s=await Require(id,ct);var slots=await db.CameraScheduleSlots.Where(x=>x.ScheduleId==id).ToListAsync(ct);
         return await Write(null,new ScheduleRequest(r.Name,s.Mode,false,s.Timezone,s.RetentionDays,s.VideoQuality,s.Fps,s.MaxStorageGb,r.CameraIds,
-            slots.Select(x=>new Slot(x.Day,Clock(x.StartMinute),Clock(x.EndMinute))).ToArray()),ct);
+            slots.Select(x=>new Slot(x.Day,Clock(x.StartMinute),Clock(x.EndMinute))).ToArray(),AutoDeleteExpired:false),ct);
     }
     [HttpGet("summary")]
     public async Task<IActionResult> Summary(CancellationToken ct)
@@ -206,6 +206,12 @@ public sealed class CameraSchedulesController(AppDbContext db) : ControllerBase
         var items=new List<object>();foreach(var s in await q.OrderBy(x=>x.Name).Take(500).ToListAsync(ct)) items.Add(await Map(s,ct));
         return Result(new { items, truncated=await q.CountAsync(ct)>500 });
     }
+    [HttpGet("{id:guid}/retention")]
+    public async Task<IActionResult> Retention(Guid id,CancellationToken ct)
+    { var s=await Require(id,ct); return Result(await (retention??throw new AppException("Retention service unavailable.",503)).Preview(s,ct)); }
+    [HttpPost("{id:guid}/retention/cleanup")]
+    public async Task<IActionResult> Cleanup(Guid id,int expectedVersion,bool confirm,CancellationToken ct)
+    { if(!confirm) throw AppException.BadRequest("Explicit cleanup confirmation required."); var s=await Require(id,ct); Version(s,expectedVersion); return Result(await (retention??throw new AppException("Retention service unavailable.",503)).Cleanup(s.Id,s.Version,Actor(),false,ct)); }
     [HttpGet("{id:guid}/executions")]
     public async Task<IActionResult> Executions(Guid id,int page=1,int pageSize=25,CancellationToken ct=default)
     {

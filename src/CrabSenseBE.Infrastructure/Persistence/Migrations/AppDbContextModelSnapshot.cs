@@ -581,6 +581,7 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.Property<bool>("Enabled").HasColumnType("boolean");
                     b.Property<string>("Timezone").IsRequired().HasColumnType("text");
                     b.Property<int>("RetentionDays").HasColumnType("integer");
+                    b.Property<bool>("AutoDeleteExpired").HasColumnType("boolean");
                     b.Property<string>("VideoQuality").HasColumnType("text");
                     b.Property<int?>("Fps").HasColumnType("integer");
                     b.Property<int?>("MaxStorageGb").HasColumnType("integer");

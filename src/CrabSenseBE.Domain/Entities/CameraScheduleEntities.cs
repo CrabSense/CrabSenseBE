@@ -8,6 +8,7 @@ public sealed class CameraSchedule : BaseEntity
     public bool Enabled { get; set; }
     public string Timezone { get; set; } = "Asia/Ho_Chi_Minh";
     public int RetentionDays { get; set; } = 30;
+    public bool AutoDeleteExpired { get; set; }
     public string? VideoQuality { get; set; }
     public int? Fps { get; set; }
     public int? MaxStorageGb { get; set; }

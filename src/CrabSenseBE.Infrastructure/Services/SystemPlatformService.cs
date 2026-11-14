@@ -368,7 +368,7 @@ public class SystemPlatformService : ISystemPlatformService
             var runtime = execution?.Status == "Recording"
                 ? (execution.LastHeartbeatAt >= now.AddSeconds(-90) ? "Recording" : "Unknown")
                 : !a.Schedule.Enabled || device.Status == DeviceStatus.Maintenance ? "Disabled"
-                : execution is null ? "AwaitingAgent" : execution.Status == "Failed" ? "Failed" : "Idle";
+                : execution is null ? "AwaitingAgent" : execution.Status == "Failed" ? "Failed" : execution.Status == "Uploading" ? "Uploading" : "Idle";
             return mapped with { ScheduleId = a.Schedule.Id, ScheduleName = a.Schedule.Name,
                 RuntimeStatus = runtime, LastExecutionStatus = execution?.Status };
         }).ToList();

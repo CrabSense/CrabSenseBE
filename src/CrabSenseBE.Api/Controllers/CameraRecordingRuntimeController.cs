@@ -50,8 +50,10 @@ public sealed class CameraRecordingRuntimeController(AppDbContext db, IConfigura
     {
         Authenticate(deviceId);var camera=await Camera(deviceId,ct);var s=await Schedule(deviceId,ct);
         if(s is null) return Result(new { deviceId, shouldRecord=false, reason="NoSchedule" });
-        var due=camera.Status!=DeviceStatus.Maintenance&&await Due(s,ct);
-        return Result(new {deviceId,scheduleId=s.Id,scheduleVersion=s.Version,shouldRecord=due,
+        var used=await CameraRecordingRetentionService.UsedBytes(db,deviceId,ct);var limit=CameraRecordingRetentionService.LimitBytes(s);
+        var quotaReached=limit.HasValue&&used>=limit.Value;
+        var due=camera.Status!=DeviceStatus.Maintenance&&!quotaReached&&await Due(s,ct);
+        return Result(new {deviceId,scheduleId=s.Id,scheduleVersion=s.Version,shouldRecord=due,usedBytes=used,limitBytes=limit,reason=quotaReached?"StorageLimitReached":null,
             s.Mode,s.Timezone,s.RetentionDays,s.VideoQuality,s.Fps,s.MaxStorageGb,
             streamUrl=CameraConfiguration.SafeUrl(camera.StreamUrl), leaseSeconds=90});
     }
@@ -71,6 +73,8 @@ public sealed class CameraRecordingRuntimeController(AppDbContext db, IConfigura
         var s=await Schedule(deviceId,ct);
         if(s is null||s.Id!=r.ScheduleId||s.Version!=r.ScheduleVersion||camera.Status==DeviceStatus.Maintenance||!await Due(s,ct))
             throw AppException.Conflict("Schedule is not currently effective.");
+        var limit=CameraRecordingRetentionService.LimitBytes(s);
+        if(limit.HasValue&&await CameraRecordingRetentionService.UsedBytes(db,deviceId,ct)>=limit.Value)throw AppException.Conflict("Camera storage limit reached.");
         var now=DateTime.UtcNow;
         var active=await db.CameraRecordingExecutions.Where(x=>x.DeviceId==deviceId&&x.Status=="Recording").ToListAsync(ct);
         if(active.Any(x=>x.LastHeartbeatAt>=now.AddSeconds(-90))) throw AppException.Conflict("Camera already has an active execution.");
@@ -95,6 +99,15 @@ public sealed class CameraRecordingRuntimeController(AppDbContext db, IConfigura
         return Result(new {executionId,shouldContinue=due,leaseSeconds=90});
     }
     [AllowAnonymous]
+    [HttpPost("executions/{executionId:guid}/captured")]
+    public async Task<IActionResult> Captured(Guid deviceId,Guid executionId,CancellationToken ct)
+    {
+        Authenticate(deviceId);var row=await Execution(deviceId,executionId,ct);
+        if(row.Status is "Uploading" or "Completed")return Result(row);
+        if(row.Status!="Recording")throw AppException.Conflict("Execution already closed.");
+        row.Status="Uploading";row.EndedAt=DateTime.UtcNow;await Save(ct);return Result(row);
+    }
+    [AllowAnonymous]
     [HttpPut("executions/{executionId:guid}/finish")]
     public async Task<IActionResult> Finish(Guid deviceId,Guid executionId,FinishRequest r,CancellationToken ct)
     {
@@ -102,14 +115,14 @@ public sealed class CameraRecordingRuntimeController(AppDbContext db, IConfigura
         if(r.Status is not ("Completed" or "Failed" or "Stopped")||r.Error?.Length>1000||
             (r.Status=="Completed"&&!r.MediaAssetId.HasValue)|| (r.Status=="Failed"&&string.IsNullOrWhiteSpace(r.Error)))
             throw AppException.BadRequest("Invalid execution outcome.");
-        if(row.Status!="Recording")
+        if(row.Status is not ("Recording" or "Uploading"))
         {
             if(row.Status==r.Status&&row.MediaAssetId==r.MediaAssetId) return Result(row);
             throw AppException.Conflict("Execution already closed.");
         }
         if(r.MediaAssetId.HasValue&&!await CameraRecordingLibrary.TechnicalVideos(db).AnyAsync(x=>x.Id==r.MediaAssetId&&x.DeviceId==deviceId,ct))
             throw AppException.BadRequest("Video does not belong to this camera.");
-        row.Status=r.Status;row.EndedAt=DateTime.UtcNow;row.Error=r.Error;row.MediaAssetId=r.MediaAssetId;
+        row.Status=r.Status;row.EndedAt??=DateTime.UtcNow;row.Error=r.Error;row.MediaAssetId=r.MediaAssetId;
         await Save(ct);return Result(row);
     }
     [AllowAnonymous]
@@ -118,12 +131,19 @@ public sealed class CameraRecordingRuntimeController(AppDbContext db, IConfigura
     [RequestFormLimits(MultipartBodyLengthLimit=60_000_000)]
     public async Task<IActionResult> Upload(Guid deviceId,Guid executionId,IFormFile file,CancellationToken ct)
     {
-        Authenticate(deviceId);var row=await Execution(deviceId,executionId,ct);
-        if(row.Status=="Completed"&&row.MediaAssetId.HasValue) return Result(row);
-        if(row.Status!="Recording"||row.LastHeartbeatAt<DateTime.UtcNow.AddSeconds(-90))
+        Authenticate(deviceId);
+        await using var tx=db.Database.IsRelational()?await db.Database.BeginTransactionAsync(ct):null;
+        var row=tx is null?await Execution(deviceId,executionId,ct):
+            (await db.CameraRecordingExecutions.FromSqlInterpolated($"SELECT * FROM be.\"CameraRecordingExecutions\" WHERE \"Id\"={executionId} AND \"DeviceId\"={deviceId} FOR UPDATE").ToListAsync(ct)).SingleOrDefault()
+                ??throw AppException.NotFound("Recording execution");
+        if(row.Status=="Completed") return Result(row);
+        if(row.Status!="Uploading"&&(row.Status!="Recording"||row.LastHeartbeatAt<DateTime.UtcNow.AddSeconds(-90)))
             throw AppException.Conflict("Execution closed or expired.");
         if(storage is null) throw new AppException("Media storage unavailable.",503);
         if(file is null||file.Length<12||file.Length>50_000_000) throw AppException.BadRequest("MP4 size must be between 12 bytes and 50 MB.");
+        var schedule=await db.CameraSchedules.AsNoTracking().SingleAsync(x=>x.Id==row.ScheduleId,ct);
+        var limit=CameraRecordingRetentionService.LimitBytes(schedule);
+        if(limit.HasValue&&file.Length>limit.Value-await CameraRecordingRetentionService.UsedBytes(db,deviceId,ct))throw AppException.Conflict("Camera storage limit reached.");
         await using var input=file.OpenReadStream();
         var header=new byte[12];await input.ReadExactlyAsync(header,ct);
         if(Encoding.ASCII.GetString(header,4,4)!="ftyp") throw AppException.BadRequest("MP4 container required.");
@@ -134,13 +154,15 @@ public sealed class CameraRecordingRuntimeController(AppDbContext db, IConfigura
         var asset=new MediaAsset{DeviceId=deviceId,Category="video",FileName=filename,ContentType="video/mp4",
             SizeBytes=uploaded.SizeBytes,Provider=storage.ProviderName,StorageKey=uploaded.StorageKey,
             RelatedEntityType="Device",RelatedEntityId=deviceId,IsShared=false};
-        db.MediaAssets.Add(asset);row.MediaAssetId=asset.Id;row.Status="Completed";row.EndedAt=DateTime.UtcNow;
+        db.MediaAssets.Add(asset);row.MediaAssetId=asset.Id;row.Status="Completed";row.EndedAt??=DateTime.UtcNow;
         try { await db.SaveChangesAsync(CancellationToken.None); }
         catch(DbUpdateException)
         {
-            // Do not delete a possibly committed object after an ambiguous database error.
-            throw AppException.Conflict("Upload metadata not confirmed; reconcile storage before retrying.");
+            if(tx!=null)await tx.RollbackAsync(CancellationToken.None);
+            try{await storage.DeleteAsync(uploaded.StorageKey,CancellationToken.None);}catch{ /* provider reconciliation required */ }
+            throw AppException.Conflict("Upload metadata not confirmed; retry after reconciliation.");
         }
+        if(tx!=null)await tx.CommitAsync(CancellationToken.None);
         return Result(row);
     }
     [Authorize(Roles=AppRoles.Platform)]
