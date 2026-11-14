@@ -100,6 +100,7 @@ public class AppDbContext : DbContext
     public DbSet<CameraScheduleAssignment> CameraScheduleAssignments => Set<CameraScheduleAssignment>();
     public DbSet<CameraScheduleSlot> CameraScheduleSlots => Set<CameraScheduleSlot>();
     public DbSet<CameraRecordingExecution> CameraRecordingExecutions => Set<CameraRecordingExecution>();
+    public DbSet<CameraRecordingAgent> CameraRecordingAgents => Set<CameraRecordingAgent>();
     public DbSet<AiManagedService> AiManagedServices => Set<AiManagedService>();
     public DbSet<BackupScheduleSetting> BackupScheduleSettings => Set<BackupScheduleSetting>();
     public DbSet<SystemDeployment> SystemDeployments => Set<SystemDeployment>();
@@ -861,6 +862,15 @@ public class AppDbContext : DbContext
         {
             b.HasIndex(x => x.ScheduleId);
             b.HasOne<CameraSchedule>().WithMany().HasForeignKey(x => x.ScheduleId).OnDelete(DeleteBehavior.Cascade);
+        });
+        modelBuilder.Entity<CameraRecordingAgent>(b =>
+        {
+            b.HasIndex(x=>x.DeviceId).IsUnique();
+            b.HasIndex(x=>x.KioskId);
+            b.Property(x=>x.Version).IsConcurrencyToken();
+            b.Property(x=>x.WorkerVersion).HasMaxLength(80);
+            b.HasOne<Device>().WithMany().HasForeignKey(x=>x.DeviceId).OnDelete(DeleteBehavior.Restrict);
+            b.HasOne<FarmKiosk>().WithMany().HasForeignKey(x=>x.KioskId).OnDelete(DeleteBehavior.SetNull);
         });
         modelBuilder.Entity<CameraRecordingExecution>(b =>
         {

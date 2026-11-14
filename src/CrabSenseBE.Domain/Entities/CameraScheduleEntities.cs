@@ -42,3 +42,13 @@ public sealed class CameraRecordingExecution : BaseEntity
     public string? Error { get; set; }
     public Guid? MediaAssetId { get; set; }
 }
+public sealed class CameraRecordingAgent : BaseEntity
+{
+    public Guid DeviceId { get; set; }
+    public Guid? KioskId { get; set; }
+    public bool Enabled { get; set; }
+    public int Version { get; set; } = 1;
+    public DateTime? LastSeenAt { get; set; }
+    public string? WorkerVersion { get; set; }
+    public int PendingClips { get; set; }
+}

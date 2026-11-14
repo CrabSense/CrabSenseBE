@@ -716,7 +716,7 @@ public class SystemPlatformService : ISystemPlatformService
         "TerminateSession", "CreateApiKey", "RotateApiKey", "RevokeApiKey", "UpdateSecurityPolicy",
         "CreateSensor", "UpdateSensor", "DeleteSensor", "RegisterSensorFromPort", "UpdateSensorBinding", "EnableSensor", "DisableSensor", "UpdateSensorConfiguration", "SensorTestRequested", "RecordSensorCalibration",
         "DeleteCameraRecordingRequested", "DeleteCameraRecordingFailed", "DeleteCameraRecording",
-        "CreateCameraSchedule", "UpdateCameraSchedule", "ChangeCameraScheduleStatus", "DeleteCameraSchedule", "RotateCameraAgent", "RevokeCameraAgent",
+        "CreateCameraSchedule", "UpdateCameraSchedule", "ChangeCameraScheduleStatus", "DeleteCameraSchedule", "AssignCameraAgent", "RevokeCameraAgent",
         "Login", "LoginFailed", "LoginFailureThresholdReached"
     ];
 
