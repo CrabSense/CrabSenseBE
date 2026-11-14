@@ -526,8 +526,17 @@ public class RasFlowService : IRasFlowService
                     : await LatestRelayCommandAsync(device.DeviceCode, component.RelayChannel, ct);
                 var online = device?.Status == DeviceStatus.Online
                     && device.EdgeState is "Approved" or "Online";
+                var port = component.ControllerPortId is Guid portId
+                    ? await _uow.ControllerPorts.GetByIdAsync(portId, ct) : null;
+                var currentPort = port is not null && port.DeviceId == relayId && port.IsPresent &&
+                    port.ConfigVersion == device?.CapabilityVersion && port.PortType == "DIGITAL_OUTPUT" &&
+                    port.Channel?.ToString() == component.RelayChannel;
                 mapped = mapped with
                 {
+                    ControllerPortId = component.ControllerPortId,
+                    PortCode = port?.PortCode,
+                    PortPresent = currentPort,
+                    CommissioningStatus = currentPort ? port!.CommissioningStatus : port is null ? "Unverified" : "Missing",
                     IsOnline = online,
                     ConnectionLabel = online ? "Online" : "Offline",
                     IsOn = online && component.LastReportedAt.HasValue ? mapped.IsOn : null,
@@ -566,7 +575,7 @@ public class RasFlowService : IRasFlowService
             nodes.Count(n => n.HasRelay && n.IsOn == false),
             nodes.Count(n => n.Status is "alarm" or "error" or "unknown" or "unsafe"
                 || n.IsOnline == false),
-            logs);
+            logs, HardwareControlGuard.IsDisabled(_configuration));
     }
 
     private static RasFlowNodeDto MapNode(
