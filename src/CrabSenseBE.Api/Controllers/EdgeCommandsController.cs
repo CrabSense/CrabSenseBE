@@ -37,7 +37,8 @@ public sealed class EdgeCommandsController : ControllerBase
     [Authorize(Roles = AppRoles.Platform)]
     public async Task<IActionResult> History(Guid deviceId, [FromQuery] int page = 1,
         [FromQuery] int pageSize = 25, [FromQuery] string? status = null,
-        CancellationToken ct = default)
+        CancellationToken ct = default, [FromQuery] DateTimeOffset? from = null,
+        [FromQuery] DateTimeOffset? to = null, [FromQuery] string? channel = null)
     {
         var actor = await new FarmAreaScope(_uow, _currentUser).CurrentUserAsync(ct);
         if (actor?.Role != UserRole.SystemAdministrator)
@@ -54,6 +55,16 @@ public sealed class EdgeCommandsController : ControllerBase
             if (status is not ("pending" or "delivered" or "acknowledged" or "failed" or "timedout" or "superseded"))
                 return BadRequest(new { success = false, message = "Invalid command status." });
             query = query.Where(x => x.Status == status);
+        }
+        if (from.HasValue && to.HasValue && from.Value >= to.Value)
+            return BadRequest(new { success = false, message = "Invalid date range." });
+        if (from.HasValue) query = query.Where(x => x.CreatedAt >= from.Value.UtcDateTime);
+        if (to.HasValue) query = query.Where(x => x.CreatedAt < to.Value.UtcDateTime);
+        if (!string.IsNullOrWhiteSpace(channel))
+        {
+            channel = channel.Trim();
+            if (channel.Length > 64) return BadRequest(new { success = false, message = "Invalid channel." });
+            query = query.Where(x => x.Channel == channel);
         }
         var totalCount = await query.CountAsync(ct);
         var items = await query.OrderByDescending(x => x.CreatedAt).ThenByDescending(x => x.Id)
