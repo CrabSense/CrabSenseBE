@@ -5,6 +5,8 @@ using CrabSenseBE.Domain.Enums;
 using CrabSenseBE.Domain.Interfaces;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
+using CrabSenseBE.Application.Common;
 
 namespace CrabSenseBE.Api.Controllers;
 
@@ -28,6 +30,39 @@ public sealed class EdgeCommandsController : ControllerBase
         _configuration = configuration;
         _uow = uow;
         _currentUser = currentUser;
+    }
+
+    // Read-only platform diagnostics; never grants permission to enqueue a relay command.
+    [HttpGet("history/{deviceId:guid}")]
+    [Authorize(Roles = AppRoles.Platform)]
+    public async Task<IActionResult> History(Guid deviceId, [FromQuery] int page = 1,
+        [FromQuery] int pageSize = 25, [FromQuery] string? status = null,
+        CancellationToken ct = default)
+    {
+        var actor = await new FarmAreaScope(_uow, _currentUser).CurrentUserAsync(ct);
+        if (actor?.Role != UserRole.SystemAdministrator)
+            return Forbid();
+        if (page < 1 || page > 100000 || pageSize < 1 || pageSize > 100)
+            return BadRequest(new { success = false, message = "Invalid pagination." });
+        var device = await _uow.Devices.GetByIdAsync(deviceId, ct);
+        if (device is null)
+            return NotFound(new { success = false, message = "Controller not found." });
+        var query = _uow.EdgeCommands.Query().AsNoTracking().Where(x => x.DeviceCode == device.DeviceCode);
+        if (!string.IsNullOrWhiteSpace(status))
+        {
+            status = status.Trim().ToLowerInvariant();
+            if (status is not ("pending" or "delivered" or "acknowledged" or "failed" or "timedout" or "superseded"))
+                return BadRequest(new { success = false, message = "Invalid command status." });
+            query = query.Where(x => x.Status == status);
+        }
+        var totalCount = await query.CountAsync(ct);
+        var items = await query.OrderByDescending(x => x.CreatedAt).ThenByDescending(x => x.Id)
+            .Skip((page - 1) * pageSize).Take(pageSize)
+            .Select(x => new { x.Id, x.DeviceCode, x.Command, x.Channel, x.Status, x.CreatedAt,
+                x.DeliveredAt, x.AcknowledgedAt, x.FailedAt, x.ExpiresAt, x.AttemptCount,
+                x.ResultMessage, x.RequestSource, x.CommandSequence, x.InventoryRevision, x.SupersededAt })
+            .ToListAsync(ct);
+        return Ok(new { success = true, data = new { items, totalCount, page, pageSize } });
     }
 
     [HttpPost]
