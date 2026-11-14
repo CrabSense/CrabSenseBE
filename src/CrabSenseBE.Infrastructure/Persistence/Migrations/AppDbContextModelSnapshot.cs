@@ -619,6 +619,24 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.ToTable("CameraScheduleSlots", "be");
                 });
 
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.CameraRecordingAgent", b =>
+                {
+                    b.Property<Guid>("Id").ValueGeneratedOnAdd().HasColumnType("uuid");
+                    b.Property<DateTime>("CreatedAt").HasColumnType("timestamp with time zone");
+                    b.Property<DateTime?>("UpdatedAt").HasColumnType("timestamp with time zone");
+                    b.Property<Guid>("DeviceId").HasColumnType("uuid");
+                    b.Property<Guid?>("KioskId").HasColumnType("uuid");
+                    b.Property<bool>("Enabled").HasColumnType("boolean");
+                    b.Property<int>("Version").IsConcurrencyToken().HasColumnType("integer");
+                    b.Property<DateTime?>("LastSeenAt").HasColumnType("timestamp with time zone");
+                    b.Property<string>("WorkerVersion").HasMaxLength(80).HasColumnType("character varying(80)");
+                    b.Property<int>("PendingClips").HasColumnType("integer");
+                    b.HasKey("Id");
+                    b.HasIndex("DeviceId").IsUnique();
+                    b.HasIndex("KioskId");
+                    b.ToTable("CameraRecordingAgents", "be");
+                });
+
             modelBuilder.Entity("CrabSenseBE.Domain.Entities.CameraRecordingExecution", b =>
                 {
                     b.Property<Guid>("Id").ValueGeneratedOnAdd().HasColumnType("uuid");
@@ -4633,6 +4651,12 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
             modelBuilder.Entity("CrabSenseBE.Domain.Entities.CameraScheduleSlot", b =>
                 {
                     b.HasOne("CrabSenseBE.Domain.Entities.CameraSchedule", null).WithMany().HasForeignKey("ScheduleId").OnDelete(DeleteBehavior.Cascade).IsRequired();
+                });
+
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.CameraRecordingAgent", b =>
+                {
+                    b.HasOne("CrabSenseBE.Domain.Entities.Device", null).WithMany().HasForeignKey("DeviceId").OnDelete(DeleteBehavior.Restrict).IsRequired();
+                    b.HasOne("CrabSenseBE.Domain.Entities.FarmKiosk", null).WithMany().HasForeignKey("KioskId").OnDelete(DeleteBehavior.SetNull);
                 });
 
             modelBuilder.Entity("CrabSenseBE.Domain.Entities.CameraRecordingExecution", b =>

@@ -42,6 +42,9 @@ public interface IUnitOfWork : IDisposable
     IRepository<NotificationDelivery> NotificationDeliveries { get; }
     IRepository<UserPushToken> UserPushTokens { get; }
     IRepository<MediaAsset> MediaAssets { get; }
+    IRepository<CameraScheduleAssignment> CameraScheduleAssignments { get; }
+    IRepository<CameraRecordingExecution> CameraRecordingExecutions { get; }
+    IRepository<CameraRecordingAgent> CameraRecordingAgents { get; }
     IRepository<HarvestVoucher> HarvestVouchers { get; }
     IRepository<HarvestLine> HarvestLines { get; }
     IRepository<HarvestApprovedLine> HarvestApprovedLines { get; }

@@ -25,6 +25,7 @@ public sealed class CameraScheduleTests
         var schedule=new CameraSchedule{Enabled=true,Mode="Scheduled",Timezone=r.Timezone};
         Assert.True(CameraSchedulesController.IsDue(schedule,slots,new DateTime(2026,11,15,22,0,0,DateTimeKind.Utc)));
         Assert.False(CameraSchedulesController.IsDue(schedule,slots,new DateTime(2026,11,15,23,0,0,DateTimeKind.Utc)));
+        Assert.Equal(new DateTime(2026,11,22,11,0,0,DateTimeKind.Utc),CameraSchedulesController.NextDue(schedule,slots,new DateTime(2026,11,15,23,0,0,DateTimeKind.Utc)));
     }
     [Fact]
     public async Task CRUD_projects_legacy_config_and_preserves_media()
@@ -71,5 +72,10 @@ public sealed class CameraScheduleTests
         await Assert.ThrowsAsync<AppException>(()=>api.Start(camera.Id,new(Guid.NewGuid(),schedule.Id,1),default));
         await api.Finish(camera.Id,id,new("Failed","test recording failure",null),default);
         Assert.Equal("Failed",(await db.CameraRecordingExecutions.SingleAsync()).Status);
+        var failedId=Guid.NewGuid();
+        await api.Failure(camera.Id,new(failedId,schedule.Id,1,"FFmpeg failed"),default);
+        await api.Failure(camera.Id,new(failedId,schedule.Id,1,"FFmpeg failed"),default);
+        Assert.Equal(2,await db.CameraRecordingExecutions.CountAsync());
+        Assert.Equal("Failed",(await db.CameraRecordingExecutions.SingleAsync(x=>x.Id==failedId)).Status);
     }
 }

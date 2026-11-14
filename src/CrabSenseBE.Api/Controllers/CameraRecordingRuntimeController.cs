@@ -17,10 +17,21 @@ namespace CrabSenseBE.Api.Controllers;
 public sealed class CameraRecordingRuntimeController(AppDbContext db, IConfiguration config, IMediaStorageService? storage = null) : ControllerBase
 {
     public record StartRequest(Guid ExecutionId, Guid ScheduleId, int ScheduleVersion);
+    public record FailureRequest(Guid ExecutionId, Guid ScheduleId, int ScheduleVersion, string Error);
     public record FinishRequest(string Status, string? Error, Guid? MediaAssetId);
     private static IActionResult Result(object value) => new OkObjectResult(ApiResponse<object>.Ok(value));
-    private void Authenticate(Guid deviceId)
+    private async Task Authenticate(Guid deviceId,CancellationToken ct)
     {
+        var assignment=await db.CameraRecordingAgents.AsNoTracking().SingleOrDefaultAsync(x=>x.DeviceId==deviceId,ct);
+        if(assignment!=null)
+        {
+            if(!assignment.Enabled||!assignment.KioskId.HasValue)throw AppException.Forbidden("Recording agent disabled.");
+            var kiosk=await CameraRecordingKioskAuth.Require(db,Request,ct);
+            if(kiosk.Id!=assignment.KioskId||!await db.Devices.AnyAsync(x=>x.Id==deviceId&&x.FarmingAreaId==kiosk.FarmingAreaId,ct))
+                throw AppException.Forbidden("Camera not assigned to this Kiosk.");
+            return;
+        }
+        // Legacy per-camera key only for cameras without a managed assignment.
         // Dedicated per-camera secret, provisioned outside the API; no shared fleet key or user JWT fallback.
         var expected=config[$"CameraRecording:AgentKeys:{deviceId:D}"];
         var actual=Request.Headers["X-Camera-Agent-Key"].FirstOrDefault();
@@ -48,7 +59,7 @@ public sealed class CameraRecordingRuntimeController(AppDbContext db, IConfigura
     [HttpGet("configuration")]
     public async Task<IActionResult> Configuration(Guid deviceId,CancellationToken ct)
     {
-        Authenticate(deviceId);var camera=await Camera(deviceId,ct);var s=await Schedule(deviceId,ct);
+        await Authenticate(deviceId,ct);var camera=await Camera(deviceId,ct);var s=await Schedule(deviceId,ct);
         if(s is null) return Result(new { deviceId, shouldRecord=false, reason="NoSchedule" });
         var used=await CameraRecordingRetentionService.UsedBytes(db,deviceId,ct);var limit=CameraRecordingRetentionService.LimitBytes(s);
         var quotaReached=limit.HasValue&&used>=limit.Value;
@@ -61,7 +72,7 @@ public sealed class CameraRecordingRuntimeController(AppDbContext db, IConfigura
     [HttpPost("executions")]
     public async Task<IActionResult> Start(Guid deviceId,StartRequest r,CancellationToken ct)
     {
-        Authenticate(deviceId);var camera=await Camera(deviceId,ct);
+        await Authenticate(deviceId,ct);var camera=await Camera(deviceId,ct);
         if(r.ExecutionId==Guid.Empty) throw AppException.BadRequest("ExecutionId required.");
         var existing=await db.CameraRecordingExecutions.SingleOrDefaultAsync(x=>x.Id==r.ExecutionId,ct);
         if(existing!=null)
@@ -87,10 +98,32 @@ public sealed class CameraRecordingRuntimeController(AppDbContext db, IConfigura
         return Result(row);
     }
     [AllowAnonymous]
+    [HttpPost("failures")]
+    public async Task<IActionResult> Failure(Guid deviceId,FailureRequest r,CancellationToken ct)
+    {
+        await Authenticate(deviceId,ct);await Camera(deviceId,ct);
+        if(r.ExecutionId==Guid.Empty||string.IsNullOrWhiteSpace(r.Error)||r.Error.Length>1000)
+            throw AppException.BadRequest("Invalid failure report.");
+        var existing=await db.CameraRecordingExecutions.SingleOrDefaultAsync(x=>x.Id==r.ExecutionId,ct);
+        if(existing!=null)
+        {
+            if(existing.DeviceId!=deviceId||existing.ScheduleId!=r.ScheduleId||existing.ScheduleVersion!=r.ScheduleVersion)
+                throw AppException.Conflict("Execution identity mismatch.");
+            return Result(existing);
+        }
+        var s=await Schedule(deviceId,ct);
+        if(s is null||s.Id!=r.ScheduleId||s.Version!=r.ScheduleVersion)
+            throw AppException.Conflict("Schedule changed.");
+        var now=DateTime.UtcNow;
+        var row=new CameraRecordingExecution{Id=r.ExecutionId,DeviceId=deviceId,ScheduleId=s.Id,ScheduleVersion=s.Version,
+            Status="Failed",StartedAt=now,EndedAt=now,LastHeartbeatAt=now,Error=r.Error.Trim()};
+        db.CameraRecordingExecutions.Add(row);await Save(ct);return Result(row);
+    }
+    [AllowAnonymous]
     [HttpPost("executions/{executionId:guid}/heartbeat")]
     public async Task<IActionResult> Heartbeat(Guid deviceId,Guid executionId,CancellationToken ct)
     {
-        Authenticate(deviceId);var camera=await Camera(deviceId,ct);var row=await Execution(deviceId,executionId,ct);
+        await Authenticate(deviceId,ct);var camera=await Camera(deviceId,ct);var row=await Execution(deviceId,executionId,ct);
         var now=DateTime.UtcNow;
         if(row.Status!="Recording"||row.LastHeartbeatAt<now.AddSeconds(-90)) throw AppException.Conflict("Execution lease expired or closed.");
         var s=await Schedule(deviceId,ct);
@@ -102,16 +135,16 @@ public sealed class CameraRecordingRuntimeController(AppDbContext db, IConfigura
     [HttpPost("executions/{executionId:guid}/captured")]
     public async Task<IActionResult> Captured(Guid deviceId,Guid executionId,CancellationToken ct)
     {
-        Authenticate(deviceId);var row=await Execution(deviceId,executionId,ct);
+        await Authenticate(deviceId,ct);var row=await Execution(deviceId,executionId,ct);
         if(row.Status is "Uploading" or "Completed")return Result(row);
-        if(row.Status!="Recording")throw AppException.Conflict("Execution already closed.");
-        row.Status="Uploading";row.EndedAt=DateTime.UtcNow;await Save(ct);return Result(row);
+        if(row.Status!="Recording"&&!(row.Status=="Failed"&&row.Error=="Agent heartbeat expired."))throw AppException.Conflict("Execution already closed.");
+        row.Status="Uploading";row.Error=null;row.EndedAt??=DateTime.UtcNow;await Save(ct);return Result(row);
     }
     [AllowAnonymous]
     [HttpPut("executions/{executionId:guid}/finish")]
     public async Task<IActionResult> Finish(Guid deviceId,Guid executionId,FinishRequest r,CancellationToken ct)
     {
-        Authenticate(deviceId);var row=await Execution(deviceId,executionId,ct);
+        await Authenticate(deviceId,ct);var row=await Execution(deviceId,executionId,ct);
         if(r.Status is not ("Completed" or "Failed" or "Stopped")||r.Error?.Length>1000||
             (r.Status=="Completed"&&!r.MediaAssetId.HasValue)|| (r.Status=="Failed"&&string.IsNullOrWhiteSpace(r.Error)))
             throw AppException.BadRequest("Invalid execution outcome.");
@@ -131,8 +164,9 @@ public sealed class CameraRecordingRuntimeController(AppDbContext db, IConfigura
     [RequestFormLimits(MultipartBodyLengthLimit=60_000_000)]
     public async Task<IActionResult> Upload(Guid deviceId,Guid executionId,IFormFile file,CancellationToken ct)
     {
-        Authenticate(deviceId);
+        await Authenticate(deviceId,ct);
         await using var tx=db.Database.IsRelational()?await db.Database.BeginTransactionAsync(ct):null;
+        if(tx!=null) _=await db.Devices.FromSqlInterpolated($"SELECT * FROM be.\"Devices\" WHERE \"Id\"={deviceId} FOR UPDATE").ToListAsync(ct);
         var row=tx is null?await Execution(deviceId,executionId,ct):
             (await db.CameraRecordingExecutions.FromSqlInterpolated($"SELECT * FROM be.\"CameraRecordingExecutions\" WHERE \"Id\"={executionId} AND \"DeviceId\"={deviceId} FOR UPDATE").ToListAsync(ct)).SingleOrDefault()
                 ??throw AppException.NotFound("Recording execution");
@@ -173,6 +207,12 @@ public sealed class CameraRecordingRuntimeController(AppDbContext db, IConfigura
         var row=await db.CameraRecordingExecutions.AsNoTracking().Where(x=>x.DeviceId==deviceId).OrderByDescending(x=>x.StartedAt).FirstOrDefaultAsync(ct);
         var fresh=row?.Status=="Recording"&&row.LastHeartbeatAt>=DateTime.UtcNow.AddSeconds(-90);
         var runtimeStatus=fresh?"Recording":row?.Status=="Recording"?"Unknown":row?.Status??"NotIntegrated";
-        return Result(new {deviceId,scheduleId=s?.Id,scheduledNow=s!=null&&camera.Status!=DeviceStatus.Maintenance&&await Due(s,ct),runtimeStatus,lastExecution=row});
+        var usedBytes=await CameraRecordingRetentionService.UsedBytes(db,deviceId,ct);
+        var limitBytes=s is null?null:CameraRecordingRetentionService.LimitBytes(s);
+        var slots=s is null?new List<CameraScheduleSlot>():await db.CameraScheduleSlots.Where(x=>x.ScheduleId==s.Id).ToListAsync(ct);
+        var now=DateTime.UtcNow;
+        var agent=await db.CameraRecordingAgents.AsNoTracking().SingleOrDefaultAsync(x=>x.DeviceId==deviceId,ct);
+        var nextRecordingAt=s is null||camera.Status==DeviceStatus.Maintenance?null:CameraSchedulesController.NextDue(s,slots,now);
+        return Result(new {deviceId,scheduleId=s?.Id,scheduleName=s?.Name,scheduledNow=s!=null&&camera.Status!=DeviceStatus.Maintenance&&CameraSchedulesController.IsDue(s,slots,now),nextRecordingAt,runtimeStatus,lastExecution=row,usedBytes,limitBytes,agentConfigured=agent is null?!string.IsNullOrWhiteSpace(config[$"CameraRecording:AgentKeys:{deviceId:D}"]):agent.Enabled&&agent.KioskId.HasValue,agentLastSeenAt=agent?.LastSeenAt,pendingClips=agent?.PendingClips,kioskId=agent?.KioskId});
     }
 }
