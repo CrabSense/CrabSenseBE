@@ -114,7 +114,11 @@ public class AppDbContext : DbContext
             b.Property(x => x.PortType).HasMaxLength(32);
             b.Property(x => x.ActiveLevel).HasMaxLength(8);
             b.Property(x => x.SensorCode).HasMaxLength(128);
-            b.Property(x => x.CommissioningStatus).HasMaxLength(16);
+            b.Property(x => x.CommissioningStatus).HasMaxLength(16).IsConcurrencyToken();
+            b.Property(x => x.ConfigVersion).IsConcurrencyToken();
+            b.Property(x => x.IsPresent).IsConcurrencyToken();
+            b.Property(x => x.ReportedOn).IsConcurrencyToken();
+            b.Property(x => x.LastReportedAt).IsConcurrencyToken();
             b.HasIndex(x => new { x.DeviceId, x.PortCode }).IsUnique();
             b.HasOne(x => x.Device).WithMany().HasForeignKey(x => x.DeviceId).OnDelete(DeleteBehavior.Restrict);
         });
