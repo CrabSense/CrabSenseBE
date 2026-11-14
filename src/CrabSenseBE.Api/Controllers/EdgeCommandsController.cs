@@ -6,7 +6,7 @@ using CrabSenseBE.Domain.Interfaces;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
-using CrabSenseBE.Application.Common;
+using CrabSenseBE.Application.Services;
 
 namespace CrabSenseBE.Api.Controllers;
 
