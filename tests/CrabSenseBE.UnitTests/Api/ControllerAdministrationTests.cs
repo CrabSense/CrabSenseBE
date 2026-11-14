@@ -44,7 +44,7 @@ public sealed class ControllerAdministrationTests
         var admin = User(UserRole.SystemAdministrator);
         var device = new Device { DeviceCode = "controller-a" };
         var other = new Device { DeviceCode = "controller-b" };
-        db.Users.Add(admin);
+        db.Set<AppUser>().Add(admin);
         db.Devices.AddRange(device, other);
         var now = DateTime.UtcNow;
         db.EdgeCommands.AddRange(
@@ -75,7 +75,7 @@ public sealed class ControllerAdministrationTests
     {
         await using var db = Database();
         var staff = User(UserRole.FarmStaff);
-        db.Users.Add(staff);
+        db.Set<AppUser>().Add(staff);
         await db.SaveChangesAsync();
         var controller = new EdgeCommandsController(Mock.Of<IEdgeCommandService>(), Config(), new UnitOfWork(db), Current(staff));
         Assert.IsType<ForbidResult>(await controller.History(Guid.NewGuid()));
@@ -95,7 +95,7 @@ public sealed class ControllerAdministrationTests
         var system = new WaterSystem { FarmingAreaId = areaId, Name = "RAS" };
         var node = new RasComponent { WaterSystemId = system.Id, Name = "Pump", RelayDeviceId = device.Id,
             ControllerPortId = port.Id, RelayChannel = "5", HasRelay = true };
-        db.Users.Add(admin); db.Devices.Add(device); db.ControllerPorts.Add(port);
+        db.Set<AppUser>().Add(admin); db.Devices.Add(device); db.ControllerPorts.Add(port);
         db.WaterSystems.Add(system); db.RasComponents.Add(node);
         await db.SaveChangesAsync();
         var api = new ControllerPortsController(new UnitOfWork(db), Config(), Current(admin));
