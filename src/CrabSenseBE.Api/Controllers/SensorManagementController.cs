@@ -3,6 +3,7 @@ using CrabSenseBE.Api.Services;
 using CrabSenseBE.Application.Common;
 using CrabSenseBE.Application.DTOs.IoT;
 using CrabSenseBE.Application.Interfaces;
+using CrabSenseBE.Application.Services;
 using CrabSenseBE.Domain.Entities;
 using CrabSenseBE.Domain.Enums;
 using CrabSenseBE.Domain.Interfaces;
@@ -35,15 +36,7 @@ public sealed class SensorManagementController(AppDbContext db) : ControllerBase
         ?? throw AppException.NotFound("Sensor");
     private void Audit(Guid id, string action, string? details = null) => db.OperationLogs.Add(new OperationLog
     { UserId = Actor(), Action = action, EntityType = "Sensor", EntityId = id, IpAddress = Ip(), Details = details });
-    private static string Status(Sensor s, Device? d, ControllerPort? p, bool readError = false)
-    {
-        if (!s.IsActive) return "Disabled";
-        if (s.DeviceId.HasValue && (d == null || d.Status == DeviceStatus.Maintenance || d.EdgeState == "Revoked")) return "Offline";
-        if ((s.ControllerPortId.HasValue || s.BusPortId.HasValue) && (p == null || !p.IsPresent || d == null || p.ConfigVersion != d.CapabilityVersion)) return "Offline";
-        if (readError) return "Error";
-        if (s.LastSeenAt is null) return "Unknown";
-        return s.LastSeenAt < DateTime.UtcNow.AddSeconds(-(s.DisconnectTimeoutSeconds ?? 900)) ? "Offline" : "Online";
-    }
+    private static string Status(Sensor s, Device? d, ControllerPort? p, bool readError = false) => SensorStatusPolicy.Status(s,d,p,readError);
     private async Task<IReadOnlyList<object>> Inventory(Guid? deviceId, Guid? areaId, Guid? rowId, CancellationToken ct, Guid? sensorId = null)
     {
         var sensors = await db.Sensors.AsNoTracking().Where(s => (deviceId == null || s.DeviceId == deviceId) && (sensorId == null || s.Id == sensorId)).ToListAsync(ct);

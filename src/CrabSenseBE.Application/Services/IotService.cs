@@ -573,6 +573,10 @@ public class IotService : IIotService
             foreach (var m in latest) latestBySensor[m.SensorId] = m;
         }
 
+        var ports = (await _uow.ControllerPorts.GetAllAsync(ct)).ToDictionary(p=>p.Id);
+        var errors = (await _uow.Alerts.FindAsync(a=>a.SensorId.HasValue && sensorIds.Contains(a.SensorId.Value)
+            && a.IncidentType=="sensor_read_error" && (a.Status==AlertStatus.Active||a.Status==AlertStatus.Acknowledged||a.Status==AlertStatus.InProgress),ct)).Select(a=>a.SensorId!.Value).ToHashSet();
+        var systems=(await _uow.WaterSystems.GetAllAsync(ct)).ToDictionary(w=>w.Id);
         var list = new List<SensorLiveDto>();
         foreach (var s in sensors.OrderBy(s => s.SensorCode))
         {
@@ -595,7 +599,9 @@ public class IotService : IIotService
                 s.DeviceId, dev?.DeviceCode, dev?.Status.ToString(),
                 latest?.Value, latest?.MeasuredAt, s.LastSeenAt, alarm,
                 loc?.Name, loc?.Type,
-                rowId, row?.Name, row?.Code));
+                rowId, row?.Name, row?.Code, s.Name,
+                SensorStatusPolicy.Status(s,dev,ports.GetValueOrDefault(s.ControllerPortId??s.BusPortId??Guid.Empty),errors.Contains(s.Id)),
+                latest?.DataQuality??"Unknown",latest?.ReceivedAt,s.FarmingAreaId??row?.FarmingAreaId??systems.GetValueOrDefault(s.WaterSystemId??Guid.Empty)?.FarmingAreaId??dev?.FarmingAreaId));
         }
         return ApiResponse<IEnumerable<SensorLiveDto>>.Ok(list);
     }
@@ -732,21 +738,20 @@ public class IotService : IIotService
 
     private async Task<HashSet<Guid>> SensorIdsInAreasAsync(HashSet<Guid> areaIds, CancellationToken ct)
     {
-        if (areaIds.Count == 0) return [];
-        var waterSystemIds = (await _uow.WaterSystems.FindAsync(
-            w => w.FarmingAreaId != null && areaIds.Contains(w.FarmingAreaId.Value), ct))
-            .Select(w => w.Id).ToHashSet();
-        var rowIds = (await _uow.FarmingRows.FindAsync(
-            r => areaIds.Contains(r.FarmingAreaId), ct)).Select(r => r.Id).ToHashSet();
-        var deviceIds = (await _uow.Devices.FindAsync(
-            d => (d.FarmingAreaId != null && areaIds.Contains(d.FarmingAreaId.Value))
-                 || (d.FarmingRowId != null && rowIds.Contains(d.FarmingRowId.Value)), ct))
-            .Select(d => d.Id).ToHashSet();
-        return (await _uow.Sensors.FindAsync(
-            s => (s.FarmingAreaId != null && areaIds.Contains(s.FarmingAreaId.Value)) || (s.WaterSystemId != null && waterSystemIds.Contains(s.WaterSystemId.Value))
-                 || (s.FarmingRowId != null && rowIds.Contains(s.FarmingRowId.Value))
-                 || (s.DeviceId != null && deviceIds.Contains(s.DeviceId.Value)), ct))
-            .Select(s => s.Id).ToHashSet();
+        if(areaIds.Count==0)return [];
+        var rows=(await _uow.FarmingRows.GetAllAsync(ct)).ToDictionary(r=>r.Id);
+        var systems=(await _uow.WaterSystems.GetAllAsync(ct)).ToDictionary(w=>w.Id);
+        var devices=(await _uow.Devices.GetAllAsync(ct)).ToDictionary(d=>d.Id);
+        var result=new HashSet<Guid>();
+        foreach(var s in await _uow.Sensors.GetAllAsync(ct)){
+            var dev=devices.GetValueOrDefault(s.DeviceId??Guid.Empty);
+            var linked=new Guid?[]{s.FarmingAreaId,rows.GetValueOrDefault(s.FarmingRowId??Guid.Empty)?.FarmingAreaId,
+                systems.GetValueOrDefault(s.WaterSystemId??Guid.Empty)?.FarmingAreaId,dev?.FarmingAreaId,
+                rows.GetValueOrDefault(dev?.FarmingRowId??Guid.Empty)?.FarmingAreaId}
+                .Where(x=>x.HasValue).Select(x=>x!.Value).Distinct().ToArray();
+            if(linked.Length==1 && areaIds.Contains(linked[0]))result.Add(s.Id);
+        }
+        return result;
     }
 
     private static string NormalizeSensorType(string sensorType)
