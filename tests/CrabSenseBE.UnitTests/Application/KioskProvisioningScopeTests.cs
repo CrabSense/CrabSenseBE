@@ -154,6 +154,35 @@ public sealed class KioskProvisioningScopeTests
         device.Status.Should().Be(DeviceStatus.Offline);
     }
 
+    [Theory]
+    [InlineData("Rejected")]
+    [InlineData("Revoked")]
+    [InlineData("Approved")]
+    public async Task Registration_DoesNotRestoreBlockedStateOrClaimOnline(string state)
+    {
+        const string key = "kiosk-test-key";
+        var kiosk = new FarmKiosk { FarmingAreaId = Guid.NewGuid(), Code = "KIOSK-TEST" };
+        var device = new Device { DeviceCode = "ESP-TEST", KioskId = kiosk.Id,
+            FarmingAreaId = kiosk.FarmingAreaId, EdgeState = state, Status = DeviceStatus.Offline };
+        var uow = new Mock<IUnitOfWork>();
+        var credentials = new Mock<IRepository<KioskCredential>>();
+        credentials.Setup(r => r.FirstOrDefaultAsync(It.IsAny<System.Linq.Expressions.Expression<Func<KioskCredential,bool>>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new KioskCredential { KioskId = kiosk.Id, SecretHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(key))) });
+        var kiosks = new Mock<IRepository<FarmKiosk>>();
+        kiosks.Setup(r => r.GetByIdAsync(kiosk.Id, It.IsAny<CancellationToken>())).ReturnsAsync(kiosk);
+        var devices = new Mock<IRepository<Device>>();
+        devices.Setup(r => r.FirstOrDefaultAsync(It.IsAny<System.Linq.Expressions.Expression<Func<Device,bool>>>(), It.IsAny<CancellationToken>())).ReturnsAsync(device);
+        uow.Setup(x => x.KioskCredentials).Returns(credentials.Object);
+        uow.Setup(x => x.FarmKiosks).Returns(kiosks.Object);
+        uow.Setup(x => x.Devices).Returns(devices.Object);
+        var service = new KioskProvisioningService(uow.Object, Mock.Of<ICurrentUserService>());
+        var result = await service.RegisterControllerAsync(key, new CrabSenseBE.Application.DTOs.Kiosk.RegisterControllerRequest(device.DeviceCode,null,null,null,null));
+        result.Data!.EdgeState.Should().Be(state);
+        device.Status.Should().Be(DeviceStatus.Offline);
+        device.LastSeenAt.Should().BeNull();
+        if (state != "Approved") uow.Verify(x => x.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Never);
+    }
+
     private static (
         Mock<IUnitOfWork> Uow,
         Mock<ICurrentUserService> Current) Fixture(
