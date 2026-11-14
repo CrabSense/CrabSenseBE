@@ -115,36 +115,73 @@ public class RasFlowService : IRasFlowService
         {
             var device = await _uow.Devices.FirstOrDefaultAsync(
                 d => d.DeviceCode == req.RelayDeviceCode.Trim(), ct);
-            relayDeviceId = device?.Id;
+            relayDeviceId = device?.Id ?? throw AppException.NotFound("Controller");
         }
 
-        if (relayDeviceId is null || string.IsNullOrWhiteSpace(req.RelayChannel))
+        Device? targetDevice = null;
+        ControllerPort? targetPort = null;
+        string? targetChannel = null;
+        if (relayDeviceId is not null || !string.IsNullOrWhiteSpace(req.RelayChannel))
         {
-            node.ControllerPortId = null;
-            node.RelayDeviceId = null;
-            node.RelayChannel = null;
-            node.HasRelay = false;
-            node.IsOn = false;
-            node.LastReportedAt = null;
-            node.RunStartedAt = null;
-            node.ControlMode = null;
-        }
-        else
-        {
-            var device = await _uow.Devices.GetByIdAsync(relayDeviceId.Value, ct)
+            if (relayDeviceId is not Guid targetId || string.IsNullOrWhiteSpace(req.RelayChannel))
+                throw AppException.BadRequest("Controller and relay channel are both required.");
+            targetDevice = await _uow.Devices.GetByIdAsync(targetId, ct)
                 ?? throw AppException.NotFound("Controller");
-            EnsureDeviceArea(device, area.Id);
+            EnsureDeviceArea(targetDevice, area.Id);
             if (!int.TryParse(req.RelayChannel.Trim(), out var channelNo) || channelNo < 1)
                 throw AppException.BadRequest("SSR channel must be a positive number.");
-            var port = await ControllerPortPolicy.ResolveOutputAsync(_uow, device, req.RelayChannel, node.Id, ct);
-            node.ControllerPortId = port?.Id;
-            node.RelayDeviceId = device.Id;
-            node.RelayChannel = channelNo.ToString(System.Globalization.CultureInfo.InvariantCulture);
-            node.HasRelay = true;
+            targetChannel = channelNo.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            targetPort = await ControllerPortPolicy.ResolveOutputAsync(_uow, targetDevice, targetChannel, node.Id, ct);
+        }
+
+        var changed = node.RelayDeviceId != targetDevice?.Id || node.RelayChannel != targetChannel
+            || node.ControllerPortId != targetPort?.Id || node.HasRelay != (targetDevice is not null);
+        if (changed)
+        {
+            ControllerPort? previousPort = null;
+            if (node.ControllerPortId is Guid previousId)
+            {
+                previousPort = await _uow.ControllerPorts.GetByIdAsync(previousId, ct)
+                    ?? throw AppException.Conflict("Existing controller port not found.");
+                var previousDevice = await _uow.Devices.GetByIdAsync(previousPort.DeviceId, ct)
+                    ?? throw AppException.NotFound("Controller");
+                await ControllerPortPolicy.RequireSafeConfigurationAsync(_uow, _configuration,
+                    previousDevice, previousPort, ct, allowRemoved: true);
+            }
+            if (targetPort is not null)
+            {
+                await ControllerPortPolicy.RequireSafeConfigurationAsync(_uow, _configuration,
+                    targetDevice!, targetPort, ct);
+                if (targetPort.CommissioningStatus == "Disabled")
+                    throw AppException.Conflict("Target output is disabled.");
+            }
+
+            // Verification is for the physical port/equipment pairing, not just the GPIO.
+            // Never transfer verification to a different actuator or leave stale ON eligibility.
+            if (previousPort is { IsPresent: true } && previousPort.CommissioningStatus != "Disabled")
+                previousPort.CommissioningStatus = "Pending";
+            if (targetPort is not null)
+                targetPort.CommissioningStatus = "Pending";
+
+            node.ControllerPortId = targetPort?.Id;
+            node.RelayDeviceId = targetDevice?.Id;
+            node.RelayChannel = targetChannel;
+            node.HasRelay = targetDevice is not null;
             node.IsOn = false;
             node.LastReportedAt = null;
             node.RunStartedAt = null;
-            node.ControlMode = "manual";
+            node.ControlMode = targetDevice is null ? null : "manual";
+            if (actor is not null)
+            {
+                var auditDeviceId = targetDevice?.Id ?? previousPort?.DeviceId;
+                if (auditDeviceId is Guid auditId)
+                    await _uow.OperationLogs.AddAsync(new OperationLog
+                    {
+                        UserId = actor.Id, Action = "UpdateControllerRelayMapping",
+                        EntityType = "Device", EntityId = auditId,
+                        Details = $"RAS {node.Id:N}; channel {targetChannel ?? "unbound"}"
+                    }, ct);
+            }
         }
         if (!string.IsNullOrWhiteSpace(req.ParamDefaultsJson))
             node.ParamDefaultsJson = req.ParamDefaultsJson.Trim();
