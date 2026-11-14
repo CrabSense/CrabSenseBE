@@ -293,13 +293,13 @@ public sealed class KioskProvisioningService : IKioskProvisioningService
         if (!string.IsNullOrWhiteSpace(request.Firmware))
             device.FirmwareVersion = request.Firmware.Trim();
         device.LastSeenAt = now;
-        if (device.EdgeState is "Approved" or "Online")
+        if (device.Status != DeviceStatus.Maintenance && device.EdgeState is ("Approved" or "Online"))
         {
             device.EdgeState = "Online";
             device.Status = DeviceStatus.Online;
         }
 
-        var oneTime = device.EdgeState == "Online" ? device.PendingSecret : null;
+        var oneTime = device.EdgeState == "Online" && device.Status != DeviceStatus.Maintenance ? device.PendingSecret : null;
         if (oneTime != null)
             device.PendingSecret = null;
         await _uow.SaveChangesAsync(ct);
@@ -327,13 +327,15 @@ public sealed class KioskProvisioningService : IKioskProvisioningService
         var device = await _uow.Devices.GetByIdAsync(deviceId, ct)
             ?? throw AppException.NotFound("Device");
         await EnsureDeviceAccessAsync(device, ct);
-        if (device.EdgeState == "Revoked")
-            throw AppException.Conflict("Controller is revoked.");
+        if (device.EdgeState is "Approved" or "Online")
+            return ApiResponse<EdgeControllerDto>.Ok(MapController(device, await KioskCodeAsync(device.KioskId, ct)), "Controller already approved.");
+        if (device.EdgeState != "Pending")
+            throw AppException.Conflict("Only pending controllers can be approved.");
         var secret = Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
         device.EdgeState = "Approved";
         device.CredentialHash = Hash(secret);
         device.PendingSecret = secret;
-        device.Status = DeviceStatus.Online;
+        device.Status = DeviceStatus.Offline;
         await _uow.SaveChangesAsync(ct);
         var kioskCode = await KioskCodeAsync(device.KioskId, ct);
         return ApiResponse<EdgeControllerDto>.Ok(MapController(device, kioskCode), "Controller approved.");
