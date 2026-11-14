@@ -166,9 +166,56 @@ public sealed class ControllerPortsController(IUnitOfWork uow, IConfiguration co
         var equipment = await uow.RasComponents.FindAsync(x => x.RelayDeviceId == id, ct);
         var sensors = await uow.Sensors.FindAsync(x => x.DeviceId == id, ct);
         return Ok(ApiResponse<object>.Ok(new { deviceId = id, device.DeviceCode, device.CapabilityVersion,
-            device.HardwareModel, ports = ports.OrderBy(p => p.PortCode).Select(Map),
+            device.HardwareModel, hardwareControlDisabled = HardwareControlGuard.IsDisabled(configuration),
+            ports = ports.OrderBy(p => p.PortCode).Select(Map),
             equipment = equipment.Select(x => new { x.Id, x.Name, x.RelayChannel, x.ControllerPortId }),
             sensors = sensors.Select(x => new { x.Id, x.SensorCode, x.SensorType, x.ControllerPortId, x.BusPortId, x.BusAddress, x.BusRegister }) }));
+    }
+
+    public sealed record CommissioningRequest(int ExpectedConfigVersion, string ExpectedStatus,
+        string Status, bool PhysicalCheckConfirmed, string? Note);
+
+    // Commissioning records a technician's physical inspection. It never energizes an output.
+    [HttpPut("{id:guid}/ports/{portId:guid}/commissioning")]
+    [Authorize(Roles = AppRoles.Platform)]
+    public async Task<IActionResult> Commission(Guid id, Guid portId, [FromBody] CommissioningRequest req, CancellationToken ct)
+    {
+        var actor = await new FarmAreaScope(uow, currentUser).CurrentUserAsync(ct);
+        if (actor?.Role != UserRole.SystemAdministrator)
+            throw AppException.Forbidden("System Administrator required.");
+        if (req.Status is not ("Verified" or "Pending" or "Disabled") || !req.PhysicalCheckConfirmed ||
+            string.IsNullOrWhiteSpace(req.Note) || req.Note.Trim().Length > 500)
+            throw AppException.BadRequest("A valid status, physical inspection confirmation and note (1–500 characters) are required.");
+        var device = await uow.Devices.GetByIdAsync(id, ct) ?? throw AppException.NotFound("Controller");
+        var port = await uow.ControllerPorts.GetByIdAsync(portId, ct) ?? throw AppException.NotFound("Port");
+        if (port.DeviceId != id || req.ExpectedConfigVersion != device.CapabilityVersion ||
+            req.ExpectedConfigVersion != port.ConfigVersion || req.ExpectedStatus != port.CommissioningStatus)
+            throw AppException.Conflict("Inventory or commissioning changed; reload before saving.");
+        await ControllerPortPolicy.RequireSafeConfigurationAsync(uow, configuration, device, port, ct);
+        if (req.Status == "Verified")
+        {
+            if (string.IsNullOrWhiteSpace(device.CredentialHash) || device.EdgeState is not ("Approved" or "Online")
+                || device.Status != DeviceStatus.Online || device.FarmingAreaId is not Guid areaId || !port.Channel.HasValue)
+                throw AppException.Conflict("Controller must be authenticated, online and assigned to an area.");
+            var bindings = (await uow.RasComponents.FindAsync(x => x.ControllerPortId == port.Id &&
+                x.RelayDeviceId == id && x.RelayChannel == port.Channel.Value.ToString(), ct)).ToList();
+            if (bindings.Count != 1)
+                throw AppException.Conflict("Exactly one current RAS actuator binding is required.");
+            var system = await uow.WaterSystems.GetByIdAsync(bindings[0].WaterSystemId, ct);
+            if (system?.FarmingAreaId != areaId)
+                throw AppException.Conflict("Actuator must belong to the controller area.");
+        }
+        var before = port.CommissioningStatus;
+        port.CommissioningStatus = req.Status;
+        await uow.OperationLogs.AddAsync(new OperationLog
+        {
+            UserId = actor.Id, Action = "ControllerPortCommissioning", EntityType = "Device", EntityId = id,
+            Details = $"{port.PortCode}: {before} -> {req.Status}; rev {req.ExpectedConfigVersion}; {req.Note.Trim()}"
+        }, ct);
+        // Entity returned by the EF repository is tracked; update only the changed status.
+        try { await uow.SaveChangesAsync(ct); }
+        catch (DbUpdateException) { throw AppException.Conflict("Concurrent controller configuration change; reload."); }
+        return Ok(ApiResponse<object>.Ok(Map(port)));
     }
 
     // Link a registered sensor to a discovered input. A bus can serve many
