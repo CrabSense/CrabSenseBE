@@ -7,6 +7,7 @@ using CrabSenseBE.Domain.Entities;
 using CrabSenseBE.Domain.Enums;
 using CrabSenseBE.Domain.Interfaces;
 using Microsoft.Extensions.Configuration;
+using Microsoft.EntityFrameworkCore;
 
 namespace CrabSenseBE.Application.Services;
 
@@ -159,9 +160,15 @@ public class RasFlowService : IRasFlowService
             // Verification is for the physical port/equipment pairing, not just the GPIO.
             // Never transfer verification to a different actuator or leave stale ON eligibility.
             if (previousPort is { IsPresent: true } && previousPort.CommissioningStatus != "Disabled")
+            {
                 previousPort.CommissioningStatus = "Pending";
+                _uow.ControllerPorts.Update(previousPort);
+            }
             if (targetPort is not null)
+            {
                 targetPort.CommissioningStatus = "Pending";
+                _uow.ControllerPorts.Update(targetPort);
+            }
 
             node.ControllerPortId = targetPort?.Id;
             node.RelayDeviceId = targetDevice?.Id;
@@ -187,7 +194,8 @@ public class RasFlowService : IRasFlowService
             node.ParamDefaultsJson = req.ParamDefaultsJson.Trim();
 
         _uow.RasComponents.Update(node);
-        await _uow.SaveChangesAsync(ct);
+        try { await _uow.SaveChangesAsync(ct); }
+        catch (DbUpdateException) { throw AppException.Conflict("Controller mapping or inventory changed; reload before saving."); }
         return ApiResponse<RasFlowDiagramDto>.Ok(
             await BuildDiagramAsync(area, ws, ct), "Relay assignment updated.");
     }
