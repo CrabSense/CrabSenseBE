@@ -351,10 +351,26 @@ public class SystemPlatformService : ISystemPlatformService
         var devices = await CameraDevices(ct);
         var settings = await _db.CameraRecordingSettings.AsNoTracking().ToListAsync(ct);
         var areas = await _db.FarmingAreas.AsNoTracking().ToDictionaryAsync(a => a.Id, a => a.Name, ct);
+        var assignments = await (from a in _db.CameraScheduleAssignments.AsNoTracking()
+            join s in _db.CameraSchedules.AsNoTracking() on a.ScheduleId equals s.Id
+            where !s.Deleted select new { a.DeviceId, Schedule = s }).ToDictionaryAsync(x => x.DeviceId, ct);
+        var latest = await _db.CameraRecordingExecutions.AsNoTracking()
+            .GroupBy(x => x.DeviceId).Select(g => g.OrderByDescending(x => x.StartedAt).ThenByDescending(x => x.Id).First())
+            .ToListAsync(ct);
+        var executions = latest.ToDictionary(x => x.DeviceId);
+        var now = DateTime.UtcNow;
         var rows = devices.Select(device =>
         {
             var setting = settings.FirstOrDefault(x => x.DeviceId == device.Id);
-            return MapCamera(device, setting, device.FarmingAreaId is Guid areaId ? areas.GetValueOrDefault(areaId) : null);
+            var mapped = MapCamera(device, setting, device.FarmingAreaId is Guid areaId ? areas.GetValueOrDefault(areaId) : null);
+            if (!assignments.TryGetValue(device.Id, out var a)) return mapped;
+            executions.TryGetValue(device.Id, out var execution);
+            var runtime = execution?.Status == "Recording"
+                ? (execution.LastHeartbeatAt >= now.AddSeconds(-90) ? "Recording" : "Unknown")
+                : !a.Schedule.Enabled || device.Status == DeviceStatus.Maintenance ? "Disabled"
+                : execution is null ? "AwaitingAgent" : execution.Status == "Failed" ? "Failed" : "Idle";
+            return mapped with { ScheduleId = a.Schedule.Id, ScheduleName = a.Schedule.Name,
+                RuntimeStatus = runtime, LastExecutionStatus = execution?.Status };
         }).ToList();
         return ApiResponse<IReadOnlyList<CameraRecordingDto>>.Ok(rows);
     }
@@ -388,7 +404,7 @@ public class SystemPlatformService : ISystemPlatformService
         var areaName = device.FarmingAreaId is Guid areaId
             ? await _db.FarmingAreas.Where(x => x.Id == areaId).Select(x => x.Name).FirstOrDefaultAsync(ct) : null;
         return ApiResponse<CameraRecordingDto>.Ok(MapCamera(device, setting, areaName),
-            "Đã lưu cấu hình; worker ghi hình chưa được tích hợp, chưa xác nhận đang ghi.");
+            "Đã lưu cấu hình cũ; tạo lịch dùng chung để recording agent thực thi. Chưa xác nhận đang ghi.");
     }
 
     public async Task<ApiResponse<IReadOnlyList<RecordingHistoryDto>>> GetRecordingHistoryAsync(Guid? deviceId, CancellationToken ct = default)
