@@ -37,7 +37,9 @@ public sealed class CameraRecordingMonitor(IServiceScopeFactory scopes,IConfigur
         var latest=latestRows.ToDictionary(x=>x.DeviceId);
         var pending=await db.CameraRecordingExecutions.AsNoTracking().Where(x=>x.Status=="Uploading"&&x.EndedAt<now.AddMinutes(-5))
             .Select(x=>x.DeviceId).Distinct().ToListAsync(ct);
-        var kinds=new[]{"camera_recording_failure","camera_recording_stalled","camera_storage_limit"};
+        var agents=await db.CameraRecordingAgents.AsNoTracking().ToDictionaryAsync(x=>x.DeviceId,ct);
+        var slots=await db.CameraScheduleSlots.AsNoTracking().ToListAsync(ct);
+        var kinds=new[]{"camera_recording_failure","camera_recording_stalled","camera_storage_limit","camera_recording_missed","camera_agent_offline"};
         var alerts=await db.Alerts.Where(a=>a.SourceType=="Device"&&a.IncidentType!=null&&kinds.Contains(a.IncidentType)&&
             (a.Status==AlertStatus.Active||a.Status==AlertStatus.Acknowledged||a.Status==AlertStatus.InProgress)).ToListAsync(ct);
         foreach(var camera in cameras)
@@ -48,7 +50,16 @@ public sealed class CameraRecordingMonitor(IServiceScopeFactory scopes,IConfigur
             var quota=false;
             if(assignment is not null&&CameraRecordingRetentionService.LimitBytes(assignment.Schedule) is long limit)
                 quota=await CameraRecordingRetentionService.UsedBytes(db,camera.Id,ct)>=limit;
-            var issues=new[]{(kinds[0],failed,"Recording attempt failed"),(kinds[1],stalled,"Recording heartbeat or upload stalled"),(kinds[2],quota,"Camera storage limit reached")};
+            var due=false;
+            if(assignment is not null&&camera.Status!=DeviceStatus.Maintenance&&(assignment.Schedule.UpdatedAt??assignment.Schedule.CreatedAt)<now.AddMinutes(-3))
+            {
+                var windows=slots.Where(x=>x.ScheduleId==assignment.Schedule.Id).ToArray();
+                due=CameraScheduleClock.IsDue(assignment.Schedule,windows,now)&&CameraScheduleClock.IsDue(assignment.Schedule,windows,now.AddMinutes(-3));
+            }
+            agents.TryGetValue(camera.Id,out var agent);
+            var agentOffline=due&&agent is not null&&agent.Enabled&&agent.KioskId.HasValue&&(!agent.LastSeenAt.HasValue||agent.LastSeenAt<now.AddSeconds(-90));
+            var missed=due&&!quota&&(execution is null||execution.LastHeartbeatAt<now.AddMinutes(-3));
+            var issues=new[]{(kinds[0],failed,"Recording attempt failed"),(kinds[1],stalled,"Recording heartbeat or upload stalled"),(kinds[2],quota,"Camera storage limit reached"),(kinds[3],missed,"No recent recording evidence during scheduled window"),(kinds[4],agentOffline,"Recording agent heartbeat missing")};
             foreach(var (kind,active,message) in issues)
             {
                 var source=camera.Id.ToString("N");

@@ -1346,6 +1346,11 @@ public class IotService : IIotService
              await _uow.EdgeCommands.AnyAsync(x => x.DeviceCode == device.DeviceCode, ct)))
             throw AppException.Conflict("Controller has ownership, linked equipment or command history; unbind safely or disable instead of deleting.");
         if (CameraConfiguration.IsCamera(device)
+            && (await _uow.CameraScheduleAssignments.AnyAsync(x=>x.DeviceId==id,ct)
+                || await _uow.CameraRecordingExecutions.AnyAsync(x=>x.DeviceId==id,ct)
+                || await _uow.CameraRecordingAgents.AnyAsync(x=>x.DeviceId==id,ct)))
+            throw AppException.Conflict("Camera has recording schedules, agent assignment or execution history; disable instead of deleting.");
+        if (CameraConfiguration.IsCamera(device)
             && (await _uow.MediaAssets.AnyAsync(x => x.DeviceId == id, ct)
                 || await _uow.AiDetections.AnyAsync(x => x.DeviceId == id, ct)))
             throw AppException.Conflict("Camera có lịch sử media/AI; hãy ngừng sử dụng thay vì xóa.");
