@@ -3,6 +3,7 @@ using System.Text;
 using CrabSenseBE.Application.Common;
 using CrabSenseBE.Domain.Entities;
 using CrabSenseBE.Domain.Enums;
+using CrabSenseBE.Domain.Interfaces;
 using CrabSenseBE.Infrastructure.Persistence;
 using CrabSenseBE.Infrastructure.Services;
 using Microsoft.AspNetCore.Authorization;
@@ -13,7 +14,7 @@ namespace CrabSenseBE.Api.Controllers;
 
 [ApiController]
 [Route("api/cameras/{deviceId:guid}/recording-runtime")]
-public sealed class CameraRecordingRuntimeController(AppDbContext db, IConfiguration config) : ControllerBase
+public sealed class CameraRecordingRuntimeController(AppDbContext db, IConfiguration config, IMediaStorageService? storage = null) : ControllerBase
 {
     public record StartRequest(Guid ExecutionId, Guid ScheduleId, int ScheduleVersion);
     public record FinishRequest(string Status, string? Error, Guid? MediaAssetId);
@@ -110,6 +111,37 @@ public sealed class CameraRecordingRuntimeController(AppDbContext db, IConfigura
             throw AppException.BadRequest("Video does not belong to this camera.");
         row.Status=r.Status;row.EndedAt=DateTime.UtcNow;row.Error=r.Error;row.MediaAssetId=r.MediaAssetId;
         await Save(ct);return Result(row);
+    }
+    [AllowAnonymous]
+    [HttpPost("executions/{executionId:guid}/video")]
+    [RequestSizeLimit(60_000_000)]
+    [RequestFormLimits(MultipartBodyLengthLimit=60_000_000)]
+    public async Task<IActionResult> Upload(Guid deviceId,Guid executionId,IFormFile file,CancellationToken ct)
+    {
+        Authenticate(deviceId);var row=await Execution(deviceId,executionId,ct);
+        if(row.Status=="Completed"&&row.MediaAssetId.HasValue) return Result(row);
+        if(row.Status!="Recording"||row.LastHeartbeatAt<DateTime.UtcNow.AddSeconds(-90))
+            throw AppException.Conflict("Execution closed or expired.");
+        if(storage is null) throw new AppException("Media storage unavailable.",503);
+        if(file is null||file.Length<12||file.Length>50_000_000) throw AppException.BadRequest("MP4 size must be between 12 bytes and 50 MB.");
+        await using var input=file.OpenReadStream();
+        var header=new byte[12];await input.ReadExactlyAsync(header,ct);
+        if(Encoding.ASCII.GetString(header,4,4)!="ftyp") throw AppException.BadRequest("MP4 container required.");
+        if(!input.CanSeek) throw AppException.BadRequest("Seekable upload required.");
+        input.Position=0;
+        var filename=$"camera-{deviceId:N}-{executionId:N}.mp4";
+        var uploaded=await storage.UploadAsync(input,filename,"video/mp4","video",ct,publicRead:false);
+        var asset=new MediaAsset{DeviceId=deviceId,Category="video",FileName=filename,ContentType="video/mp4",
+            SizeBytes=uploaded.SizeBytes,Provider=storage.ProviderName,StorageKey=uploaded.StorageKey,
+            RelatedEntityType="Device",RelatedEntityId=deviceId,IsShared=false};
+        db.MediaAssets.Add(asset);row.MediaAssetId=asset.Id;row.Status="Completed";row.EndedAt=DateTime.UtcNow;
+        try { await db.SaveChangesAsync(CancellationToken.None); }
+        catch(DbUpdateException)
+        {
+            // Do not delete a possibly committed object after an ambiguous database error.
+            throw AppException.Conflict("Upload metadata not confirmed; reconcile storage before retrying.");
+        }
+        return Result(row);
     }
     [Authorize(Roles=AppRoles.Platform)]
     [HttpGet("/api/cameras/{deviceId:guid}/recording-status")]
