@@ -62,6 +62,17 @@ public sealed class SensorDiagnosticsController(AppDbContext db) : ControllerBas
         try{await db.SaveChangesAsync(ct);}catch(DbUpdateException){throw AppException.Conflict("Concurrent test request; reload test status.");}
         return Accepted(ApiResponse<object>.Ok(run,"Test queued; waiting for controller result."));
     }
+    [HttpPost("{id:guid}/tests/{testId:guid}/cancel")]
+    public async Task<IActionResult> Cancel(Guid id,Guid testId,CancellationToken ct)
+    {
+        var s=await Require(id,ct);await Expire(s,ct);
+        var run=await db.SensorDiagnosticRuns.SingleOrDefaultAsync(r=>r.Id==testId&&r.SensorId==id,ct)??throw AppException.NotFound("Sensor test");
+        if(run.Status!="Pending")throw AppException.Conflict("Only pending tests may be cancelled.");
+        run.Status="Cancelled";run.CompletedAt=DateTime.UtcNow;
+        db.OperationLogs.Add(new OperationLog{UserId=Actor(),Action="CancelSensorTest",EntityType="Sensor",EntityId=id,Details=testId.ToString("N")});
+        try{await db.SaveChangesAsync(ct);}catch(DbUpdateConcurrencyException){throw AppException.Conflict("Test state changed; reload.");}
+        return Ok(ApiResponse<object>.Ok(run));
+    }
     [HttpGet("{id:guid}/tests")]
     public async Task<IActionResult> Tests(Guid id,CancellationToken ct)
     {

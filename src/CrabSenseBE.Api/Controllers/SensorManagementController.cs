@@ -15,7 +15,7 @@ namespace CrabSenseBE.Api.Controllers;
 
 public record RegisterSensorFromPort(Guid ControllerId, Guid PortId, string SensorCode, string SensorType,
     string? Unit, string? Name = null, Guid? FarmingAreaId = null, Guid? FarmingRowId = null,
-    Guid? WaterSystemId = null, string? BusAddress = null, string? BusRegister = null);
+    Guid? WaterSystemId = null, string? BusAddress = null, string? BusRegister = null, Guid? RasComponentId = null, string? InstallationLocation = null);
 public record SensorBindingRequest(Guid? DeviceId, Guid? PortId, string? BusAddress = null, string? BusRegister = null);
 public record SensorConfigurationRequest(int SamplingIntervalSeconds, int DisconnectTimeoutSeconds, int ExpectedVersion);
 public record SensorCalibrationRequest(DateTimeOffset PerformedAt, decimal ReferenceValue, decimal ObservedValue,
@@ -73,7 +73,7 @@ public sealed class SensorManagementController(AppDbContext db) : ControllerBase
             if (areaId.HasValue && area != areaId || rowId.HasValue && row?.Id != rowId) continue;
             var m = values.GetValueOrDefault(s.Id);
             result.Add(new { s.Id, s.SensorCode, s.SensorType, s.Name, s.Unit, s.IsActive, s.LastSeenAt,
-                s.WaterSystemId, s.RasComponentId, s.DeviceId, s.ControllerPortId, s.BusPortId, s.BusAddress, s.BusRegister,
+                s.WaterSystemId, waterSystemName=systems.GetValueOrDefault(s.WaterSystemId??Guid.Empty)?.Name, s.RasComponentId, s.DeviceId, s.ControllerPortId, s.BusPortId, s.BusAddress, s.BusRegister,
                 controllerCode = d?.DeviceCode, controllerName = d?.Name, controllerStatus = d?.Status.ToString(),
                 portCode = p?.PortCode, portType = p?.PortType, gpio = p?.Gpio, secondaryGpio = p?.SecondaryGpio,
                 portPresent = p?.IsPresent, farmingAreaId = area, areaName = areas.GetValueOrDefault(area ?? Guid.Empty)?.Name,
@@ -94,6 +94,14 @@ public sealed class SensorManagementController(AppDbContext db) : ControllerBase
     [HttpGet("{id:guid}/inventory")]
     public async Task<IActionResult> InventoryDetail(Guid id,CancellationToken ct)
         => Ok(ApiResponse<object>.Ok((await Inventory(null,null,null,ct,id)).SingleOrDefault() ?? throw AppException.NotFound("Sensor")));
+
+    [HttpGet("ras-locations")]
+    public async Task<IActionResult> RasLocations(CancellationToken ct)
+    {
+        var systems=await db.WaterSystems.AsNoTracking().OrderBy(w=>w.Name).Select(w=>new{w.Id,w.Name,w.FarmingAreaId,w.IsActive}).ToListAsync(ct);
+        var components=await db.RasComponents.AsNoTracking().OrderBy(c=>c.Name).Select(c=>new{c.Id,c.Name,c.WaterSystemId}).ToListAsync(ct);
+        return Ok(ApiResponse<object>.Ok(systems.Select(w=>new{w.Id,w.Name,w.FarmingAreaId,w.IsActive,components=components.Where(c=>c.WaterSystemId==w.Id)})));
+    }
 
     [HttpGet("summary")]
     public async Task<IActionResult> Summary(CancellationToken ct)
@@ -165,8 +173,8 @@ public sealed class SensorManagementController(AppDbContext db) : ControllerBase
         var p=await RequirePort(req.ControllerId,req.PortId,ct);
         // Validate binding before persistence; explicit registration is required even for discovered hardware.
         var s=new Sensor {SensorCode=req.SensorCode?.Trim()??"",SensorType=req.SensorType?.Trim()??"",DeviceId=req.ControllerId,
-            Name=req.Name?.Trim(),Unit=req.Unit?.Trim(),FarmingAreaId=req.FarmingAreaId,FarmingRowId=req.FarmingRowId,WaterSystemId=req.WaterSystemId,SourceType="Controller"};
-        if(string.IsNullOrWhiteSpace(s.SensorCode)||s.SensorCode.Length>128||string.IsNullOrWhiteSpace(s.SensorType)||s.SensorType.Length>64||s.Unit?.Length>32||s.Name?.Length>200)
+            Name=req.Name?.Trim(),Unit=req.Unit?.Trim(),FarmingAreaId=req.FarmingAreaId,FarmingRowId=req.FarmingRowId,WaterSystemId=req.WaterSystemId,RasComponentId=req.RasComponentId,InstallationLocation=req.InstallationLocation?.Trim(),SourceType="Controller"};
+        if(string.IsNullOrWhiteSpace(s.SensorCode)||s.SensorCode.Length>128||string.IsNullOrWhiteSpace(s.SensorType)||s.SensorType.Length>64||s.Unit?.Length>32||s.Name?.Length>200||s.InstallationLocation?.Length>200)
             throw AppException.BadRequest("Invalid sensor metadata.");
         if(await db.Sensors.AnyAsync(x=>x.SensorCode==s.SensorCode,ct))throw AppException.Conflict("Sensor code already exists.");
         await Bind(s,p,req.BusAddress,req.BusRegister,ct);
@@ -230,36 +238,37 @@ public sealed class SensorManagementController(AppDbContext db) : ControllerBase
             latestValue=latest?.Value,latestMeasuredAt=latest?.MeasuredAt,lastReceivedAt=lastReceived,dataQuality=latest?.DataQuality??"Unknown",
             timeoutSeconds=s.DisconnectTimeoutSeconds??900,verification="TelemetryOnly"}));
     }
-    private IQueryable<WaterMeasurement> Measurements(Guid id,DateTimeOffset? from,DateTimeOffset? to)
+    private IQueryable<WaterMeasurement> Measurements(Guid id,DateTimeOffset? from,DateTimeOffset? to,string? quality=null)
     {
         if(from.HasValue&&to.HasValue&&from>=to)throw AppException.BadRequest("From must precede To.");
-        return db.WaterMeasurements.AsNoTracking().Where(m=>m.SensorId==id&&(!from.HasValue||m.MeasuredAt>=from.Value.UtcDateTime)&&(!to.HasValue||m.MeasuredAt<to.Value.UtcDateTime));
+        if(quality is not (null or "Realtime" or "Backfill" or "Unknown"))throw AppException.BadRequest("Invalid data quality.");
+        return db.WaterMeasurements.AsNoTracking().Where(m=>(quality==null||m.DataQuality==quality||(quality=="Unknown"&&m.DataQuality==null))&&m.SensorId==id&&(!from.HasValue||m.MeasuredAt>=from.Value.UtcDateTime)&&(!to.HasValue||m.MeasuredAt<to.Value.UtcDateTime));
     }
     [HttpGet("{id:guid}/measurements")]
-    public async Task<IActionResult> History(Guid id,DateTimeOffset? from,DateTimeOffset? to,int page=1,int pageSize=100,CancellationToken ct=default)
+    public async Task<IActionResult> History(Guid id,DateTimeOffset? from,DateTimeOffset? to,int page=1,int pageSize=100,CancellationToken ct=default,string? quality=null)
     {
         _=await RequireSensor(id,ct);
         if(page<1||pageSize is <1 or >2000||(long)(page-1)*pageSize>int.MaxValue)throw AppException.BadRequest("Invalid pagination.");
-        var q=Measurements(id,from,to);var total=await q.CountAsync(ct);
+        var q=Measurements(id,from,to,quality);var total=await q.CountAsync(ct);
         var items=await q.OrderByDescending(m=>m.MeasuredAt).ThenByDescending(m=>m.Id).Skip((page-1)*pageSize).Take(pageSize)
             .Select(m=>new {m.Id,m.SensorId,m.Value,m.Unit,m.MeasuredAt,m.ReceivedAt,m.Source,m.DataQuality}).ToListAsync(ct);
         return Ok(ApiResponse<object>.Ok(new{items,totalCount=total,page,pageSize,totalPages=(int)Math.Ceiling((double)total/pageSize)}));
     }
     [HttpGet("{id:guid}/statistics")]
-    public async Task<IActionResult> Statistics(Guid id,DateTimeOffset? from,DateTimeOffset? to,CancellationToken ct)
+    public async Task<IActionResult> Statistics(Guid id,DateTimeOffset? from,DateTimeOffset? to,CancellationToken ct,string? quality=null)
     {
         _=await RequireSensor(id,ct);
-        var groups=await Measurements(id,from,to).GroupBy(m=>m.Unit).Select(g=>new{unit=g.Key,count=g.Count(),min=g.Min(m=>m.Value),max=g.Max(m=>m.Value),average=g.Average(m=>m.Value)}).ToListAsync(ct);
+        var groups=await Measurements(id,from,to,quality).GroupBy(m=>m.Unit).Select(g=>new{unit=g.Key,count=g.Count(),min=g.Min(m=>m.Value),max=g.Max(m=>m.Value),average=g.Average(m=>m.Value)}).ToListAsync(ct);
         return Ok(ApiResponse<object>.Ok(new{sensorId=id,groups}));
     }
     [HttpGet("{id:guid}/chart")]
-    public async Task<IActionResult> Chart(Guid id,DateTimeOffset? from,DateTimeOffset? to,int bucketMinutes=60,CancellationToken ct=default)
+    public async Task<IActionResult> Chart(Guid id,DateTimeOffset? from,DateTimeOffset? to,int bucketMinutes=60,CancellationToken ct=default,string? quality=null)
     {
         _=await RequireSensor(id,ct);var end=to??DateTimeOffset.UtcNow;var start=from??end.AddHours(-24);
         if(bucketMinutes<1||bucketMinutes>1440||end<=start||end-start>TimeSpan.FromDays(31)||(end-start).TotalMinutes/bucketMinutes>2000)
             throw AppException.BadRequest("Chart range max 31 days and 2000 buckets.");
         // Bound raw rows; clients may narrow range for higher-frequency sensors.
-        var values=await Measurements(id,start,end).OrderBy(m=>m.MeasuredAt).Take(100001).Select(m=>new{m.MeasuredAt,m.Value,m.Unit}).ToListAsync(ct);
+        var values=await Measurements(id,start,end,quality).OrderBy(m=>m.MeasuredAt).Take(100001).Select(m=>new{m.MeasuredAt,m.Value,m.Unit}).ToListAsync(ct);
         if(values.Count>100000)throw AppException.BadRequest("Too many readings; narrow chart range.");
         var ticks=TimeSpan.FromMinutes(bucketMinutes).Ticks;
         var buckets=values.GroupBy(m=>new {at=new DateTime(m.MeasuredAt.Ticks/ticks*ticks,DateTimeKind.Utc),m.Unit})
@@ -267,6 +276,17 @@ public sealed class SensorManagementController(AppDbContext db) : ControllerBase
         return Ok(ApiResponse<object>.Ok(new{sensorId=id,bucketMinutes,buckets}));
     }
 
+    [HttpPost("{id:guid}/events/{alertId:guid}/acknowledge")]
+    public async Task<IActionResult> Acknowledge(Guid id,Guid alertId,CancellationToken ct)
+    {
+        _=await RequireSensor(id,ct);
+        var a=await db.Alerts.SingleOrDefaultAsync(a=>a.Id==alertId&&a.SensorId==id&&a.SourceType=="Sensor"&&(a.IncidentType=="sensor_disconnect"||a.IncidentType=="sensor_read_error"),ct)
+            ??throw AppException.NotFound("Technical sensor alert");
+        if(a.Status!=AlertStatus.Active)throw AppException.Conflict("Only active technical alerts may be acknowledged.");
+        a.Status=AlertStatus.Acknowledged;a.AcknowledgedAt=DateTime.UtcNow;a.AcknowledgedBy=Actor();
+        Audit(id,"AcknowledgeSensorAlert",alertId.ToString("N"));await Save(ct);
+        return Ok(ApiResponse<object>.Ok(new{a.Id,status=a.Status.ToString()}));
+    }
     [HttpGet("{id:guid}/events")]
     public async Task<IActionResult> Events(Guid id,CancellationToken ct)
     {
@@ -293,6 +313,15 @@ public sealed class SensorManagementController(AppDbContext db) : ControllerBase
         Audit(id,"UpdateSensorConfiguration");await Save(ct);return Ok(ApiResponse<object>.Ok(Config(s)));
     }
 
+    [HttpPost("{id:guid}/configuration/reset")]
+    public async Task<IActionResult> Reset(Guid id,[FromQuery]int expectedVersion,CancellationToken ct)
+    {
+        var s=await RequireSensor(id,ct);
+        if(s.ConfigurationVersion!=expectedVersion)throw AppException.Conflict("Configuration version changed.");
+        s.SamplingIntervalSeconds=null;s.DisconnectTimeoutSeconds=null;s.ConfigurationVersion++;
+        s.AppliedConfigurationVersion=null;s.LastConfigurationAppliedAt=null;
+        Audit(id,"ResetSensorConfiguration");await Save(ct);return Ok(ApiResponse<object>.Ok(Config(s)));
+    }
     [HttpGet("{id:guid}/calibrations")]
     public async Task<IActionResult> Calibrations(Guid id,CancellationToken ct)
     {

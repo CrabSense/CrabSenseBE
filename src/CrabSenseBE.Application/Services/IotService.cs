@@ -1339,7 +1339,11 @@ public class IotService : IIotService
                 || await _uow.AiDetections.AnyAsync(x => x.DeviceId == id, ct)))
             throw AppException.Conflict("Camera có lịch sử media/AI; hãy ngừng sử dụng thay vì xóa.");
         foreach (var sensor in await _uow.Sensors.FindAsync(s => s.DeviceId == id, ct))
-            sensor.DeviceId = null;
+        {
+            sensor.DeviceId = null; sensor.ControllerPortId=null; sensor.BusPortId=null; sensor.BusAddress=null; sensor.BusRegister=null;
+            sensor.LastSeenAt=null; sensor.ConfigurationVersion++; sensor.AppliedConfigurationVersion=null; sensor.LastConfigurationAppliedAt=null;
+            _uow.Sensors.Update(sensor);
+        }
         foreach (var relay in await _uow.RasComponents.FindAsync(c => c.RelayDeviceId == id, ct))
         {
             relay.RelayDeviceId = null;

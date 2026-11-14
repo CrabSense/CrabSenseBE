@@ -78,6 +78,7 @@ public sealed class ControllerPortsController(IUnitOfWork uow, IConfiguration co
             if (matches.Count == 1 && matches[0].ControllerPortId is null && matches[0].BusPortId is null && !sensors.Any(s => s.ControllerPortId == port.Id))
             {
                 matches[0].ControllerPortId = port.Id;
+                matches[0].ConfigurationVersion++; matches[0].LastSeenAt=null; matches[0].AppliedConfigurationVersion=null; matches[0].LastConfigurationAppliedAt=null;
                 uow.Sensors.Update(matches[0]);
             }
         }
@@ -167,7 +168,7 @@ public sealed class ControllerPortsController(IUnitOfWork uow, IConfiguration co
         return Ok(ApiResponse<object>.Ok(new { deviceId = id, device.DeviceCode, device.CapabilityVersion,
             device.HardwareModel, ports = ports.OrderBy(p => p.PortCode).Select(Map),
             equipment = equipment.Select(x => new { x.Id, x.Name, x.RelayChannel, x.ControllerPortId }),
-            sensors = sensors.Select(x => new { x.Id, x.SensorCode, x.SensorType, x.ControllerPortId }) }));
+            sensors = sensors.Select(x => new { x.Id, x.SensorCode, x.SensorType, x.ControllerPortId, x.BusPortId, x.BusAddress, x.BusRegister }) }));
     }
 
     // Link a registered sensor to a discovered input. A bus can serve many
@@ -192,7 +193,8 @@ public sealed class ControllerPortsController(IUnitOfWork uow, IConfiguration co
             throw AppException.Conflict("Input already has a sensor.");
         sensor.ControllerPortId = portId;
         sensor.BusPortId = null; sensor.BusAddress = null; sensor.BusRegister = null;
-        sensor.LastSeenAt = null; sensor.AppliedConfigurationVersion = null;
+        sensor.LastSeenAt = null; sensor.AppliedConfigurationVersion = null; sensor.LastConfigurationAppliedAt=null; sensor.ConfigurationVersion++;
+        await uow.OperationLogs.AddAsync(new OperationLog { UserId=actor.Id, Action="UpdateSensorBinding", EntityType="Sensor", EntityId=sensor.Id },ct);
         uow.Sensors.Update(sensor);
         try { await uow.SaveChangesAsync(ct); }
         catch (DbUpdateException) { throw AppException.Conflict("Concurrent input binding; reload inventory."); }
