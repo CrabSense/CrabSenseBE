@@ -12,7 +12,7 @@ public class DisconnectCheckHostedService : BackgroundService
 {
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly ILogger<DisconnectCheckHostedService> _logger;
-    private readonly TimeSpan _interval = TimeSpan.FromMinutes(5);
+    private readonly TimeSpan _interval = TimeSpan.FromMinutes(1);
     private readonly int _timeoutMinutes = 15;
 
     public DisconnectCheckHostedService(

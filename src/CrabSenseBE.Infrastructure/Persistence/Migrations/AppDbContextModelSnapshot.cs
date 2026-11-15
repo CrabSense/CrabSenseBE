@@ -632,10 +632,24 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.Property<string>("ReasonCode").IsRequired().HasColumnType("text");
                     b.Property<DateTime>("OccurredAt").HasColumnType("timestamp with time zone");
                     b.Property<DateTime?>("LastSeenAt").HasColumnType("timestamp with time zone");
+                    b.Property<DateTime?>("PreviousObservedAt").HasColumnType("timestamp with time zone");
                     b.HasKey("Id");
                     b.HasIndex("SourceType","SourceId","OccurredAt");
                     b.HasIndex("OccurredAt");
                     b.ToTable("DeviceConnectionEvents","be");
+                });
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.DeviceMonitoringPolicy", b =>
+                {
+                    b.Property<Guid>("Id").ValueGeneratedOnAdd().HasColumnType("uuid");
+                    b.Property<DateTime>("CreatedAt").HasColumnType("timestamp with time zone");
+                    b.Property<DateTime?>("UpdatedAt").HasColumnType("timestamp with time zone");
+                    b.Property<string>("SourceType").IsRequired().HasColumnType("text");
+                    b.Property<int>("HeartbeatTimeoutSeconds").HasColumnType("integer");
+                    b.Property<int>("Version").IsConcurrencyToken().HasColumnType("integer");
+                    b.Property<Guid>("UpdatedBy").HasColumnType("uuid");
+                    b.HasKey("Id");
+                    b.HasIndex("SourceType").IsUnique();
+                    b.ToTable("DeviceMonitoringPolicies","be");
                 });
             modelBuilder.Entity("CrabSenseBE.Domain.Entities.DeviceMonitoringState", b =>
                 {

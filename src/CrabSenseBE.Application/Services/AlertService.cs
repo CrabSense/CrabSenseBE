@@ -19,12 +19,14 @@ public class AlertService : IAlertService
     private readonly IUnitOfWork _uow;
     private readonly INotificationService _notifications;
     private readonly FarmAreaScope _areas;
+    private readonly IMonitoringTimeoutProvider? _monitoringTimeouts;
 
-    public AlertService(IUnitOfWork uow, INotificationService notifications, ICurrentUserService? currentUser = null)
+    public AlertService(IUnitOfWork uow, INotificationService notifications, ICurrentUserService? currentUser = null, IMonitoringTimeoutProvider? monitoringTimeouts = null)
     {
         _uow = uow;
         _notifications = notifications;
         _areas = new FarmAreaScope(uow, currentUser);
+        _monitoringTimeouts=monitoringTimeouts;
     }
 
     // ─── Thresholds ─────────────────────────────────────────────────────────
@@ -406,12 +408,13 @@ public class AlertService : IAlertService
     public async Task<ApiResponse<int>> CheckDisconnectsAsync(
         int timeoutMinutes = 15, CancellationToken ct = default)
     {
-        var cutoff = DateTime.UtcNow.AddMinutes(-timeoutMinutes);
+        var now=DateTime.UtcNow;
+        var timeouts=_monitoringTimeouts==null?new MonitoringTimeouts(timeoutMinutes*60,timeoutMinutes*60,120,timeoutMinutes*60):await _monitoringTimeouts.GetAsync(ct);
         var created = 0;
 
         var sensors = await _uow.Sensors.FindAsync(
             s => s.IsActive && s.LastSeenAt != null, ct);
-        sensors = sensors.Where(s => s.LastSeenAt < DateTime.UtcNow.AddSeconds(-(s.DisconnectTimeoutSeconds ?? timeoutMinutes*60)));
+        sensors = sensors.Where(s => s.LastSeenAt < now.AddSeconds(-(s.DisconnectTimeoutSeconds ?? timeoutMinutes*60)));
         foreach (var sensor in sensors)
         {
             var areaId = await AreaOfSensorAsync(sensor, ct);
@@ -436,7 +439,7 @@ public class AlertService : IAlertService
                 IncidentType = "sensor_disconnect",
                 SourceType = "Sensor",
                 SourceId = sensor.Id.ToString("N"),
-                Message = $"Cảm biến mất kết nối: {sensor.SensorCode} (>{timeoutMinutes} phút)",
+                Message = $"Cảm biến mất kết nối: {sensor.SensorCode} (>{sensor.DisconnectTimeoutSeconds??timeoutMinutes*60} giây)",
                 Severity = AlertSeverity.Critical,
                 Status = AlertStatus.Active,
                 OccurrenceCount = 1,
@@ -456,13 +459,14 @@ public class AlertService : IAlertService
                     ["sensor"] = sensor.SensorType,
                     ["code"] = sensor.SensorCode,
                     ["name"] = sensor.SensorType,
-                    ["minutes"] = timeoutMinutes.ToString()
+                    ["minutes"] = ((sensor.DisconnectTimeoutSeconds??timeoutMinutes*60)/60.0).ToString(System.Globalization.CultureInfo.InvariantCulture)
                 }, ct);
         }
 
         var devices = await _uow.Devices.FindAsync(
-            d => d.LastSeenAt != null && d.LastSeenAt < cutoff
-                 && d.Status != DeviceStatus.Maintenance, ct);
+            d => d.LastSeenAt != null && d.Status != DeviceStatus.Maintenance
+                 && (d.EdgeState=="Approved"||d.EdgeState=="Online"), ct);
+        devices=devices.Where(d=>d.LastSeenAt<now.AddSeconds(-timeouts.ForDevice(d)));
         foreach (var device in devices)
         {
             device.Status = DeviceStatus.Offline;
@@ -511,16 +515,16 @@ public class AlertService : IAlertService
                     ["code"] = device.DeviceCode,
                     ["name"] = device.Name ?? device.DeviceCode,
                     ["deviceType"] = kind,
-                    ["minutes"] = timeoutMinutes.ToString()
+                    ["minutes"] = (timeouts.ForDevice(device)/60.0).ToString(System.Globalization.CultureInfo.InvariantCulture)
                 }, ct);
         }
 
-        var kioskCutoff = DateTime.UtcNow.AddMinutes(-2);
+        var kioskCutoff = now.AddSeconds(-timeouts.KioskSeconds);
         var kiosks = await _uow.FarmKiosks.FindAsync(
             k => k.Status != "Revoked" && k.Status != "Created", ct);
         foreach (var kiosk in kiosks)
         {
-            var message = $"Kiosk mất kết nối: {kiosk.Code} (>2 phút)";
+            var message = $"Kiosk mất kết nối: {kiosk.Code} (>{timeouts.KioskSeconds} giây)";
             var active = (await _uow.Alerts.FindAsync(
                 a => a.IncidentType == "kiosk_disconnect"
                     && a.SourceType == "Kiosk"
@@ -572,7 +576,7 @@ public class AlertService : IAlertService
                         {
                             ["code"] = kiosk.Code,
                             ["name"] = kiosk.Name ?? kiosk.Code,
-                            ["minutes"] = "2"
+                            ["minutes"] = (timeouts.KioskSeconds/60.0).ToString(System.Globalization.CultureInfo.InvariantCulture)
                         }, ct);
                 }
             }
@@ -1046,26 +1050,27 @@ public class AlertService : IAlertService
         CancellationToken ct)
     {
         var cutoff = DateTime.UtcNow.AddMinutes(-5);
+        var timeouts=_monitoringTimeouts==null?new MonitoringTimeouts():await _monitoringTimeouts.GetAsync(ct);
         if (alert.IncidentType == "sensor_disconnect"
             && alert.SensorId is Guid sensorId)
         {
             var sensor = await _uow.Sensors.GetByIdAsync(sensorId, ct);
             return sensor?.IsActive == true
-                && sensor.LastSeenAt >= cutoff;
+                && sensor.LastSeenAt >= DateTime.UtcNow.AddSeconds(-Math.Min(300,sensor.DisconnectTimeoutSeconds??900));
         }
         if (alert.IncidentType == "device_disconnect"
             && Guid.TryParse(alert.SourceId, out var deviceId))
         {
             var device = await _uow.Devices.GetByIdAsync(deviceId, ct);
             return device?.Status == DeviceStatus.Online
-                && device.LastSeenAt >= cutoff
+                && device.LastSeenAt >= DateTime.UtcNow.AddSeconds(-Math.Min(300,timeouts.ForDevice(device)))
                 && device.EdgeState is "Approved" or "Online";
         }
         if (alert.IncidentType == "kiosk_disconnect"
             && Guid.TryParse(alert.SourceId, out var kioskId))
         {
             var kiosk = await _uow.FarmKiosks.GetByIdAsync(kioskId, ct);
-            return kiosk?.LastSeenAt >= DateTime.UtcNow.AddMinutes(-2);
+            return kiosk!=null&&kiosk.Status!="Revoked"&&kiosk.LastSeenAt>=DateTime.UtcNow.AddSeconds(-timeouts.KioskSeconds);
         }
         if (alert.IncidentType == "threshold_violation"
             && alert.SensorId is Guid thresholdSensorId)

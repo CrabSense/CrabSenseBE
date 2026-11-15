@@ -40,24 +40,43 @@ public sealed class DeviceMonitoringController(AppDbContext db):ControllerBase
     [HttpGet("devices")]
     public async Task<IActionResult> Devices(string? type,string? status,Guid? farmingAreaId,Guid? farmingRowId,string? search,bool? hasAlert,int page=1,int pageSize=20,CancellationToken ct=default){
         await Actor(ct);Paging(page,pageSize);var now=DateTime.UtcNow;
-        var rows=Filter(await new DeviceMonitoringReader(db).ReadAsync(now,ct),type,status,farmingAreaId,farmingRowId,search,hasAlert).OrderBy(x=>x.Type).ThenBy(x=>x.Code).ThenBy(x=>x.Id).ToList();
-        return Result(new{items=rows.Skip((page-1)*pageSize).Take(pageSize),total=rows.Count,page,pageSize,checkedAtUtc=now});
+        var reader=new DeviceMonitoringReader(db);var rows=Filter(await reader.ReadAsync(now,ct,false),type,status,farmingAreaId,farmingRowId,search,hasAlert).OrderBy(x=>x.Type).ThenBy(x=>x.Code).ThenBy(x=>x.Id).ToList();
+        var items=await reader.AddMeasurementsAsync(rows.Skip((page-1)*pageSize).Take(pageSize).ToList(),ct);
+        return Result(new{items,total=rows.Count,page,pageSize,checkedAtUtc=now});
     }
     [HttpGet("{type}/{id:guid}")]
     public async Task<IActionResult> Detail(string type,Guid id,CancellationToken ct){
-        await Actor(ct);var now=DateTime.UtcNow;var row=(await new DeviceMonitoringReader(db).ReadAsync(now,ct)).SingleOrDefault(x=>x.Type==type&&x.Id==id)??throw AppException.NotFound("Device");
-        return Result(new{device=row,checkedAtUtc=now});
+        await Actor(ct);var now=DateTime.UtcNow;var reader=new DeviceMonitoringReader(db);var row=(await reader.ReadAsync(now,ct,false)).SingleOrDefault(x=>x.Type==type&&x.Id==id)??throw AppException.NotFound("Device");
+        return Result(new{device=(await reader.AddMeasurementsAsync([row],ct)).Single(),checkedAtUtc=now});
     }
     [HttpGet("areas")]
     public async Task<IActionResult> Areas(CancellationToken ct){
         await Actor(ct);var now=DateTime.UtcNow;var rows=await new DeviceMonitoringReader(db).ReadAsync(now,ct,false);
         return Result(rows.GroupBy(x=>new{x.FarmingAreaId,x.AreaName}).Select(g=>new{g.Key.FarmingAreaId,g.Key.AreaName,counts=Counts(g)}));
     }
+    public sealed record PolicyUpdate(int HeartbeatTimeoutSeconds,int ExpectedVersion);
     [HttpGet("policies")]
     public async Task<IActionResult> Policies(CancellationToken ct){
-        await Actor(ct);return Result(new{cameraTimeoutSeconds=900,controllerTimeoutSeconds=900,kioskTimeoutSeconds=120,agentTimeoutSeconds=90,
-            sensorDefaultTimeoutSeconds=900,sensorOverrideSupported=true,historySampleSeconds=60,historyGapSeconds=180,
-            note="Sensor timeout is configured in sensor configuration. Other timeouts match current disconnect and recording policies."});
+        await Actor(ct);var t=await new DeviceMonitoringPolicyStore(db).GetAsync(ct);
+        var rows=await db.DeviceMonitoringPolicies.AsNoTracking().ToDictionaryAsync(x=>x.SourceType,ct);
+        var items=new[]{("camera",t.CameraSeconds),("controller",t.ControllerSeconds),("kiosk",t.KioskSeconds)}
+            .Select(x=>new{sourceType=x.Item1,heartbeatTimeoutSeconds=x.Item2,version=rows.GetValueOrDefault(x.Item1)?.Version??0});
+        return Result(new{items,cameraTimeoutSeconds=t.CameraSeconds,controllerTimeoutSeconds=t.ControllerSeconds,kioskTimeoutSeconds=t.KioskSeconds,
+            legacyControllerTimeoutSeconds=t.LegacyControllerSeconds,agentTimeoutSeconds=90,sensorDefaultTimeoutSeconds=900,sensorOverrideSupported=true,
+            historySampleSeconds=60,historyGapSeconds=180});
+    }
+    [HttpPut("policies/{type}")]
+    public async Task<IActionResult> SavePolicy(string type,PolicyUpdate request,CancellationToken ct){
+        var actor=await Actor(ct);
+        if(type is not ("camera" or "controller" or "kiosk")||request.HeartbeatTimeoutSeconds is <60 or >86400)
+            throw AppException.BadRequest("Timeout must be 60–86400 seconds for camera/controller/kiosk.");
+        var row=await db.DeviceMonitoringPolicies.SingleOrDefaultAsync(x=>x.SourceType==type,ct);
+        if(request.ExpectedVersion!=(row?.Version??0))throw AppException.Conflict("Policy changed; reload.");
+        if(row==null){row=new(){SourceType=type};db.DeviceMonitoringPolicies.Add(row);}else row.Version++;
+        row.HeartbeatTimeoutSeconds=request.HeartbeatTimeoutSeconds;row.UpdatedBy=actor;row.UpdatedAt=DateTime.UtcNow;
+        db.OperationLogs.Add(new(){UserId=actor,Action="UpdateDeviceMonitoringPolicy",EntityType="DeviceMonitoringPolicy",EntityId=row.Id,Details=type+":"+request.HeartbeatTimeoutSeconds});
+        try{await db.SaveChangesAsync(ct);}catch(DbUpdateException){throw AppException.Conflict("Policy changed; reload.");}
+        return Result(new{row.SourceType,row.HeartbeatTimeoutSeconds,row.Version});
     }
     [HttpGet("{type}/{id:guid}/history")]
     public async Task<IActionResult> History(string type,Guid id,int page=1,int pageSize=50,CancellationToken ct=default){
@@ -65,6 +84,18 @@ public sealed class DeviceMonitoringController(AppDbContext db):ControllerBase
         var total=await q.CountAsync(ct);var state=await db.DeviceMonitoringStates.AsNoTracking().SingleOrDefaultAsync(x=>x.SourceType==type&&x.SourceId==id,ct);
         var items=await q.OrderByDescending(x=>x.OccurredAt).ThenBy(x=>x.Id).Skip((page-1)*pageSize).Take(pageSize).ToListAsync(ct);
         return Result(new{items,total,page,pageSize,lastObservedAt=state?.ObservedAt,coverage="sampled_transitions_only"});
+    }
+    [HttpGet("{type}/{id:guid}/availability")]
+    public async Task<IActionResult> Availability(string type,Guid id,int days=7,CancellationToken ct=default){
+        await Actor(ct);if(days is <1 or >90)throw AppException.BadRequest("Days must be between 1 and 90.");
+        var to=DateTime.UtcNow;var from=to.AddDays(-days);
+        var q=db.DeviceConnectionEvents.AsNoTracking().Where(x=>x.SourceType==type&&x.SourceId==id);
+        var prior=await q.Where(x=>x.OccurredAt<from).OrderByDescending(x=>x.OccurredAt).ThenByDescending(x=>x.Id).FirstOrDefaultAsync(ct);
+        var events=await q.Where(x=>x.OccurredAt>=from&&x.OccurredAt<=to).OrderBy(x=>x.OccurredAt).ThenBy(x=>x.Id).Take(50001).ToListAsync(ct);
+        if(events.Count>50000)throw AppException.BadRequest("Too many observations; use a shorter range.");
+        if(prior!=null)events.Insert(0,prior);
+        var state=await db.DeviceMonitoringStates.AsNoTracking().SingleOrDefaultAsync(x=>x.SourceType==type&&x.SourceId==id,ct);
+        return Result(DeviceAvailability.Calculate(events,state,from,to));
     }
     [HttpGet("trends")]
     public async Task<IActionResult> Trends(Guid? farmingAreaId,int days=7,CancellationToken ct=default){
@@ -84,17 +115,30 @@ public sealed class DeviceMonitoringController(AppDbContext db):ControllerBase
         if(farmingAreaId.HasValue)q=q.Where(a=>a.FarmingAreaId==farmingAreaId);
         if(!string.IsNullOrWhiteSpace(severity)){if(!Enum.TryParse<AlertSeverity>(severity,true,out var s))throw AppException.BadRequest("Invalid severity.");q=q.Where(a=>a.Severity==s);}
         var total=await q.CountAsync(ct);
-        var items=await q.OrderByDescending(a=>a.LastOccurredAt??a.CreatedAt).ThenBy(a=>a.Id).Skip((page-1)*pageSize).Take(pageSize)
-            .Select(a=>new{a.Id,a.SourceType,a.SourceId,a.FarmingAreaId,a.IncidentType,a.Message,severity=a.Severity.ToString(),status=a.Status.ToString(),a.CreatedAt,a.LastOccurredAt,a.OccurrenceCount,a.AcknowledgedAt,a.ResolvedAt}).ToListAsync(ct);
+        var alerts=await q.OrderByDescending(a=>a.LastOccurredAt??a.CreatedAt).ThenBy(a=>a.Id).Skip((page-1)*pageSize).Take(pageSize).ToListAsync(ct);
+        var rows=await new DeviceMonitoringReader(db).ReadAsync(DateTime.UtcNow,ct,false);
+        var items=alerts.Select(a=>{
+            var id=Guid.TryParse(a.SourceId,out var sourceId)?sourceId:a.SensorId;
+            var target=rows.FirstOrDefault(x=>x.Id==id&&(a.SourceType=="Device"?x.Type=="camera"||x.Type=="controller":x.Type==a.SourceType?.ToLowerInvariant()));
+            return new{a.Id,a.SourceType,a.SourceId,a.FarmingAreaId,a.IncidentType,a.Message,severity=a.Severity.ToString(),status=a.Status.ToString(),a.CreatedAt,a.LastOccurredAt,a.OccurrenceCount,a.AcknowledgedAt,a.ResolvedAt,targetId=target?.Id,targetType=target?.Type,sourceCode=target?.Code};
+        });
         return Result(new{items,total,page,pageSize});
     }
     [HttpPost("alerts/{id:guid}/acknowledge")]
     public async Task<IActionResult> Acknowledge(Guid id,CancellationToken ct){
         var actor=await Actor(ct);if(!await DeviceMonitoringReader.TechnicalAlerts(db).AnyAsync(a=>a.Id==id,ct))throw AppException.NotFound("Technical alert");
-        var a=await db.Alerts.SingleAsync(x=>x.Id==id,ct);
-        if(a.Status!=AlertStatus.Active)throw AppException.Conflict("Only active alerts can be acknowledged.");
-        a.Status=AlertStatus.Acknowledged;a.AcknowledgedAt=DateTime.UtcNow;a.AcknowledgedBy=actor;
+        await using var tx=db.Database.IsRelational()?await db.Database.BeginTransactionAsync(ct):null;
+        var now=DateTime.UtcNow;
+        if(db.Database.IsRelational()){
+            var count=await db.Alerts.Where(x=>x.Id==id&&x.Status==AlertStatus.Active).ExecuteUpdateAsync(s=>s.SetProperty(x=>x.Status,AlertStatus.Acknowledged).SetProperty(x=>x.AcknowledgedAt,(DateTime?)now).SetProperty(x=>x.AcknowledgedBy,(Guid?)actor),ct);
+            if(count!=1)throw AppException.Conflict("Only active alerts can be acknowledged.");
+        }else{
+            var a=await db.Alerts.SingleAsync(x=>x.Id==id,ct);
+            if(a.Status!=AlertStatus.Active)throw AppException.Conflict("Only active alerts can be acknowledged.");
+            a.Status=AlertStatus.Acknowledged;a.AcknowledgedAt=now;a.AcknowledgedBy=actor;
+        }
         db.OperationLogs.Add(new(){UserId=actor,Action="AcknowledgeDeviceMonitoringAlert",EntityType="Alert",EntityId=id});
-        await db.SaveChangesAsync(ct);return Result(new{a.Id,status=a.Status.ToString()});
+        await db.SaveChangesAsync(ct);if(tx!=null)await tx.CommitAsync(ct);
+        return Result(new{id,status=AlertStatus.Acknowledged.ToString()});
     }
 }
