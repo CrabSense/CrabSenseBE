@@ -126,7 +126,8 @@ public record CreateDeviceRequest(
     string? Resolution = null,
     string? InstallationLocation = null,
     string? Note = null,
-    string? Notes = null);
+    string? Notes = null,
+    bool PrepareOnly = false);
 
 /// <remarks>
 /// FarmingRowId = Guid.Empty → gỡ khỏi dãy.
