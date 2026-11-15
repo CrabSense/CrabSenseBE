@@ -13,8 +13,9 @@ public sealed class DeviceMonitoringTests
         await using var db=new CrabSenseBE.Infrastructure.Persistence.AppDbContext(
             new Microsoft.EntityFrameworkCore.DbContextOptionsBuilder<CrabSenseBE.Infrastructure.Persistence.AppDbContext>()
                 .UseInMemoryDatabase(Guid.NewGuid().ToString()).Options);
-        var camera=new Device{DeviceCode="CAM-HEALTH",DeviceType="camera",Status=DeviceStatus.Online,EdgeState="Approved",LastSeenAt=now};
-        var kiosk=new FarmKiosk{Code="KIOSK-HEALTH",Status="Online",LastSeenAt=now};
+        var areaId=Guid.NewGuid();
+        var camera=new Device{DeviceCode="CAM-HEALTH",DeviceType="camera",FarmingAreaId=areaId,Status=DeviceStatus.Online,EdgeState="Approved",LastSeenAt=now};
+        var kiosk=new FarmKiosk{Code="KIOSK-HEALTH",FarmingAreaId=areaId,Status="Online",LastSeenAt=now};
         db.Devices.Add(camera);db.FarmKiosks.Add(kiosk);
         db.CameraRecordingAgents.Add(new CameraRecordingAgent{DeviceId=camera.Id,KioskId=kiosk.Id,Enabled=true,LastSeenAt=now.AddMinutes(-5)});
         await db.SaveChangesAsync();
