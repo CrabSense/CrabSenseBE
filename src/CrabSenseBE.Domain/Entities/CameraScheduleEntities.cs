@@ -51,4 +51,7 @@ public sealed class CameraRecordingAgent : BaseEntity
     public DateTime? LastSeenAt { get; set; }
     public string? WorkerVersion { get; set; }
     public int PendingClips { get; set; }
+    public string? StreamProbeStatus { get; set; }
+    public DateTime? StreamProbedAt { get; set; }
+    public DateTime? LastFrameObservedAt { get; set; }
 }

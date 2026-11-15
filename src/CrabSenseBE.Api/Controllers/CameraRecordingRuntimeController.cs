@@ -60,13 +60,13 @@ public sealed class CameraRecordingRuntimeController(AppDbContext db, IConfigura
     public async Task<IActionResult> Configuration(Guid deviceId,CancellationToken ct)
     {
         await Authenticate(deviceId,ct);var camera=await Camera(deviceId,ct);var s=await Schedule(deviceId,ct);
-        if(s is null) return Result(new { deviceId, shouldRecord=false, reason="NoSchedule" });
+        if(s is null) return Result(new { deviceId, shouldRecord=false, reason="NoSchedule",streamUrl=CameraConfiguration.SafeUrl(camera.StreamUrl),monitorStream=camera.Status!=DeviceStatus.Maintenance });
         var used=await CameraRecordingRetentionService.UsedBytes(db,deviceId,ct);var limit=CameraRecordingRetentionService.LimitBytes(s);
         var quotaReached=limit.HasValue&&used>=limit.Value;
         var due=camera.Status!=DeviceStatus.Maintenance&&!quotaReached&&await Due(s,ct);
         return Result(new {deviceId,scheduleId=s.Id,scheduleVersion=s.Version,shouldRecord=due,usedBytes=used,limitBytes=limit,reason=quotaReached?"StorageLimitReached":null,
             s.Mode,s.Timezone,s.RetentionDays,s.VideoQuality,s.Fps,s.MaxStorageGb,
-            streamUrl=CameraConfiguration.SafeUrl(camera.StreamUrl), leaseSeconds=90});
+            streamUrl=CameraConfiguration.SafeUrl(camera.StreamUrl), monitorStream=camera.Status!=DeviceStatus.Maintenance,leaseSeconds=90});
     }
     [AllowAnonymous]
     [HttpPost("executions")]
