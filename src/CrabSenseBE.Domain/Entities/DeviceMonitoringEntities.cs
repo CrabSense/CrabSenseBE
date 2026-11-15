@@ -10,6 +10,7 @@ public sealed class DeviceConnectionEvent:BaseEntity
     public string ReasonCode {get;set;}="";
     public DateTime OccurredAt {get;set;}
     public DateTime? LastSeenAt {get;set;}
+    public DateTime? PreviousObservedAt {get;set;}
 }
 public sealed class DeviceMonitoringState:BaseEntity
 {
