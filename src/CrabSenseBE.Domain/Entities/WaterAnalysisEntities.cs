@@ -50,6 +50,7 @@ public class WaterAnalysisRun : BaseEntity
     public Guid? CalibrationId { get; set; }
     public Guid? SampleMediaId { get; set; }
     public string? ColorEvidenceJson { get; set; }
+    public string? SampleSha256 { get; set; }
     public FarmingArea? FarmingArea { get; set; }
 }
 
@@ -71,6 +72,7 @@ public sealed class WaterColorCalibration : BaseEntity
     public string ValidationJson { get; set; } = "";
     public DateTime ValidUntil { get; set; }
     public DateTime? RevokedAt { get; set; }
+    public DateTime? QualityCheckDueAt { get; set; }
     public Guid CreatedBy { get; set; }
 }
 
@@ -113,4 +115,19 @@ public sealed class WaterAssayChannel : BaseEntity
     public Guid? CapturedMediaId { get; set; }
     public string? Failure { get; set; }
     public string EventsJson { get; set; } = "[]";
+}
+
+public sealed class WaterCalibrationCheck : BaseEntity
+{
+    public Guid CalibrationId { get; set; }
+    public Guid MediaId { get; set; }
+    public Guid PerformedBy { get; set; }
+    public string Status { get; set; } = "";
+    public string Unit { get; set; } = "";
+    public decimal Expected { get; set; }
+    public decimal Estimated { get; set; }
+    public decimal AbsoluteError { get; set; }
+    public decimal MaxError { get; set; }
+    public string ImageSha256 { get; set; } = "";
+    public string EvidenceJson { get; set; } = "";
 }

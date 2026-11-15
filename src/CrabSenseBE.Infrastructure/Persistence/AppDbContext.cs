@@ -53,6 +53,7 @@ public class AppDbContext : DbContext
     public DbSet<WaterAssayChannel> WaterAssayChannels => Set<WaterAssayChannel>();
     public DbSet<WaterAnalysisBatch> WaterAnalysisBatches => Set<WaterAnalysisBatch>();
     public DbSet<WaterAnalysisSchedule> WaterAnalysisSchedules => Set<WaterAnalysisSchedule>();
+    public DbSet<WaterCalibrationCheck> WaterCalibrationChecks => Set<WaterCalibrationCheck>();
     public DbSet<WaterColorCalibration> WaterColorCalibrations => Set<WaterColorCalibration>();
     public DbSet<WaterAnalysisRun> WaterAnalysisRuns => Set<WaterAnalysisRun>();
     public DbSet<Hdf5Upload> Hdf5Uploads => Set<Hdf5Upload>();
@@ -126,6 +127,15 @@ public class AppDbContext : DbContext
 
         // Schema riêng — không đụng bảng Cap_Ras snake_case trong public
         modelBuilder.HasDefaultSchema("be");
+        modelBuilder.Entity<WaterCalibrationCheck>().HasIndex(x=>x.MediaId).IsUnique();
+        modelBuilder.Entity<WaterCalibrationCheck>().Property(x=>x.ImageSha256).HasMaxLength(64);
+        modelBuilder.Entity<WaterCalibrationCheck>().HasIndex(x=>new{x.CalibrationId,x.ImageSha256}).IsUnique();
+        modelBuilder.Entity<WaterCalibrationCheck>().HasIndex(x=>new{x.CalibrationId,x.CreatedAt});
+        modelBuilder.Entity<WaterCalibrationCheck>().HasOne<WaterColorCalibration>().WithMany().HasForeignKey(x=>x.CalibrationId).OnDelete(DeleteBehavior.Restrict);
+        modelBuilder.Entity<WaterCalibrationCheck>().HasOne<MediaAsset>().WithMany().HasForeignKey(x=>x.MediaId).OnDelete(DeleteBehavior.Restrict);
+        modelBuilder.Entity<WaterAnalysisRun>().Property(x=>x.SampleSha256).HasMaxLength(64);
+        modelBuilder.Entity<WaterAnalysisRun>().HasIndex(x=>new{x.FarmingAreaId,x.SampleSha256}).IsUnique();
+
         modelBuilder.Entity<WaterAssayChannel>().HasIndex(x=>new{x.BatchId,x.Analyte}).IsUnique();
         modelBuilder.Entity<WaterAssayChannel>().HasIndex(x=>x.CapturedMediaId).IsUnique();
         modelBuilder.Entity<WaterAssayChannel>().HasOne<WaterAnalysisBatch>().WithMany().HasForeignKey(x=>x.BatchId).OnDelete(DeleteBehavior.Restrict);

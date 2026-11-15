@@ -91,7 +91,7 @@ public sealed class WaterAnalysisBatchController(AppDbContext db,IUnitOfWork uow
         {
             if(request.Step=="rinse"&&!request.KitInstructionsConfirmed)
                 throw AppException.BadRequest("Xác nhận đã đối chiếu đúng phiên bản kit, hướng dẫn, lô thuốc và điều kiện mẫu trước khi bắt đầu.");
-            if(request.Step!="cleanup"&&!await db.WaterColorCalibrations.AnyAsync(x=>x.Id==channel.CalibrationId&&x.RevokedAt==null&&x.ValidUntil>now,ct))
+            if(request.Step!="cleanup"&&!await db.WaterColorCalibrations.AnyAsync(x=>x.Id==channel.CalibrationId&&x.RevokedAt==null&&x.ValidUntil>now&&(x.QualityCheckDueAt==null||x.QualityCheckDueAt>now),ct))
                 throw AppException.Conflict("Hiệu chuẩn hết hiệu lực; báo lỗi và làm sạch.");
             if(request.Step=="capture"&&request.MediaId is Guid mediaId)
             {
