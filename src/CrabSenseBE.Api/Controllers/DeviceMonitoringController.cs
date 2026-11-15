@@ -40,13 +40,17 @@ public sealed class DeviceMonitoringController(AppDbContext db):ControllerBase
     [HttpGet("devices")]
     public async Task<IActionResult> Devices(string? type,string? status,Guid? farmingAreaId,Guid? farmingRowId,string? search,bool? hasAlert,int page=1,int pageSize=20,CancellationToken ct=default){
         await Actor(ct);Paging(page,pageSize);var now=DateTime.UtcNow;
-        var rows=Filter(await new DeviceMonitoringReader(db).ReadAsync(now,ct),type,status,farmingAreaId,farmingRowId,search,hasAlert).OrderBy(x=>x.Type).ThenBy(x=>x.Code).ThenBy(x=>x.Id).ToList();
-        return Result(new{items=rows.Skip((page-1)*pageSize).Take(pageSize),total=rows.Count,page,pageSize,checkedAtUtc=now});
+        var reader=new DeviceMonitoringReader(db);
+        var rows=Filter(await reader.ReadAsync(now,ct,false),type,status,farmingAreaId,farmingRowId,search,hasAlert)
+            .OrderBy(x=>x.Type).ThenBy(x=>x.Code).ThenBy(x=>x.Id).ToList();
+        var items=await reader.AddMeasurementsAsync(rows.Skip((page-1)*pageSize).Take(pageSize).ToList(),ct);
+        return Result(new{items,total=rows.Count,page,pageSize,checkedAtUtc=now});
     }
     [HttpGet("{type}/{id:guid}")]
     public async Task<IActionResult> Detail(string type,Guid id,CancellationToken ct){
-        await Actor(ct);var now=DateTime.UtcNow;var row=(await new DeviceMonitoringReader(db).ReadAsync(now,ct)).SingleOrDefault(x=>x.Type==type&&x.Id==id)??throw AppException.NotFound("Device");
-        return Result(new{device=row,checkedAtUtc=now});
+        await Actor(ct);var now=DateTime.UtcNow;var reader=new DeviceMonitoringReader(db);
+        var row=(await reader.ReadAsync(now,ct,false)).SingleOrDefault(x=>x.Type==type&&x.Id==id)??throw AppException.NotFound("Device");
+        return Result(new{device=(await reader.AddMeasurementsAsync([row],ct)).Single(),checkedAtUtc=now});
     }
     [HttpGet("areas")]
     public async Task<IActionResult> Areas(CancellationToken ct){
@@ -126,8 +130,17 @@ public sealed class DeviceMonitoringController(AppDbContext db):ControllerBase
         if(farmingAreaId.HasValue)q=q.Where(a=>a.FarmingAreaId==farmingAreaId);
         if(!string.IsNullOrWhiteSpace(severity)){if(!Enum.TryParse<AlertSeverity>(severity,true,out var s))throw AppException.BadRequest("Invalid severity.");q=q.Where(a=>a.Severity==s);}
         var total=await q.CountAsync(ct);
-        var items=await q.OrderByDescending(a=>a.LastOccurredAt??a.CreatedAt).ThenBy(a=>a.Id).Skip((page-1)*pageSize).Take(pageSize)
-            .Select(a=>new{a.Id,a.SourceType,a.SourceId,a.FarmingAreaId,a.IncidentType,a.Message,severity=a.Severity.ToString(),status=a.Status.ToString(),a.CreatedAt,a.LastOccurredAt,a.OccurrenceCount,a.AcknowledgedAt,a.ResolvedAt}).ToListAsync(ct);
+        var pageAlerts=await q.OrderByDescending(a=>a.LastOccurredAt??a.CreatedAt).ThenBy(a=>a.Id).Skip((page-1)*pageSize).Take(pageSize).ToListAsync(ct);
+        var monitored=await new DeviceMonitoringReader(db).ReadAsync(DateTime.UtcNow,ct,false);
+        var devices=monitored.ToDictionary(x=>(x.Type,x.Id));
+        var items=pageAlerts.Select(a=>{
+            var sourceId=Guid.TryParse(a.SourceId,out var fromSource)?fromSource:a.SensorId??Guid.Empty;
+            var sourceType=a.SourceType=="Device"?(devices.ContainsKey(("camera",sourceId))?"camera":"controller"):a.SourceType?.ToLowerInvariant();
+            var target=sourceType!=null?devices.GetValueOrDefault((sourceType,sourceId)):null;
+            return new{a.Id,a.SourceType,a.SourceId,a.FarmingAreaId,a.IncidentType,a.Message,
+                severity=a.Severity.ToString(),status=a.Status.ToString(),a.CreatedAt,a.LastOccurredAt,a.OccurrenceCount,a.AcknowledgedAt,a.ResolvedAt,
+                targetType=target?.Type,targetId=target?.Id,sourceCode=target?.Code};
+        }).ToList();
         return Result(new{items,total,page,pageSize});
     }
     [HttpPost("alerts/{id:guid}/acknowledge")]

@@ -33,6 +33,23 @@ public sealed class DeviceMonitoringReader(AppDbContext db)
         var fresh=Fresh(d.LastSeenAt,now,timeoutSeconds);
         return fresh!="Online"?fresh:d.Status==DeviceStatus.Online?"Online":d.Status.ToString();
     }
+    public async Task<List<MonitoringRow>> AddMeasurementsAsync(List<MonitoringRow> page,CancellationToken ct)
+    {
+        var ids=page.Where(x=>x.Type=="sensor").Select(x=>x.Id).Distinct().ToArray();
+        if(ids.Length==0)return page;
+        var latest=await db.WaterMeasurements.AsNoTracking().Where(x=>ids.Contains(x.SensorId))
+            .GroupBy(x=>x.SensorId).Select(g=>g.OrderByDescending(x=>x.MeasuredAt).ThenByDescending(x=>x.Id).First())
+            .ToDictionaryAsync(x=>x.SensorId,ct);
+        var received=await db.WaterMeasurements.AsNoTracking().Where(x=>ids.Contains(x.SensorId))
+            .GroupBy(x=>x.SensorId).Select(g=>new{Id=g.Key,At=g.Max(x=>x.ReceivedAt)})
+            .ToDictionaryAsync(x=>x.Id,x=>x.At,ct);
+        return page.Select(row=>row.Type!="sensor"?row:row with{
+            LatestValue=latest.GetValueOrDefault(row.Id)?.Value,
+            LatestMeasuredAt=latest.GetValueOrDefault(row.Id)?.MeasuredAt,
+            LastReceivedAt=received.GetValueOrDefault(row.Id),
+            DataQuality=latest.GetValueOrDefault(row.Id)?.DataQuality??"Unknown"
+        }).ToList();
+    }
     public async Task<List<MonitoringRow>> ReadAsync(DateTime now,CancellationToken ct,bool includeMeasurements=true)
     {
         var policies=await db.DeviceMonitoringPolicies.AsNoTracking()
