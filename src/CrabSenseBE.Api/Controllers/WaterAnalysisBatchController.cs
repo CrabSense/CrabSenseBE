@@ -16,12 +16,18 @@ namespace CrabSenseBE.Api.Controllers;
 [ApiController]
 [Route("api/areas/{areaId:guid}/water-analysis")]
 [Authorize(Roles=AppRoles.FarmWrite)]
-public sealed class WaterAnalysisBatchController(AppDbContext db,IUnitOfWork uow,ICurrentUserService user):ControllerBase
+public sealed class WaterAnalysisBatchController(AppDbContext db,IUnitOfWork uow,ICurrentUserService user,IMediaService media):ControllerBase
 {
     private readonly FarmAreaScope scope=new(uow,user);
     public record StartRequest(WaterBatchPlanning.Target[] Targets,string SampleSource);
     public record ScheduleRequest(WaterBatchPlanning.Target[] Targets,string SampleSource,int IntervalMinutes,DateTimeOffset NextRunAt,bool Enabled);
 
+    [HttpGet("assay-profiles")]
+    public async Task<IActionResult> AssayProfiles(Guid areaId,CancellationToken ct)
+    {
+        await scope.EnsureAsync(areaId,false,ct);
+        return Ok(ApiResponse<object>.Ok(WaterAssayCatalog.All()));
+    }
     [HttpPost("batches")]
     public async Task<IActionResult> Start(Guid areaId,StartRequest request,CancellationToken ct)
     {
@@ -34,6 +40,7 @@ public sealed class WaterAnalysisBatchController(AppDbContext db,IUnitOfWork uow
             throw AppException.Conflict("Trạm đang chạy một quy trình phần cứng.");
         var batch=WaterBatchPlanning.New(areaId,"manual",targets,source,now,user.UserId);
         db.WaterAnalysisBatches.Add(batch);
+        await WaterBatchPlanning.AddChannels(db,batch,targets,now,ct);
         try{await db.SaveChangesAsync(ct);}catch(DbUpdateException){throw AppException.Conflict("Khu đang có phiên đo chờ mẫu.");}
         return Ok(ApiResponse<object>.Ok(new{batch.Id,batch.Status,batch.Trigger,targets,dispatch="not_integrated"}));
     }
@@ -52,18 +59,76 @@ public sealed class WaterAnalysisBatchController(AppDbContext db,IUnitOfWork uow
             ??throw AppException.NotFound("Water analysis batch");
         var targets=JsonSerializer.Deserialize<WaterBatchPlanning.Target[]>(batch.TargetsJson,WaterBatchPlanning.Json)!;
         var runs=await db.WaterAnalysisRuns.AsNoTracking().Where(x=>x.BatchId==id).Select(x=>new{x.Id,x.Analyte,x.MeasuredValue,x.MeasuredUnit,x.Status,x.SampleMediaId,x.CalibrationId}).ToListAsync(ct);
-        return Ok(ApiResponse<object>.Ok(new{batch,tests=targets.Select(t=>new{t.Analyte,t.CalibrationId,kit=WaterBatchPlanning.Kit(t.Analyte),
-            status=runs.Any(x=>x.Analyte==t.Analyte)?"completed":batch.Status=="cancelled"?"cancelled":"waiting_sample",
-            result=runs.FirstOrDefault(x=>x.Analyte==t.Analyte)}),dispatch="not_integrated"}));
+        var channels=await db.WaterAssayChannels.AsNoTracking().Where(x=>x.BatchId==id).ToListAsync(ct);
+        return Ok(ApiResponse<object>.Ok(new{batch,tests=targets.Select(t=>{
+            var channel=channels.SingleOrDefault(x=>x.Analyte==t.Analyte);
+            return new{t.Analyte,t.CalibrationId,kit=WaterBatchPlanning.Kit(t.Analyte),
+                status=channel?.State??batch.Status,channel,step=channel is null?null:WaterAssayFlow.Current(channel),
+                result=runs.FirstOrDefault(x=>x.Analyte==t.Analyte)};
+        }),dispatch="not_integrated",execution="operator_assisted"}));
+    }
+    public record StepRequest(string Step,string Action,Guid? MediaId=null,string? Reason=null,bool KitInstructionsConfirmed=false);
+
+    [HttpPost("batches/{id:guid}/channels/{analyte}/steps")]
+    public async Task<IActionResult> Step(Guid areaId,Guid id,string analyte,StepRequest request,CancellationToken ct)
+    {
+        await scope.EnsureAsync(areaId,false,ct);
+        var now=DateTime.UtcNow;
+        await using var tx=await db.Database.BeginTransactionAsync(ct);
+        var locked=await db.WaterAnalysisBatches.Where(x=>x.Id==id&&x.FarmingAreaId==areaId&&x.Status=="waiting_samples")
+            .ExecuteUpdateAsync(u=>u.SetProperty(x=>x.UpdatedAt,now),ct);
+        if(locked!=1)throw AppException.Conflict("Phiên không tồn tại hoặc đã kết thúc.");
+        var batch=await db.WaterAnalysisBatches.FirstAsync(x=>x.Id==id,ct);
+        var channels=await db.WaterAssayChannels.Where(x=>x.BatchId==id).ToListAsync(ct);
+        var channel=channels.SingleOrDefault(x=>x.Analyte==analyte.Trim().ToUpperInvariant())
+            ??throw AppException.NotFound("Water assay channel");
+        if(request.Action=="fail")
+        {
+            if(request.MediaId.HasValue)throw AppException.BadRequest("Báo lỗi không nhận ảnh.");
+            WaterAssayFlow.Fail(channel,request.Step,request.Reason??"",now,user.UserId);
+        }
+        else if(request.Action=="confirm")
+        {
+            if(request.Step=="rinse"&&!request.KitInstructionsConfirmed)
+                throw AppException.BadRequest("Xác nhận đã đối chiếu đúng phiên bản kit, hướng dẫn, lô thuốc và điều kiện mẫu trước khi bắt đầu.");
+            if(request.Step!="cleanup"&&!await db.WaterColorCalibrations.AnyAsync(x=>x.Id==channel.CalibrationId&&x.RevokedAt==null&&x.ValidUntil>now,ct))
+                throw AppException.Conflict("Hiệu chuẩn hết hiệu lực; báo lỗi và làm sạch.");
+            if(request.Step=="capture"&&request.MediaId is Guid mediaId)
+            {
+                await media.GetByIdAsync(mediaId,ct);
+                var profile=await db.WaterColorCalibrations.AsNoTracking().FirstAsync(x=>x.Id==channel.CalibrationId,ct);
+                var asset=await db.MediaAssets.AsNoTracking().FirstOrDefaultAsync(x=>x.Id==mediaId,ct)??throw AppException.NotFound("Media");
+                if(asset.DeviceId!=profile.CameraDeviceId||asset.Category!="image"||asset.BoxId!=null||asset.CrabId!=null||
+                    asset.RelatedEntityType!="device"||asset.RelatedEntityId!=profile.CameraDeviceId||asset.IsShared||
+                    asset.SizeBytes<=0||asset.SizeBytes>5*1024*1024||channel.ReactionReadyAt is not DateTime ready||
+                    asset.CreatedAt<ready||asset.CreatedAt>now.AddSeconds(1)||
+                    await db.WaterAssayChannels.AnyAsync(x=>x.CapturedMediaId==mediaId&&x.Id!=channel.Id,ct))
+                    throw AppException.BadRequest("Ảnh phải riêng tư, đúng camera, tải sau khi đủ thời gian và chưa dùng cho kênh khác.");
+            }
+            WaterAssayFlow.Confirm(channel,request.Step,now,user.UserId,request.MediaId);
+        }
+        else throw AppException.BadRequest("Action phải là confirm hoặc fail.");
+        var status=WaterAssayFlow.BatchStatus(channels);
+        if(status!="waiting_samples"){batch.Status=status;batch.CompletedAt=now;}
+        await db.SaveChangesAsync(ct);await tx.CommitAsync(ct);
+        return Ok(ApiResponse<object>.Ok(new{channel,step=WaterAssayFlow.Current(channel),batch.Status,execution="operator_assisted"}));
     }
     [HttpPost("batches/{id:guid}/cancel")]
     public async Task<IActionResult> Cancel(Guid areaId,Guid id,CancellationToken ct)
     {
         await scope.EnsureAsync(areaId,false,ct);
         var now=DateTime.UtcNow;
-        var changed=await db.WaterAnalysisBatches.Where(x=>x.Id==id&&x.FarmingAreaId==areaId&&x.Status=="waiting_samples")
-            .ExecuteUpdateAsync(u=>u.SetProperty(x=>x.Status,"cancelled").SetProperty(x=>x.CompletedAt,now),ct);
-        if(changed!=1)throw AppException.Conflict("Phiên không tồn tại hoặc đã kết thúc.");
+        await using var tx=await db.Database.BeginTransactionAsync(ct);
+        var locked=await db.WaterAnalysisBatches.Where(x=>x.Id==id&&x.FarmingAreaId==areaId&&x.Status=="waiting_samples")
+            .ExecuteUpdateAsync(u=>u.SetProperty(x=>x.UpdatedAt,now),ct);
+        if(locked!=1)throw AppException.Conflict("Phiên không tồn tại hoặc đã kết thúc.");
+        var channels=await db.WaterAssayChannels.Where(x=>x.BatchId==id).ToListAsync(ct);
+        if(channels.Any(x=>!WaterAssayFlow.Terminal(x)&&x.State!="waiting"))
+            throw AppException.Conflict("Kênh đã bắt đầu; báo lỗi và xác nhận thu gom/rửa trước khi kết thúc phiên.");
+        foreach(var channel in channels.Where(x=>x.State=="waiting")){channel.State="cancelled";channel.UpdatedAt=now;}
+        var batch=await db.WaterAnalysisBatches.FirstAsync(x=>x.Id==id,ct);
+        batch.Status=channels.Any(x=>x.State=="completed")?"partial":"cancelled";batch.CompletedAt=now;
+        await db.SaveChangesAsync(ct);await tx.CommitAsync(ct);
         return Ok(ApiResponse.Ok());
     }
     [HttpGet("schedule")]

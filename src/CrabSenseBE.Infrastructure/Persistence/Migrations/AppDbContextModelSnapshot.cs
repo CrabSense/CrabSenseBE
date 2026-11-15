@@ -4602,6 +4602,31 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.HasIndex("FarmingAreaId").IsUnique();
                     b.ToTable("WaterAnalysisSchedules", "be");
                 });
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.WaterAssayChannel", b =>
+                {
+                    b.Property<Guid>("Id").ValueGeneratedOnAdd().HasColumnType("uuid");
+                    b.Property<DateTime>("CreatedAt").HasColumnType("timestamp with time zone");
+                    b.Property<DateTime?>("UpdatedAt").HasColumnType("timestamp with time zone");
+                    b.Property<Guid>("BatchId").HasColumnType("uuid");
+                    b.Property<Guid>("CalibrationId").HasColumnType("uuid");
+                    b.Property<string>("Analyte").IsRequired().HasColumnType("text");
+                    b.Property<string>("ProfileId").IsRequired().HasColumnType("text");
+                    b.Property<string>("ProfileJson").IsRequired().HasColumnType("text");
+                    b.Property<string>("ProtocolJson").IsRequired().HasColumnType("text");
+                    b.Property<string>("EventsJson").IsRequired().HasColumnType("text");
+                    b.Property<string>("State").IsRequired().IsConcurrencyToken().HasColumnType("text");
+                    b.Property<int>("StepIndex").IsConcurrencyToken().HasColumnType("integer");
+                    b.Property<DateTime>("StepStartedAt").HasColumnType("timestamp with time zone");
+                    b.Property<DateTime?>("ReactionReadyAt").HasColumnType("timestamp with time zone");
+                    b.Property<Guid?>("CapturedMediaId").HasColumnType("uuid");
+                    b.Property<string>("Failure").HasColumnType("text");
+                    b.HasKey("Id");
+                    b.HasIndex("BatchId","Analyte").IsUnique();
+                    b.HasIndex("CalibrationId");
+                    b.HasIndex("CapturedMediaId").IsUnique();
+                    b.ToTable("WaterAssayChannels","be");
+                });
+
             modelBuilder.Entity("CrabSenseBE.Domain.Entities.WaterColorCalibration", b =>
                 {
                     b.Property<Guid>("Id").ValueGeneratedOnAdd().HasColumnType("uuid");
@@ -6063,6 +6088,12 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                 { b.HasOne("CrabSenseBE.Domain.Entities.WaterAnalysisBatch", null).WithMany().HasForeignKey("BatchId").OnDelete(DeleteBehavior.Restrict); });
             modelBuilder.Entity("CrabSenseBE.Domain.Entities.WaterAnalysisRun", b =>
                 { b.HasOne("CrabSenseBE.Domain.Entities.MediaAsset", null).WithMany().HasForeignKey("SampleMediaId").OnDelete(DeleteBehavior.Restrict); });
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.WaterAssayChannel", b =>
+                {
+                    b.HasOne("CrabSenseBE.Domain.Entities.WaterAnalysisBatch",null).WithMany().HasForeignKey("BatchId").OnDelete(DeleteBehavior.Restrict).IsRequired();
+                    b.HasOne("CrabSenseBE.Domain.Entities.WaterColorCalibration",null).WithMany().HasForeignKey("CalibrationId").OnDelete(DeleteBehavior.Restrict).IsRequired();
+                    b.HasOne("CrabSenseBE.Domain.Entities.MediaAsset",null).WithMany().HasForeignKey("CapturedMediaId").OnDelete(DeleteBehavior.Restrict);
+                });
 #pragma warning restore 612, 618
             modelBuilder.Entity("CrabSenseBE.Domain.Entities.AiModelVersion", b =>
                 {

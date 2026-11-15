@@ -134,6 +134,7 @@ public sealed class WaterColorAnalysisController(AppDbContext db, IUnitOfWork uo
         var actor=await scope.CurrentUserAsync(ct);
         await using var tx=await db.Database.BeginTransactionAsync(ct);
         WaterAnalysisBatch? batch=null;
+        WaterAssayChannel? channel=null;
         if(request.BatchId is Guid batchId)
         {
             var locked=await db.WaterAnalysisBatches.Where(x=>x.Id==batchId&&x.FarmingAreaId==areaId&&x.Status=="waiting_samples")
@@ -145,8 +146,9 @@ public sealed class WaterColorAnalysisController(AppDbContext db, IUnitOfWork uo
                 throw AppException.BadRequest("Ảnh, nguồn mẫu hoặc hiệu chuẩn không thuộc phiên đo.");
             if(await db.WaterAnalysisRuns.AnyAsync(x=>x.BatchId==batchId&&x.Analyte==profile.Analyte,ct))
                 throw AppException.Conflict("Chỉ tiêu đã có kết quả trong phiên này.");
-            var done=await db.WaterAnalysisRuns.CountAsync(x=>x.BatchId==batchId,ct);
-            if(done+1==targets.Length){batch.Status="completed";batch.CompletedAt=now;}
+            channel=await db.WaterAssayChannels.FirstOrDefaultAsync(x=>x.BatchId==batchId&&x.CalibrationId==profile.Id,ct)
+                ??throw AppException.Conflict("Phiên chưa có kênh quy trình.");
+            WaterAssayFlow.ResultSaved(channel,asset.Id,now,user.UserId);
         }
         if(!await db.WaterColorCalibrations.AnyAsync(x=>x.Id==profile.Id&&x.RevokedAt==null&&x.ValidUntil>now,ct))
             throw AppException.Conflict("Hiệu chuẩn không còn hợp lệ.");
@@ -160,7 +162,7 @@ public sealed class WaterColorAnalysisController(AppDbContext db, IUnitOfWork uo
             CameraId=camera.DeviceCode[..Math.Min(64,camera.DeviceCode.Length)],
             ColorEvidenceJson=JsonSerializer.Serialize(new { algorithm=WaterColorAnalyzer.Version,reading,request.ReactionSeconds,request.SalinityPpt,
                 request.ReagentLot,unit=profile.Unit,value,mediaUploadedAt=asset.CreatedAt,validationError=validation.RootElement.GetProperty("absoluteError"),
-                timingSource="operator-attested",cleaning="not-performed-by-api" },Json),
+                timingSource="operator-attested",assayProfileId=channel?.ProfileId,assayChannelId=channel?.Id,cleaning="not-performed-by-api" },Json),
             StepLogJson=JsonSerializer.Serialize(new[]{
                 new { At=now,Step=5,Event="IMAGE_PROVIDED",Label="Ảnh mẫu đã lưu" },
                 new { At=now,Step=6,Event="COLOR_ESTIMATED",Label="Nội suy từ đường hiệu chuẩn" },
@@ -188,7 +190,7 @@ public sealed class WaterColorAnalysisController(AppDbContext db, IUnitOfWork uo
     {
         var asset=await db.MediaAssets.AsNoTracking().FirstOrDefaultAsync(x=>x.Id==mediaId,ct)??throw AppException.NotFound("Media");
         if(asset.DeviceId!=cameraId||asset.Category!="image"||asset.BoxId!=null||asset.CrabId!=null||asset.SizeBytes<=0||asset.SizeBytes>5*1024*1024||
-           asset.RelatedEntityType!="device"||asset.RelatedEntityId!=cameraId)
+           asset.RelatedEntityType!="device"||asset.RelatedEntityId!=cameraId||asset.IsShared)
             throw AppException.BadRequest("Cần ảnh riêng của camera buồng đo (không gắn hộp/cua), tối đa 5 MB.");
         var content=await media.OpenContentAsync(mediaId,ct);
         await using var input=content.Content;
