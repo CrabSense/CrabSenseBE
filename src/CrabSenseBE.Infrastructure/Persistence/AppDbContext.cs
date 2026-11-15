@@ -53,6 +53,7 @@ public class AppDbContext : DbContext
     public DbSet<WaterAssayChannel> WaterAssayChannels => Set<WaterAssayChannel>();
     public DbSet<WaterAnalysisBatch> WaterAnalysisBatches => Set<WaterAnalysisBatch>();
     public DbSet<WaterAnalysisSchedule> WaterAnalysisSchedules => Set<WaterAnalysisSchedule>();
+    public DbSet<WaterTrainingSample> WaterTrainingSamples => Set<WaterTrainingSample>();
     public DbSet<WaterCalibrationCheck> WaterCalibrationChecks => Set<WaterCalibrationCheck>();
     public DbSet<WaterColorCalibration> WaterColorCalibrations => Set<WaterColorCalibration>();
     public DbSet<WaterAnalysisRun> WaterAnalysisRuns => Set<WaterAnalysisRun>();
@@ -127,6 +128,14 @@ public class AppDbContext : DbContext
 
         // Schema riêng — không đụng bảng Cap_Ras snake_case trong public
         modelBuilder.HasDefaultSchema("be");
+        modelBuilder.Entity<WaterTrainingSample>().HasOne<WaterColorCalibration>().WithMany().HasForeignKey(x=>x.CalibrationId).OnDelete(DeleteBehavior.Restrict);
+        modelBuilder.Entity<WaterTrainingSample>().HasOne<MediaAsset>().WithMany().HasForeignKey(x=>x.MediaId).OnDelete(DeleteBehavior.Restrict);
+        modelBuilder.Entity<WaterTrainingSample>().HasOne<FarmingArea>().WithMany().HasForeignKey(x=>x.FarmingAreaId).OnDelete(DeleteBehavior.Restrict);
+        modelBuilder.Entity<WaterTrainingSample>().Property(x=>x.ImageSha256).HasMaxLength(64);
+        modelBuilder.Entity<WaterTrainingSample>().HasIndex(x=>new{x.FarmingAreaId,x.ImageSha256}).IsUnique();
+        modelBuilder.Entity<WaterTrainingSample>().HasIndex(x=>x.MediaId).IsUnique();
+        modelBuilder.Entity<WaterTrainingSample>().HasIndex(x=>new{x.CalibrationId,x.PreparationId});
+
         modelBuilder.Entity<WaterCalibrationCheck>().HasIndex(x=>x.MediaId).IsUnique();
         modelBuilder.Entity<WaterCalibrationCheck>().Property(x=>x.ImageSha256).HasMaxLength(64);
         modelBuilder.Entity<WaterCalibrationCheck>().HasIndex(x=>new{x.CalibrationId,x.ImageSha256}).IsUnique();

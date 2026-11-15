@@ -131,3 +131,21 @@ public sealed class WaterCalibrationCheck : BaseEntity
     public string ImageSha256 { get; set; } = "";
     public string EvidenceJson { get; set; } = "";
 }
+
+public sealed class WaterTrainingSample : BaseEntity
+{
+    public Guid CalibrationId { get; set; }
+    public Guid FarmingAreaId { get; set; }
+    public Guid MediaId { get; set; }
+    public string ImageSha256 { get; set; } = "";
+    public string PreparationId { get; set; } = "";
+    public string Split { get; set; } = "";
+    public string LabelSource { get; set; } = "";
+    public string ReferenceId { get; set; } = "";
+    public decimal Concentration { get; set; }
+    public int ReactionSeconds { get; set; }
+    public decimal SalinityPpt { get; set; }
+    public Guid ReviewedBy { get; set; }
+    public DateTime ReviewedAt { get; set; }
+    public DateTime? WithdrawnAt { get; set; }
+}

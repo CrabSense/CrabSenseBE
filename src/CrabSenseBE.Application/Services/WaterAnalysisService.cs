@@ -436,7 +436,7 @@ public class WaterAnalysisService : IWaterAnalysisService
             legacy,
             run.Id.ToString(),
             manualColor ? (run.Source=="water-ai-python"?"rgb-median-monotonic":"color-ratio-piecewise") : snap.AiModelId ?? assay.AiModelId,
-            manualColor ? (run.Source=="water-ai-python"?"rgb-median-monotonic-v1":WaterColorAnalyzer.Version) : null,
+            manualColor ? RecordedAlgorithm(run) : null,
             manualColor ? null : hardware.FirmwareVersion,
             run.ImageUrl,
             prev,
@@ -915,6 +915,22 @@ public class WaterAnalysisService : IWaterAnalysisService
         ColorMetric("no2", "NO2", r.No2, r),
         ColorMetric("no3", "NO3", r.No3, r)
     ];
+
+    private static string RecordedAlgorithm(WaterAnalysisRun run)
+    {
+        if(run.Source!="water-ai-python")return WaterColorAnalyzer.Version;
+        if(!string.IsNullOrWhiteSpace(run.ColorEvidenceJson))
+        {
+            try
+            {
+                using var evidence=System.Text.Json.JsonDocument.Parse(run.ColorEvidenceJson);
+                if(evidence.RootElement.TryGetProperty("algorithm",out var algorithm)&&algorithm.ValueKind==System.Text.Json.JsonValueKind.String&&
+                   algorithm.GetString() is {Length:>0} value)return value;
+            }
+            catch(System.Text.Json.JsonException) { }
+        }
+        return "rgb-median-monotonic-v1";
+    }
 
     private static WaterAnalysisMetricDto ColorMetric(string code, string label, decimal? value, WaterAnalysisRun? run)
     {
