@@ -1197,6 +1197,10 @@ public class IotService : IIotService
         if (req.PrepareOnly && (CameraConfiguration.IsCamera(req.DeviceType, req.StreamUrl, req.SnapshotUrl) || !string.IsNullOrWhiteSpace(req.ApiKey)))
             throw AppException.BadRequest("Controller preparation cannot grant credentials or create a Camera.");
         var code = req.DeviceCode.Trim();
+        if (req.PrepareOnly && (code.Length > 100 || code is "." or ".." || !System.Text.RegularExpressions.Regex.IsMatch(code, @"\A[A-Za-z0-9_.:-]+\z")))
+            throw AppException.BadRequest("Mã Controller phải có tối đa 100 ký tự chữ, số, dấu gạch, chấm hoặc hai chấm.");
+        if (req.PrepareOnly && (!req.FarmingAreaId.HasValue || req.FarmingAreaId == Guid.Empty))
+            throw AppException.BadRequest("Chọn khu nuôi cho hồ sơ Controller.");
         var codeKey = code.ToLowerInvariant();
         if (await _uow.Devices.AnyAsync(d => d.DeviceCode.ToLower() == codeKey, ct))
             throw AppException.Conflict($"DeviceCode '{code}' already exists.");
@@ -1205,8 +1209,11 @@ public class IotService : IIotService
             throw AppException.Conflict($"IP '{deviceIp}' đang được thiết bị khác sử dụng.");
 
         if (req.FarmingAreaId is Guid areaId && areaId != Guid.Empty)
-            _ = await _uow.FarmingAreas.GetByIdAsync(areaId, ct)
+        {
+            var targetArea = await _uow.FarmingAreas.GetByIdAsync(areaId, ct)
                 ?? throw AppException.NotFound("FarmingArea");
+            if (req.PrepareOnly && !targetArea.IsActive) throw AppException.BadRequest("Khu nuôi không hoạt động.");
+        }
 
         if (CameraConfiguration.IsCamera(req.DeviceType, req.StreamUrl, req.SnapshotUrl))
         {
@@ -1257,7 +1264,7 @@ public class IotService : IIotService
         if (device.FarmingAreaId is Guid aid)
             area = await _uow.FarmingAreas.GetByIdAsync(aid, ct);
         return ApiResponse<DeviceDto>.Ok(
-            MapDevice(device, 0, 0, area, await RowOfAsync(device, ct)), "Controller/ESP32 registered.");
+            MapDevice(device, 0, 0, area, await RowOfAsync(device, ct)), req.PrepareOnly ? "Controller profile prepared; awaiting registration." : "Controller/ESP32 registered.");
     }
 
     public async Task<ApiResponse<DeviceDto>> UpdateDeviceAsync(
