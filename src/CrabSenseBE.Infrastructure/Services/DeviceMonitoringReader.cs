@@ -52,7 +52,7 @@ public sealed class DeviceMonitoringReader(AppDbContext db)
     }
     public async Task<List<MonitoringRow>> ReadAsync(DateTime now,CancellationToken ct,bool includeMeasurements=true)
     {
-        var policies=await db.DeviceMonitoringPolicies.AsNoTracking()
+        var policies=await db.DeviceMonitoringPolicies.AsNoTracking().Where(x=>!x.IsInherited)
             .ToDictionaryAsync(x=>new ValueTuple<string,Guid>(x.SourceType,x.SourceId),ct);
         int Timeout(string type,Guid id,int fallback) =>
             policies.TryGetValue((type,id),out var own)?own.TimeoutSeconds:

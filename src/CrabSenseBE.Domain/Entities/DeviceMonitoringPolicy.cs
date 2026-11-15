@@ -8,5 +8,6 @@ public sealed class DeviceMonitoringPolicy : BaseEntity
     public Guid SourceId { get; set; }
     public int TimeoutSeconds { get; set; }
     public int Version { get; set; }
+    public bool IsInherited { get; set; }
     public Guid UpdatedBy { get; set; }
 }

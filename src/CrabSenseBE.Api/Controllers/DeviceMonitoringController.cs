@@ -1,4 +1,7 @@
 using System.Security.Claims;
+using System.Globalization;
+using System.Text;
+using CrabSenseBE.Domain.Entities;
 using CrabSenseBE.Application.Common;
 using CrabSenseBE.Domain.Enums;
 using CrabSenseBE.Infrastructure.Persistence;
@@ -41,9 +44,10 @@ public sealed class DeviceMonitoringController(AppDbContext db,Microsoft.Extensi
     [HttpGet("health")]
     public async Task<IActionResult> Health(CancellationToken ct){
         await Actor(ct);var now=DateTime.UtcNow;
-        var last=await db.DeviceMonitoringStates.AsNoTracking().MaxAsync(x=>(DateTime?)x.ObservedAt,ct);
+        var worker=await db.MonitoringWorkerStates.AsNoTracking().SingleOrDefaultAsync(x=>x.WorkerName=="device-history",ct);
+        var last=worker?.LastSucceededAt??await db.DeviceMonitoringStates.AsNoTracking().MaxAsync(x=>(DateTime?)x.ObservedAt,ct);
         var enabled=config?.GetValue("DeviceMonitoring:EnableHistory",true)??true;
-        return Result(new{historyEnabled=enabled,lastObservedAt=last,historyStatus=!enabled?"Disabled":last==null?"Unknown":last<now.AddMinutes(-3)?"Stale":"Healthy",checkedAtUtc=now,observationGapSeconds=180});
+        return Result(new{historyEnabled=enabled,lastObservedAt=last,historyStatus=!enabled?"Disabled":last==null?"Unknown":last<now.AddMinutes(-3)?"Stale":"Healthy",checkedAtUtc=now,observationGapSeconds=180,deviceCount=worker?.DeviceCount});
     }
     [HttpGet("devices")]
     public async Task<IActionResult> Devices(string? type,string? status,Guid? farmingAreaId,Guid? farmingRowId,string? search,bool? hasAlert,int page=1,int pageSize=20,CancellationToken ct=default){
@@ -81,7 +85,7 @@ public sealed class DeviceMonitoringController(AppDbContext db,Microsoft.Extensi
             agentTimeoutSeconds=policies.FirstOrDefault(x=>x.SourceType=="agent"&&x.SourceId==Guid.Empty)?.TimeoutSeconds??90,
             sensorDefaultTimeoutSeconds=900,sensorOverrideSupported=true,
             historySampleSeconds=60,historyGapSeconds=180,
-            overrides=policies.Select(x=>new{x.SourceType,x.SourceId,x.TimeoutSeconds,x.Version,x.UpdatedAt}),
+            overrides=policies.Select(x=>new{x.SourceType,x.SourceId,timeoutSeconds=x.IsInherited?(int?)null:x.TimeoutSeconds,x.Version,x.UpdatedAt,x.IsInherited}),
             note="Display/history thresholds only. Technical disconnect alert timing retains its existing service policy; Sensor uses its own disconnect timeout."
         });
     }
@@ -107,11 +111,91 @@ public sealed class DeviceMonitoringController(AppDbContext db,Microsoft.Extensi
             db.DeviceMonitoringPolicies.Add(policy);
         }else{
             if(policy.Version!=body.ExpectedVersion)throw AppException.Conflict("Policy was updated. Refresh before saving.");
-            policy.TimeoutSeconds=body.TimeoutSeconds;policy.Version++;policy.UpdatedBy=actor;
+            policy.TimeoutSeconds=body.TimeoutSeconds;policy.IsInherited=false;policy.Version++;policy.UpdatedBy=actor;
         }
         db.OperationLogs.Add(new(){UserId=actor,Action="UpdateDeviceMonitoringPolicy",EntityType="DeviceMonitoringPolicy",EntityId=policy.Id,Details=$"{type}:{id:N}:{body.TimeoutSeconds}"});
         try{await db.SaveChangesAsync(ct);}catch(DbUpdateException){throw AppException.Conflict("Concurrent policy update. Refresh and try again.");}
         return Result(new{policy.SourceType,policy.SourceId,policy.TimeoutSeconds,policy.Version});
+    }
+    [HttpDelete("policies/{type}/{id:guid}")]
+    public async Task<IActionResult> ResetPolicy(string type,Guid id,int expectedVersion,CancellationToken ct){
+        var actor=await Actor(ct);type=type.Trim().ToLowerInvariant();
+        if(id==Guid.Empty||!Defaults.ContainsKey(type)||expectedVersion<0)throw AppException.BadRequest("Only device overrides may be reset.");
+        var policy=await db.DeviceMonitoringPolicies.SingleOrDefaultAsync(x=>x.SourceType==type&&x.SourceId==id,ct)??throw AppException.NotFound("Monitoring override");
+        if(policy.Version!=expectedVersion)throw AppException.Conflict("Policy changed; reload.");
+        if(!policy.IsInherited){
+            policy.IsInherited=true;policy.Version++;policy.UpdatedBy=actor;
+            db.OperationLogs.Add(new(){UserId=actor,Action="ResetDeviceMonitoringPolicy",EntityType="DeviceMonitoringPolicy",EntityId=policy.Id});
+            try{await db.SaveChangesAsync(ct);}catch(DbUpdateConcurrencyException){throw AppException.Conflict("Policy changed; reload.");}
+        }
+        return Result(new{policy.SourceType,policy.SourceId,policy.Version,policy.IsInherited});
+    }
+    [HttpGet("topology")]
+    public async Task<IActionResult> Topology(Guid? farmingAreaId,CancellationToken ct){
+        await Actor(ct);var now=DateTime.UtcNow;
+        var rows=Filter(await new DeviceMonitoringReader(db).ReadAsync(now,ct,false),null,null,farmingAreaId,null,null,null).ToList();
+        var nodes=rows.Select(x=>new{x.Id,x.Type,x.Code,x.Name,x.FarmingAreaId,x.AreaName,x.FarmingRowId,x.RowName,x.KioskId,x.ControllerId,x.PortCode,x.ConnectionStatus,x.HealthStatus,x.ReasonCode});
+        var controllerIds=rows.Where(x=>x.Type=="controller").Select(x=>x.Id).ToArray();
+        var ports=await db.ControllerPorts.AsNoTracking().Where(x=>controllerIds.Contains(x.DeviceId)).OrderBy(x=>x.PortCode)
+            .Select(x=>new{x.Id,x.DeviceId,x.PortCode,x.PortType,x.IsPresent,x.ConfigVersion,x.ReportedOn,x.CommissioningStatus,x.LastReportedAt}).ToListAsync(ct);
+        var portIds=ports.Select(x=>x.Id).ToArray();
+        var equipment=await db.RasComponents.AsNoTracking().Where(x=>x.ControllerPortId.HasValue&&portIds.Contains(x.ControllerPortId.Value))
+            .Select(x=>new{x.Id,x.Name,x.Code,x.Type,x.ControllerPortId,x.LastReportedAt}).ToListAsync(ct);
+        return Result(new{nodes,ports,equipment,checkedAtUtc=now,note="Reported output is not proof of physical load operation."});
+    }
+    [HttpGet("{type}/{id:guid}/diagnostics")]
+    public async Task<IActionResult> Diagnostics(string type,Guid id,CancellationToken ct){
+        await Actor(ct);var now=DateTime.UtcNow;var reader=new DeviceMonitoringReader(db);
+        var row=(await reader.ReadAsync(now,ct,false)).SingleOrDefault(x=>x.Type==type&&x.Id==id)??throw AppException.NotFound("Device");
+        row=(await reader.AddMeasurementsAsync([row],ct)).Single();
+        object? extra=null;
+        if(type=="controller"){
+            var d=await db.Devices.AsNoTracking().SingleAsync(x=>x.Id==id,ct);
+            var ports=await db.ControllerPorts.AsNoTracking().Where(x=>x.DeviceId==id).OrderBy(x=>x.PortCode)
+                .Select(x=>new{x.Id,x.PortCode,x.PortType,x.Channel,x.Gpio,x.IsPresent,x.ConfigVersion,x.ReportedOn,x.CommissioningStatus,x.LastReportedAt}).ToListAsync(ct);
+            var commands=await db.EdgeCommands.AsNoTracking().Where(x=>x.DeviceCode==d.DeviceCode).OrderByDescending(x=>x.CreatedAt).ThenBy(x=>x.Id).Take(50)
+                .Select(x=>new{x.Id,x.Channel,x.Command,x.Status,x.CreatedAt,x.DeliveredAt,x.AcknowledgedAt,x.FailedAt,x.ExpiresAt,x.AttemptCount,x.InventoryRevision}).ToListAsync(ct);
+            extra=new{d.CapabilityVersion,d.HardwareModel,d.RssiDbm,d.BatteryLevel,ports,commands};
+        }else if(type=="sensor"){
+            var s=await db.Sensors.AsNoTracking().SingleAsync(x=>x.Id==id,ct);
+            var calibration=await db.SensorCalibrations.AsNoTracking().Where(x=>x.SensorId==id).OrderByDescending(x=>x.PerformedAt).Select(x=>new{x.PerformedAt,x.Result,x.Method}).FirstOrDefaultAsync(ct);
+            extra=new{s.SamplingIntervalSeconds,s.ConfigurationVersion,s.AppliedConfigurationVersion,s.LastConfigurationAppliedAt,calibration,
+                measurementFresh=row.LatestMeasuredAt.HasValue&&row.LatestMeasuredAt>=now.AddSeconds(-row.TimeoutSeconds)&&row.LatestMeasuredAt<=now.AddSeconds(5)};
+        }else if(type=="camera"){
+            var latest=await db.CameraRecordingExecutions.AsNoTracking().Where(x=>x.DeviceId==id).OrderByDescending(x=>x.StartedAt).ThenByDescending(x=>x.Id).Select(x=>new{x.Id,x.Status,x.StartedAt,x.EndedAt,x.LastHeartbeatAt,x.MediaAssetId}).FirstOrDefaultAsync(ct);
+            var a=await db.CameraRecordingAgents.AsNoTracking().SingleOrDefaultAsync(x=>x.DeviceId==id,ct);
+            extra=new{latest,agentVersion=a?.WorkerVersion,streamStatus="Unverified",note="Recording lease and completed clips are evidence; not a live stream probe."};
+        }else if(type=="kiosk"){
+            var controllers=await db.Devices.AsNoTracking().CountAsync(x=>x.KioskId==id,ct);
+            var cameras=await db.CameraRecordingAgents.AsNoTracking().CountAsync(x=>x.KioskId==id&&x.Enabled,ct);
+            var pending=await db.CameraRecordingAgents.AsNoTracking().Where(x=>x.KioskId==id&&x.Enabled).SumAsync(x=>(int?)x.PendingClips,ct);
+            extra=new{controllers,cameras,pendingClips=pending??0};
+        }
+        return Result(new{device=row,extra,checkedAtUtc=now});
+    }
+    [HttpGet("{type}/{id:guid}/health-history")]
+    public async Task<IActionResult> HealthHistory(string type,Guid id,int page=1,int pageSize=50,CancellationToken ct=default){
+        await Actor(ct);Paging(page,pageSize);
+        if(type is not ("camera" or "sensor" or "controller" or "kiosk"))throw AppException.BadRequest("Invalid source type.");
+        var q=db.DeviceHealthEvents.AsNoTracking().Where(x=>x.SourceType==type&&x.SourceId==id);
+        var total=await q.CountAsync(ct);
+        var items=await q.OrderByDescending(x=>x.OccurredAt).ThenBy(x=>x.Id).Skip((page-1)*pageSize).Take(pageSize).ToListAsync(ct);
+        return Result(new{items,total,page,pageSize,coverage="sampled_health_changes"});
+    }
+    [HttpGet("export")]
+    public async Task<IActionResult> Export(Guid? farmingAreaId,int days=7,CancellationToken ct=default){
+        await Actor(ct);if(days is <1 or >90)throw AppException.BadRequest("Days must be 1..90.");
+        var from=DateTime.UtcNow.AddDays(-days);
+        var q=db.DeviceConnectionEvents.AsNoTracking().Where(x=>x.OccurredAt>=from&&(!farmingAreaId.HasValue||x.FarmingAreaId==farmingAreaId));
+        var events=await q.OrderBy(x=>x.OccurredAt).ThenBy(x=>x.Id).Take(50001).ToListAsync(ct);
+        if(events.Count>50000)throw AppException.BadRequest("Too many events; narrow the range.");
+        static string Csv(string? value){
+            var s=value??"";if(s.TrimStart().FirstOrDefault() is '=' or '+' or '-' or '@')s="'"+s;
+            return "\""+s.Replace("\"","\"\"")+"\"";
+        }
+        var b=new StringBuilder("type,id,areaId,occurredAtUtc,previousStatus,newStatus,reasonCode\r\n");
+        foreach(var e in events)b.AppendLine(string.Join(",",Csv(e.SourceType),Csv(e.SourceId.ToString()),Csv(e.FarmingAreaId?.ToString()),Csv(e.OccurredAt.ToString("O",CultureInfo.InvariantCulture)),Csv(e.PreviousStatus),Csv(e.NewStatus),Csv(e.ReasonCode)));
+        return File(Encoding.UTF8.GetPreamble().Concat(Encoding.UTF8.GetBytes(b.ToString())).ToArray(),"text/csv; charset=utf-8","device-connection-history.csv");
     }
     [HttpGet("{type}/{id:guid}/history")]
     public async Task<IActionResult> History(string type,Guid id,int page=1,int pageSize=50,CancellationToken ct=default){

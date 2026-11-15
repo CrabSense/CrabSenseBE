@@ -639,6 +639,36 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.HasIndex("FarmingAreaId","OccurredAt");
                     b.ToTable("DeviceConnectionEvents","be");
                 });
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.DeviceHealthEvent", b =>
+                {
+                    b.Property<Guid>("Id").ValueGeneratedOnAdd().HasColumnType("uuid");
+                    b.Property<DateTime>("CreatedAt").HasColumnType("timestamp with time zone");
+                    b.Property<DateTime?>("UpdatedAt").HasColumnType("timestamp with time zone");
+                    b.Property<string>("SourceType").IsRequired().HasColumnType("text");
+                    b.Property<Guid>("SourceId").HasColumnType("uuid");
+                    b.Property<Guid?>("FarmingAreaId").HasColumnType("uuid");
+                    b.Property<DateTime>("OccurredAt").HasColumnType("timestamp with time zone");
+                    b.Property<string>("PreviousHealth").HasColumnType("text");
+                    b.Property<string>("HealthStatus").IsRequired().HasColumnType("text");
+                    b.Property<string>("ReasonCode").HasColumnType("text");
+                    b.Property<string>("AgentStatus").HasColumnType("text");
+                    b.HasKey("Id");
+                    b.HasIndex("SourceType","SourceId","OccurredAt");
+                    b.HasIndex("OccurredAt");
+                    b.ToTable("DeviceHealthEvents","be");
+                });
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.MonitoringWorkerState", b =>
+                {
+                    b.Property<Guid>("Id").ValueGeneratedOnAdd().HasColumnType("uuid");
+                    b.Property<DateTime>("CreatedAt").HasColumnType("timestamp with time zone");
+                    b.Property<DateTime?>("UpdatedAt").HasColumnType("timestamp with time zone");
+                    b.Property<string>("WorkerName").IsRequired().HasColumnType("text");
+                    b.Property<DateTime>("LastSucceededAt").HasColumnType("timestamp with time zone");
+                    b.Property<int>("DeviceCount").HasColumnType("integer");
+                    b.HasKey("Id");
+                    b.HasIndex("WorkerName").IsUnique();
+                    b.ToTable("MonitoringWorkerStates","be");
+                });
             modelBuilder.Entity("CrabSenseBE.Domain.Entities.DeviceMonitoringPolicy", b =>
                 {
                     b.Property<Guid>("Id").ValueGeneratedOnAdd().HasColumnType("uuid");
@@ -647,6 +677,7 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.Property<string>("SourceType").IsRequired().HasColumnType("text");
                     b.Property<Guid>("SourceId").HasColumnType("uuid");
                     b.Property<int>("TimeoutSeconds").HasColumnType("integer");
+                    b.Property<bool>("IsInherited").ValueGeneratedOnAdd().HasColumnType("boolean").HasDefaultValue(false);
                     b.Property<int>("Version").IsConcurrencyToken().HasColumnType("integer");
                     b.Property<Guid>("UpdatedBy").HasColumnType("uuid");
                     b.HasKey("Id");
@@ -664,6 +695,9 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.Property<Guid?>("FarmingAreaId").HasColumnType("uuid");
                     b.Property<string>("Status").IsRequired().HasColumnType("text");
                     b.Property<DateTime>("ObservedAt").HasColumnType("timestamp with time zone");
+                    b.Property<string>("HealthStatus").HasColumnType("text");
+                    b.Property<string>("HealthReason").HasColumnType("text");
+                    b.Property<string>("AgentStatus").HasColumnType("text");
                     b.HasKey("Id");
                     b.HasIndex("SourceType","SourceId").IsUnique();
                     b.ToTable("DeviceMonitoringStates","be");
