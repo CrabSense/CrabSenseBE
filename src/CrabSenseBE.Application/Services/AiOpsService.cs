@@ -221,6 +221,7 @@ public class AiOpsService : IAiOpsService
 
         Guid? AreaOf(AiDetection d)
         {
+            if (d.FarmingAreaId is Guid capturedArea) return capturedArea;
             if (d.BoxId is Guid bid && boxes.TryGetValue(bid, out var b)
                 && rows.TryGetValue(b.FarmingRowId, out var r))
                 return r.FarmingAreaId;
@@ -245,7 +246,7 @@ public class AiOpsService : IAiOpsService
             if (box is not null) rows.TryGetValue(box.FarmingRowId, out row);
             devices.TryGetValue(d.DeviceId ?? Guid.Empty, out var dev);
             // Camera phụ trách: DeviceId của detection → camera gắn dãy → camera tổng quan khu.
-            dev ??= PickCamera(devices.Values, row);
+            // Preserve the original camera for historical detections.
             Crab? crab = null;
             if (d.CrabId is Guid cid) crabs.TryGetValue(cid, out crab);
             return Map(d, dev, box, row, crab);
@@ -275,7 +276,9 @@ public class AiOpsService : IAiOpsService
 
         var detection = await _uow.AiDetections.GetByIdAsync(detectionId.Value, ct)
             ?? throw AppException.NotFound("AI detection");
-        if (detection.BoxId is Guid boxId)
+        if (detection.FarmingAreaId is Guid capturedArea)
+            await _areas.EnsureAsync(capturedArea, manage: false, ct);
+        else if (detection.BoxId is Guid boxId)
             await _areas.EnsureBoxAsync(boxId, manage: false, ct);
         else if (detection.MediaId is Guid mediaId)
         {
@@ -286,10 +289,11 @@ public class AiOpsService : IAiOpsService
         else
             throw AppException.Forbidden("Không xác định được khu của AI detection.");
 
+        if (userId == Guid.Empty) throw AppException.Unauthorized();
         var feedback = new AiFeedback
         {
             AiDetectionId = detectionId.Value,
-            UserId = userId == Guid.Empty ? Guid.NewGuid() : userId,
+            UserId = userId,
             IsCorrect = req.AiAgreement ?? req.IsCorrect,
             CorrectLabel = req.CorrectLabel,
             Comment = req.Comment
@@ -306,5 +310,5 @@ public class AiOpsService : IAiOpsService
         dev?.Id ?? d.DeviceId, dev?.DeviceCode, d.ImagePath,
         box?.Code,
         crab?.Id ?? d.CrabId, crab is null ? null : (string.IsNullOrWhiteSpace(crab.Tag) ? crab.Code : crab.Tag),
-        row?.Id, row?.Name, row?.FarmingAreaId);
+        row?.Id, row?.Name, d.FarmingAreaId ?? row?.FarmingAreaId, d.InferenceJobId.HasValue ? "model" : "rules");
 }
