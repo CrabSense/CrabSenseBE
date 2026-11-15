@@ -118,8 +118,9 @@ public class AppDbContext : DbContext
         modelBuilder.HasDefaultSchema("be");
         modelBuilder.Entity<DeviceConnectionEvent>().HasIndex(x=>new{x.SourceType,x.SourceId,x.OccurredAt});
         modelBuilder.Entity<DeviceConnectionEvent>().HasIndex(x=>x.OccurredAt);
+        modelBuilder.Entity<DeviceConnectionEvent>().HasIndex(x=>new{x.FarmingAreaId,x.OccurredAt});
         modelBuilder.Entity<DeviceMonitoringState>().HasIndex(x=>new{x.SourceType,x.SourceId}).IsUnique();
-        modelBuilder.Entity<DeviceMonitoringPolicy>().HasIndex(x=>x.SourceType).IsUnique();
+        modelBuilder.Entity<DeviceMonitoringPolicy>().HasIndex(x=>new{x.SourceType,x.SourceId}).IsUnique();
         modelBuilder.Entity<DeviceMonitoringPolicy>().Property(x=>x.Version).IsConcurrencyToken();
         modelBuilder.Entity<Device>().Property(x => x.CapabilityVersion).HasDefaultValue(0).IsConcurrencyToken();
         modelBuilder.Entity<ControllerEvent>(b =>

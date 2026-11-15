@@ -27,18 +27,18 @@ public sealed class DeviceMonitoringWorker(IServiceScopeFactory scopes,IConfigur
     var states=await db.DeviceMonitoringStates.ToDictionaryAsync(x=>new ValueTuple<string,Guid>(x.SourceType,x.SourceId),ct);
     foreach(var row in rows){
         var key=(row.Type,row.Id);var state=states.GetValueOrDefault(key);
-        if(state!=null&&state.ObservedAt>=now)continue;
-        if(state==null||state.Status!=row.ConnectionStatus||state.FarmingAreaId!=row.FarmingAreaId||now-state.ObservedAt>TimeSpan.FromMinutes(3)){
+        if(state==null||state.Status!=row.ConnectionStatus||now-state.ObservedAt>TimeSpan.FromMinutes(3)){
             var gap=state!=null&&now-state.ObservedAt>TimeSpan.FromMinutes(3);
             db.DeviceConnectionEvents.Add(new(){SourceType=row.Type,SourceId=row.Id,FarmingAreaId=row.FarmingAreaId,
-                PreviousStatus=gap?null:state?.Status,NewStatus=row.ConnectionStatus,OccurredAt=now,LastSeenAt=row.LastSeenAt,PreviousObservedAt=state?.ObservedAt,
-                ReasonCode=state==null?"initial_observation":gap?"observation_gap":state.FarmingAreaId!=row.FarmingAreaId?"area_changed":row.ReasonCode??"status_changed"});
+                PreviousStatus=gap?null:state?.Status,NewStatus=row.ConnectionStatus,OccurredAt=now,LastSeenAt=row.LastSeenAt,
+                PreviousObservedAt=state?.ObservedAt,
+                ReasonCode=state==null?"initial_observation":gap?"observation_gap":row.ReasonCode??"status_changed"});
         }
         if(state==null){state=new(){SourceType=row.Type,SourceId=row.Id};db.DeviceMonitoringStates.Add(state);}
         state.Status=row.ConnectionStatus;state.ObservedAt=now;state.FarmingAreaId=row.FarmingAreaId;
     }
     var keys=rows.Select(x=>(x.Type,x.Id)).ToHashSet();
-    foreach(var state in states.Values.Where(x=>x.ObservedAt<now&&!keys.Contains((x.SourceType,x.SourceId)))){
+    foreach(var state in states.Values.Where(x=>!keys.Contains((x.SourceType,x.SourceId)))){
         db.DeviceConnectionEvents.Add(new(){SourceType=state.SourceType,SourceId=state.SourceId,FarmingAreaId=state.FarmingAreaId,
             PreviousStatus=state.Status,NewStatus="Removed",ReasonCode="source_removed",OccurredAt=now,PreviousObservedAt=state.ObservedAt});
         db.DeviceMonitoringStates.Remove(state);

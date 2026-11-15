@@ -717,7 +717,7 @@ public class SystemPlatformService : ISystemPlatformService
         "CreateSensor", "UpdateSensor", "DeleteSensor", "RegisterSensorFromPort", "UpdateSensorBinding", "EnableSensor", "DisableSensor", "UpdateSensorConfiguration", "SensorTestRequested", "RecordSensorCalibration",
         "DeleteCameraRecordingRequested", "DeleteCameraRecordingFailed", "DeleteCameraRecording",
         "CreateCameraSchedule", "UpdateCameraSchedule", "ChangeCameraScheduleStatus", "DeleteCameraSchedule", "AssignCameraAgent", "RevokeCameraAgent",
-        "Login", "LoginFailed", "LoginFailureThresholdReached", "AcknowledgeDeviceMonitoringAlert", "UpdateDeviceMonitoringPolicy"
+        "Login", "LoginFailed", "LoginFailureThresholdReached", "AcknowledgeDeviceMonitoringAlert"
     ];
 
     private IQueryable<OperationLog> TechnicalOperations() => _db.OperationLogs.AsNoTracking()

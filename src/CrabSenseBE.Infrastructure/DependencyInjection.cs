@@ -69,7 +69,6 @@ public static class DependencyInjection
         services.AddHostedService<CameraRecordingRetentionWorker>();
         services.AddHostedService<CameraRecordingMonitor>();
         services.AddHostedService<DeviceMonitoringWorker>();
-        services.AddScoped<CrabSenseBE.Application.Common.IMonitoringTimeoutProvider, DeviceMonitoringPolicyStore>();
 
         return services;
     }
