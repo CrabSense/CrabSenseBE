@@ -50,6 +50,9 @@ public class AppDbContext : DbContext
     public DbSet<ControllerPort> ControllerPorts => Set<ControllerPort>();
     public DbSet<ControllerEvent> ControllerEvents => Set<ControllerEvent>();
     public DbSet<WaterMeasurement> WaterMeasurements => Set<WaterMeasurement>();
+    public DbSet<WaterAnalysisBatch> WaterAnalysisBatches => Set<WaterAnalysisBatch>();
+    public DbSet<WaterAnalysisSchedule> WaterAnalysisSchedules => Set<WaterAnalysisSchedule>();
+    public DbSet<WaterColorCalibration> WaterColorCalibrations => Set<WaterColorCalibration>();
     public DbSet<WaterAnalysisRun> WaterAnalysisRuns => Set<WaterAnalysisRun>();
     public DbSet<Hdf5Upload> Hdf5Uploads => Set<Hdf5Upload>();
 
@@ -122,6 +125,20 @@ public class AppDbContext : DbContext
 
         // Schema riêng — không đụng bảng Cap_Ras snake_case trong public
         modelBuilder.HasDefaultSchema("be");
+        modelBuilder.Entity<WaterAnalysisBatch>().HasIndex(x=>x.FarmingAreaId).IsUnique().HasFilter("\"Status\" = 'waiting_samples'");
+        modelBuilder.Entity<WaterAnalysisBatch>().HasOne<FarmingArea>().WithMany().HasForeignKey(x=>x.FarmingAreaId).OnDelete(DeleteBehavior.Restrict);
+        modelBuilder.Entity<WaterAnalysisBatch>().Property(x=>x.Status).IsConcurrencyToken();
+        modelBuilder.Entity<WaterAnalysisSchedule>().HasIndex(x=>x.FarmingAreaId).IsUnique();
+        modelBuilder.Entity<WaterAnalysisSchedule>().HasOne<FarmingArea>().WithMany().HasForeignKey(x=>x.FarmingAreaId).OnDelete(DeleteBehavior.Restrict);
+        modelBuilder.Entity<WaterAnalysisSchedule>().Property(x=>x.NextRunAt).IsConcurrencyToken();
+        modelBuilder.Entity<WaterAnalysisRun>().HasOne<WaterAnalysisBatch>().WithMany().HasForeignKey(x=>x.BatchId).OnDelete(DeleteBehavior.Restrict);
+        modelBuilder.Entity<WaterAnalysisRun>().HasIndex(x=>new{x.BatchId,x.Analyte}).IsUnique();
+        modelBuilder.Entity<WaterColorCalibration>().HasIndex(x => new { x.FarmingAreaId, x.Analyte });
+        modelBuilder.Entity<WaterColorCalibration>().HasOne<FarmingArea>().WithMany().HasForeignKey(x => x.FarmingAreaId).OnDelete(DeleteBehavior.Restrict);
+        modelBuilder.Entity<WaterColorCalibration>().HasOne<Device>().WithMany().HasForeignKey(x => x.CameraDeviceId).OnDelete(DeleteBehavior.Restrict);
+        modelBuilder.Entity<WaterAnalysisRun>().HasOne<WaterColorCalibration>().WithMany().HasForeignKey(x => x.CalibrationId).OnDelete(DeleteBehavior.Restrict);
+        modelBuilder.Entity<WaterAnalysisRun>().HasIndex(x => x.SampleMediaId).IsUnique();
+        modelBuilder.Entity<WaterAnalysisRun>().HasOne<MediaAsset>().WithMany().HasForeignKey(x=>x.SampleMediaId).OnDelete(DeleteBehavior.Restrict);
         modelBuilder.Entity<AiManagedService>().Property(x => x.CommandId).IsConcurrencyToken();
         modelBuilder.Entity<AiModelVersion>().HasIndex(x => new { x.AiServiceId, x.Version }).IsUnique();
         modelBuilder.Entity<AiCameraAssignment>().HasIndex(x => new { x.AiServiceId, x.DeviceId }).IsUnique();

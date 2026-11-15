@@ -52,7 +52,13 @@ public record WaterAnalysisRunDto(
     string? PerformedBy = null,
     string? ControllerId = null,
     string? CameraId = null,
-    IReadOnlyList<WaterAnalysisStepLogDto>? StepLogs = null);
+    IReadOnlyList<WaterAnalysisStepLogDto>? StepLogs = null,
+    Guid? CalibrationId = null,
+    Guid? SampleMediaId = null,
+    string? ExecutionMode = null,
+    Guid? BatchId = null,
+    decimal? MeasuredValue = null,
+    string? MeasuredUnit = null);
 
 public record WaterAnalysisThresholdDto(
     string Code,
@@ -211,4 +217,8 @@ public record WaterAnalysisDetailDto(
     WaterAnalysisRelatedAlertDto? Alert,
     string? Error,
     string? FailedStep,
-    bool CanRerun);
+    bool CanRerun,
+    Guid? CalibrationId = null,
+    Guid? SampleMediaId = null,
+    string? ColorEvidenceJson = null,
+    Guid? BatchId = null);
