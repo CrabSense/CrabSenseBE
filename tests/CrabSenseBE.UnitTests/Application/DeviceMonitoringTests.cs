@@ -1,3 +1,4 @@
+using Microsoft.EntityFrameworkCore;
 using CrabSenseBE.Domain.Entities;
 using CrabSenseBE.Domain.Enums;
 using CrabSenseBE.Infrastructure.Services;
@@ -5,7 +6,26 @@ using Xunit;
 namespace CrabSenseBE.UnitTests.Application;
 public sealed class DeviceMonitoringTests
 {
-    [Fact] public void FreshnessDoesNotTreatUnseenAsOnline(){
+    [Fact]
+    public async Task CameraWithOfflineAgentIsNotReportedHealthy()
+    {
+        var now=DateTime.UtcNow;
+        await using var db=new CrabSenseBE.Infrastructure.Persistence.AppDbContext(
+            new Microsoft.EntityFrameworkCore.DbContextOptionsBuilder<CrabSenseBE.Infrastructure.Persistence.AppDbContext>()
+                .UseInMemoryDatabase(Guid.NewGuid().ToString()).Options);
+        var areaId=Guid.NewGuid();
+        var camera=new Device{DeviceCode="CAM-HEALTH",DeviceType="camera",FarmingAreaId=areaId,Status=DeviceStatus.Online,EdgeState="Approved",LastSeenAt=now};
+        var kiosk=new FarmKiosk{Code="KIOSK-HEALTH",FarmingAreaId=areaId,Status="Online",LastSeenAt=now};
+        db.Devices.Add(camera);db.FarmKiosks.Add(kiosk);
+        db.CameraRecordingAgents.Add(new CameraRecordingAgent{DeviceId=camera.Id,KioskId=kiosk.Id,Enabled=true,LastSeenAt=now.AddMinutes(-5)});
+        await db.SaveChangesAsync();
+        var rows=await new DeviceMonitoringReader(db).ReadAsync(now,CancellationToken.None,false);
+        var result=Assert.Single(rows.Where(x=>x.Id==camera.Id));
+        Assert.Equal("Online",result.ConnectionStatus);
+        Assert.Equal("Offline",result.AgentStatus);
+        Assert.Equal("Warning",result.HealthStatus);
+    }
+        [Fact] public void FreshnessDoesNotTreatUnseenAsOnline(){
         var now=DateTime.UtcNow;
         Assert.Equal("Unknown",DeviceMonitoringReader.Fresh(null,now,120));
         Assert.Equal("Offline",DeviceMonitoringReader.Fresh(now.AddSeconds(-121),now,120));

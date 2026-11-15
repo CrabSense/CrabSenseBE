@@ -31,6 +31,7 @@ public sealed class DeviceMonitoringWorker(IServiceScopeFactory scopes,IConfigur
             var gap=state!=null&&now-state.ObservedAt>TimeSpan.FromMinutes(3);
             db.DeviceConnectionEvents.Add(new(){SourceType=row.Type,SourceId=row.Id,FarmingAreaId=row.FarmingAreaId,
                 PreviousStatus=gap?null:state?.Status,NewStatus=row.ConnectionStatus,OccurredAt=now,LastSeenAt=row.LastSeenAt,
+                PreviousObservedAt=state?.ObservedAt,
                 ReasonCode=state==null?"initial_observation":gap?"observation_gap":row.ReasonCode??"status_changed"});
         }
         if(state==null){state=new(){SourceType=row.Type,SourceId=row.Id};db.DeviceMonitoringStates.Add(state);}
@@ -39,7 +40,7 @@ public sealed class DeviceMonitoringWorker(IServiceScopeFactory scopes,IConfigur
     var keys=rows.Select(x=>(x.Type,x.Id)).ToHashSet();
     foreach(var state in states.Values.Where(x=>!keys.Contains((x.SourceType,x.SourceId)))){
         db.DeviceConnectionEvents.Add(new(){SourceType=state.SourceType,SourceId=state.SourceId,FarmingAreaId=state.FarmingAreaId,
-            PreviousStatus=state.Status,NewStatus="Removed",ReasonCode="source_removed",OccurredAt=now});
+            PreviousStatus=state.Status,NewStatus="Removed",ReasonCode="source_removed",OccurredAt=now,PreviousObservedAt=state.ObservedAt});
         db.DeviceMonitoringStates.Remove(state);
     }
     await db.SaveChangesAsync(ct);await tx.CommitAsync(ct);
