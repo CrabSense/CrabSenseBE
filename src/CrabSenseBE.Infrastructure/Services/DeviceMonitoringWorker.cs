@@ -34,7 +34,12 @@ public sealed class DeviceMonitoringWorker(IServiceScopeFactory scopes,IConfigur
                 PreviousObservedAt=state?.ObservedAt,
                 ReasonCode=state==null?"initial_observation":gap?"observation_gap":row.ReasonCode??"status_changed"});
         }
+        if(state==null||state.HealthStatus!=row.HealthStatus||state.HealthReason!=row.ReasonCode||state.AgentStatus!=row.AgentStatus||now-state.ObservedAt>TimeSpan.FromMinutes(3)){
+            db.DeviceHealthEvents.Add(new(){SourceType=row.Type,SourceId=row.Id,FarmingAreaId=row.FarmingAreaId,OccurredAt=now,
+                PreviousHealth=state?.HealthStatus,HealthStatus=row.HealthStatus,ReasonCode=row.ReasonCode,AgentStatus=row.AgentStatus});
+        }
         if(state==null){state=new(){SourceType=row.Type,SourceId=row.Id};db.DeviceMonitoringStates.Add(state);}
+        state.HealthStatus=row.HealthStatus;state.HealthReason=row.ReasonCode;state.AgentStatus=row.AgentStatus;
         state.Status=row.ConnectionStatus;state.ObservedAt=now;state.FarmingAreaId=row.FarmingAreaId;
     }
     var keys=rows.Select(x=>(x.Type,x.Id)).ToHashSet();
@@ -43,6 +48,9 @@ public sealed class DeviceMonitoringWorker(IServiceScopeFactory scopes,IConfigur
             PreviousStatus=state.Status,NewStatus="Removed",ReasonCode="source_removed",OccurredAt=now,PreviousObservedAt=state.ObservedAt});
         db.DeviceMonitoringStates.Remove(state);
     }
+    var worker=await db.MonitoringWorkerStates.SingleOrDefaultAsync(x=>x.WorkerName=="device-history",ct);
+    if(worker==null){worker=new(){WorkerName="device-history"};db.MonitoringWorkerStates.Add(worker);}
+    worker.LastSucceededAt=now;worker.DeviceCount=rows.Count;
     await db.SaveChangesAsync(ct);await tx.CommitAsync(ct);
  }
 }
