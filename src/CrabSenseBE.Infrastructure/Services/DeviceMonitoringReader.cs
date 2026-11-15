@@ -13,7 +13,7 @@ public sealed record MonitoringRow(Guid Id,string Type,string Code,string? Name,
     string? KioskCode=null,string? KioskStatus=null,Guid? ControllerId=null,string? ControllerCode=null,string? PortCode=null,
     decimal? LatestValue=null,string? Unit=null,DateTime? LatestMeasuredAt=null,DateTime? LastReceivedAt=null,string? DataQuality=null,
     string? AgentStatus=null,DateTime? AgentLastSeenAt=null,int? PendingClips=null,string? RecordingStatus=null,
-    string? ScheduleName=null,int PortCount=0,int PendingCommands=0,int ActiveAlertCount=0,string? ReasonCode=null);
+    string? ScheduleName=null,int PortCount=0,int PendingCommands=0,int ActiveAlertCount=0,string? ReasonCode=null,DateTime? LastRecordingAt=null);
 
 public sealed class DeviceMonitoringReader(AppDbContext db)
 {
@@ -23,7 +23,7 @@ public sealed class DeviceMonitoringReader(AppDbContext db)
         (a.SourceType=="Device"&&(a.IncidentType=="device_disconnect"||a.IncidentType=="camera_recording_failure"||
         a.IncidentType=="camera_recording_stalled"||a.IncidentType=="camera_storage_limit"||a.IncidentType=="camera_recording_missed"||a.IncidentType=="camera_agent_offline"))||
         (a.SourceType=="Kiosk"&&a.IncidentType=="kiosk_disconnect"));
-    public static string Fresh(DateTime? seen,DateTime now,int seconds)=>seen==null?"Unknown":seen<now.AddSeconds(-seconds)?"Offline":"Online";
+    public static string Fresh(DateTime? seen,DateTime now,int seconds)=>seen==null||seen>now.AddSeconds(5)?"Unknown":seen<now.AddSeconds(-seconds)?"Offline":"Online";
     public static string KioskConnection(FarmKiosk k,DateTime now,int timeoutSeconds=120)=>k.Status=="Revoked"?"Disabled":k.Status=="Created"?"Unknown":Fresh(k.LastSeenAt,now,timeoutSeconds);
     public static string DeviceConnection(Device d,DateTime now,int timeoutSeconds=900)
     {
@@ -97,7 +97,7 @@ public sealed class DeviceMonitoringReader(AppDbContext db)
                 conn,health,camera?null:d.EdgeState,d.LastSeenAt,timeout,d.IpAddress,d.FirmwareVersion?.Contains("://")==true?null:d.FirmwareVersion,
                 kioskId,k?.Code,ks,AgentStatus:agentStatus,AgentLastSeenAt:agent?.LastSeenAt,PendingClips:agent?.PendingClips,
                 RecordingStatus:schedule==null?"NotScheduled":!schedule.Enabled?"Disabled":execution==null?"Waiting":execution.Status,
-                ScheduleName:schedule?.Name,PortCount:portCounts.GetValueOrDefault(d.Id),PendingCommands:commands.Where(c=>string.Equals(c.Code,d.DeviceCode,StringComparison.OrdinalIgnoreCase)).Sum(c=>c.Count),
+                ScheduleName:schedule?.Name,LastRecordingAt:camera?execution?.EndedAt:null,PortCount:portCounts.GetValueOrDefault(d.Id),PendingCommands:commands.Where(c=>string.Equals(c.Code,d.DeviceCode,StringComparison.OrdinalIgnoreCase)).Sum(c=>c.Count),
                 ActiveAlertCount:a.Count,ReasonCode:conn=="Offline"?(ks=="Offline"?"upstream_kiosk_offline":"heartbeat_timeout"):conn=="Unknown"?"no_verified_heartbeat":null));
         }
         foreach(var s in sensors){

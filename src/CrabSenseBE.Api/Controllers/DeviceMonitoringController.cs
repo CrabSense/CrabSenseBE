@@ -162,11 +162,26 @@ public sealed class DeviceMonitoringController(AppDbContext db):ControllerBase
     }
     [HttpPost("alerts/{id:guid}/acknowledge")]
     public async Task<IActionResult> Acknowledge(Guid id,CancellationToken ct){
-        var actor=await Actor(ct);if(!await DeviceMonitoringReader.TechnicalAlerts(db).AnyAsync(a=>a.Id==id,ct))throw AppException.NotFound("Technical alert");
-        var a=await db.Alerts.SingleAsync(x=>x.Id==id,ct);
-        if(a.Status!=AlertStatus.Active)throw AppException.Conflict("Only active alerts can be acknowledged.");
-        a.Status=AlertStatus.Acknowledged;a.AcknowledgedAt=DateTime.UtcNow;a.AcknowledgedBy=actor;
+        var actor=await Actor(ct);
+        var technical=DeviceMonitoringReader.TechnicalAlerts(db).Where(a=>a.Id==id);
+        var now=DateTime.UtcNow;
+        await using var tx=db.Database.IsRelational()?await db.Database.BeginTransactionAsync(ct):null;
+        if(!await technical.AnyAsync(ct))throw AppException.NotFound("Technical alert");
+        if(tx!=null){
+            var count=await technical.Where(a=>a.Status==AlertStatus.Active).ExecuteUpdateAsync(setters=>setters
+                .SetProperty(a=>a.Status,AlertStatus.Acknowledged)
+                .SetProperty(a=>a.AcknowledgedAt,(DateTime?)now)
+                .SetProperty(a=>a.AcknowledgedBy,(Guid?)actor)
+                .SetProperty(a=>a.UpdatedAt,(DateTime?)now),ct);
+            if(count!=1)throw AppException.Conflict("Only active alerts can be acknowledged.");
+        }else{
+            var alert=await db.Alerts.SingleAsync(a=>a.Id==id,ct);
+            if(alert.Status!=AlertStatus.Active)throw AppException.Conflict("Only active alerts can be acknowledged.");
+            alert.Status=AlertStatus.Acknowledged;alert.AcknowledgedAt=now;alert.AcknowledgedBy=actor;
+        }
         db.OperationLogs.Add(new(){UserId=actor,Action="AcknowledgeDeviceMonitoringAlert",EntityType="Alert",EntityId=id});
-        await db.SaveChangesAsync(ct);return Result(new{a.Id,status=a.Status.ToString()});
+        await db.SaveChangesAsync(ct);
+        if(tx!=null)await tx.CommitAsync(ct);
+        return Result(new{id,status=AlertStatus.Acknowledged.ToString()});
     }
 }
