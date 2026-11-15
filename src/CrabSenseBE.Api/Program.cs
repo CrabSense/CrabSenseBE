@@ -31,6 +31,7 @@ builder.Services.AddHttpContextAccessor();
 builder.Services.AddScoped<ICurrentUserService, CurrentUserService>();
 builder.Services.AddApplication(builder.Configuration);
 builder.Services.AddHostedService<WaterBatchScheduleWorker>();
+builder.Services.AddHttpClient<WaterAiClient>().ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
 
 // ─── JWT Authentication ─────────────────────────────────────────────────────
 builder.Services.AddCrabSenseJwtAuthentication(builder.Configuration);
