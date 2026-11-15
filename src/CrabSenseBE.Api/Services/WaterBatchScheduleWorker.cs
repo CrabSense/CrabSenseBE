@@ -48,7 +48,9 @@ public sealed class WaterBatchScheduleWorker(IServiceScopeFactory scopes,ILogger
             await db.WaterAnalysisRuns.AnyAsync(x=>x.FarmingAreaId==item.FarmingAreaId&&(x.Status=="running"||x.Status=="stopping"),ct))outcome="skipped_busy";
         else
         {
-            db.WaterAnalysisBatches.Add(WaterBatchPlanning.New(item.FarmingAreaId,"scheduled",targets,item.SampleSource,now,scheduleId:item.Id,scheduledFor:item.NextRunAt));
+            var batch=WaterBatchPlanning.New(item.FarmingAreaId,"scheduled",targets,item.SampleSource,now,scheduleId:item.Id,scheduledFor:item.NextRunAt);
+            db.WaterAnalysisBatches.Add(batch);
+            await WaterBatchPlanning.AddChannels(db,batch,targets,now,ct);
             outcome="waiting_samples";
         }
         await db.SaveChangesAsync(ct);

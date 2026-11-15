@@ -92,3 +92,20 @@ public sealed class WaterAnalysisSchedule : BaseEntity
     public DateTime? LastAttemptAt { get; set; }
     public string? LastOutcome { get; set; }
 }
+
+public sealed class WaterAssayChannel : BaseEntity
+{
+    public Guid BatchId { get; set; }
+    public Guid CalibrationId { get; set; }
+    public string Analyte { get; set; } = "";
+    public string ProfileId { get; set; } = "";
+    public string ProfileJson { get; set; } = "";
+    public string ProtocolJson { get; set; } = "";
+    public string State { get; set; } = "waiting";
+    public int StepIndex { get; set; }
+    public DateTime StepStartedAt { get; set; }
+    public DateTime? ReactionReadyAt { get; set; }
+    public Guid? CapturedMediaId { get; set; }
+    public string? Failure { get; set; }
+    public string EventsJson { get; set; } = "[]";
+}

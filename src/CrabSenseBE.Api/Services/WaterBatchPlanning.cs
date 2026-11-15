@@ -34,7 +34,18 @@ public static class WaterBatchPlanning
     {
         var ids=targets.Select(x=>x.CalibrationId).ToArray();
         var profiles=await db.WaterColorCalibrations.AsNoTracking().Where(x=>x.FarmingAreaId==areaId&&ids.Contains(x.Id)&&x.RevokedAt==null&&x.ValidUntil>now).ToListAsync(ct);
-        return targets.All(t=>profiles.Any(p=>p.Id==t.CalibrationId&&p.Analyte==t.Analyte&&string.Equals(p.KitName,Kit(t.Analyte),StringComparison.OrdinalIgnoreCase)));
+        return targets.All(t=>profiles.Any(p=>p.Id==t.CalibrationId&&p.Analyte==t.Analyte&&string.Equals(p.KitName,Kit(t.Analyte),StringComparison.OrdinalIgnoreCase)&&WaterAssayCatalog.Compatible(p)));
+    }
+    public static async Task AddChannels(AppDbContext db,WaterAnalysisBatch batch,Target[] targets,DateTime now,CancellationToken ct)
+    {
+        var ids=targets.Select(x=>x.CalibrationId).ToArray();
+        var profiles=await db.WaterColorCalibrations.AsNoTracking().Where(x=>ids.Contains(x.Id)&&x.FarmingAreaId==batch.FarmingAreaId&&x.RevokedAt==null&&x.ValidUntil>now).ToListAsync(ct);
+        foreach(var target in targets)
+        {
+            var profile=profiles.SingleOrDefault(x=>x.Id==target.CalibrationId&&x.Analyte==target.Analyte)
+                ??throw AppException.Conflict("Hiệu chuẩn không còn hợp lệ.");
+            db.WaterAssayChannels.Add(WaterAssayCatalog.New(batch.Id,profile,now));
+        }
     }
     public static DateTime Next(DateTime due,DateTime now,int intervalMinutes)
     {

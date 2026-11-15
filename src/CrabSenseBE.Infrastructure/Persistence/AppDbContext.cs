@@ -50,6 +50,7 @@ public class AppDbContext : DbContext
     public DbSet<ControllerPort> ControllerPorts => Set<ControllerPort>();
     public DbSet<ControllerEvent> ControllerEvents => Set<ControllerEvent>();
     public DbSet<WaterMeasurement> WaterMeasurements => Set<WaterMeasurement>();
+    public DbSet<WaterAssayChannel> WaterAssayChannels => Set<WaterAssayChannel>();
     public DbSet<WaterAnalysisBatch> WaterAnalysisBatches => Set<WaterAnalysisBatch>();
     public DbSet<WaterAnalysisSchedule> WaterAnalysisSchedules => Set<WaterAnalysisSchedule>();
     public DbSet<WaterColorCalibration> WaterColorCalibrations => Set<WaterColorCalibration>();
@@ -125,6 +126,13 @@ public class AppDbContext : DbContext
 
         // Schema riêng — không đụng bảng Cap_Ras snake_case trong public
         modelBuilder.HasDefaultSchema("be");
+        modelBuilder.Entity<WaterAssayChannel>().HasIndex(x=>new{x.BatchId,x.Analyte}).IsUnique();
+        modelBuilder.Entity<WaterAssayChannel>().HasIndex(x=>x.CapturedMediaId).IsUnique();
+        modelBuilder.Entity<WaterAssayChannel>().HasOne<WaterAnalysisBatch>().WithMany().HasForeignKey(x=>x.BatchId).OnDelete(DeleteBehavior.Restrict);
+        modelBuilder.Entity<WaterAssayChannel>().HasOne<WaterColorCalibration>().WithMany().HasForeignKey(x=>x.CalibrationId).OnDelete(DeleteBehavior.Restrict);
+        modelBuilder.Entity<WaterAssayChannel>().HasOne<MediaAsset>().WithMany().HasForeignKey(x=>x.CapturedMediaId).OnDelete(DeleteBehavior.Restrict);
+        modelBuilder.Entity<WaterAssayChannel>().Property(x=>x.StepIndex).IsConcurrencyToken();
+        modelBuilder.Entity<WaterAssayChannel>().Property(x=>x.State).IsConcurrencyToken();
         modelBuilder.Entity<WaterAnalysisBatch>().HasIndex(x=>x.FarmingAreaId).IsUnique().HasFilter("\"Status\" = 'waiting_samples'");
         modelBuilder.Entity<WaterAnalysisBatch>().HasOne<FarmingArea>().WithMany().HasForeignKey(x=>x.FarmingAreaId).OnDelete(DeleteBehavior.Restrict);
         modelBuilder.Entity<WaterAnalysisBatch>().Property(x=>x.Status).IsConcurrencyToken();
