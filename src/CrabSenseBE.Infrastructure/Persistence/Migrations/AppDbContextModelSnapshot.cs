@@ -632,9 +632,11 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.Property<string>("ReasonCode").IsRequired().HasColumnType("text");
                     b.Property<DateTime>("OccurredAt").HasColumnType("timestamp with time zone");
                     b.Property<DateTime?>("LastSeenAt").HasColumnType("timestamp with time zone");
+                    b.Property<DateTime?>("PreviousObservedAt").HasColumnType("timestamp with time zone");
                     b.HasKey("Id");
                     b.HasIndex("SourceType","SourceId","OccurredAt");
                     b.HasIndex("OccurredAt");
+                    b.HasIndex("FarmingAreaId","OccurredAt");
                     b.ToTable("DeviceConnectionEvents","be");
                 });
             modelBuilder.Entity("CrabSenseBE.Domain.Entities.DeviceMonitoringPolicy", b =>

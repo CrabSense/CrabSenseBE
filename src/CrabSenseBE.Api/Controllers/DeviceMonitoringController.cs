@@ -108,6 +108,23 @@ public sealed class DeviceMonitoringController(AppDbContext db):ControllerBase
         var items=await q.OrderByDescending(x=>x.OccurredAt).ThenBy(x=>x.Id).Skip((page-1)*pageSize).Take(pageSize).ToListAsync(ct);
         return Result(new{items,total,page,pageSize,lastObservedAt=state?.ObservedAt,coverage="sampled_transitions_only"});
     }
+    [HttpGet("{type}/{id:guid}/availability")]
+    public async Task<IActionResult> Availability(string type,Guid id,int days=7,CancellationToken ct=default){
+        await Actor(ct);
+        if(type is not ("camera" or "sensor" or "controller" or "kiosk"))throw AppException.BadRequest("Invalid source type.");
+        if(days is <1 or >90)throw AppException.BadRequest("Days must be 1..90.");
+        var to=DateTime.UtcNow;
+        var from=to.AddDays(-days);
+        var reader=new DeviceMonitoringReader(db);
+        if(!(await reader.ReadAsync(to,ct,false)).Any(x=>x.Type==type&&x.Id==id))throw AppException.NotFound("Device");
+        var q=db.DeviceConnectionEvents.AsNoTracking().Where(x=>x.SourceType==type&&x.SourceId==id);
+        var prior=await q.Where(x=>x.OccurredAt<from).OrderByDescending(x=>x.OccurredAt).ThenByDescending(x=>x.Id).FirstOrDefaultAsync(ct);
+        var recent=await q.Where(x=>x.OccurredAt>=from&&x.OccurredAt<=to).OrderBy(x=>x.OccurredAt).ThenBy(x=>x.Id).Take(50001).ToListAsync(ct);
+        if(recent.Count>50000)throw AppException.BadRequest("Too many observations; select a shorter range.");
+        if(prior!=null)recent.Insert(0,prior);
+        var state=await db.DeviceMonitoringStates.AsNoTracking().SingleOrDefaultAsync(x=>x.SourceType==type&&x.SourceId==id,ct);
+        return Result(DeviceAvailability.Calculate(recent,state,from,to));
+    }
     [HttpGet("trends")]
     public async Task<IActionResult> Trends(Guid? farmingAreaId,int days=7,CancellationToken ct=default){
         await Actor(ct);if(days is <1 or >90)throw AppException.BadRequest("Days must be between 1 and 90.");
