@@ -281,11 +281,11 @@ public class SystemPlatformService : ISystemPlatformService
             var now=DateTime.UtcNow;
             var evidence=valid&&device.Status!=DeviceStatus.Maintenance&&agent!.StreamProbedAt>=now.AddMinutes(-3)&&agent.StreamProbedAt<=now.AddSeconds(5)?agent.StreamProbeStatus:null;
             var verification=evidence is "Verified" or "Failed" or "Synthetic"?evidence:agent==null?"NotIntegrated":"Unverified";
-            var message=verification=="Verified"?"Kiosk đã xác minh frame gần đây; đây là bằng chứng đã lưu, không phải phép thử trực tiếp.":verification=="Failed"?"Lần kiểm tra frame gần nhất thất bại.":verification=="Synthetic"?"Chỉ có frame thử nghiệm, chưa xác minh camera thật.":"Chưa có bằng chứng stream mới từ Camera Agent.";
+            var cameraMessage=verification=="Verified"?"Kiosk đã xác minh frame gần đây; đây là bằng chứng đã lưu, không phải phép thử trực tiếp.":verification=="Failed"?"Lần kiểm tra frame gần nhất thất bại.":verification=="Synthetic"?"Chỉ có frame thử nghiệm, chưa xác minh camera thật.":"Chưa có bằng chứng stream mới từ Camera Agent.";
             await AuditAsync(userId, "TestConnection", "Device", device.Id, verification, ip, ct);
             await _db.SaveChangesAsync(ct);
             return ApiResponse<DeviceConnectionTestDto>.Ok(new DeviceConnectionTestDto(
-                device.Id, verification=="Verified", message, device.IpAddress, null, device.LastSeenAt, device.RssiDbm, verification));
+                device.Id, verification=="Verified", cameraMessage, device.IpAddress, null, device.LastSeenAt, device.RssiDbm, verification));
         }
         if (string.IsNullOrWhiteSpace(device.IpAddress))
         {
