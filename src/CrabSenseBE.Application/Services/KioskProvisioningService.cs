@@ -258,6 +258,8 @@ public sealed class KioskProvisioningService : IKioskProvisioningService
         if (string.IsNullOrWhiteSpace(code))
             throw AppException.BadRequest("DeviceCode is required.");
 
+        if (code.Length > 100 || code is "." or ".." || !System.Text.RegularExpressions.Regex.IsMatch(code, @"\A[A-Za-z0-9_.:-]+\z"))
+            throw AppException.BadRequest("Controller code is invalid.");
         var now = DateTime.UtcNow;
         var codeKey = code.ToLowerInvariant();
         var device = await _uow.Devices.FirstOrDefaultAsync(d => d.DeviceCode.ToLower() == codeKey, ct);
@@ -302,6 +304,10 @@ public sealed class KioskProvisioningService : IKioskProvisioningService
         }
         else if (device.EdgeState == "Unprovisioned" || device.KioskId is null)
         {
+            // Prepared profiles have no active device credential. Preserve their ID
+            // but adopt the board spelling before issuing any signed Edge V2 commands.
+            if (device.EdgeState == "Unprovisioned" && device.KioskId is null && device.CredentialHash is null)
+                device.DeviceCode = code;
             device.KioskId = kiosk.Id;
             device.FarmingAreaId = kiosk.FarmingAreaId;
             device.EdgeState = "Pending";

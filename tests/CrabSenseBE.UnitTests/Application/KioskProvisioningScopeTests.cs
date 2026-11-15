@@ -217,6 +217,8 @@ public sealed class KioskProvisioningScopeTests
         {
             var result=await service.RegisterControllerAsync(key,request);
             Assert.Equal(device.Id,result.Data!.DeviceId);
+            Assert.Equal("esp-test",device.DeviceCode);
+            Assert.Equal("esp-test",result.Data.DeviceCode);
             Assert.Equal("Pending",device.EdgeState);
             Assert.Equal(kiosk.Id,device.KioskId);
             Assert.Equal(DeviceStatus.Offline,device.Status);
