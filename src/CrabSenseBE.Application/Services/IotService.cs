@@ -120,7 +120,7 @@ public class IotService : IIotService
         if (string.IsNullOrWhiteSpace(deviceCode) || channel < 1)
             throw AppException.BadRequest("DeviceCode và channel hợp lệ là bắt buộc.");
         var device = await _uow.Devices.FirstOrDefaultAsync(
-            d => d.DeviceCode == deviceCode.Trim(), ct);
+            d => d.DeviceCode.ToLower() == deviceCode.Trim().ToLower(), ct);
         if (device is null) throw AppException.NotFound("Device");
         if (device.EdgeState is not ("Approved" or "Online"))
             throw AppException.Forbidden("Controller chưa được phê duyệt.");
@@ -1194,6 +1194,8 @@ public class IotService : IIotService
     {
         if (string.IsNullOrWhiteSpace(req.DeviceCode))
             throw AppException.BadRequest("DeviceCode is required (ESP32 id / MAC).");
+        if (req.PrepareOnly && (CameraConfiguration.IsCamera(req.DeviceType, req.StreamUrl, req.SnapshotUrl) || !string.IsNullOrWhiteSpace(req.ApiKey)))
+            throw AppException.BadRequest("Controller preparation cannot grant credentials or create a Camera.");
         var code = req.DeviceCode.Trim();
         var codeKey = code.ToLowerInvariant();
         if (await _uow.Devices.AnyAsync(d => d.DeviceCode.ToLower() == codeKey, ct))
@@ -1218,6 +1220,17 @@ public class IotService : IIotService
                     throw AppException.Conflict("MAC đã được đăng ký.");
             }
         }
+        if (!CameraConfiguration.IsCamera(req.DeviceType, req.StreamUrl, req.SnapshotUrl))
+        {
+            CameraConfiguration.ValidateMetadata(deviceIp, req.MacAddress, null);
+            if (!string.IsNullOrWhiteSpace(req.MacAddress))
+            {
+                var macKey = req.MacAddress.Trim().ToLowerInvariant().Replace(":", "").Replace("-", "");
+                if (macKey.Length != 12 || !macKey.All(Uri.IsHexDigit)) throw AppException.BadRequest("MAC phải gồm 12 ký tự hex.");
+                if (await _uow.Devices.AnyAsync(d => d.MacAddress != null && d.MacAddress.ToLower().Replace(":", "").Replace("-", "") == macKey, ct))
+                    throw AppException.Conflict("MAC đã được đăng ký.");
+            }
+        }
         var device = new Device
         {
             DeviceCode = code,
@@ -1233,6 +1246,7 @@ public class IotService : IIotService
             Resolution = Clean(req.Resolution),
             InstallationLocation = Limit(Clean(req.InstallationLocation), 200),
             Notes = Limit(Clean(req.Note ?? req.Notes), 500),
+            EdgeState = req.PrepareOnly ? "Unprovisioned" : "Approved",
             Status = DeviceStatus.Offline
         };
         await ApplyRowAsync(device, req.FarmingRowId, ct);
