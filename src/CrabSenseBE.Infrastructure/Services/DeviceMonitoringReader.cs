@@ -13,7 +13,7 @@ public sealed record MonitoringRow(Guid Id,string Type,string Code,string? Name,
     string? KioskCode=null,string? KioskStatus=null,Guid? ControllerId=null,string? ControllerCode=null,string? PortCode=null,
     decimal? LatestValue=null,string? Unit=null,DateTime? LatestMeasuredAt=null,DateTime? LastReceivedAt=null,string? DataQuality=null,
     string? AgentStatus=null,DateTime? AgentLastSeenAt=null,int? PendingClips=null,string? RecordingStatus=null,
-    string? ScheduleName=null,int PortCount=0,int PendingCommands=0,int ActiveAlertCount=0,string? ReasonCode=null,DateTime? LastRecordingAt=null,int? AlertTimeoutSeconds=null);
+    string? ScheduleName=null,int PortCount=0,int PendingCommands=0,int ActiveAlertCount=0,string? ReasonCode=null,DateTime? LastRecordingAt=null,int? AlertTimeoutSeconds=null,string? StreamStatus=null,DateTime? StreamProbedAt=null,DateTime? LastFrameObservedAt=null);
 
 public sealed class DeviceMonitoringReader(AppDbContext db)
 {
@@ -21,7 +21,7 @@ public sealed class DeviceMonitoringReader(AppDbContext db)
     public static IQueryable<Alert> TechnicalAlerts(AppDbContext db)=>db.Alerts.AsNoTracking().Where(a=>
         (a.SourceType=="Sensor"&&(a.IncidentType=="sensor_disconnect"||a.IncidentType=="sensor_read_error"))||
         (a.SourceType=="Device"&&(a.IncidentType=="device_disconnect"||a.IncidentType=="camera_recording_failure"||
-        a.IncidentType=="camera_recording_stalled"||a.IncidentType=="camera_storage_limit"||a.IncidentType=="camera_recording_missed"||a.IncidentType=="camera_agent_offline"))||
+        a.IncidentType=="camera_recording_stalled"||a.IncidentType=="camera_storage_limit"||a.IncidentType=="camera_recording_missed"||a.IncidentType=="camera_agent_offline"||a.IncidentType=="camera_stream_failed"))||
         (a.SourceType=="Kiosk"&&a.IncidentType=="kiosk_disconnect"));
     public static string Fresh(DateTime? seen,DateTime now,int seconds)=>seen==null||seen>now.AddSeconds(5)?"Unknown":seen<now.AddSeconds(-seconds)?"Offline":"Online";
     public static string KioskConnection(FarmKiosk k,DateTime now,int timeoutSeconds=120)=>k.Status=="Revoked"?"Disabled":k.Status=="Created"?"Unknown":Fresh(k.LastSeenAt,now,timeoutSeconds);
@@ -31,7 +31,7 @@ public sealed class DeviceMonitoringReader(AppDbContext db)
         if(d.EdgeState is "Rejected" or "Revoked")return "Disabled";
         if(d.EdgeState is "Unprovisioned" or "Pending")return "Unknown";
         var fresh=Fresh(d.LastSeenAt,now,timeoutSeconds);
-        return fresh!="Online"?fresh:d.Status==DeviceStatus.Error?"Error":"Online";
+        return fresh!="Online"?fresh:d.Status==DeviceStatus.Error?"Error":CameraConfiguration.IsCamera(d)&&d.Status!=DeviceStatus.Online?"Offline":"Online";
     }
     public async Task<List<MonitoringRow>> AddMeasurementsAsync(List<MonitoringRow> page,CancellationToken ct)
     {
@@ -92,15 +92,16 @@ public sealed class DeviceMonitoringReader(AppDbContext db)
             var k=kiosks.GetValueOrDefault(kioskId??Guid.Empty);var ks=k==null?null:KioskConnection(k,now,Timeout("kiosk",k.Id,120));
             var agentStatus=!camera?null:agent==null?"Unassigned":!agent.Enabled||k==null||k.Status=="Revoked"||k.FarmingAreaId!=d.FarmingAreaId?"Disabled":Fresh(agent.LastSeenAt,now,Timeout("agent",d.Id,90));
             var execution=executions.GetValueOrDefault(d.Id);var schedule=schedules.GetValueOrDefault(d.Id);
+            var streamStatus=!camera?null:d.Status==DeviceStatus.Maintenance?"Disabled":agent==null||!agent.Enabled||agentStatus=="Disabled"?"Unverified":agent.StreamProbedAt==null?"Unverified":Fresh(agent.StreamProbedAt,now,180)!="Online"?"Stale":agent.StreamProbeStatus??"Unverified";
             var recordingStatus=schedule==null?"NotScheduled":!schedule.Enabled?"Disabled":execution==null?"Waiting":execution.Status=="Recording"&&Fresh(execution.LastHeartbeatAt,now,90)!="Online"?"Stalled":execution.Status;
-            var health=Health(a,conn);if(camera&&(agentStatus=="Offline"||recordingStatus=="Stalled"||schedule?.Enabled==true&&agentStatus is "Unassigned" or "Disabled" or "Unknown")&&(health=="Healthy"||health=="Unknown"))health="Warning";
-            var reason=conn=="Offline"?(ks=="Offline"?"upstream_kiosk_offline":"heartbeat_timeout"):conn=="Unknown"?"no_verified_heartbeat":recordingStatus=="Stalled"?"recording_lease_expired":camera&&agentStatus=="Offline"?"recording_agent_offline":null;
+            var health=Health(a,conn);if(camera&&(streamStatus=="Failed"||agentStatus=="Offline"||recordingStatus=="Stalled"||schedule?.Enabled==true&&agentStatus is "Unassigned" or "Disabled" or "Unknown")&&(health=="Healthy"||health=="Unknown"))health="Warning";
+            var reason=conn=="Offline"?(ks=="Offline"?"upstream_kiosk_offline":"heartbeat_timeout"):conn=="Unknown"?"no_verified_heartbeat":recordingStatus=="Stalled"?"recording_lease_expired":camera&&agentStatus=="Offline"?"recording_agent_offline":streamStatus=="Failed"?"camera_stream_failed":null;
             result.Add(new(d.Id,camera?"camera":"controller",d.DeviceCode,d.Name,d.FarmingAreaId,d.FarmingRowId,Area(d.FarmingAreaId),Row(d.FarmingRowId),
                 conn,health,camera?null:d.EdgeState,d.LastSeenAt,timeout,d.IpAddress,d.FirmwareVersion?.Contains("://")==true?null:d.FirmwareVersion,
                 kioskId,k?.Code,ks,AgentStatus:agentStatus,AgentLastSeenAt:agent?.LastSeenAt,PendingClips:agent?.PendingClips,
                 RecordingStatus:recordingStatus,
                 ScheduleName:schedule?.Name,LastRecordingAt:camera?execution?.EndedAt:null,PortCount:portCounts.GetValueOrDefault(d.Id),PendingCommands:commands.Where(c=>string.Equals(c.Code,d.DeviceCode,StringComparison.OrdinalIgnoreCase)).Sum(c=>c.Count),
-                ActiveAlertCount:a.Count,ReasonCode:reason,AlertTimeoutSeconds:900));
+                ActiveAlertCount:a.Count,ReasonCode:reason,AlertTimeoutSeconds:900,StreamStatus:streamStatus,StreamProbedAt:agent?.StreamProbedAt,LastFrameObservedAt:agent?.LastFrameObservedAt));
         }
         foreach(var s in sensors){
             var d=devices.GetValueOrDefault(s.DeviceId??Guid.Empty);var p=ports.GetValueOrDefault(s.ControllerPortId??s.BusPortId??Guid.Empty);

@@ -334,7 +334,7 @@ public class SystemPlatformService : ISystemPlatformService
         var deviceSource = deviceId.ToString("N");
         var alerts = await _db.Alerts.AsNoTracking()
             .Where(a => (a.SensorId != null && sensorIds.Contains(a.SensorId.Value) && a.IncidentType == "sensor_disconnect")
-                || ((a.IncidentType == "device_disconnect" || a.IncidentType == "camera_recording_failure" || a.IncidentType == "camera_recording_stalled" || a.IncidentType == "camera_storage_limit" || a.IncidentType == "camera_recording_missed" || a.IncidentType == "camera_agent_offline") && a.SourceType == "Device" && a.SourceId == deviceSource))
+                || ((a.IncidentType == "device_disconnect" || a.IncidentType == "camera_recording_failure" || a.IncidentType == "camera_recording_stalled" || a.IncidentType == "camera_storage_limit" || a.IncidentType == "camera_recording_missed" || a.IncidentType == "camera_agent_offline" || a.IncidentType == "camera_stream_failed") && a.SourceType == "Device" && a.SourceId == deviceSource))
             .OrderByDescending(a => a.CreatedAt)
             .Take(100)
             .ToListAsync(ct);
@@ -705,7 +705,7 @@ public class SystemPlatformService : ISystemPlatformService
     // Explicit technical incident allowlist. Do not infer authorization from free-text messages.
     private IQueryable<Alert> TechnicalAlerts() => _db.Alerts.AsNoTracking().Where(a =>
         ((a.IncidentType == "sensor_disconnect" || a.IncidentType == "sensor_read_error") && a.SourceType == "Sensor") ||
-        ((a.IncidentType == "device_disconnect" || a.IncidentType == "camera_recording_failure" || a.IncidentType == "camera_recording_stalled" || a.IncidentType == "camera_storage_limit" || a.IncidentType == "camera_recording_missed" || a.IncidentType == "camera_agent_offline") && a.SourceType == "Device") ||
+        ((a.IncidentType == "device_disconnect" || a.IncidentType == "camera_recording_failure" || a.IncidentType == "camera_recording_stalled" || a.IncidentType == "camera_storage_limit" || a.IncidentType == "camera_recording_missed" || a.IncidentType == "camera_agent_offline" || a.IncidentType == "camera_stream_failed") && a.SourceType == "Device") ||
         (a.IncidentType == "kiosk_disconnect" && a.SourceType == "Kiosk"));
 
     private static readonly string[] TechnicalActions =
@@ -717,7 +717,7 @@ public class SystemPlatformService : ISystemPlatformService
         "CreateSensor", "UpdateSensor", "DeleteSensor", "RegisterSensorFromPort", "UpdateSensorBinding", "EnableSensor", "DisableSensor", "UpdateSensorConfiguration", "SensorTestRequested", "RecordSensorCalibration",
         "DeleteCameraRecordingRequested", "DeleteCameraRecordingFailed", "DeleteCameraRecording",
         "CreateCameraSchedule", "UpdateCameraSchedule", "ChangeCameraScheduleStatus", "DeleteCameraSchedule", "AssignCameraAgent", "RevokeCameraAgent",
-        "Login", "LoginFailed", "LoginFailureThresholdReached", "AcknowledgeDeviceMonitoringAlert"
+        "Login", "LoginFailed", "LoginFailureThresholdReached", "AcknowledgeDeviceMonitoringAlert", "ProcessDeviceMonitoringAlert", "NoteDeviceMonitoringAlert", "CloseDeviceMonitoringAlert", "UpdateDeviceMonitoringPolicy", "ResetDeviceMonitoringPolicy"
     ];
 
     private IQueryable<OperationLog> TechnicalOperations() => _db.OperationLogs.AsNoTracking()

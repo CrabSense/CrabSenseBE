@@ -39,11 +39,12 @@ public sealed class CameraRecordingMonitor(IServiceScopeFactory scopes,IConfigur
             .Select(x=>x.DeviceId).Distinct().ToListAsync(ct);
         var agents=await db.CameraRecordingAgents.AsNoTracking().ToDictionaryAsync(x=>x.DeviceId,ct);
         var slots=await db.CameraScheduleSlots.AsNoTracking().ToListAsync(ct);
-        var kinds=new[]{"camera_recording_failure","camera_recording_stalled","camera_storage_limit","camera_recording_missed","camera_agent_offline"};
+        var kinds=new[]{"camera_recording_failure","camera_recording_stalled","camera_storage_limit","camera_recording_missed","camera_agent_offline","camera_stream_failed"};
         var alerts=await db.Alerts.Where(a=>a.SourceType=="Device"&&a.IncidentType!=null&&kinds.Contains(a.IncidentType)&&
             (a.Status==AlertStatus.Active||a.Status==AlertStatus.Acknowledged||a.Status==AlertStatus.InProgress)).ToListAsync(ct);
         foreach(var camera in cameras)
         {
+            if(camera.Status==DeviceStatus.Maintenance)continue;
             schedules.TryGetValue(camera.Id,out var assignment);latest.TryGetValue(camera.Id,out var execution);
             var failed=execution is not null&&execution.Status=="Failed"&&assignment?.Schedule.Id==execution.ScheduleId;
             var stalled=(execution is not null&&execution.Status=="Recording"&&execution.LastHeartbeatAt<now.AddSeconds(-90))||pending.Contains(camera.Id);
@@ -60,6 +61,8 @@ public sealed class CameraRecordingMonitor(IServiceScopeFactory scopes,IConfigur
             var agentOffline=due&&agent is not null&&agent.Enabled&&agent.KioskId.HasValue&&(!agent.LastSeenAt.HasValue||agent.LastSeenAt<now.AddSeconds(-90));
             var missed=due&&!quota&&(execution is null||execution.LastHeartbeatAt<now.AddMinutes(-3));
             var issues=new[]{(kinds[0],failed,"Recording attempt failed"),(kinds[1],stalled,"Recording heartbeat or upload stalled"),(kinds[2],quota,"Camera storage limit reached"),(kinds[3],missed,"No recent recording evidence during scheduled window"),(kinds[4],agentOffline,"Recording agent heartbeat missing")};
+            var streamFresh=agent?.Enabled==true&&agent.StreamProbedAt>=now.AddMinutes(-3)&&agent.StreamProbedAt<=now.AddSeconds(5);
+            if(streamFresh&&agent?.StreamProbeStatus is "Verified" or "Failed")issues=issues.Append((kinds[5],agent.StreamProbeStatus=="Failed","Camera frame probe failed")).ToArray();
             foreach(var (kind,active,message) in issues)
             {
                 var source=camera.Id.ToString("N");

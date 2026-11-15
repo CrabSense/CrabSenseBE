@@ -30,7 +30,7 @@ internal static class CameraRecordingKioskAuth
 public sealed class CameraRecordingAgentsController(AppDbContext db):ControllerBase
 {
     public record Assignment(Guid? KioskId,bool Enabled,int ExpectedVersion);
-    public record AgentHeartbeat(string? WorkerVersion,int PendingClips);
+    public record AgentHeartbeat(string? WorkerVersion,int PendingClips,int? AssignmentVersion=null,string? StreamProbeStatus=null,DateTimeOffset? StreamProbedAt=null);
     private static IActionResult Result(object value)=>new OkObjectResult(ApiResponse<object>.Ok(value));
     private async Task<Guid> Actor(CancellationToken ct)
     {
@@ -52,7 +52,7 @@ public sealed class CameraRecordingAgentsController(AppDbContext db):ControllerB
             FarmKiosk? kiosk=null;if(a?.KioskId is Guid k)kiosks.TryGetValue(k,out kiosk);
             var valid=a?.Enabled==true&&kiosk!=null&&kiosk.Status!="Revoked"&&c.FarmingAreaId==kiosk.FarmingAreaId;
             return new {id=c.Id,deviceId=c.Id,c.DeviceCode,c.Name,c.FarmingAreaId,kioskId=a?.KioskId,kioskCode=kiosk?.Code,
-                enabled=a?.Enabled??false,version=a?.Version??0,lastSeenAt=a?.LastSeenAt,workerVersion=a?.WorkerVersion,pendingClips=a?.PendingClips??0,
+                enabled=a?.Enabled??false,version=a?.Version??0,lastSeenAt=a?.LastSeenAt,workerVersion=a?.WorkerVersion,pendingClips=a?.PendingClips??0,streamProbeStatus=a?.StreamProbeStatus,streamProbedAt=a?.StreamProbedAt,lastFrameObservedAt=a?.LastFrameObservedAt,
                 status=a is null?"Unassigned":!valid?"Disabled":a.LastSeenAt>=now.AddSeconds(-90)?"Online":"Offline"};
         }).ToList());
     }
@@ -70,7 +70,7 @@ public sealed class CameraRecordingAgentsController(AppDbContext db):ControllerB
         if(request.ExpectedVersion!=(row?.Version??0))throw AppException.Conflict("Agent assignment changed; reload.");
         if(row is null){row=new CameraRecordingAgent{DeviceId=deviceId};db.CameraRecordingAgents.Add(row);}
         else row.Version++;
-        row.KioskId=request.Enabled?request.KioskId:null;row.Enabled=request.Enabled;row.LastSeenAt=null;row.PendingClips=0;row.WorkerVersion=null;
+        row.KioskId=request.Enabled?request.KioskId:null;row.Enabled=request.Enabled;row.LastSeenAt=null;row.PendingClips=0;row.WorkerVersion=null;row.StreamProbeStatus=null;row.StreamProbedAt=null;row.LastFrameObservedAt=null;
         db.OperationLogs.Add(new OperationLog{UserId=actor,EntityType="Device",EntityId=deviceId,Action=request.Enabled?"AssignCameraAgent":"RevokeCameraAgent"});
         try{await db.SaveChangesAsync(ct);}catch(DbUpdateException){throw AppException.Conflict("Agent assignment changed; reload.");}
         return Result(new {deviceId,row.KioskId,row.Enabled,row.Version});
@@ -94,7 +94,14 @@ public sealed class CameraRecordingAgentsController(AppDbContext db):ControllerB
         if(request.PendingClips is <0 or >1000||request.WorkerVersion?.Length>80)throw AppException.BadRequest("Invalid heartbeat.");
         var row=await db.CameraRecordingAgents.SingleOrDefaultAsync(x=>x.DeviceId==deviceId&&x.KioskId==kiosk.Id&&x.Enabled,ct);
         if(row is null||!await db.Devices.AnyAsync(x=>x.Id==deviceId&&x.FarmingAreaId==kiosk.FarmingAreaId,ct))throw AppException.Forbidden("Camera not assigned.");
-        row.LastSeenAt=DateTime.UtcNow;row.WorkerVersion=request.WorkerVersion;row.PendingClips=request.PendingClips;
+        var now=DateTime.UtcNow;
+        if(request.StreamProbeStatus!=null||request.StreamProbedAt.HasValue){
+            if(request.AssignmentVersion!=row.Version)throw AppException.Conflict("Agent assignment changed; reload.");
+            var observed=request.StreamProbedAt?.UtcDateTime;
+            if(request.StreamProbeStatus is not ("Verified" or "Failed" or "Synthetic")||!observed.HasValue||observed>now.AddSeconds(5)||observed<now.AddHours(-24))throw AppException.BadRequest("Invalid stream evidence.");
+            if(row.StreamProbedAt==null||observed>row.StreamProbedAt){row.StreamProbeStatus=request.StreamProbeStatus;row.StreamProbedAt=observed;if(request.StreamProbeStatus=="Verified")row.LastFrameObservedAt=observed;}
+        }
+        row.LastSeenAt=now;row.WorkerVersion=request.WorkerVersion;row.PendingClips=request.PendingClips;
         try{await db.SaveChangesAsync(ct);}catch(DbUpdateConcurrencyException){throw AppException.Conflict("Agent assignment changed.");}
         return Result(new {deviceId,row.Version});
     }

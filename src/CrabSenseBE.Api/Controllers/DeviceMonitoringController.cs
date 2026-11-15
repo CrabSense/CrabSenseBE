@@ -164,12 +164,13 @@ public sealed class DeviceMonitoringController(AppDbContext db,Microsoft.Extensi
         }else if(type=="camera"){
             var latest=await db.CameraRecordingExecutions.AsNoTracking().Where(x=>x.DeviceId==id).OrderByDescending(x=>x.StartedAt).ThenByDescending(x=>x.Id).Select(x=>new{x.Id,x.Status,x.StartedAt,x.EndedAt,x.LastHeartbeatAt,x.MediaAssetId}).FirstOrDefaultAsync(ct);
             var a=await db.CameraRecordingAgents.AsNoTracking().SingleOrDefaultAsync(x=>x.DeviceId==id,ct);
-            extra=new{latest,agentVersion=a?.WorkerVersion,streamStatus="Unverified",note="Recording lease and completed clips are evidence; not a live stream probe."};
+            extra=new{latest,agentVersion=a?.WorkerVersion,streamStatus=row.StreamStatus??"Unverified",row.StreamProbedAt,row.LastFrameObservedAt,note="Stream status is the most recent authenticated frame observation, not live playback."};
         }else if(type=="kiosk"){
             var controllers=await db.Devices.AsNoTracking().CountAsync(x=>x.KioskId==id,ct);
             var cameras=await db.CameraRecordingAgents.AsNoTracking().CountAsync(x=>x.KioskId==id&&x.Enabled,ct);
             var pending=await db.CameraRecordingAgents.AsNoTracking().Where(x=>x.KioskId==id&&x.Enabled).SumAsync(x=>(int?)x.PendingClips,ct);
-            extra=new{controllers,cameras,pendingClips=pending??0};
+            var k=await db.FarmKiosks.AsNoTracking().SingleAsync(x=>x.Id==id,ct);
+            extra=new{controllers,cameras,pendingClips=pending??0,k.MetricsReportedAt,k.ProcessCpuPercent,k.ProcessMemoryBytes,k.DiskTotalBytes,k.DiskFreeBytes,k.SoftwareVersion,k.EdgeSyncedAt,k.RecordingCheckedAt,k.UploadCheckedAt,metricsFresh=k.MetricsReportedAt>=now.AddMinutes(-3)};
         }
         return Result(new{device=row,extra,checkedAtUtc=now});
     }
@@ -231,9 +232,10 @@ public sealed class DeviceMonitoringController(AppDbContext db,Microsoft.Extensi
         return Result(new{points,fromUtc=start,coverage="sampled_transitions_only"});
     }
     [HttpGet("alerts")]
-    public async Task<IActionResult> Alerts(string? sourceType,Guid? sourceId,Guid? farmingAreaId,string? severity,bool activeOnly=true,int page=1,int pageSize=20,CancellationToken ct=default){
+    public async Task<IActionResult> Alerts(string? sourceType,Guid? sourceId,Guid? farmingAreaId,string? severity,bool activeOnly=true,int page=1,int pageSize=20,CancellationToken ct=default,string? alertStatus=null){
         await Actor(ct);Paging(page,pageSize);var q=DeviceMonitoringReader.TechnicalAlerts(db);
         if(activeOnly)q=q.Where(a=>a.Status==AlertStatus.Active||a.Status==AlertStatus.Acknowledged||a.Status==AlertStatus.InProgress);
+        if(!string.IsNullOrWhiteSpace(alertStatus)){if(!Enum.TryParse<AlertStatus>(alertStatus,true,out var parsed)||!Enum.IsDefined(parsed))throw AppException.BadRequest("Invalid alert status.");q=q.Where(a=>a.Status==parsed);}
         if(!string.IsNullOrWhiteSpace(sourceType))q=q.Where(a=>a.SourceType==sourceType);
         if(sourceId.HasValue){var n=sourceId.Value.ToString("N");var d=sourceId.Value.ToString();q=q.Where(a=>a.SourceId==n||a.SourceId==d);}
         if(farmingAreaId.HasValue)q=q.Where(a=>a.FarmingAreaId==farmingAreaId);
@@ -247,10 +249,66 @@ public sealed class DeviceMonitoringController(AppDbContext db,Microsoft.Extensi
             var sourceType=a.SourceType=="Device"?(devices.ContainsKey(("camera",sourceId))?"camera":"controller"):a.SourceType?.ToLowerInvariant();
             var target=sourceType!=null?devices.GetValueOrDefault((sourceType,sourceId)):null;
             return new{a.Id,a.SourceType,a.SourceId,a.FarmingAreaId,a.IncidentType,a.Message,
-                severity=a.Severity.ToString(),status=a.Status.ToString(),a.CreatedAt,a.LastOccurredAt,a.OccurrenceCount,a.AcknowledgedAt,a.ResolvedAt,
+                severity=a.Severity.ToString(),status=a.Status.ToString(),a.CreatedAt,a.LastOccurredAt,a.OccurrenceCount,a.AcknowledgedAt,a.AcknowledgedBy,a.ProcessingStartedAt,a.ProcessingBy,a.ResolvedAt,a.ResolvedBy,a.ResolutionReason,
                 targetType=target?.Type,targetId=target?.Id,sourceCode=target?.Code};
         }).ToList();
         return Result(new{items,total,page,pageSize});
+    }
+    public sealed record IncidentNote(string? Note);
+    [HttpGet("alerts/{id:guid}")]
+    public async Task<IActionResult> AlertDetail(Guid id,CancellationToken ct){
+        await Actor(ct);
+        var a=await DeviceMonitoringReader.TechnicalAlerts(db).SingleOrDefaultAsync(x=>x.Id==id,ct)??throw AppException.NotFound("Technical alert");
+        var ids=new[]{a.AcknowledgedBy,a.ProcessingBy,a.ResolvedBy}.Where(x=>x.HasValue).Select(x=>x!.Value).ToArray();
+        var users=await db.AppUsers.AsNoTracking().Where(x=>ids.Contains(x.Id)).ToDictionaryAsync(x=>x.Id,x=>x.FullName,ct);
+        string? Name(Guid? actor)=>actor.HasValue?users.GetValueOrDefault(actor.Value):null;
+        var actions=await db.OperationLogs.AsNoTracking().Where(x=>x.EntityType=="Alert"&&x.EntityId==id&&
+            (x.Action=="AcknowledgeDeviceMonitoringAlert"||x.Action=="ProcessDeviceMonitoringAlert"||x.Action=="NoteDeviceMonitoringAlert"||x.Action=="CloseDeviceMonitoringAlert"))
+            .OrderByDescending(x=>x.CreatedAt).Take(100).Select(x=>new{x.Id,x.Action,x.Details,x.CreatedAt,x.UserId,actor=x.User==null?null:x.User.FullName}).ToListAsync(ct);
+        return Result(new{a.Id,a.Message,a.IncidentType,severity=a.Severity.ToString(),status=a.Status.ToString(),a.CreatedAt,a.LastOccurredAt,a.OccurrenceCount,
+            a.AcknowledgedAt,acknowledgedBy=Name(a.AcknowledgedBy),a.ProcessingStartedAt,processingBy=Name(a.ProcessingBy),a.ResolvedAt,resolvedBy=Name(a.ResolvedBy),a.ResolutionReason,a.ResolutionNote,actions});
+    }
+    [HttpPost("alerts/{id:guid}/notes")]
+    public async Task<IActionResult> NoteAlert(Guid id,IncidentNote request,CancellationToken ct){
+        var actor=await Actor(ct);var note=request.Note?.Trim();
+        if(string.IsNullOrWhiteSpace(note)||note.Length>1000)throw AppException.BadRequest("Note must contain 1..1000 characters.");
+        if(!await DeviceMonitoringReader.TechnicalAlerts(db).AnyAsync(x=>x.Id==id,ct))throw AppException.NotFound("Technical alert");
+        db.OperationLogs.Add(new(){UserId=actor,Action="NoteDeviceMonitoringAlert",EntityType="Alert",EntityId=id,Details=note});
+        await db.SaveChangesAsync(ct);return Result(new{id});
+    }
+    [HttpPost("alerts/{id:guid}/process")]
+    public async Task<IActionResult> ProcessAlert(Guid id,IncidentNote request,CancellationToken ct){
+        var actor=await Actor(ct);var note=request.Note?.Trim();if(note?.Length>1000)throw AppException.BadRequest("Note is too long.");
+        var q=DeviceMonitoringReader.TechnicalAlerts(db).Where(x=>x.Id==id);var now=DateTime.UtcNow;
+        await using var tx=db.Database.IsRelational()?await db.Database.BeginTransactionAsync(ct):null;
+        if(!await q.AnyAsync(ct))throw AppException.NotFound("Technical alert");
+        if(tx!=null){
+            var changed=await q.Where(x=>x.Status==AlertStatus.Acknowledged).ExecuteUpdateAsync(u=>u.SetProperty(x=>x.Status,AlertStatus.InProgress).SetProperty(x=>x.ProcessingBy,(Guid?)actor).SetProperty(x=>x.ProcessingStartedAt,(DateTime?)now).SetProperty(x=>x.UpdatedAt,(DateTime?)now),ct);
+            if(changed!=1)throw AppException.Conflict("Alert must be acknowledged before processing.");
+        }else{
+            var a=await db.Alerts.SingleAsync(x=>x.Id==id,ct);
+            if(a.Status!=AlertStatus.Acknowledged)throw AppException.Conflict("Alert must be acknowledged before processing.");
+            a.Status=AlertStatus.InProgress;a.ProcessingBy=actor;a.ProcessingStartedAt=now;
+        }
+        db.OperationLogs.Add(new(){UserId=actor,Action="ProcessDeviceMonitoringAlert",EntityType="Alert",EntityId=id,Details=note});
+        await db.SaveChangesAsync(ct);if(tx!=null)await tx.CommitAsync(ct);return Result(new{id,status="InProgress"});
+    }
+    [HttpPost("alerts/{id:guid}/close")]
+    public async Task<IActionResult> CloseAlert(Guid id,IncidentNote request,CancellationToken ct){
+        var actor=await Actor(ct);var note=request.Note?.Trim();if(string.IsNullOrWhiteSpace(note)||note.Length>1000)throw AppException.BadRequest("Closure note must contain 1..1000 characters.");
+        var q=DeviceMonitoringReader.TechnicalAlerts(db).Where(x=>x.Id==id);var now=DateTime.UtcNow;
+        await using var tx=db.Database.IsRelational()?await db.Database.BeginTransactionAsync(ct):null;
+        if(!await q.AnyAsync(ct))throw AppException.NotFound("Technical alert");
+        if(tx!=null){
+            var changed=await q.Where(x=>x.Status==AlertStatus.Recovered).ExecuteUpdateAsync(u=>u.SetProperty(x=>x.Status,AlertStatus.Resolved).SetProperty(x=>x.ResolvedBy,(Guid?)actor).SetProperty(x=>x.ResolutionNote,note).SetProperty(x=>x.UpdatedAt,(DateTime?)now),ct);
+            if(changed!=1)throw AppException.Conflict("Only an alert with recovery evidence may be closed.");
+        }else{
+            var a=await db.Alerts.SingleAsync(x=>x.Id==id,ct);
+            if(a.Status!=AlertStatus.Recovered)throw AppException.Conflict("Only an alert with recovery evidence may be closed.");
+            a.Status=AlertStatus.Resolved;a.ResolvedBy=actor;a.ResolutionNote=note;
+        }
+        db.OperationLogs.Add(new(){UserId=actor,Action="CloseDeviceMonitoringAlert",EntityType="Alert",EntityId=id,Details=note});
+        await db.SaveChangesAsync(ct);if(tx!=null)await tx.CommitAsync(ct);return Result(new{id,status="Resolved"});
     }
     [HttpPost("alerts/{id:guid}/acknowledge")]
     public async Task<IActionResult> Acknowledge(Guid id,CancellationToken ct){

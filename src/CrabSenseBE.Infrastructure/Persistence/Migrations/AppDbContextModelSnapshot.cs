@@ -714,6 +714,9 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.Property<DateTime?>("LastSeenAt").HasColumnType("timestamp with time zone");
                     b.Property<string>("WorkerVersion").HasMaxLength(80).HasColumnType("character varying(80)");
                     b.Property<int>("PendingClips").HasColumnType("integer");
+                    b.Property<string>("StreamProbeStatus").HasColumnType("text");
+                    b.Property<DateTime?>("StreamProbedAt").HasColumnType("timestamp with time zone");
+                    b.Property<DateTime?>("LastFrameObservedAt").HasColumnType("timestamp with time zone");
                     b.HasKey("Id");
                     b.HasIndex("DeviceId").IsUnique();
                     b.HasIndex("KioskId");
@@ -1777,6 +1780,15 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.Property<DateTime?>("UpdatedAt")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<DateTime?>("MetricsReportedAt").HasColumnType("timestamp with time zone");
+                    b.Property<double?>("ProcessCpuPercent").HasColumnType("double precision");
+                    b.Property<long?>("ProcessMemoryBytes").HasColumnType("bigint");
+                    b.Property<long?>("DiskTotalBytes").HasColumnType("bigint");
+                    b.Property<long?>("DiskFreeBytes").HasColumnType("bigint");
+                    b.Property<string>("SoftwareVersion").HasColumnType("text");
+                    b.Property<DateTime?>("EdgeSyncedAt").HasColumnType("timestamp with time zone");
+                    b.Property<DateTime?>("RecordingCheckedAt").HasColumnType("timestamp with time zone");
+                    b.Property<DateTime?>("UploadCheckedAt").HasColumnType("timestamp with time zone");
                     b.HasKey("Id");
 
                     b.HasIndex("Code")
