@@ -86,6 +86,9 @@ public class AppDbContext : DbContext
     public DbSet<FarmSettings> FarmSettings => Set<FarmSettings>();
 
     // AI
+    public DbSet<AiModelVersion> AiModelVersions => Set<AiModelVersion>();
+    public DbSet<AiCameraAssignment> AiCameraAssignments => Set<AiCameraAssignment>();
+    public DbSet<AiInferenceJob> AiInferenceJobs => Set<AiInferenceJob>();
     public DbSet<AiDetection> AiDetections => Set<AiDetection>();
     public DbSet<AiFeedback> AiFeedbacks => Set<AiFeedback>();
     public DbSet<AiRecommendation> AiRecommendations => Set<AiRecommendation>();
@@ -119,6 +122,19 @@ public class AppDbContext : DbContext
 
         // Schema riêng — không đụng bảng Cap_Ras snake_case trong public
         modelBuilder.HasDefaultSchema("be");
+        modelBuilder.Entity<AiManagedService>().Property(x => x.CommandId).IsConcurrencyToken();
+        modelBuilder.Entity<AiModelVersion>().HasIndex(x => new { x.AiServiceId, x.Version }).IsUnique();
+        modelBuilder.Entity<AiCameraAssignment>().HasIndex(x => new { x.AiServiceId, x.DeviceId }).IsUnique();
+        modelBuilder.Entity<AiInferenceJob>().HasIndex(x => new { x.AiServiceId, x.MediaId, x.ModelVersionId }).IsUnique();
+        modelBuilder.Entity<AiInferenceJob>().HasIndex(x => new { x.AiServiceId, x.Status, x.CreatedAt });
+        modelBuilder.Entity<AiInferenceJob>().Property(x => x.LeaseId).IsConcurrencyToken();
+        modelBuilder.Entity<AiDetection>().HasIndex(x => x.InferenceJobId).IsUnique();
+        modelBuilder.Entity<AiDetection>().HasIndex(x => x.AiServiceId);
+        modelBuilder.Entity<AiModelVersion>().HasOne<AiManagedService>().WithMany().HasForeignKey(x => x.AiServiceId).OnDelete(DeleteBehavior.Restrict);
+        modelBuilder.Entity<AiCameraAssignment>().HasOne<AiManagedService>().WithMany().HasForeignKey(x => x.AiServiceId).OnDelete(DeleteBehavior.Restrict);
+        modelBuilder.Entity<AiCameraAssignment>().HasOne<Device>().WithMany().HasForeignKey(x => x.DeviceId).OnDelete(DeleteBehavior.Cascade);
+        modelBuilder.Entity<AiInferenceJob>().HasOne<AiManagedService>().WithMany().HasForeignKey(x => x.AiServiceId).OnDelete(DeleteBehavior.Restrict);
+        modelBuilder.Entity<AiInferenceJob>().HasOne<AiModelVersion>().WithMany().HasForeignKey(x => x.ModelVersionId).OnDelete(DeleteBehavior.Restrict);
         modelBuilder.Entity<DeviceConnectionEvent>().HasIndex(x=>new{x.SourceType,x.SourceId,x.OccurredAt});
         modelBuilder.Entity<DeviceConnectionEvent>().HasIndex(x=>x.OccurredAt);
         modelBuilder.Entity<DeviceConnectionEvent>().HasIndex(x=>new{x.FarmingAreaId,x.OccurredAt});
