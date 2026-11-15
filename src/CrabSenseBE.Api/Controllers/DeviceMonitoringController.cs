@@ -6,12 +6,13 @@ using CrabSenseBE.Infrastructure.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 namespace CrabSenseBE.Api.Controllers;
 
 [ApiController]
 [Authorize(Roles=AppRoles.Platform)]
 [Route("api/system/device-monitoring")]
-public sealed class DeviceMonitoringController(AppDbContext db):ControllerBase
+public sealed class DeviceMonitoringController(AppDbContext db,Microsoft.Extensions.Configuration.IConfiguration? config=null):ControllerBase
 {
     private async Task<Guid> Actor(CancellationToken ct){
         if(!Guid.TryParse(User.FindFirstValue(ClaimTypes.NameIdentifier)??User.FindFirstValue("sub"),out var id)||
@@ -36,6 +37,13 @@ public sealed class DeviceMonitoringController(AppDbContext db):ControllerBase
     public async Task<IActionResult> Summary(Guid? farmingAreaId,CancellationToken ct){
         await Actor(ct);var now=DateTime.UtcNow;var rows=Filter(await new DeviceMonitoringReader(db).ReadAsync(now,ct,false),null,null,farmingAreaId,null,null,null).ToList();
         return Result(new{counts=Counts(rows),byType=rows.GroupBy(x=>x.Type).Select(g=>new{type=g.Key,counts=Counts(g)}),checkedAtUtc=now,activeAlerts=rows.Sum(x=>x.ActiveAlertCount)});
+    }
+    [HttpGet("health")]
+    public async Task<IActionResult> Health(CancellationToken ct){
+        await Actor(ct);var now=DateTime.UtcNow;
+        var last=await db.DeviceMonitoringStates.AsNoTracking().MaxAsync(x=>(DateTime?)x.ObservedAt,ct);
+        var enabled=config?.GetValue("DeviceMonitoring:EnableHistory",true)??true;
+        return Result(new{historyEnabled=enabled,lastObservedAt=last,historyStatus=!enabled?"Disabled":last==null?"Unknown":last<now.AddMinutes(-3)?"Stale":"Healthy",checkedAtUtc=now,observationGapSeconds=180});
     }
     [HttpGet("devices")]
     public async Task<IActionResult> Devices(string? type,string? status,Guid? farmingAreaId,Guid? farmingRowId,string? search,bool? hasAlert,int page=1,int pageSize=20,CancellationToken ct=default){
