@@ -4627,6 +4627,29 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.ToTable("WaterAssayChannels","be");
                 });
 
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.WaterCalibrationCheck", b =>
+                {
+                    b.Property<Guid>("Id").ValueGeneratedOnAdd().HasColumnType("uuid");
+                    b.Property<DateTime>("CreatedAt").HasColumnType("timestamp with time zone");
+                    b.Property<DateTime?>("UpdatedAt").HasColumnType("timestamp with time zone");
+                    b.Property<Guid>("CalibrationId").HasColumnType("uuid");
+                    b.Property<Guid>("MediaId").HasColumnType("uuid");
+                    b.Property<Guid>("PerformedBy").HasColumnType("uuid");
+                    b.Property<string>("Status").IsRequired().HasColumnType("text");
+                    b.Property<string>("Unit").IsRequired().HasColumnType("text");
+                    b.Property<string>("EvidenceJson").IsRequired().HasColumnType("text");
+                    b.Property<decimal>("Expected").HasColumnType("numeric");
+                    b.Property<decimal>("Estimated").HasColumnType("numeric");
+                    b.Property<decimal>("AbsoluteError").HasColumnType("numeric");
+                    b.Property<decimal>("MaxError").HasColumnType("numeric");
+                    b.Property<string>("ImageSha256").IsRequired().HasMaxLength(64).HasColumnType("character varying(64)");
+                    b.HasKey("Id");
+                    b.HasIndex("MediaId").IsUnique();
+                    b.HasIndex("CalibrationId","CreatedAt");
+                    b.HasIndex("CalibrationId","ImageSha256").IsUnique();
+                    b.ToTable("WaterCalibrationChecks","be");
+                });
+
             modelBuilder.Entity("CrabSenseBE.Domain.Entities.WaterColorCalibration", b =>
                 {
                     b.Property<Guid>("Id").ValueGeneratedOnAdd().HasColumnType("uuid");
@@ -4665,6 +4688,8 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.Property<string>("KitRevision").HasColumnType("text");
 
                     b.Property<string>("AiCalibrationToken").HasColumnType("text");
+
+                    b.Property<DateTime?>("QualityCheckDueAt").HasColumnType("timestamp with time zone");
 
                     b.HasKey("Id");
                     b.HasIndex("CameraDeviceId");
@@ -4797,6 +4822,8 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.Property<Guid?>("BatchId").HasColumnType("uuid");
                     b.Property<decimal?>("MeasuredValue").HasColumnType("numeric");
                     b.Property<string>("MeasuredUnit").HasColumnType("text");
+                    b.Property<string>("SampleSha256").HasMaxLength(64).HasColumnType("character varying(64)");
+
                     b.HasKey("Id");
 
                     b.HasIndex("FarmingAreaId")
@@ -4809,6 +4836,8 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.HasIndex("SampleMediaId").IsUnique();
 
                     b.HasIndex("BatchId","Analyte").IsUnique();
+                    b.HasIndex("FarmingAreaId","SampleSha256").IsUnique();
+
                     b.ToTable("WaterAnalysisRuns", "be");
                 });
 
@@ -6101,6 +6130,11 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.HasOne("CrabSenseBE.Domain.Entities.WaterAnalysisBatch",null).WithMany().HasForeignKey("BatchId").OnDelete(DeleteBehavior.Restrict).IsRequired();
                     b.HasOne("CrabSenseBE.Domain.Entities.WaterColorCalibration",null).WithMany().HasForeignKey("CalibrationId").OnDelete(DeleteBehavior.Restrict).IsRequired();
                     b.HasOne("CrabSenseBE.Domain.Entities.MediaAsset",null).WithMany().HasForeignKey("CapturedMediaId").OnDelete(DeleteBehavior.Restrict);
+                });
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.WaterCalibrationCheck", b =>
+                {
+                    b.HasOne("CrabSenseBE.Domain.Entities.WaterColorCalibration",null).WithMany().HasForeignKey("CalibrationId").OnDelete(DeleteBehavior.Restrict).IsRequired();
+                    b.HasOne("CrabSenseBE.Domain.Entities.MediaAsset",null).WithMany().HasForeignKey("MediaId").OnDelete(DeleteBehavior.Restrict).IsRequired();
                 });
 #pragma warning restore 612, 618
             modelBuilder.Entity("CrabSenseBE.Domain.Entities.AiModelVersion", b =>

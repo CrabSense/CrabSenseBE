@@ -64,6 +64,45 @@ public sealed class WaterAiClient(HttpClient http, IConfiguration config)
         }
         catch(Exception ex) when(ex is KeyNotFoundException or InvalidOperationException or FormatException or OverflowException){throw Invalid();}
     }
+    public record Control(string Status,decimal Estimated,decimal AbsoluteError,JsonElement Evidence);
+    public async Task<Control> ValidateControl(Guid area,Guid camera,string analyte,string unit,string lot,string token,string calibrationId,Photo photo,decimal expected,decimal maxError,CancellationToken ct)
+    {
+        var data=await Post("v1/calibrations/validate",new { sample=new { area_id=area.ToString("D"),camera_id=camera.ToString("D"),analyte,
+            reagent_lot=lot,calibration_token=token,image_b64=Convert.ToBase64String(photo.Bytes),media_id=photo.MediaId.ToString("D"),
+            reaction_seconds=photo.ReactionSeconds,salinity_ppt=photo.SalinityPpt },expected,max_error=maxError },ct);
+        try
+        {
+            var status=data.GetProperty("status").GetString();
+            var value=data.GetProperty("estimated").GetDecimal();var error=data.GetProperty("absolute_error").GetDecimal();
+            var evidence=data.GetProperty("evidence");
+            var hash=Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(photo.Bytes));
+            if(status is not ("passed" or "failed")||data.GetProperty("calibration_id").GetString()!=calibrationId||
+                data.GetProperty("analyte").GetString()!=analyte||data.GetProperty("unit").GetString()!=unit||
+                data.GetProperty("media_id").GetString()!=photo.MediaId.ToString("D")||
+                evidence.GetProperty("media_id").GetString()!=photo.MediaId.ToString("D")||
+                !string.Equals(evidence.GetProperty("sha256").GetString(),hash,StringComparison.OrdinalIgnoreCase)||
+                data.GetProperty("expected").GetDecimal()!=expected||data.GetProperty("max_error").GetDecimal()!=maxError||
+                value<0||value>10000||error<0||Math.Abs(error-Math.Abs(value-expected))>0.000001m||
+                (status=="passed")!=(error<=maxError))throw Invalid();
+            return new(status,value,error,evidence.Clone());
+        }
+        catch(Exception ex) when(ex is KeyNotFoundException or InvalidOperationException or FormatException or OverflowException){throw Invalid();}
+    }
+
+    public async Task<JsonElement> Inspect(ColorProtocol protocol,Photo photo,CancellationToken ct)
+    {
+        var data=await Post("v1/images/inspect",new { protocol=Protocol(protocol),photo=new { image_b64=Convert.ToBase64String(photo.Bytes),
+            media_id=photo.MediaId.ToString("D"),reaction_seconds=photo.ReactionSeconds,salinity_ppt=photo.SalinityPpt } },ct);
+        try
+        {
+            var evidence=data.GetProperty("evidence");
+            if(data.GetProperty("status").GetString()!="optical_roi_pass"||evidence.GetProperty("media_id").GetString()!=photo.MediaId.ToString("D")||
+                !string.Equals(evidence.GetProperty("sha256").GetString(),Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(photo.Bytes)),StringComparison.OrdinalIgnoreCase))
+                throw Invalid();
+            return data;
+        }
+        catch(Exception ex) when(ex is KeyNotFoundException or InvalidOperationException or FormatException){throw Invalid();}
+    }
     private static bool Hash(string? value)=>value is {Length:64}&&value.All(Uri.IsHexDigit);
     private static AppException Invalid()=>new("Dịch vụ AI nước trả dữ liệu không hợp lệ.",502);
     private async Task<JsonElement> Post(string path,object payload,CancellationToken ct)
