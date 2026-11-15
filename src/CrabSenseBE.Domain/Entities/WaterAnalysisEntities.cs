@@ -44,5 +44,51 @@ public class WaterAnalysisRun : BaseEntity
     public DateTime? ResultRecordedAt { get; set; }
     public DateTime? CleaningConfirmedAt { get; set; }
 
+    public Guid? BatchId { get; set; }
+    public decimal? MeasuredValue { get; set; }
+    public string? MeasuredUnit { get; set; }
+    public Guid? CalibrationId { get; set; }
+    public Guid? SampleMediaId { get; set; }
+    public string? ColorEvidenceJson { get; set; }
     public FarmingArea? FarmingArea { get; set; }
+}
+
+public sealed class WaterColorCalibration : BaseEntity
+{
+    public Guid FarmingAreaId { get; set; }
+    public Guid CameraDeviceId { get; set; }
+    public string Analyte { get; set; } = "";
+    public string KitName { get; set; } = "";
+    public string ReagentLot { get; set; } = "";
+    public string Unit { get; set; } = "";
+    public string ProtocolJson { get; set; } = "";
+    public string CurveJson { get; set; } = "";
+    public string ValidationJson { get; set; } = "";
+    public DateTime ValidUntil { get; set; }
+    public DateTime? RevokedAt { get; set; }
+    public Guid CreatedBy { get; set; }
+}
+
+public sealed class WaterAnalysisBatch : BaseEntity
+{
+    public Guid FarmingAreaId { get; set; }
+    public string Trigger { get; set; } = "";
+    public string Status { get; set; } = "waiting_samples";
+    public string TargetsJson { get; set; } = "";
+    public string SampleSource { get; set; } = "";
+    public Guid? ScheduleId { get; set; }
+    public DateTime? ScheduledFor { get; set; }
+    public Guid? RequestedBy { get; set; }
+    public DateTime? CompletedAt { get; set; }
+}
+public sealed class WaterAnalysisSchedule : BaseEntity
+{
+    public Guid FarmingAreaId { get; set; }
+    public string TargetsJson { get; set; } = "";
+    public string SampleSource { get; set; } = "";
+    public int IntervalMinutes { get; set; }
+    public bool Enabled { get; set; }
+    public DateTime NextRunAt { get; set; }
+    public DateTime? LastAttemptAt { get; set; }
+    public string? LastOutcome { get; set; }
 }
