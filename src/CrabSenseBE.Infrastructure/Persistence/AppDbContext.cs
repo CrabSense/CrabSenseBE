@@ -46,6 +46,7 @@ public class AppDbContext : DbContext
     public DbSet<DeviceMonitoringPolicy> DeviceMonitoringPolicies => Set<DeviceMonitoringPolicy>();
     public DbSet<DeviceHealthEvent> DeviceHealthEvents => Set<DeviceHealthEvent>();
     public DbSet<MonitoringWorkerState> MonitoringWorkerStates => Set<MonitoringWorkerState>();
+    public DbSet<DeviceMaintenanceWindow> DeviceMaintenanceWindows => Set<DeviceMaintenanceWindow>();
     public DbSet<ControllerPort> ControllerPorts => Set<ControllerPort>();
     public DbSet<ControllerEvent> ControllerEvents => Set<ControllerEvent>();
     public DbSet<WaterMeasurement> WaterMeasurements => Set<WaterMeasurement>();
@@ -128,6 +129,7 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<DeviceHealthEvent>().HasIndex(x=>new{x.SourceType,x.SourceId,x.OccurredAt});
         modelBuilder.Entity<DeviceHealthEvent>().HasIndex(x=>x.OccurredAt);
         modelBuilder.Entity<MonitoringWorkerState>().HasIndex(x=>x.WorkerName).IsUnique();
+        modelBuilder.Entity<DeviceMaintenanceWindow>().HasIndex(x=>new{x.SourceType,x.SourceId,x.StartsAt});
         modelBuilder.Entity<Device>().Property(x => x.CapabilityVersion).HasDefaultValue(0).IsConcurrencyToken();
         modelBuilder.Entity<ControllerEvent>(b =>
         {

@@ -639,6 +639,23 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.HasIndex("FarmingAreaId","OccurredAt");
                     b.ToTable("DeviceConnectionEvents","be");
                 });
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.DeviceMaintenanceWindow", b =>
+                {
+                    b.Property<Guid>("Id").ValueGeneratedOnAdd().HasColumnType("uuid");
+                    b.Property<DateTime>("CreatedAt").HasColumnType("timestamp with time zone");
+                    b.Property<DateTime?>("UpdatedAt").HasColumnType("timestamp with time zone");
+                    b.Property<string>("SourceType").IsRequired().HasColumnType("text");
+                    b.Property<Guid>("SourceId").HasColumnType("uuid");
+                    b.Property<DateTime>("StartsAt").HasColumnType("timestamp with time zone");
+                    b.Property<DateTime>("EndsAt").HasColumnType("timestamp with time zone");
+                    b.Property<string>("Reason").IsRequired().HasColumnType("text");
+                    b.Property<Guid>("CreatedBy").HasColumnType("uuid");
+                    b.Property<DateTime?>("CancelledAt").HasColumnType("timestamp with time zone");
+                    b.Property<Guid?>("CancelledBy").HasColumnType("uuid");
+                    b.HasKey("Id");
+                    b.HasIndex("SourceType","SourceId","StartsAt");
+                    b.ToTable("DeviceMaintenanceWindows","be");
+                });
             modelBuilder.Entity("CrabSenseBE.Domain.Entities.DeviceHealthEvent", b =>
                 {
                     b.Property<Guid>("Id").ValueGeneratedOnAdd().HasColumnType("uuid");
@@ -1641,6 +1658,12 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.Property<DateTime?>("UpdatedAt")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<bool?>("ControllerCommandStorageReady").HasColumnType("boolean");
+                    b.Property<bool?>("ControllerSensorReadSupported").HasColumnType("boolean");
+                    b.Property<int?>("ControllerRssiDbm").HasColumnType("integer");
+                    b.Property<long?>("ControllerFreeHeapBytes").HasColumnType("bigint");
+                    b.Property<long?>("ControllerUptimeSeconds").HasColumnType("bigint");
+                    b.Property<DateTime?>("ControllerHealthAt").HasColumnType("timestamp with time zone");
                     b.HasKey("Id");
 
                     b.HasIndex("FarmingAreaId");

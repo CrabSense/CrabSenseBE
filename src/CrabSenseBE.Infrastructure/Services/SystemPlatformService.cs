@@ -276,11 +276,16 @@ public class SystemPlatformService : ISystemPlatformService
         var device = await RequireDevice(deviceId, ct);
         if (CameraConfiguration.IsCamera(device))
         {
-            await AuditAsync(userId, "TestConnection", "Device", device.Id, "Camera Agent not integrated", ip, ct);
+            var agent=await _db.CameraRecordingAgents.AsNoTracking().SingleOrDefaultAsync(x=>x.DeviceId==device.Id,ct);
+            var valid=agent?.Enabled==true&&agent.KioskId.HasValue&&await _db.FarmKiosks.AnyAsync(x=>x.Id==agent.KioskId&&x.Status!="Revoked"&&x.FarmingAreaId==device.FarmingAreaId,ct);
+            var now=DateTime.UtcNow;
+            var evidence=valid&&device.Status!=DeviceStatus.Maintenance&&agent!.StreamProbedAt>=now.AddMinutes(-3)&&agent.StreamProbedAt<=now.AddSeconds(5)?agent.StreamProbeStatus:null;
+            var verification=evidence is "Verified" or "Failed" or "Synthetic"?evidence:agent==null?"NotIntegrated":"Unverified";
+            var cameraMessage=verification=="Verified"?"Kiosk đã xác minh frame gần đây; đây là bằng chứng đã lưu, không phải phép thử trực tiếp.":verification=="Failed"?"Lần kiểm tra frame gần nhất thất bại.":verification=="Synthetic"?"Chỉ có frame thử nghiệm, chưa xác minh camera thật.":"Chưa có bằng chứng stream mới từ Camera Agent.";
+            await AuditAsync(userId, "TestConnection", "Device", device.Id, verification, ip, ct);
             await _db.SaveChangesAsync(ct);
             return ApiResponse<DeviceConnectionTestDto>.Ok(new DeviceConnectionTestDto(
-                device.Id, false, "Camera Agent chưa tích hợp; chưa xác minh được kết nối/stream Camera.",
-                device.IpAddress, null, device.LastSeenAt, device.RssiDbm, "NotIntegrated"));
+                device.Id, verification=="Verified", cameraMessage, device.IpAddress, null, device.LastSeenAt, device.RssiDbm, verification));
         }
         if (string.IsNullOrWhiteSpace(device.IpAddress))
         {
@@ -717,7 +722,7 @@ public class SystemPlatformService : ISystemPlatformService
         "CreateSensor", "UpdateSensor", "DeleteSensor", "RegisterSensorFromPort", "UpdateSensorBinding", "EnableSensor", "DisableSensor", "UpdateSensorConfiguration", "SensorTestRequested", "RecordSensorCalibration",
         "DeleteCameraRecordingRequested", "DeleteCameraRecordingFailed", "DeleteCameraRecording",
         "CreateCameraSchedule", "UpdateCameraSchedule", "ChangeCameraScheduleStatus", "DeleteCameraSchedule", "AssignCameraAgent", "RevokeCameraAgent",
-        "Login", "LoginFailed", "LoginFailureThresholdReached", "AcknowledgeDeviceMonitoringAlert", "ProcessDeviceMonitoringAlert", "NoteDeviceMonitoringAlert", "CloseDeviceMonitoringAlert", "UpdateDeviceMonitoringPolicy", "ResetDeviceMonitoringPolicy"
+        "Login", "LoginFailed", "LoginFailureThresholdReached", "AcknowledgeDeviceMonitoringAlert", "ProcessDeviceMonitoringAlert", "NoteDeviceMonitoringAlert", "CloseDeviceMonitoringAlert", "UpdateDeviceMonitoringPolicy", "ResetDeviceMonitoringPolicy", "ScheduleDeviceMaintenance", "CancelDeviceMaintenance"
     ];
 
     private IQueryable<OperationLog> TechnicalOperations() => _db.OperationLogs.AsNoTracking()

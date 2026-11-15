@@ -31,7 +31,7 @@ public sealed class DeviceMonitoringReader(AppDbContext db)
         if(d.EdgeState is "Rejected" or "Revoked")return "Disabled";
         if(d.EdgeState is "Unprovisioned" or "Pending")return "Unknown";
         var fresh=Fresh(d.LastSeenAt,now,timeoutSeconds);
-        return fresh!="Online"?fresh:d.Status==DeviceStatus.Error?"Error":CameraConfiguration.IsCamera(d)&&d.Status!=DeviceStatus.Online?"Offline":"Online";
+        return fresh!="Online"?fresh:d.Status==DeviceStatus.Error?"Error":"Online";
     }
     public async Task<List<MonitoringRow>> AddMeasurementsAsync(List<MonitoringRow> page,CancellationToken ct)
     {
@@ -95,7 +95,9 @@ public sealed class DeviceMonitoringReader(AppDbContext db)
             var streamStatus=!camera?null:d.Status==DeviceStatus.Maintenance?"Disabled":agent==null||!agent.Enabled||agentStatus=="Disabled"?"Unverified":agent.StreamProbedAt==null?"Unverified":Fresh(agent.StreamProbedAt,now,180)!="Online"?"Stale":agent.StreamProbeStatus??"Unverified";
             var recordingStatus=schedule==null?"NotScheduled":!schedule.Enabled?"Disabled":execution==null?"Waiting":execution.Status=="Recording"&&Fresh(execution.LastHeartbeatAt,now,90)!="Online"?"Stalled":execution.Status;
             var health=Health(a,conn);if(camera&&(streamStatus=="Failed"||agentStatus=="Offline"||recordingStatus=="Stalled"||schedule?.Enabled==true&&agentStatus is "Unassigned" or "Disabled" or "Unknown")&&(health=="Healthy"||health=="Unknown"))health="Warning";
-            var reason=conn=="Offline"?(ks=="Offline"?"upstream_kiosk_offline":"heartbeat_timeout"):conn=="Unknown"?"no_verified_heartbeat":recordingStatus=="Stalled"?"recording_lease_expired":camera&&agentStatus=="Offline"?"recording_agent_offline":streamStatus=="Failed"?"camera_stream_failed":null;
+            var storageFault=!camera&&Fresh(d.ControllerHealthAt,now,180)=="Online"&&d.ControllerCommandStorageReady==false;
+            if(storageFault&&health=="Healthy")health="Warning";
+            var reason=conn=="Offline"?(ks=="Offline"?"upstream_kiosk_offline":"heartbeat_timeout"):conn=="Unknown"?"no_verified_heartbeat":recordingStatus=="Stalled"?"recording_lease_expired":camera&&agentStatus=="Offline"?"recording_agent_offline":streamStatus=="Failed"?"camera_stream_failed":storageFault?"controller_command_storage_fault":null;
             result.Add(new(d.Id,camera?"camera":"controller",d.DeviceCode,d.Name,d.FarmingAreaId,d.FarmingRowId,Area(d.FarmingAreaId),Row(d.FarmingRowId),
                 conn,health,camera?null:d.EdgeState,d.LastSeenAt,timeout,d.IpAddress,d.FirmwareVersion?.Contains("://")==true?null:d.FirmwareVersion,
                 kioskId,k?.Code,ks,AgentStatus:agentStatus,AgentLastSeenAt:agent?.LastSeenAt,PendingClips:agent?.PendingClips,

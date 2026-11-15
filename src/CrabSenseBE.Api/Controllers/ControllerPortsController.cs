@@ -16,7 +16,7 @@ namespace CrabSenseBE.Api.Controllers;
 public record PortManifestItem(string PortCode, string Type, int? Channel, int Gpio, int? SecondaryGpio = null,
     string? ActiveLevel = null, string? SensorCode = null, bool? On = null);
 public record ControllerManifest(string DeviceCode, string HardwareModel, string FirmwareVersion, int ConfigVersion,
-    IReadOnlyList<PortManifestItem> Ports);
+    IReadOnlyList<PortManifestItem> Ports,bool? CommandStorageReady=null,bool? SensorReadSupported=null,int? RssiDbm=null,long? FreeHeapBytes=null,long? UptimeSeconds=null);
 public record BindSensorPortRequest(Guid? SensorId);
 public record PortInventoryItem(Guid Id, string PortCode, string Type, int? Channel, int Gpio, int? SecondaryGpio,
     string? ActiveLevel, string? SensorCode, int ConfigVersion, bool IsPresent, bool? ReportedOn,
@@ -117,6 +117,13 @@ public sealed class ControllerPortsController(IUnitOfWork uow, IConfiguration co
         device.CapabilityVersion = req.ConfigVersion; device.CapabilityHash = hash;
         device.HardwareModel = req.HardwareModel; device.FirmwareVersion = req.FirmwareVersion;
         device.LastSeenAt = now; device.Status = DeviceStatus.Online; device.EdgeState = "Online";
+        // Optional evidence must never change the inventory hash, commissioning or control guard.
+        if(req.CommandStorageReady.HasValue||req.SensorReadSupported.HasValue||req.RssiDbm.HasValue||req.FreeHeapBytes.HasValue||req.UptimeSeconds.HasValue){
+            device.ControllerCommandStorageReady=req.CommandStorageReady;device.ControllerSensorReadSupported=req.SensorReadSupported;
+            device.ControllerRssiDbm=req.RssiDbm is >=-127 and <=0?req.RssiDbm:null;
+            device.ControllerFreeHeapBytes=req.FreeHeapBytes is >=0 and <=16777216?req.FreeHeapBytes:null;
+            device.ControllerUptimeSeconds=req.UptimeSeconds is >=0 and <=315360000?req.UptimeSeconds:null;device.ControllerHealthAt=now;
+        }
         uow.Devices.Update(device);
         try { await uow.SaveChangesAsync(ct); }
         catch (DbUpdateException) { throw AppException.Conflict("Concurrent capability update; retry the current manifest."); }
