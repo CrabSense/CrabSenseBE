@@ -41,6 +41,8 @@ public class AppDbContext : DbContext
     public DbSet<SensorCalibration> SensorCalibrations => Set<SensorCalibration>();
     public DbSet<SensorDiagnosticRun> SensorDiagnosticRuns => Set<SensorDiagnosticRun>();
     public DbSet<Device> Devices => Set<Device>();
+    public DbSet<DeviceConnectionEvent> DeviceConnectionEvents => Set<DeviceConnectionEvent>();
+    public DbSet<DeviceMonitoringState> DeviceMonitoringStates => Set<DeviceMonitoringState>();
     public DbSet<ControllerPort> ControllerPorts => Set<ControllerPort>();
     public DbSet<ControllerEvent> ControllerEvents => Set<ControllerEvent>();
     public DbSet<WaterMeasurement> WaterMeasurements => Set<WaterMeasurement>();
@@ -113,6 +115,9 @@ public class AppDbContext : DbContext
 
         // Schema riêng — không đụng bảng Cap_Ras snake_case trong public
         modelBuilder.HasDefaultSchema("be");
+        modelBuilder.Entity<DeviceConnectionEvent>().HasIndex(x=>new{x.SourceType,x.SourceId,x.OccurredAt});
+        modelBuilder.Entity<DeviceConnectionEvent>().HasIndex(x=>x.OccurredAt);
+        modelBuilder.Entity<DeviceMonitoringState>().HasIndex(x=>new{x.SourceType,x.SourceId}).IsUnique();
         modelBuilder.Entity<Device>().Property(x => x.CapabilityVersion).HasDefaultValue(0).IsConcurrencyToken();
         modelBuilder.Entity<ControllerEvent>(b =>
         {

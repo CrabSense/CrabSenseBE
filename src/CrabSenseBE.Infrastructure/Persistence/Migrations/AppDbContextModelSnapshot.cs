@@ -619,6 +619,38 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.ToTable("CameraScheduleSlots", "be");
                 });
 
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.DeviceConnectionEvent", b =>
+                {
+                    b.Property<Guid>("Id").ValueGeneratedOnAdd().HasColumnType("uuid");
+                    b.Property<DateTime>("CreatedAt").HasColumnType("timestamp with time zone");
+                    b.Property<DateTime?>("UpdatedAt").HasColumnType("timestamp with time zone");
+                    b.Property<string>("SourceType").IsRequired().HasColumnType("text");
+                    b.Property<Guid>("SourceId").HasColumnType("uuid");
+                    b.Property<Guid?>("FarmingAreaId").HasColumnType("uuid");
+                    b.Property<string>("PreviousStatus").HasColumnType("text");
+                    b.Property<string>("NewStatus").IsRequired().HasColumnType("text");
+                    b.Property<string>("ReasonCode").IsRequired().HasColumnType("text");
+                    b.Property<DateTime>("OccurredAt").HasColumnType("timestamp with time zone");
+                    b.Property<DateTime?>("LastSeenAt").HasColumnType("timestamp with time zone");
+                    b.HasKey("Id");
+                    b.HasIndex("SourceType","SourceId","OccurredAt");
+                    b.HasIndex("OccurredAt");
+                    b.ToTable("DeviceConnectionEvents","be");
+                });
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.DeviceMonitoringState", b =>
+                {
+                    b.Property<Guid>("Id").ValueGeneratedOnAdd().HasColumnType("uuid");
+                    b.Property<DateTime>("CreatedAt").HasColumnType("timestamp with time zone");
+                    b.Property<DateTime?>("UpdatedAt").HasColumnType("timestamp with time zone");
+                    b.Property<string>("SourceType").IsRequired().HasColumnType("text");
+                    b.Property<Guid>("SourceId").HasColumnType("uuid");
+                    b.Property<Guid?>("FarmingAreaId").HasColumnType("uuid");
+                    b.Property<string>("Status").IsRequired().HasColumnType("text");
+                    b.Property<DateTime>("ObservedAt").HasColumnType("timestamp with time zone");
+                    b.HasKey("Id");
+                    b.HasIndex("SourceType","SourceId").IsUnique();
+                    b.ToTable("DeviceMonitoringStates","be");
+                });
             modelBuilder.Entity("CrabSenseBE.Domain.Entities.CameraRecordingAgent", b =>
                 {
                     b.Property<Guid>("Id").ValueGeneratedOnAdd().HasColumnType("uuid");
