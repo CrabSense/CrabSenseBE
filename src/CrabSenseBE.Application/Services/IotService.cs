@@ -1218,6 +1218,17 @@ public class IotService : IIotService
                     throw AppException.Conflict("MAC đã được đăng ký.");
             }
         }
+        if (!CameraConfiguration.IsCamera(req.DeviceType, req.StreamUrl, req.SnapshotUrl))
+        {
+            CameraConfiguration.ValidateMetadata(deviceIp, req.MacAddress, null);
+            if (!string.IsNullOrWhiteSpace(req.MacAddress))
+            {
+                var macKey = req.MacAddress.Trim().ToLowerInvariant().Replace(":", "").Replace("-", "");
+                if (macKey.Length != 12 || !macKey.All(Uri.IsHexDigit)) throw AppException.BadRequest("MAC phải gồm 12 ký tự hex.");
+                if (await _uow.Devices.AnyAsync(d => d.MacAddress != null && d.MacAddress.ToLower().Replace(":", "").Replace("-", "") == macKey, ct))
+                    throw AppException.Conflict("MAC đã được đăng ký.");
+            }
+        }
         var device = new Device
         {
             DeviceCode = code,

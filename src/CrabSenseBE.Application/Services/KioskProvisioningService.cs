@@ -259,7 +259,21 @@ public sealed class KioskProvisioningService : IKioskProvisioningService
             throw AppException.BadRequest("DeviceCode is required.");
 
         var now = DateTime.UtcNow;
-        var device = await _uow.Devices.FirstOrDefaultAsync(d => d.DeviceCode == code, ct);
+        var codeKey = code.ToLowerInvariant();
+        var device = await _uow.Devices.FirstOrDefaultAsync(d => d.DeviceCode.ToLower() == codeKey, ct);
+        if (device != null && CameraConfiguration.IsCamera(device))
+            throw AppException.Conflict("Mã thiết bị thuộc Camera, không thể đăng ký Controller.");
+        if (!string.IsNullOrWhiteSpace(request.Mac))
+        {
+            var macKey = request.Mac.Trim().ToLowerInvariant().Replace(":", "").Replace("-", "");
+            if (macKey.Length != 12 || !macKey.All(Uri.IsHexDigit)) throw AppException.BadRequest("MAC phải gồm 12 ký tự hex.");
+            if (device != null && !string.IsNullOrWhiteSpace(device.MacAddress) && device.MacAddress.Trim().ToLowerInvariant().Replace(":", "").Replace("-", "") != macKey)
+                throw AppException.Conflict("MAC không khớp hồ sơ Controller hiện tại.");
+            var currentId = device?.Id ?? Guid.Empty;
+            if (await _uow.Devices.AnyAsync(d => d.Id != currentId && d.MacAddress != null && d.MacAddress.ToLower().Replace(":", "").Replace("-", "") == macKey, ct))
+                throw AppException.Conflict("MAC đã thuộc thiết bị khác.");
+        }
+        CameraConfiguration.ValidateMetadata(request.IpAddress, request.Mac, null);
         if (device is null)
         {
             device = new Device
