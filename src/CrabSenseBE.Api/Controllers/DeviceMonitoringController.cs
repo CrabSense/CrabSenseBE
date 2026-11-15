@@ -53,6 +53,28 @@ public sealed class DeviceMonitoringController(AppDbContext db):ControllerBase
         await Actor(ct);var now=DateTime.UtcNow;var rows=await new DeviceMonitoringReader(db).ReadAsync(now,ct,false);
         return Result(rows.GroupBy(x=>new{x.FarmingAreaId,x.AreaName}).Select(g=>new{g.Key.FarmingAreaId,g.Key.AreaName,counts=Counts(g)}));
     }
+    [HttpGet("policies")]
+    public async Task<IActionResult> Policies(CancellationToken ct){
+        await Actor(ct);return Result(new{cameraTimeoutSeconds=900,controllerTimeoutSeconds=900,kioskTimeoutSeconds=120,agentTimeoutSeconds=90,
+            sensorDefaultTimeoutSeconds=900,sensorOverrideSupported=true,historySampleSeconds=60,historyGapSeconds=180,
+            note="Sensor timeout is configured in sensor configuration. Other timeouts match current disconnect and recording policies."});
+    }
+    [HttpGet("{type}/{id:guid}/history")]
+    public async Task<IActionResult> History(string type,Guid id,int page=1,int pageSize=50,CancellationToken ct=default){
+        await Actor(ct);Paging(page,pageSize);var q=db.DeviceConnectionEvents.AsNoTracking().Where(x=>x.SourceType==type&&x.SourceId==id);
+        var total=await q.CountAsync(ct);var state=await db.DeviceMonitoringStates.AsNoTracking().SingleOrDefaultAsync(x=>x.SourceType==type&&x.SourceId==id,ct);
+        var items=await q.OrderByDescending(x=>x.OccurredAt).ThenBy(x=>x.Id).Skip((page-1)*pageSize).Take(pageSize).ToListAsync(ct);
+        return Result(new{items,total,page,pageSize,lastObservedAt=state?.ObservedAt,coverage="sampled_transitions_only"});
+    }
+    [HttpGet("trends")]
+    public async Task<IActionResult> Trends(Guid? farmingAreaId,int days=7,CancellationToken ct=default){
+        await Actor(ct);if(days is <1 or >90)throw AppException.BadRequest("Days must be between 1 and 90.");
+        var start=DateTime.UtcNow.Date.AddDays(1-days);
+        var q=db.DeviceConnectionEvents.AsNoTracking().Where(x=>x.OccurredAt>=start&&(!farmingAreaId.HasValue||x.FarmingAreaId==farmingAreaId));
+        var points=await q.GroupBy(x=>x.OccurredAt.Date).Select(g=>new{day=g.Key,offline=g.Count(x=>x.PreviousStatus!=null&&x.NewStatus=="Offline"),
+            recovered=g.Count(x=>x.PreviousStatus=="Offline"&&x.NewStatus=="Online"),gaps=g.Count(x=>x.ReasonCode=="observation_gap"),observations=g.Count()}).OrderBy(x=>x.day).ToListAsync(ct);
+        return Result(new{points,fromUtc=start,coverage="sampled_transitions_only"});
+    }
     [HttpGet("alerts")]
     public async Task<IActionResult> Alerts(string? sourceType,Guid? sourceId,Guid? farmingAreaId,string? severity,bool activeOnly=true,int page=1,int pageSize=20,CancellationToken ct=default){
         await Actor(ct);Paging(page,pageSize);var q=DeviceMonitoringReader.TechnicalAlerts(db);
