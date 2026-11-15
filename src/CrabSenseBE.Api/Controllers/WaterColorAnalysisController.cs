@@ -16,14 +16,14 @@ namespace CrabSenseBE.Api.Controllers;
 [ApiController]
 [Route("api/areas/{areaId:guid}/water-analysis/color")]
 [Authorize(Roles = AppRoles.FarmWrite)]
-public sealed class WaterColorAnalysisController(AppDbContext db, IUnitOfWork uow, ICurrentUserService user, IMediaService media) : ControllerBase
+public sealed class WaterColorAnalysisController(AppDbContext db, IUnitOfWork uow, ICurrentUserService user, IMediaService media, WaterAiClient ai) : ControllerBase
 {
     private readonly FarmAreaScope scope = new(uow,user);
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
     private static readonly string[] Sources = ["RAS_RETURN","RETURN_TANK","BIO_TANK","SETTLING_TANK","INLET"];
     public record Standard(Guid MediaId, decimal Concentration, int ReactionSeconds, decimal SalinityPpt);
     public record CalibrationRequest(Guid CameraDeviceId,string Analyte,string KitName,string ReagentLot,
-        ColorProtocol Protocol,Standard[] Standards,Standard Validation,decimal MaxValidationError,DateTimeOffset ValidUntil,string? MeasuredUnit=null);
+        ColorProtocol Protocol,Standard[] Standards,Standard Validation,decimal MaxValidationError,DateTimeOffset ValidUntil,string? MeasuredUnit=null,string? KitRevision=null);
     public record AnalyzeRequest(Guid CalibrationId,Guid MediaId,string SampleSource,string? SampleLocation,string? Notes,
         string ReagentLot,int ReactionSeconds,decimal SalinityPpt,Guid? BatchId=null);
 
@@ -57,33 +57,32 @@ public sealed class WaterColorAnalysisController(AppDbContext db, IUnitOfWork uo
         var unit=request.MeasuredUnit?.Trim() ?? (analyte=="NH3"?"":"mg/L "+analyte);
         if(analyte=="NH3" ? unit is not ("mg/L NH3" or "mg/L NH4" or "mg/L TAN-N") : unit!="mg/L "+analyte)
             throw AppException.BadRequest("Chọn đại lượng thực tế của thang màu; NH3/NH4/TAN-N không được dùng thay thế nhau.");
-        WaterColorAnalyzer.ValidateProtocol(request.Protocol);
+        var protocol=request.Protocol.Channel=="AUTO"?request.Protocol with {Channel="R"}:request.Protocol;
+        WaterColorAnalyzer.ValidateProtocol(protocol);
+        var revision=request.KitRevision?.Trim();
+        if(string.IsNullOrWhiteSpace(revision)||revision.Length>120)
+            throw AppException.BadRequest("Cần phiên bản bộ kit thực tế để tạo hiệu chuẩn AI.");
         await Camera(areaId,request.CameraDeviceId,ct);
-        var points=new List<ColorPoint>();
-        foreach(var standard in request.Standards)
+        var photos=new List<WaterAiClient.Photo>();
+        long total=0;
+        foreach(var standard in request.Standards.Append(request.Validation))
         {
-            CheckConditions(request.Protocol,standard.ReactionSeconds,standard.SalinityPpt);
-            var (reading,_) = await Read(areaId,request.CameraDeviceId,standard.MediaId,request.Protocol,ct);
-            points.Add(new(standard.Concentration,standard.MediaId,reading));
+            CheckConditions(protocol,standard.ReactionSeconds,standard.SalinityPpt);
+            var (bytes,_) = await ReadBytes(request.CameraDeviceId,standard.MediaId,ct);
+            total+=bytes.Length;
+            if(total>28L*1024*1024)throw AppException.BadRequest("Tổng ảnh hiệu chuẩn vượt 28 MiB.");
+            photos.Add(new(standard.MediaId,bytes,standard.ReactionSeconds,standard.SalinityPpt,standard.Concentration));
         }
-        var curve=WaterColorAnalyzer.Fit(points);
-        var validation=request.Validation;
-        CheckConditions(request.Protocol,validation.ReactionSeconds,validation.SalinityPpt);
-        if(validation.Concentration<=curve[0].Concentration||validation.Concentration>=curve[^1].Concentration||
-           request.MaxValidationError>(curve[^1].Concentration-curve[0].Concentration)*0.10m||
-           curve.Any(x=>x.MediaId==validation.MediaId))
-            throw AppException.BadRequest("Mẫu đối chứng phải độc lập, nằm trong dải; sai số cho phép không quá 10% dải.");
-        var (check,_) = await Read(areaId,request.CameraDeviceId,validation.MediaId,request.Protocol,ct);
-        if(curve.Any(x=>x.Reading.Sha256==check.Sha256)) throw AppException.BadRequest("Ảnh đối chứng trùng ảnh chuẩn.");
-        var predicted=WaterColorAnalyzer.Predict(curve,check);
-        if(Math.Abs(predicted-validation.Concentration)>request.MaxValidationError)
-            throw AppException.BadRequest("Mẫu đối chứng không đạt sai số cho phép; hiệu chuẩn lại.");
+        var fitted=await ai.Fit(areaId,request.CameraDeviceId,analyte,WaterBatchPlanning.Kit(analyte),revision,unit,lot,
+            protocol,photos.Take(photos.Count-1).ToArray(),photos[^1],request.MaxValidationError,request.ValidUntil.UtcDateTime,ct);
+        protocol=protocol with {Channel=new[]{"R","G","B"}[fitted.Curve.GetProperty("channel").GetInt32()]};
         var profile=new WaterColorCalibration { FarmingAreaId=areaId,CameraDeviceId=request.CameraDeviceId,
             Analyte=analyte,Unit=unit,KitName=WaterBatchPlanning.Kit(analyte),ReagentLot=lot,CreatedBy=user.UserId,
-            ValidUntil=request.ValidUntil.UtcDateTime,ProtocolJson=JsonSerializer.Serialize(request.Protocol,Json),
-            CurveJson=JsonSerializer.Serialize(curve,Json),ValidationJson=JsonSerializer.Serialize(new {
-                sample=validation,reading=check,predicted,absoluteError=Math.Abs(predicted-validation.Concentration),request.MaxValidationError,
-                standards=request.Standards,algorithm=WaterColorAnalyzer.Version },Json) };
+            AiAlgorithm=fitted.Algorithm,AiCalibrationId=fitted.Id,AiCalibrationToken=fitted.Token,KitRevision=revision,
+            ValidUntil=fitted.ValidUntil,ProtocolJson=JsonSerializer.Serialize(protocol,Json),
+            CurveJson=fitted.Curve.GetRawText(),ValidationJson=JsonSerializer.Serialize(new {
+                sample=request.Validation,checks=fitted.Validation,absoluteError=fitted.Validation[0].GetProperty("absolute_error").GetDecimal(),
+                request.MaxValidationError,standards=request.Standards,algorithm=fitted.Algorithm },Json) };
         db.WaterColorCalibrations.Add(profile);
         Audit("CreateWaterColorCalibration",profile.Id,analyte);
         await db.SaveChangesAsync(ct);
@@ -113,23 +112,47 @@ public sealed class WaterColorAnalysisController(AppDbContext db, IUnitOfWork uo
         if(!Sources.Contains(source)||request.SampleLocation?.Length>128||request.Notes?.Length>500)
             throw AppException.BadRequest("Thông tin nguồn mẫu không hợp lệ.");
         var protocol=JsonSerializer.Deserialize<ColorProtocol>(profile.ProtocolJson,Json)!;
-        var points=JsonSerializer.Deserialize<ColorPoint[]>(profile.CurveJson,Json)!;
         CheckConditions(protocol,request.ReactionSeconds,request.SalinityPpt);
         var camera=await Camera(areaId,profile.CameraDeviceId,ct);
-        var (reading,asset)=await Read(areaId,profile.CameraDeviceId,request.MediaId,protocol,ct);
+        var (bytes,asset)=await ReadBytes(profile.CameraDeviceId,request.MediaId,ct);
         var existing=await db.WaterAnalysisRuns.AsNoTracking().FirstOrDefaultAsync(x=>x.SampleMediaId==request.MediaId,ct);
         if(existing is not null)
         {
             if(existing.FarmingAreaId!=areaId||existing.CalibrationId!=profile.Id||existing.BatchId!=request.BatchId) throw AppException.Conflict("Ảnh đã được sử dụng trong phiên khác.");
             return Ok(ApiResponse<object>.Ok(View(existing,profile)));
         }
-        using var validation=JsonDocument.Parse(profile.ValidationJson);
-        var checkHash=validation.RootElement.GetProperty("reading").GetProperty("sha256").GetString();
-        if(points.Any(x=>x.Reading.Sha256==reading.Sha256)||reading.Sha256==checkHash)
-            throw AppException.BadRequest("Không dùng lại ảnh chuẩn/đối chứng để đo mẫu.");
         if(asset.CreatedAt < profile.CreatedAt || asset.CreatedAt > DateTime.UtcNow.AddMinutes(1))
             throw AppException.BadRequest("Ảnh mẫu phải được tải lên sau khi hiệu chuẩn được tạo.");
-        var value=WaterColorAnalyzer.Predict(points,reading);
+        if(request.BatchId is Guid requestedBatch)
+        {
+            var ready=await db.WaterAssayChannels.AsNoTracking().FirstOrDefaultAsync(x=>x.BatchId==requestedBatch&&x.CalibrationId==profile.Id,ct);
+            var active=await db.WaterAnalysisBatches.AsNoTracking().AnyAsync(x=>x.Id==requestedBatch&&x.FarmingAreaId==areaId&&x.Status=="waiting_samples"&&x.SampleSource==source,ct);
+            if(!active||ready is null||WaterAssayFlow.Current(ready)!="analyze"||ready.CapturedMediaId!=asset.Id)
+                throw AppException.Conflict("Kênh chưa sẵn sàng phân tích ảnh đã xác nhận.");
+        }
+        decimal value,validationError;
+        object reading;
+        var algorithm=profile.AiAlgorithm??WaterColorAnalyzer.Version;
+        if(profile.AiAlgorithm is not null)
+        {
+            if(algorithm!=WaterAiClient.Algorithm||string.IsNullOrWhiteSpace(profile.AiCalibrationToken)||string.IsNullOrWhiteSpace(profile.AiCalibrationId))
+                throw AppException.Conflict("Hồ sơ hiệu chuẩn AI không hợp lệ; hiệu chuẩn lại.");
+            var estimate=await ai.Analyze(areaId,profile.CameraDeviceId,profile.Analyte,profile.Unit,profile.ReagentLot,
+                profile.AiCalibrationToken,profile.AiCalibrationId,new(asset.Id,bytes,request.ReactionSeconds,request.SalinityPpt),ct);
+            value=estimate.Value;reading=estimate.Evidence;validationError=estimate.HoldoutError;
+        }
+        else
+        {
+            // Legacy local curves remain version-pinned; never fall back from remote inference.
+            var points=JsonSerializer.Deserialize<ColorPoint[]>(profile.CurveJson,Json)!;
+            using var validation=JsonDocument.Parse(profile.ValidationJson);
+            var local=WaterColorAnalyzer.Read(bytes,protocol);
+            var checkHash=validation.RootElement.GetProperty("reading").GetProperty("sha256").GetString();
+            if(points.Any(x=>x.Reading.Sha256==local.Sha256)||local.Sha256==checkHash)
+                throw AppException.BadRequest("Không dùng lại ảnh chuẩn/đối chứng để đo mẫu.");
+            value=WaterColorAnalyzer.Predict(points,local);reading=local;
+            validationError=validation.RootElement.GetProperty("absoluteError").GetDecimal();
+        }
         var now=DateTime.UtcNow;
         var actor=await scope.CurrentUserAsync(ct);
         await using var tx=await db.Database.BeginTransactionAsync(ct);
@@ -154,14 +177,14 @@ public sealed class WaterColorAnalysisController(AppDbContext db, IUnitOfWork uo
             throw AppException.Conflict("Hiệu chuẩn không còn hợp lệ.");
         var run=new WaterAnalysisRun { FarmingAreaId=areaId, Analyte=profile.Analyte, Status="completed",
             CurrentStep=7, StartedAt=now, LastStepAt=now,CompletedAt=now,ResultRecordedAt=now,
-            Source="calibrated-color",ExecutionMode="manual-color",CalibrationId=profile.Id,SampleMediaId=asset.Id,
+            Source=profile.AiAlgorithm is null?"calibrated-color":"water-ai-python",ExecutionMode="manual-color",CalibrationId=profile.Id,SampleMediaId=asset.Id,
             BatchId=request.BatchId,MeasuredValue=value,MeasuredUnit=profile.Unit,Nh3=profile.Unit=="mg/L NH3"?value:null,
             No2=profile.Analyte=="NO2"?value:null,No3=profile.Analyte=="NO3"?value:null,
             TestCode="COLOR-"+Guid.NewGuid().ToString("N")[..20],SampleSource=source,SampleLocation=request.SampleLocation,
             Notes=request.Notes,PerformedBy=actor?.FullName is { Length: >0 } name ? name[..Math.Min(128,name.Length)] : user.UserId.ToString(),
             CameraId=camera.DeviceCode[..Math.Min(64,camera.DeviceCode.Length)],
-            ColorEvidenceJson=JsonSerializer.Serialize(new { algorithm=WaterColorAnalyzer.Version,reading,request.ReactionSeconds,request.SalinityPpt,
-                request.ReagentLot,unit=profile.Unit,value,mediaUploadedAt=asset.CreatedAt,validationError=validation.RootElement.GetProperty("absoluteError"),
+            ColorEvidenceJson=JsonSerializer.Serialize(new { algorithm,aiCalibrationId=profile.AiCalibrationId,kitRevision=profile.KitRevision,reading,request.ReactionSeconds,request.SalinityPpt,
+                request.ReagentLot,unit=profile.Unit,value,mediaUploadedAt=asset.CreatedAt,validationError,
                 timingSource="operator-attested",assayProfileId=channel?.ProfileId,assayChannelId=channel?.Id,cleaning="not-performed-by-api" },Json),
             StepLogJson=JsonSerializer.Serialize(new[]{
                 new { At=now,Step=5,Event="IMAGE_PROVIDED",Label="Ảnh mẫu đã lưu" },
@@ -175,7 +198,7 @@ public sealed class WaterColorAnalysisController(AppDbContext db, IUnitOfWork uo
 
     private static object View(WaterAnalysisRun run,WaterColorCalibration profile)=>new {
         run.Id,run.TestCode,run.Status,run.Analyte,result=run.MeasuredValue??run.No2??run.No3??run.Nh3,profile.Unit,run.CalibrationId,run.BatchId,
-        run.SampleMediaId,run.ColorEvidenceJson,run.CompletedAt,method=WaterColorAnalyzer.Version };
+        run.SampleMediaId,run.ColorEvidenceJson,run.CompletedAt,method=profile.AiAlgorithm??WaterColorAnalyzer.Version };
     private async Task<WaterColorCalibration> Find(Guid areaId,Guid id,CancellationToken ct)=>
         await db.WaterColorCalibrations.FirstOrDefaultAsync(x=>x.Id==id&&x.FarmingAreaId==areaId,ct)
         ??throw AppException.NotFound("WaterColorCalibration");
@@ -186,7 +209,7 @@ public sealed class WaterColorAnalysisController(AppDbContext db, IUnitOfWork uo
             throw AppException.BadRequest("Camera buồng đo phải được đăng ký đúng khu.");
         return d;
     }
-    private async Task<(ColorReading reading,MediaAsset asset)> Read(Guid areaId,Guid cameraId,Guid mediaId,ColorProtocol protocol,CancellationToken ct)
+    private async Task<(byte[] bytes,MediaAsset asset)> ReadBytes(Guid cameraId,Guid mediaId,CancellationToken ct)
     {
         var asset=await db.MediaAssets.AsNoTracking().FirstOrDefaultAsync(x=>x.Id==mediaId,ct)??throw AppException.NotFound("Media");
         if(asset.DeviceId!=cameraId||asset.Category!="image"||asset.BoxId!=null||asset.CrabId!=null||asset.SizeBytes<=0||asset.SizeBytes>5*1024*1024||
@@ -198,7 +221,7 @@ public sealed class WaterColorAnalysisController(AppDbContext db, IUnitOfWork uo
         var chunk=new byte[65536];int n;
         while((n=await input.ReadAsync(chunk.AsMemory(),ct))>0)
         {if(buffer.Length+n>5*1024*1024)throw AppException.BadRequest("Ảnh quá lớn.");await buffer.WriteAsync(chunk.AsMemory(0,n),ct);}
-        return (WaterColorAnalyzer.Read(buffer.ToArray(),protocol),asset);
+        return (buffer.ToArray(),asset);
     }
     private static void CheckConditions(ColorProtocol p,int seconds,decimal salinity)
     {

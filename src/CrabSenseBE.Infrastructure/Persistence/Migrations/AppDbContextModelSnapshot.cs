@@ -4658,6 +4658,14 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
 
                     b.Property<DateTime?>("RevokedAt").HasColumnType("timestamp with time zone");
 
+                    b.Property<string>("AiAlgorithm").HasColumnType("text");
+
+                    b.Property<string>("AiCalibrationId").HasColumnType("text");
+
+                    b.Property<string>("KitRevision").HasColumnType("text");
+
+                    b.Property<string>("AiCalibrationToken").HasColumnType("text");
+
                     b.HasKey("Id");
                     b.HasIndex("CameraDeviceId");
                     b.HasIndex("FarmingAreaId", "Analyte");

@@ -63,6 +63,11 @@ public sealed class WaterColorCalibration : BaseEntity
     public string Unit { get; set; } = "";
     public string ProtocolJson { get; set; } = "";
     public string CurveJson { get; set; } = "";
+    public string? AiAlgorithm { get; set; }
+    public string? AiCalibrationId { get; set; }
+    public string? KitRevision { get; set; }
+    [System.Text.Json.Serialization.JsonIgnore]
+    public string? AiCalibrationToken { get; set; }
     public string ValidationJson { get; set; } = "";
     public DateTime ValidUntil { get; set; }
     public DateTime? RevokedAt { get; set; }
