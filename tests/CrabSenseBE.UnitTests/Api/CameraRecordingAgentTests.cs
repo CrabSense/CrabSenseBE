@@ -64,4 +64,26 @@ public sealed class CameraRecordingAgentTests
         await db.SaveChangesAsync();await CameraRecordingMonitor.Sweep(db,now.AddSeconds(20),default);
         Assert.Equal(AlertStatus.Resolved,(await db.Alerts.SingleAsync(x=>x.IncidentType=="camera_recording_failure")).Status);
     }
+
+    [Fact]
+    public async Task FrameEvidenceRequiresCurrentAssignmentAndRejectsFutureTimestamp()
+    {
+        await using var db=new AppDbContext(new DbContextOptionsBuilder<AppDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options);
+        var area=Guid.NewGuid();var key="monitoring-kiosk-secret";
+        var kiosk=new FarmKiosk{Code="K",FarmingAreaId=area,Status="Online"};
+        var camera=new Device{DeviceCode="CAM",DeviceType="camera",FarmingAreaId=area};
+        var agent=new CameraRecordingAgent{DeviceId=camera.Id,KioskId=kiosk.Id,Enabled=true,Version=2};
+        db.FarmKiosks.Add(kiosk);db.Devices.Add(camera);db.CameraRecordingAgents.Add(agent);
+        db.KioskCredentials.Add(new KioskCredential{KioskId=kiosk.Id,SecretHash=Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(key)))});
+        await db.SaveChangesAsync();
+        var api=new CameraRecordingAgentsController(db){ControllerContext=new ControllerContext{HttpContext=new DefaultHttpContext()}};
+        api.Request.Headers["X-Kiosk-Key"]=key;
+        var now=DateTimeOffset.UtcNow;
+        Assert.Equal(409,(await Assert.ThrowsAsync<AppException>(()=>api.Heartbeat(camera.Id,new("v2",0,1,"Verified",now),default))).StatusCode);
+        Assert.Equal(400,(await Assert.ThrowsAsync<AppException>(()=>api.Heartbeat(camera.Id,new("v2",0,2,"Verified",now.AddMinutes(5)),default))).StatusCode);
+        await api.Heartbeat(camera.Id,new("v2",0,2,"Verified",now),default);
+        Assert.Equal("Verified",agent.StreamProbeStatus);Assert.NotNull(agent.LastFrameObservedAt);
+        await api.Heartbeat(camera.Id,new("v2",0,2,"Failed",now.AddSeconds(-1)),default);
+        Assert.Equal("Verified",agent.StreamProbeStatus);
+    }
 }

@@ -41,3 +41,15 @@ public sealed class MonitoringWorkerState:BaseEntity
     public int DeviceCount {get;set;}
 }
 
+
+public sealed class DeviceMaintenanceWindow:BaseEntity
+{
+    public string SourceType {get;set;}="";
+    public Guid SourceId {get;set;}
+    public DateTime StartsAt {get;set;}
+    public DateTime EndsAt {get;set;}
+    public string Reason {get;set;}="";
+    public Guid CreatedBy {get;set;}
+    public DateTime? CancelledAt {get;set;}
+    public Guid? CancelledBy {get;set;}
+}

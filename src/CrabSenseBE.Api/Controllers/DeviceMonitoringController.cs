@@ -130,6 +130,45 @@ public sealed class DeviceMonitoringController(AppDbContext db,Microsoft.Extensi
         }
         return Result(new{policy.SourceType,policy.SourceId,policy.Version,policy.IsInherited});
     }
+    public sealed record MaintenanceRequest(DateTimeOffset StartsAt,DateTimeOffset EndsAt,string? Reason);
+    [HttpGet("{type}/{id:guid}/maintenance")]
+    public async Task<IActionResult> Maintenance(string type,Guid id,CancellationToken ct){
+        await Actor(ct);if(type is not ("camera" or "sensor" or "controller" or "kiosk"))throw AppException.BadRequest("Invalid source type.");
+        var now=DateTime.UtcNow;var q=db.DeviceMaintenanceWindows.AsNoTracking().Where(x=>x.SourceType==type&&x.SourceId==id);
+        var items=await q.OrderByDescending(x=>x.StartsAt).Take(50).ToListAsync(ct);
+        var actorIds=items.Select(x=>x.CreatedBy).Concat(items.Where(x=>x.CancelledBy.HasValue).Select(x=>x.CancelledBy!.Value)).Distinct().ToArray();
+        var actors=await db.AppUsers.AsNoTracking().Where(x=>actorIds.Contains(x.Id)).ToDictionaryAsync(x=>x.Id,x=>x.FullName,ct);
+        return Result(new{items=items.Select(x=>new{x.Id,x.StartsAt,x.EndsAt,x.Reason,createdBy=actors.GetValueOrDefault(x.CreatedBy),x.CancelledAt,
+            cancelledBy=x.CancelledBy.HasValue?actors.GetValueOrDefault(x.CancelledBy.Value):null,
+            status=x.CancelledAt.HasValue?"Cancelled":x.StartsAt>now?"Scheduled":x.EndsAt<=now?"Completed":"Active"}),
+            note="Maintenance plans document work; actual device maintenance uses existing management controls. Plans never mute safety alerts or change relay state."});
+    }
+    [HttpPost("{type}/{id:guid}/maintenance")]
+    public async Task<IActionResult> CreateMaintenance(string type,Guid id,MaintenanceRequest request,CancellationToken ct){
+        var actor=await Actor(ct);var now=DateTime.UtcNow;var start=request.StartsAt.UtcDateTime;var end=request.EndsAt.UtcDateTime;var reason=request.Reason?.Trim();
+        if(type is not ("camera" or "sensor" or "controller" or "kiosk")||string.IsNullOrWhiteSpace(reason)||reason.Length>500||start<now.AddMinutes(-5)||start>now.AddDays(90)||end<=start||end<=now||end-start>TimeSpan.FromDays(7))
+            throw AppException.BadRequest("Use a 1..500 character reason and a maintenance window of up to 7 days within the next 90 days.");
+        if(!(await new DeviceMonitoringReader(db).ReadAsync(now,ct,false)).Any(x=>x.Type==type&&x.Id==id))throw AppException.NotFound("Device");
+        await using var tx=db.Database.IsRelational()?await db.Database.BeginTransactionAsync(ct):null;
+        if(tx!=null)await db.Database.ExecuteSqlRawAsync("SELECT pg_advisory_xact_lock(74638112016)",ct);
+        if(await db.DeviceMaintenanceWindows.AnyAsync(x=>x.SourceType==type&&x.SourceId==id&&x.CancelledAt==null&&x.StartsAt<end&&x.EndsAt>start,ct))
+            throw AppException.Conflict("Maintenance windows overlap.");
+        var row=new DeviceMaintenanceWindow{SourceType=type,SourceId=id,StartsAt=start,EndsAt=end,Reason=reason,CreatedBy=actor};
+        db.DeviceMaintenanceWindows.Add(row);
+        db.OperationLogs.Add(new(){UserId=actor,Action="ScheduleDeviceMaintenance",EntityType="DeviceMaintenanceWindow",EntityId=row.Id,Details=type+":"+id.ToString("N")});
+        await db.SaveChangesAsync(ct);if(tx!=null)await tx.CommitAsync(ct);return Result(new{row.Id});
+    }
+    [HttpPost("maintenance/{id:guid}/cancel")]
+    public async Task<IActionResult> CancelMaintenance(Guid id,CancellationToken ct){
+        var actor=await Actor(ct);var now=DateTime.UtcNow;
+        await using var tx=db.Database.IsRelational()?await db.Database.BeginTransactionAsync(ct):null;
+        if(tx!=null)await db.Database.ExecuteSqlRawAsync("SELECT pg_advisory_xact_lock(74638112016)",ct);
+        var row=await db.DeviceMaintenanceWindows.SingleOrDefaultAsync(x=>x.Id==id,ct)??throw AppException.NotFound("Maintenance window");
+        if(row.CancelledAt.HasValue||row.EndsAt<=now)throw AppException.Conflict("Window already finished or cancelled.");
+        row.CancelledAt=now;row.CancelledBy=actor;
+        db.OperationLogs.Add(new(){UserId=actor,Action="CancelDeviceMaintenance",EntityType="DeviceMaintenanceWindow",EntityId=id});
+        await db.SaveChangesAsync(ct);if(tx!=null)await tx.CommitAsync(ct);return Result(new{id});
+    }
     [HttpGet("topology")]
     public async Task<IActionResult> Topology(Guid? farmingAreaId,CancellationToken ct){
         await Actor(ct);var now=DateTime.UtcNow;
@@ -155,7 +194,7 @@ public sealed class DeviceMonitoringController(AppDbContext db,Microsoft.Extensi
                 .Select(x=>new{x.Id,x.PortCode,x.PortType,x.Channel,x.Gpio,x.IsPresent,x.ConfigVersion,x.ReportedOn,x.CommissioningStatus,x.LastReportedAt}).ToListAsync(ct);
             var commands=await db.EdgeCommands.AsNoTracking().Where(x=>x.DeviceCode==d.DeviceCode).OrderByDescending(x=>x.CreatedAt).ThenBy(x=>x.Id).Take(50)
                 .Select(x=>new{x.Id,x.Channel,x.Command,x.Status,x.CreatedAt,x.DeliveredAt,x.AcknowledgedAt,x.FailedAt,x.ExpiresAt,x.AttemptCount,x.InventoryRevision}).ToListAsync(ct);
-            extra=new{d.CapabilityVersion,d.HardwareModel,d.RssiDbm,d.BatteryLevel,ports,commands};
+            extra=new{d.CapabilityVersion,d.HardwareModel,d.RssiDbm,d.BatteryLevel,d.ControllerCommandStorageReady,d.ControllerSensorReadSupported,d.ControllerRssiDbm,d.ControllerFreeHeapBytes,d.ControllerUptimeSeconds,d.ControllerHealthAt,controllerHealthFresh=d.ControllerHealthAt>=now.AddMinutes(-3),hardwareControlDisabled=CrabSenseBE.Application.Services.HardwareControlGuard.IsDisabled(config),ports,commands};
         }else if(type=="sensor"){
             var s=await db.Sensors.AsNoTracking().SingleAsync(x=>x.Id==id,ct);
             var calibration=await db.SensorCalibrations.AsNoTracking().Where(x=>x.SensorId==id).OrderByDescending(x=>x.PerformedAt).Select(x=>new{x.PerformedAt,x.Result,x.Method}).FirstOrDefaultAsync(ct);

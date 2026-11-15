@@ -1341,6 +1341,8 @@ public class IotService : IIotService
         {
             if (!Enum.TryParse<DeviceStatus>(req.Status, true, out var st) || !Enum.IsDefined(st))
                 throw AppException.BadRequest("Trạng thái thiết bị không hợp lệ.");
+            // Explicit camera reactivation requires new authenticated evidence; never reuse pre-maintenance heartbeat.
+            if(camera&&st==DeviceStatus.Offline)device.LastSeenAt=null;
             device.Status = st;
         }
         _uow.Devices.Update(device);

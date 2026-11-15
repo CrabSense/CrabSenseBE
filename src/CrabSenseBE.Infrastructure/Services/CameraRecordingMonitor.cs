@@ -38,6 +38,7 @@ public sealed class CameraRecordingMonitor(IServiceScopeFactory scopes,IConfigur
         var pending=await db.CameraRecordingExecutions.AsNoTracking().Where(x=>x.Status=="Uploading"&&x.EndedAt<now.AddMinutes(-5))
             .Select(x=>x.DeviceId).Distinct().ToListAsync(ct);
         var agents=await db.CameraRecordingAgents.AsNoTracking().ToDictionaryAsync(x=>x.DeviceId,ct);
+        var kiosks=await db.FarmKiosks.AsNoTracking().Where(x=>x.Status!="Revoked").ToDictionaryAsync(x=>x.Id,ct);
         var slots=await db.CameraScheduleSlots.AsNoTracking().ToListAsync(ct);
         var kinds=new[]{"camera_recording_failure","camera_recording_stalled","camera_storage_limit","camera_recording_missed","camera_agent_offline","camera_stream_failed"};
         var alerts=await db.Alerts.Where(a=>a.SourceType=="Device"&&a.IncidentType!=null&&kinds.Contains(a.IncidentType)&&
@@ -61,7 +62,7 @@ public sealed class CameraRecordingMonitor(IServiceScopeFactory scopes,IConfigur
             var agentOffline=due&&agent is not null&&agent.Enabled&&agent.KioskId.HasValue&&(!agent.LastSeenAt.HasValue||agent.LastSeenAt<now.AddSeconds(-90));
             var missed=due&&!quota&&(execution is null||execution.LastHeartbeatAt<now.AddMinutes(-3));
             var issues=new[]{(kinds[0],failed,"Recording attempt failed"),(kinds[1],stalled,"Recording heartbeat or upload stalled"),(kinds[2],quota,"Camera storage limit reached"),(kinds[3],missed,"No recent recording evidence during scheduled window"),(kinds[4],agentOffline,"Recording agent heartbeat missing")};
-            var streamFresh=agent?.Enabled==true&&agent.StreamProbedAt>=now.AddMinutes(-3)&&agent.StreamProbedAt<=now.AddSeconds(5);
+            var streamFresh=agent?.Enabled==true&&agent.KioskId.HasValue&&kiosks.TryGetValue(agent.KioskId.Value,out var kiosk)&&kiosk.FarmingAreaId==camera.FarmingAreaId&&agent.StreamProbedAt>=now.AddMinutes(-3)&&agent.StreamProbedAt<=now.AddSeconds(5);
             if(streamFresh&&agent?.StreamProbeStatus is "Verified" or "Failed")issues=issues.Append((kinds[5],agent.StreamProbeStatus=="Failed","Camera frame probe failed")).ToArray();
             foreach(var (kind,active,message) in issues)
             {

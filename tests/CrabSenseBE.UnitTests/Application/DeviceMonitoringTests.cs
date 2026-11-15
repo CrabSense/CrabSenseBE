@@ -109,4 +109,58 @@ public sealed class DeviceMonitoringTests
         d.EdgeState="Revoked";
         Assert.Equal("Disabled",DeviceMonitoringReader.DeviceConnection(d,now,30));
     }
+
+    private static DeviceMonitoringController AdminController(AppDbContext db,AppUser actor)=>new(db)
+    {
+        ControllerContext=new ControllerContext{HttpContext=new DefaultHttpContext
+        {User=new ClaimsPrincipal(new ClaimsIdentity(new[]{new Claim(ClaimTypes.NameIdentifier,actor.Id.ToString())},"test"))}}
+    };
+    [Fact]
+    public async Task ResetPolicyPreservesVersionAndInheritsDefault()
+    {
+        await using var db=new AppDbContext(new DbContextOptionsBuilder<AppDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options);
+        var actor=new AppUser{Username="admin",Role=UserRole.SystemAdministrator,IsActive=true};
+        var d=new Device{DeviceCode="CT",DeviceType="esp32",Status=DeviceStatus.Online,LastSeenAt=DateTime.UtcNow};
+        db.AppUsers.Add(actor);db.Devices.Add(d);
+        db.DeviceMonitoringPolicies.AddRange(new DeviceMonitoringPolicy{SourceType="controller",SourceId=Guid.Empty,TimeoutSeconds=120,Version=1,UpdatedBy=actor.Id},new DeviceMonitoringPolicy{SourceType="controller",SourceId=d.Id,TimeoutSeconds=30,Version=2,UpdatedBy=actor.Id});
+        await db.SaveChangesAsync();
+        var api=AdminController(db,actor);
+        await api.ResetPolicy("controller",d.Id,2,default);
+        var row=await db.DeviceMonitoringPolicies.SingleAsync(x=>x.SourceId==d.Id);
+        Assert.True(row.IsInherited);Assert.Equal(3,row.Version);
+        Assert.Equal(120,Assert.Single(await new DeviceMonitoringReader(db).ReadAsync(DateTime.UtcNow,default,false)).TimeoutSeconds);
+        Assert.Equal(409,(await Assert.ThrowsAsync<AppException>(()=>api.UpdatePolicy("controller",d.Id,new(45,2),default))).StatusCode);
+        await api.UpdatePolicy("controller",d.Id,new(45,3),default);
+        Assert.False(row.IsInherited);Assert.Equal(4,row.Version);
+    }
+    [Fact]
+    public async Task MaintenancePlanRejectsOverlapAndDoesNotChangeControlStatus()
+    {
+        await using var db=new AppDbContext(new DbContextOptionsBuilder<AppDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options);
+        var actor=new AppUser{Username="admin",Role=UserRole.SystemAdministrator,IsActive=true};
+        var d=new Device{DeviceCode="CT",DeviceType="esp32",Status=DeviceStatus.Online,LastSeenAt=DateTime.UtcNow};
+        db.AppUsers.Add(actor);db.Devices.Add(d);await db.SaveChangesAsync();
+        var api=AdminController(db,actor);var now=DateTimeOffset.UtcNow;
+        await api.CreateMaintenance("controller",d.Id,new(now.AddMinutes(10),now.AddHours(1),"Inspect wiring"),default);
+        Assert.Equal(409,(await Assert.ThrowsAsync<AppException>(()=>api.CreateMaintenance("controller",d.Id,new(now.AddMinutes(20),now.AddHours(2),"Overlap"),default))).StatusCode);
+        var plan=await db.DeviceMaintenanceWindows.SingleAsync();Assert.Equal(actor.Id,plan.CreatedBy);
+        Assert.Equal(DeviceStatus.Online,d.Status);
+        await api.CancelMaintenance(plan.Id,default);Assert.NotNull(plan.CancelledAt);Assert.Equal<Guid?>(actor.Id,plan.CancelledBy);
+        Assert.Equal(DeviceStatus.Online,d.Status);
+    }
+    [Fact]
+    public async Task IncidentCannotCloseBeforeRecoveryAndRecordsProcessingActor()
+    {
+        await using var db=new AppDbContext(new DbContextOptionsBuilder<AppDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options);
+        var actor=new AppUser{Username="admin",Role=UserRole.SystemAdministrator,IsActive=true};
+        var a=new Alert{SourceType="Device",IncidentType="device_disconnect",Status=AlertStatus.Active};
+        db.AppUsers.Add(actor);db.Alerts.Add(a);await db.SaveChangesAsync();
+        var api=AdminController(db,actor);
+        await api.Acknowledge(a.Id,default);await api.ProcessAlert(a.Id,new("Investigating"),default);
+        Assert.Equal(AlertStatus.InProgress,a.Status);Assert.Equal<Guid?>(actor.Id,a.ProcessingBy);
+        Assert.Equal(409,(await Assert.ThrowsAsync<AppException>(()=>api.CloseAlert(a.Id,new("Still offline"),default))).StatusCode);
+        a.Status=AlertStatus.Recovered;a.ResolvedAt=DateTime.UtcNow;await db.SaveChangesAsync();
+        await api.CloseAlert(a.Id,new("Verified recovery"),default);
+        Assert.Equal(AlertStatus.Resolved,a.Status);Assert.Equal("Verified recovery",a.ResolutionNote);
+    }
 }
