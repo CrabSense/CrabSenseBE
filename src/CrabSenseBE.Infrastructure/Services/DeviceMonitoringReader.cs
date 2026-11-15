@@ -92,7 +92,7 @@ public sealed class DeviceMonitoringReader(AppDbContext db)
             var k=kiosks.GetValueOrDefault(kioskId??Guid.Empty);var ks=k==null?null:KioskConnection(k,now,Timeout("kiosk",k.Id,120));
             var agentStatus=!camera?null:agent==null?"Unassigned":!agent.Enabled||k==null||k.Status=="Revoked"||k.FarmingAreaId!=d.FarmingAreaId?"Disabled":Fresh(agent.LastSeenAt,now,Timeout("agent",d.Id,90));
             var execution=executions.GetValueOrDefault(d.Id);var schedule=schedules.GetValueOrDefault(d.Id);
-            var health=Health(a,conn);if(camera&&agentStatus=="Offline"&&health=="Unknown")health="Warning";
+            var health=Health(a,conn);if(camera&&agentStatus=="Offline"&&(health=="Healthy"||health=="Unknown"))health="Warning";
             result.Add(new(d.Id,camera?"camera":"controller",d.DeviceCode,d.Name,d.FarmingAreaId,d.FarmingRowId,Area(d.FarmingAreaId),Row(d.FarmingRowId),
                 conn,health,camera?null:d.EdgeState,d.LastSeenAt,timeout,d.IpAddress,d.FirmwareVersion?.Contains("://")==true?null:d.FirmwareVersion,
                 kioskId,k?.Code,ks,AgentStatus:agentStatus,AgentLastSeenAt:agent?.LastSeenAt,PendingClips:agent?.PendingClips,
