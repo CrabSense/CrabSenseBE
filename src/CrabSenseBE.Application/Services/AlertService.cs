@@ -414,6 +414,7 @@ public class AlertService : IAlertService
         sensors = sensors.Where(s => s.LastSeenAt < DateTime.UtcNow.AddSeconds(-(s.DisconnectTimeoutSeconds ?? timeoutMinutes*60)));
         foreach (var sensor in sensors)
         {
+            var timeoutSeconds = sensor.DisconnectTimeoutSeconds ?? timeoutMinutes * 60;
             var areaId = await AreaOfSensorAsync(sensor, ct);
             var existing = (await _uow.Alerts.FindAsync(
                 a => a.SensorId == sensor.Id
@@ -436,7 +437,7 @@ public class AlertService : IAlertService
                 IncidentType = "sensor_disconnect",
                 SourceType = "Sensor",
                 SourceId = sensor.Id.ToString("N"),
-                Message = $"Cảm biến mất kết nối: {sensor.SensorCode} (>{timeoutMinutes} phút)",
+                Message = $"Cảm biến mất kết nối: {sensor.SensorCode} (>{timeoutSeconds} giây)",
                 Severity = AlertSeverity.Critical,
                 Status = AlertStatus.Active,
                 OccurrenceCount = 1,
@@ -456,13 +457,14 @@ public class AlertService : IAlertService
                     ["sensor"] = sensor.SensorType,
                     ["code"] = sensor.SensorCode,
                     ["name"] = sensor.SensorType,
-                    ["minutes"] = timeoutMinutes.ToString()
+                    ["minutes"] = (timeoutSeconds / 60.0).ToString(System.Globalization.CultureInfo.InvariantCulture)
                 }, ct);
         }
 
         var devices = await _uow.Devices.FindAsync(
             d => d.LastSeenAt != null && d.LastSeenAt < cutoff
-                 && d.Status != DeviceStatus.Maintenance, ct);
+                 && d.Status != DeviceStatus.Maintenance
+                 && (d.EdgeState == "Approved" || d.EdgeState == "Online"), ct);
         foreach (var device in devices)
         {
             device.Status = DeviceStatus.Offline;
@@ -1051,7 +1053,8 @@ public class AlertService : IAlertService
         {
             var sensor = await _uow.Sensors.GetByIdAsync(sensorId, ct);
             return sensor?.IsActive == true
-                && sensor.LastSeenAt >= cutoff;
+                && sensor.LastSeenAt >= DateTime.UtcNow.AddSeconds(-Math.Min(300, sensor.DisconnectTimeoutSeconds ?? 900))
+                && sensor.LastSeenAt <= DateTime.UtcNow.AddSeconds(5);
         }
         if (alert.IncidentType == "device_disconnect"
             && Guid.TryParse(alert.SourceId, out var deviceId))
@@ -1059,6 +1062,7 @@ public class AlertService : IAlertService
             var device = await _uow.Devices.GetByIdAsync(deviceId, ct);
             return device?.Status == DeviceStatus.Online
                 && device.LastSeenAt >= cutoff
+                && device.LastSeenAt <= DateTime.UtcNow.AddSeconds(5)
                 && device.EdgeState is "Approved" or "Online";
         }
         if (alert.IncidentType == "kiosk_disconnect"

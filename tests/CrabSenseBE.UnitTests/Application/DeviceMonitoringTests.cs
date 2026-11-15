@@ -86,4 +86,27 @@ public sealed class DeviceMonitoringTests
         Assert.Equal<DateTime?>(now,enriched.LastReceivedAt);
         Assert.Equal("Good",enriched.DataQuality);
     }
+
+    [Fact]
+    public void SensorStatusRejectsUnverifiedParentAndWrongPortAndReadError()
+    {
+        var now=DateTime.UtcNow;
+        var d=new Device{EdgeState="Pending",Status=DeviceStatus.Online,LastSeenAt=now,CapabilityVersion=2};
+        var sensor=new Sensor{DeviceId=d.Id,IsActive=true,LastSeenAt=now};
+        Assert.Equal("Unknown",CrabSenseBE.Application.Services.SensorStatusPolicy.Status(sensor,d,null,false,now));
+        d.EdgeState="Approved";
+        Assert.Equal("Error",CrabSenseBE.Application.Services.SensorStatusPolicy.Status(sensor,d,null,true,now,"Online"));
+        sensor.ControllerPortId=Guid.NewGuid();
+        var port=new ControllerPort{Id=sensor.ControllerPortId.Value,DeviceId=Guid.NewGuid(),IsPresent=true,ConfigVersion=2};
+        Assert.Equal("Offline",CrabSenseBE.Application.Services.SensorStatusPolicy.Status(sensor,d,port,false,now,"Online"));
+    }
+    [Fact]
+    public void FreshHeartbeatIsIndependentOfStoredDisconnectWorkerStatus()
+    {
+        var now=DateTime.UtcNow;
+        var d=new Device{Status=DeviceStatus.Offline,EdgeState="Approved",LastSeenAt=now.AddSeconds(-10)};
+        Assert.Equal("Online",DeviceMonitoringReader.DeviceConnection(d,now,30));
+        d.EdgeState="Revoked";
+        Assert.Equal("Disabled",DeviceMonitoringReader.DeviceConnection(d,now,30));
+    }
 }
