@@ -5,6 +5,7 @@ using CrabSenseBE.Application.Common;
 using CrabSenseBE.Application.Interfaces;
 using CrabSenseBE.Domain.Entities;
 using CrabSenseBE.Domain.Enums;
+using CrabSenseBE.Domain.Interfaces;
 using CrabSenseBE.Infrastructure.Persistence;
 using CrabSenseBE.Infrastructure.Repositories;
 using Microsoft.AspNetCore.Http;
