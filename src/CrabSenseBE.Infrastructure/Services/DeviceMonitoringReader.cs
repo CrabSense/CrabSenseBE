@@ -24,17 +24,22 @@ public sealed class DeviceMonitoringReader(AppDbContext db)
         a.IncidentType=="camera_recording_stalled"||a.IncidentType=="camera_storage_limit"||a.IncidentType=="camera_recording_missed"||a.IncidentType=="camera_agent_offline"))||
         (a.SourceType=="Kiosk"&&a.IncidentType=="kiosk_disconnect"));
     public static string Fresh(DateTime? seen,DateTime now,int seconds)=>seen==null?"Unknown":seen<now.AddSeconds(-seconds)?"Offline":"Online";
-    public static string KioskConnection(FarmKiosk k,DateTime now)=>k.Status=="Revoked"?"Disabled":k.Status=="Created"?"Unknown":Fresh(k.LastSeenAt,now,120);
-    public static string DeviceConnection(Device d,DateTime now)
+    public static string KioskConnection(FarmKiosk k,DateTime now,int timeoutSeconds=120)=>k.Status=="Revoked"?"Disabled":k.Status=="Created"?"Unknown":Fresh(k.LastSeenAt,now,timeoutSeconds);
+    public static string DeviceConnection(Device d,DateTime now,int timeoutSeconds=900)
     {
         if(d.Status==DeviceStatus.Maintenance)return "Maintenance";
         if(d.EdgeState is "Rejected" or "Revoked")return "Disabled";
         if(d.EdgeState is "Unprovisioned" or "Pending")return "Unknown";
-        var fresh=Fresh(d.LastSeenAt,now,900);
+        var fresh=Fresh(d.LastSeenAt,now,timeoutSeconds);
         return fresh!="Online"?fresh:d.Status==DeviceStatus.Online?"Online":d.Status.ToString();
     }
     public async Task<List<MonitoringRow>> ReadAsync(DateTime now,CancellationToken ct,bool includeMeasurements=true)
     {
+        var policies=await db.DeviceMonitoringPolicies.AsNoTracking()
+            .ToDictionaryAsync(x=>new ValueTuple<string,Guid>(x.SourceType,x.SourceId),ct);
+        int Timeout(string type,Guid id,int fallback) =>
+            policies.TryGetValue((type,id),out var own)?own.TimeoutSeconds:
+            policies.TryGetValue((type,Guid.Empty),out var general)?general.TimeoutSeconds:fallback;
         var devices=await db.Devices.AsNoTracking().ToDictionaryAsync(x=>x.Id,ct);
         var sensors=await db.Sensors.AsNoTracking().ToListAsync(ct);
         var kiosks=await db.FarmKiosks.AsNoTracking().ToDictionaryAsync(x=>x.Id,ct);
@@ -58,21 +63,21 @@ public sealed class DeviceMonitoringReader(AppDbContext db)
         string? Area(Guid? id)=>areas.GetValueOrDefault(id??Guid.Empty);
         string? Row(Guid? id)=>rows.GetValueOrDefault(id??Guid.Empty)?.Name;
         List<Alert> Alerts(string t,Guid id)=>alertGroups.GetValueOrDefault((t,id))??new();
-        string Health(List<Alert> list)=>list.Count==0?"Unknown":list.Any(a=>a.Severity==AlertSeverity.Critical)?"Critical":"Warning";
+        string Health(List<Alert> list,string connection)=>list.Any(a=>a.Severity==AlertSeverity.Critical)?"Critical":list.Count>0?"Warning":connection=="Online"?"Healthy":connection is "Offline" or "Error"?"Warning":"Unknown";
         var result=new List<MonitoringRow>();
         foreach(var k in kiosks.Values){
-            var a=Alerts("Kiosk",k.Id);var conn=KioskConnection(k,now);
-            result.Add(new(k.Id,"kiosk",k.Code,k.Name,k.FarmingAreaId,null,Area(k.FarmingAreaId),null,conn,Health(a),k.Status,k.LastSeenAt,120,k.LanIp,ActiveAlertCount:a.Count,ReasonCode:conn=="Offline"?"heartbeat_timeout":null));
+            var a=Alerts("Kiosk",k.Id);var conn=KioskConnection(k,now,Timeout("kiosk",k.Id,120));
+            result.Add(new(k.Id,"kiosk",k.Code,k.Name,k.FarmingAreaId,null,Area(k.FarmingAreaId),null,conn,Health(a,conn),k.Status,k.LastSeenAt,Timeout("kiosk",k.Id,120),k.LanIp,ActiveAlertCount:a.Count,ReasonCode:conn=="Offline"?"heartbeat_timeout":null));
         }
         foreach(var d in devices.Values){
-            var camera=CameraConfiguration.IsCamera(d);var a=Alerts("Device",d.Id);var conn=DeviceConnection(d,now);
+            var camera=CameraConfiguration.IsCamera(d);var a=Alerts("Device",d.Id);var type=camera?"camera":"controller";var timeout=Timeout(type,d.Id,900);var conn=DeviceConnection(d,now,timeout);
             var agent=agents.GetValueOrDefault(d.Id);var kioskId=camera?agent?.KioskId:d.KioskId;
-            var k=kiosks.GetValueOrDefault(kioskId??Guid.Empty);var ks=k==null?null:KioskConnection(k,now);
-            var agentStatus=!camera?null:agent==null?"Unassigned":!agent.Enabled||k==null||k.Status=="Revoked"||k.FarmingAreaId!=d.FarmingAreaId?"Disabled":Fresh(agent.LastSeenAt,now,90);
+            var k=kiosks.GetValueOrDefault(kioskId??Guid.Empty);var ks=k==null?null:KioskConnection(k,now,Timeout("kiosk",k.Id,120));
+            var agentStatus=!camera?null:agent==null?"Unassigned":!agent.Enabled||k==null||k.Status=="Revoked"||k.FarmingAreaId!=d.FarmingAreaId?"Disabled":Fresh(agent.LastSeenAt,now,Timeout("agent",d.Id,90));
             var execution=executions.GetValueOrDefault(d.Id);var schedule=schedules.GetValueOrDefault(d.Id);
-            var health=Health(a);if(camera&&agentStatus=="Offline"&&health=="Unknown")health="Warning";
+            var health=Health(a,conn);if(camera&&agentStatus=="Offline"&&health=="Unknown")health="Warning";
             result.Add(new(d.Id,camera?"camera":"controller",d.DeviceCode,d.Name,d.FarmingAreaId,d.FarmingRowId,Area(d.FarmingAreaId),Row(d.FarmingRowId),
-                conn,health,camera?null:d.EdgeState,d.LastSeenAt,900,d.IpAddress,d.FirmwareVersion?.Contains("://")==true?null:d.FirmwareVersion,
+                conn,health,camera?null:d.EdgeState,d.LastSeenAt,timeout,d.IpAddress,d.FirmwareVersion?.Contains("://")==true?null:d.FirmwareVersion,
                 kioskId,k?.Code,ks,AgentStatus:agentStatus,AgentLastSeenAt:agent?.LastSeenAt,PendingClips:agent?.PendingClips,
                 RecordingStatus:schedule==null?"NotScheduled":!schedule.Enabled?"Disabled":execution==null?"Waiting":execution.Status,
                 ScheduleName:schedule?.Name,PortCount:portCounts.GetValueOrDefault(d.Id),PendingCommands:commands.Where(c=>string.Equals(c.Code,d.DeviceCode,StringComparison.OrdinalIgnoreCase)).Sum(c=>c.Count),
@@ -82,13 +87,13 @@ public sealed class DeviceMonitoringReader(AppDbContext db)
             var d=devices.GetValueOrDefault(s.DeviceId??Guid.Empty);var p=ports.GetValueOrDefault(s.ControllerPortId??s.BusPortId??Guid.Empty);
             var rowId=s.FarmingRowId??d?.FarmingRowId;var areaId=s.FarmingAreaId??rows.GetValueOrDefault(rowId??Guid.Empty)?.FarmingAreaId??systems.GetValueOrDefault(s.WaterSystemId??Guid.Empty)??d?.FarmingAreaId;
             var a=Alerts("Sensor",s.Id);var timeout=s.DisconnectTimeoutSeconds??900;
-            var conn=!s.IsActive?"Disabled":s.DeviceId.HasValue&&(d==null||DeviceConnection(d,now) is "Offline" or "Maintenance" or "Disabled")?"Offline":
+            var conn=!s.IsActive?"Disabled":s.DeviceId.HasValue&&(d==null||DeviceConnection(d,now,Timeout("controller",d.Id,900)) is "Offline" or "Maintenance" or "Disabled")?"Offline":
                 (s.ControllerPortId.HasValue||s.BusPortId.HasValue)&&(p==null||!p.IsPresent||d==null||p.ConfigVersion!=d.CapabilityVersion)?"Offline":Fresh(s.LastSeenAt,now,timeout);
             var m=values.GetValueOrDefault(s.Id);var k=kiosks.GetValueOrDefault(d?.KioskId??Guid.Empty);
-            result.Add(new(s.Id,"sensor",s.SensorCode,s.Name??s.SensorType,areaId,rowId,Area(areaId),Row(rowId),conn,Health(a),null,s.LastSeenAt,timeout,
-                KioskId:k?.Id,KioskCode:k?.Code,KioskStatus:k==null?null:KioskConnection(k,now),ControllerId:d?.Id,ControllerCode:d?.DeviceCode,PortCode:p?.PortCode,
+            result.Add(new(s.Id,"sensor",s.SensorCode,s.Name??s.SensorType,areaId,rowId,Area(areaId),Row(rowId),conn,Health(a,conn),null,s.LastSeenAt,timeout,
+                KioskId:k?.Id,KioskCode:k?.Code,KioskStatus:k==null?null:KioskConnection(k,now,Timeout("kiosk",k.Id,120)),ControllerId:d?.Id,ControllerCode:d?.DeviceCode,PortCode:p?.PortCode,
                 LatestValue:m?.Value,Unit:s.Unit,LatestMeasuredAt:m?.MeasuredAt,LastReceivedAt:received.GetValueOrDefault(s.Id),DataQuality:m?.DataQuality??"Unknown",
-                ActiveAlertCount:a.Count,ReasonCode:conn=="Offline"&&d!=null&&DeviceConnection(d,now)=="Offline"?"upstream_controller_offline":conn=="Offline"?"telemetry_timeout":null));
+                ActiveAlertCount:a.Count,ReasonCode:conn=="Offline"&&d!=null&&DeviceConnection(d,now,Timeout("controller",d.Id,900))=="Offline"?"upstream_controller_offline":conn=="Offline"?"telemetry_timeout":null));
         }
         return result;
     }
