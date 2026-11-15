@@ -40,4 +40,12 @@ public class WaterColorAnalyzerTests
         Assert.Throws<AppException>(()=>WaterColorAnalyzer.Read([1,2,3],p));
         Assert.Throws<AppException>(()=>WaterColorAnalyzer.ValidateProtocol(p with { Reference=p.Sample }));
     }
+    [Fact] public void GeometryPolicyRequiresDisjointAnchorAndBoundedSearch()
+    {
+        var p=new ColorProtocol(100,100,new(0,0,20,20),new(50,50,20,20),"G",60,5,5,"Kit instructions",10,20,
+            new ColorGeometryPolicy(new(25,50,16,16)));
+        WaterColorAnalyzer.ValidateProtocol(p);
+        Assert.Throws<AppException>(()=>WaterColorAnalyzer.ValidateProtocol(p with {GeometryPolicy=new ColorGeometryPolicy(new(50,50,16,16))}));
+        Assert.Throws<AppException>(()=>WaterColorAnalyzer.ValidateProtocol(p with {GeometryPolicy=new ColorGeometryPolicy(new(25,50,16,16),MaxShift:9)}));
+    }
 }

@@ -10,6 +10,11 @@ namespace CrabSenseBE.Api.Services;
 public sealed class WaterAiClient(HttpClient http, IConfiguration config)
 {
     public const string Algorithm = "rgb-median-monotonic-v1";
+    public const string GeometryAlgorithm = "rgb-median-monotonic-v2-qc";
+    public static bool Supported(string? algorithm)=>algorithm is Algorithm or GeometryAlgorithm;
+    private static bool GeometryEvidence(JsonElement evidence,string algorithm)=>algorithm!=GeometryAlgorithm||
+        (evidence.TryGetProperty("geometry",out var g)&&g.GetProperty("status").GetString()=="aligned"&&
+         g.GetProperty("shift_px").GetArrayLength()==2&&g.GetProperty("shift_px")[0].GetInt32()==0&&g.GetProperty("shift_px")[1].GetInt32()==0);
     public record Photo(Guid MediaId, byte[] Bytes, int ReactionSeconds, decimal SalinityPpt, decimal? Concentration = null);
     public record Fitted(string Token, string Id, string Algorithm, JsonElement Curve, JsonElement Validation, DateTime ValidUntil);
     public record Estimate(decimal Value, JsonElement Evidence, decimal HoldoutError);
@@ -18,7 +23,8 @@ public sealed class WaterAiClient(HttpClient http, IConfiguration config)
     private static object Roi(ColorRoi r) => new { x=r.X,y=r.Y,width=r.Width,height=r.Height };
     private static object Protocol(ColorProtocol p) => new { width=p.Width,height=p.Height,sample=Roi(p.Sample),reference=Roi(p.Reference),
         reaction_seconds=p.ReactionSeconds,tolerance_seconds=p.TimingToleranceSeconds,sample_volume_ml=p.SampleVolumeMl,
-        min_salinity_ppt=p.MinSalinityPpt,max_salinity_ppt=p.MaxSalinityPpt };
+        min_salinity_ppt=p.MinSalinityPpt,max_salinity_ppt=p.MaxSalinityPpt,
+        geometry_policy=p.GeometryPolicy is { } g ? new { anchor=Roi(g.Anchor),max_shift=g.MaxShift,min_correlation=g.MinCorrelation,min_focus_ratio=g.MinFocusRatio } : null };
     private static object Standard(Photo p) => new { image_b64=Convert.ToBase64String(p.Bytes),media_id=p.MediaId.ToString("D"),
         reaction_seconds=p.ReactionSeconds,salinity_ppt=p.SalinityPpt,concentration=p.Concentration };
     public async Task<Fitted> Fit(Guid area, Guid camera, string analyte, string kit, string revision, string unit, string lot,
@@ -34,18 +40,19 @@ public sealed class WaterAiClient(HttpClient http, IConfiguration config)
             var token=data.GetProperty("calibration_token").GetString();var id=data.GetProperty("calibration_id").GetString();
             var algo=data.GetProperty("algorithm").GetString();var expiry=data.GetProperty("valid_until").GetDateTimeOffset().UtcDateTime;
             var curve=data.GetProperty("curve");var checks=data.GetProperty("validation");
-            if(string.IsNullOrWhiteSpace(token)||token.Length>100000||!Hash(id)||algo!=Algorithm||
+            if(string.IsNullOrWhiteSpace(token)||token.Length>100000||!Hash(id)||algo!=(protocol.GeometryPolicy is null?Algorithm:GeometryAlgorithm)||
                 data.GetProperty("unit").GetString()!=unit||Math.Abs((expiry-validUntil).TotalSeconds)>1||
                 curve.ValueKind!=JsonValueKind.Object||curve.GetProperty("channel").GetInt32() is <0 or >2||checks.ValueKind!=JsonValueKind.Array||checks.GetArrayLength()!=1||
                 checks[0].GetProperty("media_id").GetString()!=validation.MediaId.ToString("D")||
                 checks[0].GetProperty("absolute_error").GetDecimal()<0||checks[0].GetProperty("absolute_error").GetDecimal()>tolerance)
                 throw Invalid();
-            return new(token,id!,algo,curve.Clone(),checks.Clone(),expiry);
+            return new(token,id!,algo!,curve.Clone(),checks.Clone(),expiry);
         }
         catch(Exception ex) when(ex is KeyNotFoundException or InvalidOperationException or FormatException or OverflowException){throw Invalid();}
     }
-    public async Task<Estimate> Analyze(Guid area, Guid camera, string analyte,string unit,string lot,string token,string calibrationId,Photo photo,CancellationToken ct)
+    public async Task<Estimate> Analyze(Guid area, Guid camera, string analyte,string unit,string lot,string token,string calibrationId,Photo photo,CancellationToken ct,string algorithm=Algorithm)
     {
+        if(!Supported(algorithm))throw Invalid();
         var data=await Post("v1/analyze",new { area_id=area.ToString("D"),camera_id=camera.ToString("D"),analyte,reagent_lot=lot,
             calibration_token=token,image_b64=Convert.ToBase64String(photo.Bytes),media_id=photo.MediaId.ToString("D"),
             reaction_seconds=photo.ReactionSeconds,salinity_ppt=photo.SalinityPpt },ct);
@@ -55,18 +62,19 @@ public sealed class WaterAiClient(HttpClient http, IConfiguration config)
             var evidence=data.GetProperty("evidence");
             var hash=Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(photo.Bytes));
             if(data.GetProperty("status").GetString()!="estimated"||data.GetProperty("analyte").GetString()!=analyte||
-                data.GetProperty("unit").GetString()!=unit||data.GetProperty("algorithm").GetString()!=Algorithm||
+                data.GetProperty("unit").GetString()!=unit||data.GetProperty("algorithm").GetString()!=algorithm||
                 data.GetProperty("calibration_id").GetString()!=calibrationId||data.GetProperty("media_id").GetString()!=photo.MediaId.ToString("D")||
                 value<0||value>10000||error<0||error>1000||data.GetProperty("confidence").ValueKind!=JsonValueKind.Null||
-                evidence.GetProperty("media_id").GetString()!=photo.MediaId.ToString("D")||
+                evidence.GetProperty("media_id").GetString()!=photo.MediaId.ToString("D")||!GeometryEvidence(evidence,algorithm)||
                 !string.Equals(evidence.GetProperty("sha256").GetString(),hash,StringComparison.OrdinalIgnoreCase))throw Invalid();
             return new(value,evidence.Clone(),error);
         }
         catch(Exception ex) when(ex is KeyNotFoundException or InvalidOperationException or FormatException or OverflowException){throw Invalid();}
     }
     public record Control(string Status,decimal Estimated,decimal AbsoluteError,JsonElement Evidence);
-    public async Task<Control> ValidateControl(Guid area,Guid camera,string analyte,string unit,string lot,string token,string calibrationId,Photo photo,decimal expected,decimal maxError,CancellationToken ct)
+    public async Task<Control> ValidateControl(Guid area,Guid camera,string analyte,string unit,string lot,string token,string calibrationId,Photo photo,decimal expected,decimal maxError,CancellationToken ct,string algorithm=Algorithm)
     {
+        if(!Supported(algorithm))throw Invalid();
         var data=await Post("v1/calibrations/validate",new { sample=new { area_id=area.ToString("D"),camera_id=camera.ToString("D"),analyte,
             reagent_lot=lot,calibration_token=token,image_b64=Convert.ToBase64String(photo.Bytes),media_id=photo.MediaId.ToString("D"),
             reaction_seconds=photo.ReactionSeconds,salinity_ppt=photo.SalinityPpt },expected,max_error=maxError },ct);
@@ -76,10 +84,10 @@ public sealed class WaterAiClient(HttpClient http, IConfiguration config)
             var value=data.GetProperty("estimated").GetDecimal();var error=data.GetProperty("absolute_error").GetDecimal();
             var evidence=data.GetProperty("evidence");
             var hash=Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(photo.Bytes));
-            if(status is not ("passed" or "failed")||data.GetProperty("calibration_id").GetString()!=calibrationId||
+            if(status is not ("passed" or "failed")||data.GetProperty("algorithm").GetString()!=algorithm||data.GetProperty("calibration_id").GetString()!=calibrationId||
                 data.GetProperty("analyte").GetString()!=analyte||data.GetProperty("unit").GetString()!=unit||
                 data.GetProperty("media_id").GetString()!=photo.MediaId.ToString("D")||
-                evidence.GetProperty("media_id").GetString()!=photo.MediaId.ToString("D")||
+                evidence.GetProperty("media_id").GetString()!=photo.MediaId.ToString("D")||!GeometryEvidence(evidence,algorithm)||
                 !string.Equals(evidence.GetProperty("sha256").GetString(),hash,StringComparison.OrdinalIgnoreCase)||
                 data.GetProperty("expected").GetDecimal()!=expected||data.GetProperty("max_error").GetDecimal()!=maxError||
                 value<0||value>10000||error<0||Math.Abs(error-Math.Abs(value-expected))>0.000001m||
@@ -89,6 +97,24 @@ public sealed class WaterAiClient(HttpClient http, IConfiguration config)
         catch(Exception ex) when(ex is KeyNotFoundException or InvalidOperationException or FormatException or OverflowException){throw Invalid();}
     }
 
+    public async Task<JsonElement> InspectCalibrated(Guid area,Guid camera,string analyte,string lot,string token,string calibrationId,string algorithm,Photo photo,CancellationToken ct)
+    {
+        if(!Supported(algorithm))throw Invalid();
+        var data=await Post("v1/calibrations/inspect",new { area_id=area.ToString("D"),camera_id=camera.ToString("D"),analyte,reagent_lot=lot,
+            calibration_token=token,image_b64=Convert.ToBase64String(photo.Bytes),media_id=photo.MediaId.ToString("D"),
+            reaction_seconds=photo.ReactionSeconds,salinity_ppt=photo.SalinityPpt },ct);
+        try
+        {
+            var evidence=data.GetProperty("evidence");
+            if(data.GetProperty("status").GetString()!="optical_roi_pass"||data.GetProperty("algorithm").GetString()!=algorithm||
+               data.GetProperty("calibration_id").GetString()!=calibrationId||data.GetProperty("geometry_required").GetBoolean()!=(algorithm==GeometryAlgorithm)||
+               evidence.GetProperty("media_id").GetString()!=photo.MediaId.ToString("D")||!GeometryEvidence(evidence,algorithm)||
+               !string.Equals(evidence.GetProperty("sha256").GetString(),Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(photo.Bytes)),StringComparison.OrdinalIgnoreCase))
+                throw Invalid();
+            return data;
+        }
+        catch(Exception ex) when(ex is KeyNotFoundException or InvalidOperationException or FormatException or OverflowException){throw Invalid();}
+    }
     public async Task<JsonElement> Inspect(ColorProtocol protocol,Photo photo,CancellationToken ct)
     {
         var data=await Post("v1/images/inspect",new { protocol=Protocol(protocol),photo=new { image_b64=Convert.ToBase64String(photo.Bytes),

@@ -63,6 +63,8 @@ public sealed class WaterColorAnalysisController(AppDbContext db, IUnitOfWork uo
             throw AppException.BadRequest("Chọn đại lượng thực tế của thang màu; NH3/NH4/TAN-N không được dùng thay thế nhau.");
         var protocol=request.Protocol.Channel=="AUTO"?request.Protocol with {Channel="R"}:request.Protocol;
         WaterColorAnalyzer.ValidateProtocol(protocol);
+        if(config.GetValue("WaterAi:RequireGeometryForNewCalibration",true)&&protocol.GeometryPolicy is null)
+            throw AppException.BadRequest("Cần cấu hình mốc hình học (geometryPolicy) khi tạo hiệu chuẩn AI mới.");
         var revision=request.KitRevision?.Trim();
         if(string.IsNullOrWhiteSpace(revision)||revision.Length>120)
             throw AppException.BadRequest("Cần phiên bản bộ kit thực tế để tạo hiệu chuẩn AI.");
@@ -118,7 +120,7 @@ public sealed class WaterColorAnalysisController(AppDbContext db, IUnitOfWork uo
     {
         await scope.EnsureAsync(areaId,true,ct);
         var profile=await Find(areaId,id,ct);
-        if(profile.RevokedAt.HasValue||profile.ValidUntil<=DateTime.UtcNow||profile.AiAlgorithm!=WaterAiClient.Algorithm||
+        if(profile.RevokedAt.HasValue||profile.ValidUntil<=DateTime.UtcNow||!WaterAiClient.Supported(profile.AiAlgorithm)||
            string.IsNullOrWhiteSpace(profile.AiCalibrationToken)||string.IsNullOrWhiteSpace(profile.AiCalibrationId))
             throw AppException.Conflict("Cần hiệu chuẩn Python còn hiệu lực (không bị thu hồi).");
         if(request.ReagentLot?.Trim()!=profile.ReagentLot||request.Expected<0||request.Expected>10000||request.MaxError<=0)
@@ -137,7 +139,7 @@ public sealed class WaterColorAnalysisController(AppDbContext db, IUnitOfWork uo
            await db.WaterAnalysisRuns.AnyAsync(x=>x.SampleMediaId==asset.Id||x.FarmingAreaId==areaId&&x.SampleSha256==hash,ct))
             throw AppException.Conflict("Ảnh đã được sử dụng.");
         var result=await ai.ValidateControl(areaId,profile.CameraDeviceId,profile.Analyte,profile.Unit,profile.ReagentLot,
-            profile.AiCalibrationToken,profile.AiCalibrationId,new(asset.Id,bytes,request.ReactionSeconds,request.SalinityPpt),request.Expected,request.MaxError,ct);
+            profile.AiCalibrationToken,profile.AiCalibrationId,new(asset.Id,bytes,request.ReactionSeconds,request.SalinityPpt),request.Expected,request.MaxError,ct,profile.AiAlgorithm!);
         var now=DateTime.UtcNow;
         await using var tx=await db.Database.BeginTransactionAsync(ct);
         var locked=await db.WaterColorCalibrations.Where(x=>x.Id==id&&x.RevokedAt==null&&x.ValidUntil>now)
@@ -167,7 +169,102 @@ public sealed class WaterColorAnalysisController(AppDbContext db, IUnitOfWork uo
         await Camera(areaId,profile.CameraDeviceId,ct);
         CheckConditions(protocol,request.ReactionSeconds,request.SalinityPpt);
         var (bytes,asset)=await ReadBytes(profile.CameraDeviceId,request.MediaId,ct);
-        return Ok(ApiResponse<object>.Ok(await ai.Inspect(protocol,new(asset.Id,bytes,request.ReactionSeconds,request.SalinityPpt),ct)));
+        var photo=new WaterAiClient.Photo(asset.Id,bytes,request.ReactionSeconds,request.SalinityPpt);
+        if(profile.AiAlgorithm is not null)
+        {
+            if(profile.RevokedAt.HasValue||profile.ValidUntil<=DateTime.UtcNow||!WaterAiClient.Supported(profile.AiAlgorithm)||
+               string.IsNullOrWhiteSpace(profile.AiCalibrationToken)||string.IsNullOrWhiteSpace(profile.AiCalibrationId))
+                throw AppException.Conflict("Hiệu chuẩn AI không hợp lệ hoặc hết hiệu lực.");
+            return Ok(ApiResponse<object>.Ok(await ai.InspectCalibrated(areaId,profile.CameraDeviceId,profile.Analyte,profile.ReagentLot,
+                profile.AiCalibrationToken,profile.AiCalibrationId,profile.AiAlgorithm,photo,ct)));
+        }
+        return Ok(ApiResponse<object>.Ok(await ai.Inspect(protocol,photo,ct)));
+    }
+
+    public record TrainingSampleRequest(Guid MediaId,string PreparationId,string Split,string LabelSource,string ReferenceId,
+        decimal Concentration,int ReactionSeconds,decimal SalinityPpt);
+
+    [HttpGet("calibrations/{id:guid}/training-samples")]
+    [Authorize(Roles=AppRoles.FarmManage)]
+    public async Task<IActionResult> TrainingSamples(Guid areaId,Guid id,[FromQuery]int page=1,[FromQuery]int pageSize=50,CancellationToken ct=default)
+    {
+        await scope.EnsureAsync(areaId,true,ct);await Find(areaId,id,ct);
+        page=Math.Clamp(page,1,10000);pageSize=Math.Clamp(pageSize,1,100);
+        var q=db.WaterTrainingSamples.AsNoTracking().Where(x=>x.CalibrationId==id&&x.FarmingAreaId==areaId);
+        return Ok(ApiResponse<object>.Ok(new{totalCount=await q.CountAsync(ct),items=await q.OrderByDescending(x=>x.CreatedAt).ThenBy(x=>x.Id).Skip((page-1)*pageSize).Take(pageSize).ToListAsync(ct)}));
+    }
+
+    [HttpPost("calibrations/{id:guid}/training-samples")]
+    [Authorize(Roles=AppRoles.FarmManage)]
+    public async Task<IActionResult> RegisterTrainingSample(Guid areaId,Guid id,TrainingSampleRequest request,CancellationToken ct)
+    {
+        await scope.EnsureAsync(areaId,true,ct);
+        var profile=await Find(areaId,id,ct);
+        var prep=request.PreparationId?.Trim();var reference=request.ReferenceId?.Trim();
+        if(string.IsNullOrWhiteSpace(prep)||prep.Length>128||string.IsNullOrWhiteSpace(reference)||reference.Length>200||
+           request.Split is not ("train" or "validation" or "test")||request.LabelSource is not ("certified_standard" or "reference_lab")||
+           request.Concentration<0||request.Concentration>10000)
+            throw AppException.BadRequest("Cần nhãn chuẩn độc lập, mã lần chuẩn bị, nguồn tham chiếu và tập dữ liệu hợp lệ.");
+        if(profile.AiAlgorithm!=WaterAiClient.GeometryAlgorithm||profile.RevokedAt.HasValue||profile.ValidUntil<=DateTime.UtcNow||
+           string.IsNullOrWhiteSpace(profile.AiCalibrationToken)||string.IsNullOrWhiteSpace(profile.AiCalibrationId))
+            throw AppException.Conflict("Cần hiệu chuẩn V2 còn hiệu lực để đăng ký ảnh mới.");
+        var protocol=JsonSerializer.Deserialize<ColorProtocol>(profile.ProtocolJson,Json)!;
+        CheckConditions(protocol,request.ReactionSeconds,request.SalinityPpt);
+        await Camera(areaId,profile.CameraDeviceId,ct);
+        var (bytes,asset)=await ReadBytes(profile.CameraDeviceId,request.MediaId,ct);
+        if(asset.CreatedAt<profile.CreatedAt||asset.CreatedAt>DateTime.UtcNow.AddMinutes(1))
+            throw AppException.BadRequest("Ảnh phải mới hơn hồ sơ hiệu chuẩn.");
+        await ai.InspectCalibrated(areaId,profile.CameraDeviceId,profile.Analyte,profile.ReagentLot,profile.AiCalibrationToken,
+            profile.AiCalibrationId,profile.AiAlgorithm,new(asset.Id,bytes,request.ReactionSeconds,request.SalinityPpt),ct);
+        var hash=Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(bytes)).ToLowerInvariant();
+        var now=DateTime.UtcNow;
+        await using var tx=await db.Database.BeginTransactionAsync(ct);
+        var locked=await db.WaterColorCalibrations.Where(x=>x.Id==id&&x.RevokedAt==null&&x.ValidUntil>now)
+            .ExecuteUpdateAsync(u=>u.SetProperty(x=>x.UpdatedAt,now),ct);
+        if(locked!=1)throw AppException.Conflict("Hiệu chuẩn không còn hiệu lực.");
+        if(await db.WaterTrainingSamples.AnyAsync(x=>x.CalibrationId==id&&x.PreparationId==prep&&x.Split!=request.Split,ct))
+            throw AppException.Conflict("Không chia ảnh của cùng lần chuẩn bị vào hai tập khác nhau.");
+        if(await db.WaterTrainingSamples.AnyAsync(x=>x.MediaId==asset.Id||x.FarmingAreaId==areaId&&x.ImageSha256==hash,ct))
+            throw AppException.Conflict("Ảnh đã đăng ký trong dataset.");
+        var row=new WaterTrainingSample {CalibrationId=id,FarmingAreaId=areaId,MediaId=asset.Id,ImageSha256=hash,
+            PreparationId=prep,Split=request.Split,LabelSource=request.LabelSource,ReferenceId=reference,Concentration=request.Concentration,
+            ReactionSeconds=request.ReactionSeconds,SalinityPpt=request.SalinityPpt,ReviewedBy=user.UserId,ReviewedAt=now};
+        db.WaterTrainingSamples.Add(row);Audit("RegisterWaterTrainingSample",row.Id,request.LabelSource);
+        try{await db.SaveChangesAsync(ct);await tx.CommitAsync(ct);}catch(DbUpdateException){throw AppException.Conflict("Không lưu được ảnh dataset; tải lại.");}
+        return Ok(ApiResponse<WaterTrainingSample>.Ok(row));
+    }
+
+    [HttpPost("calibrations/{id:guid}/training-samples/{sampleId:guid}/withdraw")]
+    [Authorize(Roles=AppRoles.FarmManage)]
+    public async Task<IActionResult> WithdrawTrainingSample(Guid areaId,Guid id,Guid sampleId,CancellationToken ct)
+    {
+        await scope.EnsureAsync(areaId,true,ct);await Find(areaId,id,ct);
+        var row=await db.WaterTrainingSamples.FirstOrDefaultAsync(x=>x.Id==sampleId&&x.CalibrationId==id&&x.FarmingAreaId==areaId,ct)
+            ??throw AppException.NotFound("Water training sample");
+        if(row.WithdrawnAt is null){row.WithdrawnAt=DateTime.UtcNow;Audit("WithdrawWaterTrainingSample",row.Id,"withdrawn");await db.SaveChangesAsync(ct);}
+        return Ok(ApiResponse.Ok());
+    }
+
+    [HttpGet("calibrations/{id:guid}/training-manifest")]
+    [Authorize(Roles=AppRoles.FarmManage)]
+    public async Task<IActionResult> TrainingManifest(Guid areaId,Guid id,CancellationToken ct)
+    {
+        await scope.EnsureAsync(areaId,true,ct);var profile=await Find(areaId,id,ct);
+        var protocol=JsonSerializer.Deserialize<ColorProtocol>(profile.ProtocolJson,Json)!;
+        var rows=await db.WaterTrainingSamples.AsNoTracking().Where(x=>x.CalibrationId==id&&x.FarmingAreaId==areaId&&x.WithdrawnAt==null)
+            .OrderBy(x=>x.Id).Take(5001).ToListAsync(ct);
+        if(rows.Count>5000)throw AppException.Conflict("Dataset vượt 5000 ảnh; cần chia phiên bản.");
+        object Roi(ColorRoi r)=>new{x=r.X,y=r.Y,width=r.Width,height=r.Height};
+        var domain=new{analyte=profile.Analyte,kit=profile.KitName,kit_revision=profile.KitRevision,reagent_lot=profile.ReagentLot,
+            unit=profile.Unit,camera_id=profile.CameraDeviceId.ToString("D"),source_url="crabsense:calibration:"+id.ToString("D"),license="private-internal",
+            protocol=new{width=protocol.Width,height=protocol.Height,sample=Roi(protocol.Sample),reference=Roi(protocol.Reference),
+                reaction_seconds=protocol.ReactionSeconds,tolerance_seconds=protocol.TimingToleranceSeconds,sample_volume_ml=protocol.SampleVolumeMl,
+                min_salinity_ppt=protocol.MinSalinityPpt,max_salinity_ppt=protocol.MaxSalinityPpt,
+                geometry_policy=protocol.GeometryPolicy is { } g?new{anchor=Roi(g.Anchor),max_shift=g.MaxShift,min_correlation=g.MinCorrelation,min_focus_ratio=g.MinFocusRatio}:null}};
+        var samples=rows.Select(x=>new{path="images/"+x.MediaId.ToString("D")+".img",media_id=x.MediaId.ToString("D"),preparation_id=x.PreparationId,
+            split=x.Split,label_source=x.LabelSource,reference_id=x.ReferenceId,concentration=x.Concentration,reaction_seconds=x.ReactionSeconds,
+            salinity_ppt=x.SalinityPpt,reviewed_by=x.ReviewedBy.ToString("D"),reviewed_at=x.ReviewedAt,sha256=x.ImageSha256});
+        return Ok(ApiResponse<object>.Ok(new{domain,samples}));
     }
 
     [HttpPost("analyze")]
@@ -210,10 +307,10 @@ public sealed class WaterColorAnalysisController(AppDbContext db, IUnitOfWork uo
         var algorithm=profile.AiAlgorithm??WaterColorAnalyzer.Version;
         if(profile.AiAlgorithm is not null)
         {
-            if(algorithm!=WaterAiClient.Algorithm||string.IsNullOrWhiteSpace(profile.AiCalibrationToken)||string.IsNullOrWhiteSpace(profile.AiCalibrationId))
+            if(!WaterAiClient.Supported(algorithm)||string.IsNullOrWhiteSpace(profile.AiCalibrationToken)||string.IsNullOrWhiteSpace(profile.AiCalibrationId))
                 throw AppException.Conflict("Hồ sơ hiệu chuẩn AI không hợp lệ; hiệu chuẩn lại.");
             var estimate=await ai.Analyze(areaId,profile.CameraDeviceId,profile.Analyte,profile.Unit,profile.ReagentLot,
-                profile.AiCalibrationToken,profile.AiCalibrationId,new(asset.Id,bytes,request.ReactionSeconds,request.SalinityPpt),ct);
+                profile.AiCalibrationToken,profile.AiCalibrationId,new(asset.Id,bytes,request.ReactionSeconds,request.SalinityPpt),ct,algorithm);
             value=estimate.Value;reading=estimate.Evidence;validationError=estimate.HoldoutError;
         }
         else

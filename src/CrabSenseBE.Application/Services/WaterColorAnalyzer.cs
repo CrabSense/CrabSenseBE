@@ -5,9 +5,10 @@ using SkiaSharp;
 namespace CrabSenseBE.Application.Services;
 
 public record ColorRoi(int X, int Y, int Width, int Height);
+public record ColorGeometryPolicy(ColorRoi Anchor, int MaxShift = 4, double MinCorrelation = .92, double MinFocusRatio = .5);
 public record ColorProtocol(int Width, int Height, ColorRoi Sample, ColorRoi Reference, string Channel,
     int ReactionSeconds, int TimingToleranceSeconds, decimal SampleVolumeMl, string Procedure,
-    decimal MinSalinityPpt, decimal MaxSalinityPpt);
+    decimal MinSalinityPpt, decimal MaxSalinityPpt, ColorGeometryPolicy? GeometryPolicy = null);
 public record ColorReading(double Feature, double ReferenceR, double ReferenceG, double ReferenceB, double Variation, string Sha256);
 public record ColorPoint(decimal Concentration, Guid MediaId, ColorReading Reading);
 
@@ -29,6 +30,14 @@ public static class WaterColorAnalyzer
             (p.Sample.X < p.Reference.X+p.Reference.Width && p.Reference.X < p.Sample.X+p.Sample.Width &&
              p.Sample.Y < p.Reference.Y+p.Reference.Height && p.Reference.Y < p.Sample.Y+p.Sample.Height))
             throw AppException.BadRequest("ROI không hợp lệ hoặc chồng lên nhau.");
+        if(p.GeometryPolicy is { } g)
+        {
+            var a=g.Anchor;var m=g.MaxShift;
+            if(!Valid(a)||a.Width>64||a.Height>64||m is <1 or >8||!double.IsFinite(g.MinCorrelation)||g.MinCorrelation is <.85 or >.99||
+               !double.IsFinite(g.MinFocusRatio)||g.MinFocusRatio is <.4 or >1||a.X<m||a.Y<m||(long)a.X+a.Width+m>p.Width||(long)a.Y+a.Height+m>p.Height||
+               new[]{p.Sample,p.Reference}.Any(r=>a.X-m<r.X+r.Width&&r.X<a.X+a.Width+m&&a.Y-m<r.Y+r.Height&&r.Y<a.Y+a.Height+m))
+                throw AppException.BadRequest("Mốc hình học phải 16–64 pixel, ngoài ROI màu và đủ vùng tìm kiếm.");
+        }
     }
 
     public static ColorReading Read(byte[] bytes, ColorProtocol p)
