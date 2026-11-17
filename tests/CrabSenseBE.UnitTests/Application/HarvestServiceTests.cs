@@ -20,7 +20,10 @@ public class HarvestServiceTests
     {
         _currentUser.Setup(c => c.UserId).Returns(userId ?? Guid.NewGuid());
         _currentUser.Setup(c => c.IsAuthenticated).Returns(true);
-        return new HarvestService(_uow.Object, _currentUser.Object);
+        return new HarvestService(
+    _uow.Object,
+    _currentUser.Object,
+    new HarvestRecorder(_uow.Object, _currentUser.Object));
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -238,13 +241,19 @@ public class HarvestServiceTests
         {
             [managerA] = new()
             {
-                Id = managerA, Username = "manager-a", FullName = "Manager A",
-                Role = UserRole.FarmManager, IsActive = true
+                Id = managerA,
+                Username = "manager-a",
+                FullName = "Manager A",
+                Role = UserRole.FarmManager,
+                IsActive = true
             },
             [staffA] = new()
             {
-                Id = staffA, Username = "staff-a", FullName = "Staff A",
-                Role = UserRole.FarmStaff, IsActive = true
+                Id = staffA,
+                Username = "staff-a",
+                FullName = "Staff A",
+                Role = UserRole.FarmStaff,
+                IsActive = true
             }
         };
         var userRepo = new Mock<IRepository<AppUser>>();
@@ -264,7 +273,9 @@ public class HarvestServiceTests
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync(new FarmStaffAssignment
             {
-                StaffUserId = staffA, ManagerUserId = managerA, FarmingAreaId = areaA
+                StaffUserId = staffA,
+                ManagerUserId = managerA,
+                FarmingAreaId = areaA
             });
         var areas = new Mock<IRepository<FarmingArea>>();
         areas.Setup(repo => repo.GetByIdAsync(areaA, It.IsAny<CancellationToken>()))
@@ -287,7 +298,10 @@ public class HarvestServiceTests
         _uow.Setup(unit => unit.SaveChangesAsync(It.IsAny<CancellationToken>()))
             .Callback(() => saves++)
             .ReturnsAsync(1);
-        var service = new HarvestService(_uow.Object, _currentUser.Object);
+        var service = new HarvestService(
+    _uow.Object,
+    _currentUser.Object,
+    new HarvestRecorder(_uow.Object, _currentUser.Object));
 
         var foreignAct = () => service.ApproveAsync(foreign.Id, new ApproveHarvestRequest());
         (await foreignAct.Should().ThrowAsync<AppException>()).Which.StatusCode.Should().Be(403);

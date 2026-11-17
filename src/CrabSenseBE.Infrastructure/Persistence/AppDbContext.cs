@@ -67,6 +67,11 @@ public class AppDbContext : DbContext
         Set<FrozenInventoryOpeningBalance>();
     public DbSet<QrCode> QrCodes => Set<QrCode>();
     public DbSet<TraceabilityLink> TraceabilityLinks => Set<TraceabilityLink>();
+    public DbSet<HarvestAssignment> HarvestAssignments
+    => Set<HarvestAssignment>();
+
+    public DbSet<HarvestAssignmentLine> HarvestAssignmentLines
+        => Set<HarvestAssignmentLine>();
 
     // Sales / Market
     public DbSet<Customer> Customers => Set<Customer>();
@@ -124,18 +129,18 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<Sensor>().HasOne(x => x.ControllerPort).WithMany()
             .HasForeignKey(x => x.ControllerPortId).OnDelete(DeleteBehavior.Restrict);
         modelBuilder.Entity<Sensor>().HasIndex(x => x.ControllerPortId).IsUnique();
-        modelBuilder.Entity<Sensor>().HasIndex(x=>x.SensorCode).IsUnique();
-        modelBuilder.Entity<Sensor>().Property(x=>x.ConfigurationVersion).IsConcurrencyToken();
+        modelBuilder.Entity<Sensor>().HasIndex(x => x.SensorCode).IsUnique();
+        modelBuilder.Entity<Sensor>().Property(x => x.ConfigurationVersion).IsConcurrencyToken();
         modelBuilder.Entity<Sensor>().HasOne<FarmingArea>().WithMany().HasForeignKey(x => x.FarmingAreaId).OnDelete(DeleteBehavior.Restrict);
         modelBuilder.Entity<Sensor>().HasOne<ControllerPort>().WithMany().HasForeignKey(x => x.BusPortId).OnDelete(DeleteBehavior.Restrict);
         modelBuilder.Entity<Sensor>().HasIndex(x => new { x.BusPortId, x.BusAddress, x.BusRegister }).IsUnique();
         modelBuilder.Entity<SensorCalibration>().HasOne<Sensor>().WithMany().HasForeignKey(x => x.SensorId).OnDelete(DeleteBehavior.Restrict);
         modelBuilder.Entity<SensorCalibration>().HasIndex(x => new { x.SensorId, x.PerformedAt });
-        modelBuilder.Entity<SensorDiagnosticRun>().HasOne<Sensor>().WithMany().HasForeignKey(x=>x.SensorId).OnDelete(DeleteBehavior.Restrict);
-        modelBuilder.Entity<SensorDiagnosticRun>().HasIndex(x=>new{x.SensorId,x.CreatedAt});
-        modelBuilder.Entity<SensorDiagnosticRun>().HasIndex(x=>x.SensorId).IsUnique().HasFilter("\"Status\" = 'Pending'");
-        modelBuilder.Entity<SensorDiagnosticRun>().HasIndex(x=>new{x.DeviceId,x.Status,x.ExpiresAt});
-        modelBuilder.Entity<SensorDiagnosticRun>().Property(x=>x.Status).IsConcurrencyToken();
+        modelBuilder.Entity<SensorDiagnosticRun>().HasOne<Sensor>().WithMany().HasForeignKey(x => x.SensorId).OnDelete(DeleteBehavior.Restrict);
+        modelBuilder.Entity<SensorDiagnosticRun>().HasIndex(x => new { x.SensorId, x.CreatedAt });
+        modelBuilder.Entity<SensorDiagnosticRun>().HasIndex(x => x.SensorId).IsUnique().HasFilter("\"Status\" = 'Pending'");
+        modelBuilder.Entity<SensorDiagnosticRun>().HasIndex(x => new { x.DeviceId, x.Status, x.ExpiresAt });
+        modelBuilder.Entity<SensorDiagnosticRun>().Property(x => x.Status).IsConcurrencyToken();
 
         // Apply all IEntityTypeConfiguration from this assembly
         modelBuilder.ApplyConfigurationsFromAssembly(typeof(AppDbContext).Assembly);
@@ -950,6 +955,100 @@ public class AppDbContext : DbContext
                 .OnDelete(DeleteBehavior.Restrict);
             entity.HasOne<ObservationEvent>().WithMany().HasForeignKey(x => x.ObservationEventId)
                 .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        modelBuilder.Entity<HarvestAssignment>(entity =>
+{
+    entity.Property(x => x.AssignmentCode)
+        .HasMaxLength(40)
+        .IsRequired();
+
+    entity.Property(x => x.Status)
+        .HasConversion<string>();
+
+    entity.HasIndex(x => x.AssignmentCode)
+        .IsUnique();
+
+    entity.HasIndex(x => new
+    {
+        x.FarmingAreaId,
+        x.AssignedToUserId,
+        x.Status
+    });
+
+    entity.HasOne<FarmingArea>()
+        .WithMany()
+        .HasForeignKey(x => x.FarmingAreaId)
+        .OnDelete(DeleteBehavior.Restrict);
+
+    entity.HasOne(x => x.AssignedBy)
+        .WithMany()
+        .HasForeignKey(x => x.AssignedByUserId)
+        .OnDelete(DeleteBehavior.Restrict);
+
+    entity.HasOne(x => x.AssignedTo)
+        .WithMany()
+        .HasForeignKey(x => x.AssignedToUserId)
+        .OnDelete(DeleteBehavior.Restrict);
+
+    entity.HasMany(x => x.Lines)
+        .WithOne(x => x.Assignment)
+        .HasForeignKey(x => x.HarvestAssignmentId)
+        .OnDelete(DeleteBehavior.Restrict);
+
+    entity.HasMany(x => x.Vouchers)
+        .WithOne(x => x.Assignment)
+        .HasForeignKey(x => x.HarvestAssignmentId)
+        .OnDelete(DeleteBehavior.Restrict);
+});
+        modelBuilder.Entity<HarvestAssignmentLine>(entity =>
+        {
+            entity.Property(x => x.Status)
+                .HasConversion<string>();
+
+            entity.HasIndex(x => new
+            {
+                x.HarvestAssignmentId,
+                x.CrabId
+            }).IsUnique();
+
+            entity.HasOne(x => x.Crab)
+                .WithMany()
+                .HasForeignKey(x => x.CrabId)
+                .OnDelete(DeleteBehavior.Restrict);
+
+            // Một cua chỉ có thể thuộc một assignment đang mở.
+            entity.HasIndex(x => x.CrabId)
+                .IsUnique()
+                .HasFilter(
+                    "\"Status\" IN ('Assigned', 'Eligible', 'InProgress')");
+
+            entity.HasOne(x => x.HarvestLine)
+                .WithOne(x => x.AssignmentLine)
+                .HasForeignKey<HarvestLine>(x => x.HarvestAssignmentLineId)
+                .OnDelete(DeleteBehavior.Restrict);
+
+            entity.HasOne<AppUser>()
+                .WithMany()
+                .HasForeignKey(x => x.CheckedByUserId)
+                .OnDelete(DeleteBehavior.Restrict);
+
+            entity.Property(x => x.Outcome)
+                .HasConversion<string>();
+        });
+
+        modelBuilder.Entity<HarvestVoucher>(entity =>
+        {
+            entity.Property(x => x.ReviewStatus)
+                .HasConversion<string>();
+        });
+
+        modelBuilder.Entity<HarvestLine>(entity =>
+        {
+            // Một assignment line tối đa nối tới một kết quả HarvestLine.
+            entity.HasIndex(x => x.HarvestAssignmentLineId)
+                .IsUnique()
+                .HasFilter("\"HarvestAssignmentLineId\" IS NOT NULL");
         });
     }
 

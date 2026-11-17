@@ -35,6 +35,12 @@ public class HarvestVoucher : BaseEntity
     // Navigation
     public ICollection<HarvestLine> Lines { get; set; } = new List<HarvestLine>();
     public ICollection<HarvestApprovedLine> ApprovedLines { get; set; } = new List<HarvestApprovedLine>();
+
+    public Guid? HarvestAssignmentId { get; set; }
+    public HarvestAssignment? Assignment { get; set; }
+
+    public HarvestReviewStatus ReviewStatus { get; set; }
+        = HarvestReviewStatus.NotSubmitted;
 }
 
 /// <summary>Chi tiết dòng thu hoạch</summary>
@@ -56,11 +62,15 @@ public class HarvestLine : BaseEntity
     public string? LotCode { get; set; }
     /// <summary>passed | failed</summary>
     public string Result { get; set; } = "passed";
-    
+
     // Navigation
     public HarvestVoucher? HarvestVoucher { get; set; }
     public Crab? Crab { get; set; }
     public Box? Box { get; set; }
+
+    // Nullable để hỗ trợ các HarvestLine được tạo trước khi có Assignment.
+    public Guid? HarvestAssignmentLineId { get; set; }
+    public HarvestAssignmentLine? AssignmentLine { get; set; }
 }
 
 /// <summary>
