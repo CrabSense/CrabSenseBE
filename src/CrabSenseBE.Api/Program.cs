@@ -84,6 +84,9 @@ builder.Services.AddControllers()
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(c =>
 {
+    // Use qualified CLR names: controllers may define nested DTOs with identical short names.
+    c.CustomSchemaIds(CrabSenseBE.Api.SwaggerSchemaIds.For);
+
     c.SwaggerDoc("v1", new OpenApiInfo
     {
         Title = "CrabSense API",
