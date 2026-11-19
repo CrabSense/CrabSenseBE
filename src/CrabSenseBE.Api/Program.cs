@@ -30,6 +30,8 @@ builder.Services.AddInfrastructure(builder.Configuration);
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddScoped<ICurrentUserService, CurrentUserService>();
 builder.Services.AddApplication(builder.Configuration);
+builder.Services.AddHostedService<WaterBatchScheduleWorker>();
+builder.Services.AddHttpClient<WaterAiClient>().ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
 
 // ─── JWT Authentication ─────────────────────────────────────────────────────
 builder.Services.AddCrabSenseJwtAuthentication(builder.Configuration);
@@ -82,6 +84,9 @@ builder.Services.AddControllers()
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(c =>
 {
+    // Use qualified CLR names: controllers may define nested DTOs with identical short names.
+    c.CustomSchemaIds(CrabSenseBE.Api.SwaggerSchemaIds.For);
+
     c.SwaggerDoc("v1", new OpenApiInfo
     {
         Title = "CrabSense API",
@@ -172,6 +177,8 @@ if (builder.Configuration.GetValue("Swagger:Enabled", app.Environment.IsDevelopm
     {
         c.SwaggerEndpoint("/swagger/v1/swagger.json", "CrabSense API v1");
         c.RoutePrefix = "swagger";
+        // Large API surface: show business groups collapsed by default.
+        c.DocExpansion(Swashbuckle.AspNetCore.SwaggerUI.DocExpansion.None);
     });
 }
 

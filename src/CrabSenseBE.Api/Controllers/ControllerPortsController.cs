@@ -16,7 +16,7 @@ namespace CrabSenseBE.Api.Controllers;
 public record PortManifestItem(string PortCode, string Type, int? Channel, int Gpio, int? SecondaryGpio = null,
     string? ActiveLevel = null, string? SensorCode = null, bool? On = null);
 public record ControllerManifest(string DeviceCode, string HardwareModel, string FirmwareVersion, int ConfigVersion,
-    IReadOnlyList<PortManifestItem> Ports);
+    IReadOnlyList<PortManifestItem> Ports,bool? CommandStorageReady=null,bool? SensorReadSupported=null,int? RssiDbm=null,long? FreeHeapBytes=null,long? UptimeSeconds=null);
 public record BindSensorPortRequest(Guid? SensorId);
 public record PortInventoryItem(Guid Id, string PortCode, string Type, int? Channel, int Gpio, int? SecondaryGpio,
     string? ActiveLevel, string? SensorCode, int ConfigVersion, bool IsPresent, bool? ReportedOn,
@@ -78,6 +78,7 @@ public sealed class ControllerPortsController(IUnitOfWork uow, IConfiguration co
             if (matches.Count == 1 && matches[0].ControllerPortId is null && matches[0].BusPortId is null && !sensors.Any(s => s.ControllerPortId == port.Id))
             {
                 matches[0].ControllerPortId = port.Id;
+                matches[0].ConfigurationVersion++; matches[0].LastSeenAt=null; matches[0].AppliedConfigurationVersion=null; matches[0].LastConfigurationAppliedAt=null;
                 uow.Sensors.Update(matches[0]);
             }
         }
@@ -94,9 +95,35 @@ public sealed class ControllerPortsController(IUnitOfWork uow, IConfiguration co
                 }
             }
         }
+        // Store a durable revision snapshot and at most one authenticated heartbeat sample per 5-minute bucket.
+        // No credential, secret, or unsigned registration payload is recorded.
+        var versionKey = "manifest:" + req.ConfigVersion;
+        if (!await uow.ControllerEvents.AnyAsync(x => x.DeviceId == device.Id && x.EventKey == versionKey, ct))
+            await uow.ControllerEvents.AddAsync(new ControllerEvent
+            {
+                DeviceId = device.Id, EventKey = versionKey, Kind = "manifest", InventoryRevision = req.ConfigVersion,
+                CreatedAt = now, Summary = $"Accepted manifest revision {req.ConfigVersion}; {ports.Length} current ports",
+                DetailsJson = JsonSerializer.Serialize(new { req.HardwareModel, req.FirmwareVersion,
+                    req.ConfigVersion, ports = ports.Select(p => p with { On = null }) })
+            }, ct);
+        var bucket = new DateTime(now.Year, now.Month, now.Day, now.Hour, now.Minute / 5 * 5, 0, DateTimeKind.Utc);
+        var sampleKey = "heartbeat:" + bucket.ToString("yyyyMMddHHmm", System.Globalization.CultureInfo.InvariantCulture);
+        if (!await uow.ControllerEvents.AnyAsync(x => x.DeviceId == device.Id && x.EventKey == sampleKey, ct))
+            await uow.ControllerEvents.AddAsync(new ControllerEvent
+            {
+                DeviceId = device.Id, EventKey = sampleKey, Kind = "heartbeat", InventoryRevision = req.ConfigVersion,
+                CreatedAt = now, Summary = "Authenticated Edge V2 manifest received"
+            }, ct);
         device.CapabilityVersion = req.ConfigVersion; device.CapabilityHash = hash;
         device.HardwareModel = req.HardwareModel; device.FirmwareVersion = req.FirmwareVersion;
-        device.LastSeenAt = now; device.Status = DeviceStatus.Online;
+        device.LastSeenAt = now; device.Status = DeviceStatus.Online; device.EdgeState = "Online";
+        // Optional evidence must never change the inventory hash, commissioning or control guard.
+        if(req.CommandStorageReady.HasValue||req.SensorReadSupported.HasValue||req.RssiDbm.HasValue||req.FreeHeapBytes.HasValue||req.UptimeSeconds.HasValue){
+            device.ControllerCommandStorageReady=req.CommandStorageReady;device.ControllerSensorReadSupported=req.SensorReadSupported;
+            device.ControllerRssiDbm=req.RssiDbm is >=-127 and <=0?req.RssiDbm:null;
+            device.ControllerFreeHeapBytes=req.FreeHeapBytes is >=0 and <=16777216?req.FreeHeapBytes:null;
+            device.ControllerUptimeSeconds=req.UptimeSeconds is >=0 and <=315360000?req.UptimeSeconds:null;device.ControllerHealthAt=now;
+        }
         uow.Devices.Update(device);
         try { await uow.SaveChangesAsync(ct); }
         catch (DbUpdateException) { throw AppException.Conflict("Concurrent capability update; retry the current manifest."); }
@@ -143,6 +170,7 @@ public sealed class ControllerPortsController(IUnitOfWork uow, IConfiguration co
         // guards against an inventory replacement while saving observations.
         device.LastSeenAt = now;
         device.Status = DeviceStatus.Online;
+        device.EdgeState = "Online";
         uow.Devices.Update(device);
         try { await uow.SaveChangesAsync(ct); }
         catch (DbUpdateException) { throw AppException.Conflict("Inventory changed; retry."); }
@@ -165,9 +193,118 @@ public sealed class ControllerPortsController(IUnitOfWork uow, IConfiguration co
         var equipment = await uow.RasComponents.FindAsync(x => x.RelayDeviceId == id, ct);
         var sensors = await uow.Sensors.FindAsync(x => x.DeviceId == id, ct);
         return Ok(ApiResponse<object>.Ok(new { deviceId = id, device.DeviceCode, device.CapabilityVersion,
-            device.HardwareModel, ports = ports.OrderBy(p => p.PortCode).Select(Map),
+            device.HardwareModel, hardwareControlDisabled = HardwareControlGuard.IsDisabled(configuration),
+            ports = ports.OrderBy(p => p.PortCode).Select(Map),
             equipment = equipment.Select(x => new { x.Id, x.Name, x.RelayChannel, x.ControllerPortId }),
-            sensors = sensors.Select(x => new { x.Id, x.SensorCode, x.SensorType, x.ControllerPortId }) }));
+            sensors = sensors.Select(x => new { x.Id, x.SensorCode, x.SensorType, x.ControllerPortId, x.BusPortId, x.BusAddress, x.BusRegister }) }));
+    }
+
+    [HttpGet("{id:guid}/history")]
+    [Authorize(Roles = AppRoles.Platform)]
+    public async Task<IActionResult> History(Guid id, [FromQuery] string? kind = null,
+        [FromQuery] int page = 1, [FromQuery] int pageSize = 25,
+        [FromQuery] DateTimeOffset? from = null, [FromQuery] DateTimeOffset? to = null, CancellationToken ct = default)
+    {
+        var actor = await new FarmAreaScope(uow, currentUser).CurrentUserAsync(ct);
+        if (actor?.Role != UserRole.SystemAdministrator) return Forbid();
+        if (page is < 1 or > 100000 || pageSize is < 1 or > 50 ||
+            (kind is not null && kind is not ("manifest" or "heartbeat")) ||
+            (from.HasValue && to.HasValue && from.Value >= to.Value))
+            throw AppException.BadRequest("Invalid history filters.");
+        _ = await uow.Devices.GetByIdAsync(id, ct) ?? throw AppException.NotFound("Controller");
+        var query = uow.ControllerEvents.Query().AsNoTracking().Where(x => x.DeviceId == id);
+        if (kind is not null) query = query.Where(x => x.Kind == kind);
+        if (from.HasValue) query = query.Where(x => x.CreatedAt >= from.Value.UtcDateTime);
+        if (to.HasValue) query = query.Where(x => x.CreatedAt < to.Value.UtcDateTime);
+        var totalCount = await query.CountAsync(ct);
+        var items = await query.OrderByDescending(x => x.CreatedAt).ThenByDescending(x => x.Id)
+            .Skip((page - 1) * pageSize).Take(pageSize)
+            .Select(x => new { x.Id, x.Kind, x.InventoryRevision, x.CreatedAt, x.Summary, x.DetailsJson })
+            .ToListAsync(ct);
+        return Ok(ApiResponse<object>.Ok(new { items, totalCount, page, pageSize }));
+    }
+
+    [HttpGet("{id:guid}/alerts")]
+    [Authorize(Roles = AppRoles.Platform)]
+    public async Task<IActionResult> Alerts(Guid id, CancellationToken ct)
+    {
+        var actor = await new FarmAreaScope(uow, currentUser).CurrentUserAsync(ct);
+        if (actor?.Role != UserRole.SystemAdministrator) return Forbid();
+        _ = await uow.Devices.GetByIdAsync(id, ct) ?? throw AppException.NotFound("Controller");
+        var source = id.ToString("N");
+        var rows = await uow.Alerts.Query().AsNoTracking()
+            .Where(x => x.SourceType == "Device" && x.SourceId == source && x.IncidentType == "device_disconnect")
+            .OrderByDescending(x => x.CreatedAt).Take(200)
+            .Select(x => new { x.Id, x.Message, status = x.Status.ToString(), severity = x.Severity.ToString(),
+                x.CreatedAt, x.LastOccurredAt, x.AcknowledgedAt, x.ResolvedAt, x.OccurrenceCount }).ToListAsync(ct);
+        return Ok(ApiResponse<object>.Ok(rows));
+    }
+
+    [HttpPost("{id:guid}/alerts/{alertId:guid}/acknowledge")]
+    [Authorize(Roles = AppRoles.Platform)]
+    public async Task<IActionResult> AcknowledgeAlert(Guid id, Guid alertId, CancellationToken ct)
+    {
+        var actor = await new FarmAreaScope(uow, currentUser).CurrentUserAsync(ct);
+        if (actor?.Role != UserRole.SystemAdministrator) return Forbid();
+        _ = await uow.Devices.GetByIdAsync(id, ct) ?? throw AppException.NotFound("Controller");
+        var source = id.ToString("N");
+        var alert = await uow.Alerts.FirstOrDefaultAsync(x => x.Id == alertId && x.SourceType == "Device" &&
+            x.SourceId == source && x.IncidentType == "device_disconnect", ct) ?? throw AppException.NotFound("Controller technical alert");
+        if (alert.Status == AlertStatus.Acknowledged)
+            return Ok(ApiResponse<object>.Ok(new { alert.Id, status = alert.Status.ToString() }));
+        if (alert.Status != AlertStatus.Active) throw AppException.Conflict("Only active alerts may be acknowledged.");
+        alert.Status = AlertStatus.Acknowledged;
+        alert.AcknowledgedAt = DateTime.UtcNow; alert.AcknowledgedBy = actor.Id;
+        await uow.OperationLogs.AddAsync(new OperationLog { UserId = actor.Id, EntityType = "Device",
+            EntityId = id, Action = "AcknowledgeControllerAlert", Details = alertId.ToString("N") }, ct);
+        await uow.SaveChangesAsync(ct);
+        return Ok(ApiResponse<object>.Ok(new { alert.Id, status = alert.Status.ToString() }));
+    }
+
+    public sealed record CommissioningRequest(int ExpectedConfigVersion, string ExpectedStatus,
+        string Status, bool PhysicalCheckConfirmed, string? Note);
+
+    // Commissioning records a technician's physical inspection. It never energizes an output.
+    [HttpPut("{id:guid}/ports/{portId:guid}/commissioning")]
+    [Authorize(Roles = AppRoles.Platform)]
+    public async Task<IActionResult> Commission(Guid id, Guid portId, [FromBody] CommissioningRequest req, CancellationToken ct)
+    {
+        var actor = await new FarmAreaScope(uow, currentUser).CurrentUserAsync(ct);
+        if (actor?.Role != UserRole.SystemAdministrator)
+            throw AppException.Forbidden("System Administrator required.");
+        if (req.Status is not ("Verified" or "Pending" or "Disabled") || !req.PhysicalCheckConfirmed ||
+            string.IsNullOrWhiteSpace(req.Note) || req.Note.Trim().Length > 500)
+            throw AppException.BadRequest("A valid status, physical inspection confirmation and note (1–500 characters) are required.");
+        var device = await uow.Devices.GetByIdAsync(id, ct) ?? throw AppException.NotFound("Controller");
+        var port = await uow.ControllerPorts.GetByIdAsync(portId, ct) ?? throw AppException.NotFound("Port");
+        if (port.DeviceId != id || req.ExpectedConfigVersion != device.CapabilityVersion ||
+            req.ExpectedConfigVersion != port.ConfigVersion || req.ExpectedStatus != port.CommissioningStatus)
+            throw AppException.Conflict("Inventory or commissioning changed; reload before saving.");
+        await ControllerPortPolicy.RequireSafeConfigurationAsync(uow, configuration, device, port, ct);
+        if (req.Status == "Verified")
+        {
+            if (string.IsNullOrWhiteSpace(device.CredentialHash) || device.EdgeState is not ("Approved" or "Online")
+                || device.Status != DeviceStatus.Online || device.FarmingAreaId is not Guid areaId || !port.Channel.HasValue)
+                throw AppException.Conflict("Controller must be authenticated, online and assigned to an area.");
+            var bindings = (await uow.RasComponents.FindAsync(x => x.ControllerPortId == port.Id &&
+                x.RelayDeviceId == id && x.RelayChannel == port.Channel.Value.ToString(), ct)).ToList();
+            if (bindings.Count != 1)
+                throw AppException.Conflict("Exactly one current RAS actuator binding is required.");
+            var system = await uow.WaterSystems.GetByIdAsync(bindings[0].WaterSystemId, ct);
+            if (system?.FarmingAreaId != areaId)
+                throw AppException.Conflict("Actuator must belong to the controller area.");
+        }
+        var before = port.CommissioningStatus;
+        port.CommissioningStatus = req.Status;
+        await uow.OperationLogs.AddAsync(new OperationLog
+        {
+            UserId = actor.Id, Action = "ControllerPortCommissioning", EntityType = "Device", EntityId = id,
+            Details = $"{port.PortCode}: {before} -> {req.Status}; rev {req.ExpectedConfigVersion}; {req.Note.Trim()}"
+        }, ct);
+        // Entity returned by the EF repository is tracked; update only the changed status.
+        try { await uow.SaveChangesAsync(ct); }
+        catch (DbUpdateException) { throw AppException.Conflict("Concurrent controller configuration change; reload."); }
+        return Ok(ApiResponse<object>.Ok(Map(port)));
     }
 
     // Link a registered sensor to a discovered input. A bus can serve many
@@ -192,7 +329,8 @@ public sealed class ControllerPortsController(IUnitOfWork uow, IConfiguration co
             throw AppException.Conflict("Input already has a sensor.");
         sensor.ControllerPortId = portId;
         sensor.BusPortId = null; sensor.BusAddress = null; sensor.BusRegister = null;
-        sensor.LastSeenAt = null; sensor.AppliedConfigurationVersion = null;
+        sensor.LastSeenAt = null; sensor.AppliedConfigurationVersion = null; sensor.LastConfigurationAppliedAt=null; sensor.ConfigurationVersion++;
+        await uow.OperationLogs.AddAsync(new OperationLog { UserId=actor.Id, Action="UpdateSensorBinding", EntityType="Sensor", EntityId=sensor.Id },ct);
         uow.Sensors.Update(sensor);
         try { await uow.SaveChangesAsync(ct); }
         catch (DbUpdateException) { throw AppException.Conflict("Concurrent input binding; reload inventory."); }

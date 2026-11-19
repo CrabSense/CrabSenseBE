@@ -1,3 +1,4 @@
+using Microsoft.EntityFrameworkCore;
 using CrabSenseBE.Application.Common;
 using CrabSenseBE.Application.Interfaces;
 using CrabSenseBE.Application.Services;
@@ -64,5 +65,35 @@ public sealed class SensorThresholdsController(AppDbContext db,IUnitOfWork uow,I
             IpAddress=HttpContext.Connection.RemoteIpAddress?.ToString()});
         await db.SaveChangesAsync(ct);
         return Ok(ApiResponse<object>.Ok(new{s.Id,s.MinThreshold,s.MaxThreshold}));
+    }
+}
+
+// Farm-visible sensor catalog; never exposes technical inventory or credentials.
+[ApiController]
+[Route("api/farm/sensors")]
+[Authorize(Roles=AppRoles.FarmPortal)]
+public sealed class FarmSensorCatalogController(AppDbContext db,IUnitOfWork uow,ICurrentUserService currentUser):ControllerBase
+{
+    [HttpGet]
+    public async Task<IActionResult> List(CancellationToken ct)
+    {
+        var allowed=await new FarmAreaScope(uow,currentUser).AreaIdsAsync(ct)??throw AppException.Unauthorized();
+        var rows=await db.FarmingRows.AsNoTracking().ToDictionaryAsync(x=>x.Id,ct);
+        var devices=await db.Devices.AsNoTracking().ToDictionaryAsync(x=>x.Id,ct);
+        var systems=await db.WaterSystems.AsNoTracking().ToDictionaryAsync(x=>x.Id,ct);
+        var sensors=await db.Sensors.AsNoTracking().ToListAsync(ct);
+        var result=new List<object>();
+        foreach(var s in sensors)
+        {
+            var areas=new HashSet<Guid>();
+            if(s.FarmingAreaId is Guid a)areas.Add(a);
+            if(s.FarmingRowId is Guid rid&&rows.TryGetValue(rid,out var row))areas.Add(row.FarmingAreaId);
+            if(s.WaterSystemId is Guid wid&&systems.TryGetValue(wid,out var w)&&w.FarmingAreaId is Guid wa)areas.Add(wa);
+            if(s.DeviceId is Guid did&&devices.TryGetValue(did,out var d))
+            {if(d.FarmingAreaId is Guid da)areas.Add(da);if(d.FarmingRowId is Guid dr&&rows.TryGetValue(dr,out var rr))areas.Add(rr.FarmingAreaId);}
+            if(areas.Count!=1||!allowed.Contains(areas.Single()))continue;
+            result.Add(new{s.Id,s.SensorCode,s.Name,s.SensorType,s.Unit,s.MinThreshold,s.MaxThreshold,s.IsActive,farmingAreaId=areas.Single()});
+        }
+        return Ok(ApiResponse<object>.Ok(result));
     }
 }

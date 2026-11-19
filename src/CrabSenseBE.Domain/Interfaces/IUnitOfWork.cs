@@ -30,6 +30,7 @@ public interface IUnitOfWork : IDisposable
     IRepository<Sensor> Sensors { get; }
     IRepository<Device> Devices { get; }
     IRepository<ControllerPort> ControllerPorts { get; }
+    IRepository<ControllerEvent> ControllerEvents { get; }
     IRepository<WaterMeasurement> WaterMeasurements { get; }
     IRepository<WaterAnalysisRun> WaterAnalysisRuns { get; }
     IRepository<Hdf5Upload> Hdf5Uploads { get; }
@@ -41,6 +42,9 @@ public interface IUnitOfWork : IDisposable
     IRepository<NotificationDelivery> NotificationDeliveries { get; }
     IRepository<UserPushToken> UserPushTokens { get; }
     IRepository<MediaAsset> MediaAssets { get; }
+    IRepository<CameraScheduleAssignment> CameraScheduleAssignments { get; }
+    IRepository<CameraRecordingExecution> CameraRecordingExecutions { get; }
+    IRepository<CameraRecordingAgent> CameraRecordingAgents { get; }
     IRepository<HarvestVoucher> HarvestVouchers { get; }
     IRepository<HarvestLine> HarvestLines { get; }
     IRepository<HarvestApprovedLine> HarvestApprovedLines { get; }

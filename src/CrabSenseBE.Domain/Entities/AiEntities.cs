@@ -5,6 +5,9 @@ namespace CrabSenseBE.Domain.Entities;
 /// <summary>Phát hiện AI (detection result) — MOD-AI</summary>
 public class AiDetection : BaseEntity
 {
+    public Guid? AiServiceId { get; set; }
+    public Guid? InferenceJobId { get; set; }
+    public Guid? FarmingAreaId { get; set; }
     public Guid? CrabId { get; set; }
     public Guid? DeviceId { get; set; }
     public Guid? BoxId { get; set; }

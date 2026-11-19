@@ -45,9 +45,9 @@ public static class CameraConfiguration
     public static string Status(Device device, DateTime now)
     {
         if (device.Status == DeviceStatus.Maintenance) return "Maintenance";
-        if (!device.LastSeenAt.HasValue || device.LastSeenAt.Value < now.AddMinutes(-15))
+        if (!device.LastSeenAt.HasValue || device.LastSeenAt.Value < now.AddMinutes(-15) || device.LastSeenAt.Value>now.AddSeconds(5))
             return "Offline";
-        return device.Status.ToString();
+        return device.Status==DeviceStatus.Error?"Error":"Online";
     }
 
     public static void ValidateSchedule(string? json, bool required)

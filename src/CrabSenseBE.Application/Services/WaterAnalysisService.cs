@@ -345,14 +345,22 @@ public class WaterAnalysisService : IWaterAnalysisService
             "no3" => "no3",
             _ => "no2"
         };
-        var value = ValueOf(run, code);
+        var manualColor = run.ExecutionMode == "manual-color";
+        var value = manualColor ? run.MeasuredValue ?? ValueOf(run, code) : ValueOf(run, code);
         var thr = Thresholds.FirstOrDefault(t => t.Code == code);
+        var calibratedUnit = manualColor ? run.MeasuredUnit ?? "mg/L " + analyte : null;
+        var thresholdVerified = !manualColor || (calibratedUnit == "mg/L " + analyte && string.Equals(thr?.Unit, calibratedUnit, StringComparison.OrdinalIgnoreCase));
+        if (!thresholdVerified) thr = null;
         string evaluation;
         string evaluationLabel;
         if (value is null)
         {
             evaluation = run.Status == "failed" ? "FAILED" : "pending";
             evaluationLabel = run.Status == "failed" ? "Không có kết quả" : "Chưa có";
+        }
+        else if (!thresholdVerified)
+        {
+            evaluation = "unverified"; evaluationLabel = "Chưa cấu hình ngưỡng đúng đơn vị ion";
         }
         else
         {
@@ -363,7 +371,7 @@ public class WaterAnalysisService : IWaterAnalysisService
         if (value is not null && thr?.Max is not null && value > thr.Max)
             over = Math.Round(value.Value - thr.Max.Value, 3);
 
-        var usedAi = run.Confidence is not null;
+        var usedAi = manualColor || run.Confidence is not null;
         var (confLevel, confLabel) = ConfidenceBand(run.Confidence, assay.AiConfidenceMin);
 
         var logs = ReadLogs(run.StepLogJson);
@@ -378,14 +386,14 @@ public class WaterAnalysisService : IWaterAnalysisService
             .ToList();
         WaterAnalysisPreviousDto? prev = null;
         var prevRun = runs.FirstOrDefault(r =>
-            NormalizeAnalyte(r.Analyte) == analyte && ValueOf(r, code) is not null);
+            NormalizeAnalyte(r.Analyte) == analyte && (manualColor ? r.ExecutionMode == "manual-color" && r.MeasuredUnit == calibratedUnit && r.MeasuredValue.HasValue : ValueOf(r, code) is not null));
         if (prevRun is not null)
         {
-            var pv = ValueOf(prevRun, code);
+            var pv = manualColor ? prevRun.MeasuredValue : ValueOf(prevRun, code);
             prev = new(
                 prevRun.TestCode,
                 pv,
-                thr?.Unit ?? "mg/L",
+                calibratedUnit ?? thr?.Unit ?? "mg/L",
                 prevRun.CompletedAt ?? prevRun.StartedAt,
                 value is not null && pv is not null ? Math.Round(value.Value - pv.Value, 3) : null);
         }
@@ -399,16 +407,16 @@ public class WaterAnalysisService : IWaterAnalysisService
             run.Status,
             RunStatusLabel(run.Status),
             analyte,
-            AnalyteLabel(run.Analyte),
+            manualColor && analyte=="NH3" ? "NH₃/NH₄" : AnalyteLabel(run.Analyte),
             value,
-            string.IsNullOrWhiteSpace(thr?.Unit) && code == "ph" ? "" : (thr?.Unit ?? "mg/L"),
+            calibratedUnit ?? (string.IsNullOrWhiteSpace(thr?.Unit) && code == "ph" ? "" : (thr?.Unit ?? "mg/L")),
             evaluation,
             evaluationLabel,
             thr?.Display,
             over,
             run.Confidence,
-            usedAi ? confLevel : "none",
-            usedAi ? confLabel : null,
+            run.Confidence is not null ? confLevel : "none",
+            run.Confidence is not null ? confLabel : null,
             usedAi,
             run.ImageUrl,
             area.Name,
@@ -417,25 +425,25 @@ public class WaterAnalysisService : IWaterAnalysisService
             SourceLabel(run.SampleSource),
             run.SampleLocation,
             run.Notes,
-            "Thuốc thử + Camera + AI",
+            manualColor ? "Đo màu hiệu chuẩn (thao tác thủ công)" : "Thuốc thử + Camera + AI",
             run.PerformedBy,
             run.StartedAt,
             run.CompletedAt,
-            HardwareItems(snap, hardware, station, assay),
-            ColorReferenceOf(code, value),
-            $"So sánh màu mẫu với màu tham chiếu để AI xác định nồng độ {AnalyteLabel(run.Analyte)}.",
+            manualColor ? [new WaterAnalysisHardwareItemDto("camera", "Camera ảnh mẫu", run.CameraId, "UNKNOWN", "Không xác nhận trạng thái tại lúc đo", false, false)] : HardwareItems(snap, hardware, station, assay),
+            manualColor ? [] : ColorReferenceOf(code, value),
+            manualColor ? "Đường hiệu chuẩn từ ảnh mẫu chuẩn; xem hồ sơ hiệu chuẩn." : "Màu minh họa, không phải đường hiệu chuẩn.",
             steps,
             legacy,
             run.Id.ToString(),
-            snap.AiModelId ?? assay.AiModelId,
-            null,
-            hardware.FirmwareVersion,
+            manualColor ? (run.Source=="water-ai-python"?"rgb-median-monotonic":"color-ratio-piecewise") : snap.AiModelId ?? assay.AiModelId,
+            manualColor ? RecordedAlgorithm(run) : null,
+            manualColor ? null : hardware.FirmwareVersion,
             run.ImageUrl,
             prev,
             null,
             run.Error,
             failedStep?.Label,
-            canRerun));
+            !manualColor && canRerun, run.CalibrationId, run.SampleMediaId, run.ColorEvidenceJson, run.BatchId));
     }
 
     internal async Task AdvanceActiveAsync(Guid areaId, CancellationToken ct)
@@ -690,16 +698,16 @@ public class WaterAnalysisService : IWaterAnalysisService
 
     private IReadOnlyList<WaterAnalysisMetricDto> LatestMetrics(IReadOnlyList<WaterAnalysisRun> runs)
     {
-        decimal? Last(Func<WaterAnalysisRun, decimal?> pick) =>
-            runs.Where(r => r.Status == "completed" && r.CompletedAt.HasValue)
-                .OrderByDescending(r => r.CompletedAt)
-                .Select(pick).FirstOrDefault(v => v is not null);
+        WaterAnalysisRun? Last(Func<WaterAnalysisRun, decimal?> pick) =>
+            runs.Where(r => r.Status == "completed" && r.CompletedAt.HasValue && pick(r) != null)
+                .OrderByDescending(r => r.CompletedAt).FirstOrDefault();
+        var no2 = Last(r => r.No2); var no3 = Last(r => r.No3);
         return
         [
-            Metric("ph", "pH", Last(r => r.Ph), ""),
-            Metric("nh3", "NH3", Last(r => r.Nh3), "mg/L"),
-            Metric("no2", "NO2", Last(r => r.No2), "mg/L"),
-            Metric("no3", "NO3", Last(r => r.No3), "mg/L")
+            Metric("ph", "pH", Last(r => r.Ph)?.Ph, ""),
+            ColorMetric("nh3", "NH3", Last(r => r.Nh3)?.Nh3, Last(r => r.Nh3)),
+            ColorMetric("no2", "NO2", no2?.No2, no2),
+            ColorMetric("no3", "NO3", no3?.No3, no3)
         ];
     }
 
@@ -782,8 +790,8 @@ public class WaterAnalysisService : IWaterAnalysisService
                 .OrderByDescending(x => x.Run.CompletedAt)
                 .FirstOrDefault();
             if (match.Run is null || match.Value is null) continue;
-            var (st, lb) = Evaluate(analyte, match.Value.Value);
-            points.Add(new(day, match.Value.Value, st, lb, match.Run.TestCode, match.Run.Id));
+            var metric = ColorMetric(analyte, analyte.ToUpperInvariant(), match.Value.Value, match.Run);
+            points.Add(new(day, match.Value.Value, metric.Status, metric.StatusLabel, match.Run.TestCode, match.Run.Id));
         }
 
         return points;
@@ -829,9 +837,9 @@ public class WaterAnalysisService : IWaterAnalysisService
             r.Confidence,
             r.ImageUrl,
             r.PerformedBy,
-            r.ControllerId ?? hw.ControllerCode,
+            r.ExecutionMode == "manual-color" ? null : r.ControllerId ?? hw.ControllerCode,
             r.CameraId ?? hw.CameraCode,
-            ReadLogs(r.StepLogJson));
+            ReadLogs(r.StepLogJson), r.CalibrationId, r.SampleMediaId, r.ExecutionMode, r.BatchId, r.MeasuredValue, r.MeasuredUnit);
     }
 
     private static int ProgressOf(WaterAnalysisRun r)
@@ -903,10 +911,36 @@ public class WaterAnalysisService : IWaterAnalysisService
     private IReadOnlyList<WaterAnalysisMetricDto> MetricsOf(WaterAnalysisRun r) =>
     [
         Metric("ph", "pH", r.Ph, ""),
-        Metric("nh3", "NH3", r.Nh3, "mg/L"),
-        Metric("no2", "NO2", r.No2, "mg/L"),
-        Metric("no3", "NO3", r.No3, "mg/L")
+        ColorMetric("nh3", "NH3", r.Nh3, r),
+        ColorMetric("no2", "NO2", r.No2, r),
+        ColorMetric("no3", "NO3", r.No3, r)
     ];
+
+    private static string RecordedAlgorithm(WaterAnalysisRun run)
+    {
+        if(run.Source!="water-ai-python")return WaterColorAnalyzer.Version;
+        if(!string.IsNullOrWhiteSpace(run.ColorEvidenceJson))
+        {
+            try
+            {
+                using var evidence=System.Text.Json.JsonDocument.Parse(run.ColorEvidenceJson);
+                if(evidence.RootElement.TryGetProperty("algorithm",out var algorithm)&&algorithm.ValueKind==System.Text.Json.JsonValueKind.String&&
+                   algorithm.GetString() is {Length:>0} value)return value;
+            }
+            catch(System.Text.Json.JsonException) { }
+        }
+        return "rgb-median-monotonic-v1";
+    }
+
+    private static WaterAnalysisMetricDto ColorMetric(string code, string label, decimal? value, WaterAnalysisRun? run)
+    {
+        if (run?.ExecutionMode != "manual-color") return Metric(code,label,value,"mg/L");
+        var unit = "mg/L " + label;
+        var threshold = Thresholds.FirstOrDefault(x => x.Code == code);
+        if (!string.Equals(threshold?.Unit,unit,StringComparison.OrdinalIgnoreCase))
+            return new(code,label,value,unit,value is null ? "pending" : "unverified",value is null ? "Chưa có" : "Chưa cấu hình ngưỡng đúng đơn vị ion");
+        return Metric(code,label,value,unit);
+    }
 
     private static WaterAnalysisMetricDto Metric(
         string code, string label, decimal? value, string unit)
@@ -999,7 +1033,7 @@ public class WaterAnalysisService : IWaterAnalysisService
         return new HardwareState(
             controllerOnline,
             cameraOnline,
-            true,
+            false, // Automatic hardware/AI dispatcher is not integrated; manual color endpoint is separate.
             controller?.DeviceCode,
             camera?.DeviceCode,
             controller?.FirmwareVersion,
@@ -1215,6 +1249,10 @@ public class WaterAnalysisService : IWaterAnalysisService
         WaterAnalysisAssayDto assay,
         decimal? result)
     {
+        if (run.ExecutionMode == "manual-color")
+            return Enumerable.Range(1, TotalSteps).Select(i => new WaterAnalysisProcessStepDto(i, StepCommands[i-1], StepLabels[i-1],
+                i is 5 or 6 or 7 ? "COMPLETED" : "SKIPPED", i is 5 or 6 or 7 ? "Hoàn thành" : "Thao tác ngoài hệ thống",
+                logs.LastOrDefault(l=>l.Step==i)?.At, i is 5 or 6 or 7 ? logs.LastOrDefault(l=>l.Step==i)?.Label : "Không có xác nhận phần cứng", null,null)).ToList();
         string Detail(int i) => i switch
         {
             1 => assay.SampleVolumeMl is null

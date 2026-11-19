@@ -173,6 +173,15 @@ public sealed class KioskProvisioningService : IKioskProvisioningService
         foreach (var credential in await _uow.KioskCredentials.FindAsync(
                      c => c.KioskId == kiosk.Id && c.RevokedAt == null, ct))
             credential.RevokedAt = now;
+        // Revoking a gateway must also revoke credentials already issued to its controllers.
+        // This is authorization only, not a physical emergency stop.
+        foreach (var device in await _uow.Devices.FindAsync(d => d.KioskId == kiosk.Id, ct))
+        {
+            device.EdgeState = "Revoked";
+            device.CredentialHash = null;
+            device.PendingSecret = null;
+            device.Status = DeviceStatus.Offline;
+        }
         await _uow.SaveChangesAsync(ct);
         return ApiResponse<KioskListItemDto>.Ok(MapItem(kiosk, null), "Kiosk revoked.");
     }
@@ -249,8 +258,24 @@ public sealed class KioskProvisioningService : IKioskProvisioningService
         if (string.IsNullOrWhiteSpace(code))
             throw AppException.BadRequest("DeviceCode is required.");
 
+        if (code.Length > 100 || code is "." or ".." || !System.Text.RegularExpressions.Regex.IsMatch(code, @"\A[A-Za-z0-9_.:-]+\z"))
+            throw AppException.BadRequest("Controller code is invalid.");
         var now = DateTime.UtcNow;
-        var device = await _uow.Devices.FirstOrDefaultAsync(d => d.DeviceCode == code, ct);
+        var codeKey = code.ToLowerInvariant();
+        var device = await _uow.Devices.FirstOrDefaultAsync(d => d.DeviceCode.ToLower() == codeKey, ct);
+        if (device != null && CameraConfiguration.IsCamera(device))
+            throw AppException.Conflict("Mã thiết bị thuộc Camera, không thể đăng ký Controller.");
+        if (!string.IsNullOrWhiteSpace(request.Mac))
+        {
+            var macKey = request.Mac.Trim().ToLowerInvariant().Replace(":", "").Replace("-", "");
+            if (macKey.Length != 12 || !macKey.All(Uri.IsHexDigit)) throw AppException.BadRequest("MAC phải gồm 12 ký tự hex.");
+            if (device != null && !string.IsNullOrWhiteSpace(device.MacAddress) && device.MacAddress.Trim().ToLowerInvariant().Replace(":", "").Replace("-", "") != macKey)
+                throw AppException.Conflict("MAC không khớp hồ sơ Controller hiện tại.");
+            var currentId = device?.Id ?? Guid.Empty;
+            if (await _uow.Devices.AnyAsync(d => d.Id != currentId && d.MacAddress != null && d.MacAddress.ToLower().Replace(":", "").Replace("-", "") == macKey, ct))
+                throw AppException.Conflict("MAC đã thuộc thiết bị khác.");
+        }
+        CameraConfiguration.ValidateMetadata(request.IpAddress, request.Mac, null);
         if (device is null)
         {
             device = new Device
@@ -273,8 +298,16 @@ public sealed class KioskProvisioningService : IKioskProvisioningService
             throw AppException.Conflict(
                 "Controller đang thuộc khu khác. Không được tự chuyển quyền sở hữu.");
         }
-        else if (device.EdgeState is "Rejected" or "Revoked" or "Unprovisioned" || device.KioskId is null)
+        else if (device.EdgeState is "Rejected" or "Revoked")
         {
+            return ApiResponse<RegisterControllerDto>.Ok(new RegisterControllerDto(device.Id, device.DeviceCode, device.EdgeState, null));
+        }
+        else if (device.EdgeState == "Unprovisioned" || device.KioskId is null)
+        {
+            // Prepared profiles have no active device credential. Preserve their ID
+            // but adopt the board spelling before issuing any signed Edge V2 commands.
+            if (device.EdgeState == "Unprovisioned" && device.KioskId is null && device.CredentialHash is null)
+                device.DeviceCode = code;
             device.KioskId = kiosk.Id;
             device.FarmingAreaId = kiosk.FarmingAreaId;
             device.EdgeState = "Pending";
@@ -292,19 +325,13 @@ public sealed class KioskProvisioningService : IKioskProvisioningService
             device.IpAddress = request.IpAddress.Trim();
         if (!string.IsNullOrWhiteSpace(request.Firmware))
             device.FirmwareVersion = request.Firmware.Trim();
-        device.LastSeenAt = now;
-        if (device.EdgeState is "Approved" or "Online")
-        {
-            device.EdgeState = "Online";
-            device.Status = DeviceStatus.Online;
-        }
-
-        var oneTime = device.EdgeState == "Online" ? device.PendingSecret : null;
+        // Registration is not authenticated device telemetry. Only Edge V2 discovery/observations establish connectivity.
+        var oneTime = device.EdgeState is ("Approved" or "Online") && device.Status != DeviceStatus.Maintenance ? device.PendingSecret : null;
         if (oneTime != null)
             device.PendingSecret = null;
         await _uow.SaveChangesAsync(ct);
         return ApiResponse<RegisterControllerDto>.Ok(
-            new RegisterControllerDto(device.Id, device.DeviceCode, device.EdgeState, oneTime));
+            new RegisterControllerDto(device.Id, device.DeviceCode, device.Status == DeviceStatus.Maintenance ? "Maintenance" : device.EdgeState, oneTime));
     }
 
     public async Task<ApiResponse<IReadOnlyList<EdgeControllerDto>>> ListControllersAsync(
@@ -327,13 +354,17 @@ public sealed class KioskProvisioningService : IKioskProvisioningService
         var device = await _uow.Devices.GetByIdAsync(deviceId, ct)
             ?? throw AppException.NotFound("Device");
         await EnsureDeviceAccessAsync(device, ct);
-        if (device.EdgeState == "Revoked")
-            throw AppException.Conflict("Controller is revoked.");
+        if (device.EdgeState is "Approved" or "Online")
+            return ApiResponse<EdgeControllerDto>.Ok(MapController(device, await KioskCodeAsync(device.KioskId, ct)), "Controller already approved.");
+        if (device.EdgeState is not ("Pending" or "Rejected"))
+            throw AppException.Conflict("Only pending or explicitly re-approved rejected controllers can be approved.");
+        var owner = await _uow.FarmKiosks.GetByIdAsync(device.KioskId!.Value, ct);
+        if (owner?.Status == "Revoked") throw AppException.Conflict("Kiosk is revoked.");
         var secret = Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
         device.EdgeState = "Approved";
         device.CredentialHash = Hash(secret);
         device.PendingSecret = secret;
-        device.Status = DeviceStatus.Online;
+        device.Status = DeviceStatus.Offline;
         await _uow.SaveChangesAsync(ct);
         var kioskCode = await KioskCodeAsync(device.KioskId, ct);
         return ApiResponse<EdgeControllerDto>.Ok(MapController(device, kioskCode), "Controller approved.");
@@ -376,9 +407,10 @@ public sealed class KioskProvisioningService : IKioskProvisioningService
 
     private static string LinkStatus(Device device)
     {
+        if (device.Status == DeviceStatus.Maintenance) return "Maintenance";
         if (device.EdgeState is "Pending" or "Rejected" or "Revoked" or "Approved")
             return device.EdgeState;
-        if (device.LastSeenAt is not DateTime seen)
+        if (device.Status != DeviceStatus.Online || device.LastSeenAt is not DateTime seen)
             return "Offline";
         var age = DateTime.UtcNow - seen;
         if (age > TimeSpan.FromSeconds(90))

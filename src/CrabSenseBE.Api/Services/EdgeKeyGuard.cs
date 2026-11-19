@@ -56,7 +56,7 @@ public static class EdgeKeyGuard
         var device = string.IsNullOrWhiteSpace(code)
             ? null
             : await uow.Devices.FirstOrDefaultAsync(
-                d => d.DeviceCode == code, ct);
+                d => d.DeviceCode.ToLower() == code.ToLower(), ct);
         return AuthenticateDevice(request, configuration, device);
     }
 

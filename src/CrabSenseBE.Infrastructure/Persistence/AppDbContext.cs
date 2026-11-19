@@ -41,8 +41,21 @@ public class AppDbContext : DbContext
     public DbSet<SensorCalibration> SensorCalibrations => Set<SensorCalibration>();
     public DbSet<SensorDiagnosticRun> SensorDiagnosticRuns => Set<SensorDiagnosticRun>();
     public DbSet<Device> Devices => Set<Device>();
+    public DbSet<DeviceConnectionEvent> DeviceConnectionEvents => Set<DeviceConnectionEvent>();
+    public DbSet<DeviceMonitoringState> DeviceMonitoringStates => Set<DeviceMonitoringState>();
+    public DbSet<DeviceMonitoringPolicy> DeviceMonitoringPolicies => Set<DeviceMonitoringPolicy>();
+    public DbSet<DeviceHealthEvent> DeviceHealthEvents => Set<DeviceHealthEvent>();
+    public DbSet<MonitoringWorkerState> MonitoringWorkerStates => Set<MonitoringWorkerState>();
+    public DbSet<DeviceMaintenanceWindow> DeviceMaintenanceWindows => Set<DeviceMaintenanceWindow>();
     public DbSet<ControllerPort> ControllerPorts => Set<ControllerPort>();
+    public DbSet<ControllerEvent> ControllerEvents => Set<ControllerEvent>();
     public DbSet<WaterMeasurement> WaterMeasurements => Set<WaterMeasurement>();
+    public DbSet<WaterAssayChannel> WaterAssayChannels => Set<WaterAssayChannel>();
+    public DbSet<WaterAnalysisBatch> WaterAnalysisBatches => Set<WaterAnalysisBatch>();
+    public DbSet<WaterAnalysisSchedule> WaterAnalysisSchedules => Set<WaterAnalysisSchedule>();
+    public DbSet<WaterTrainingSample> WaterTrainingSamples => Set<WaterTrainingSample>();
+    public DbSet<WaterCalibrationCheck> WaterCalibrationChecks => Set<WaterCalibrationCheck>();
+    public DbSet<WaterColorCalibration> WaterColorCalibrations => Set<WaterColorCalibration>();
     public DbSet<WaterAnalysisRun> WaterAnalysisRuns => Set<WaterAnalysisRun>();
     public DbSet<Hdf5Upload> Hdf5Uploads => Set<Hdf5Upload>();
 
@@ -84,6 +97,9 @@ public class AppDbContext : DbContext
     public DbSet<FarmSettings> FarmSettings => Set<FarmSettings>();
 
     // AI
+    public DbSet<AiModelVersion> AiModelVersions => Set<AiModelVersion>();
+    public DbSet<AiCameraAssignment> AiCameraAssignments => Set<AiCameraAssignment>();
+    public DbSet<AiInferenceJob> AiInferenceJobs => Set<AiInferenceJob>();
     public DbSet<AiDetection> AiDetections => Set<AiDetection>();
     public DbSet<AiFeedback> AiFeedbacks => Set<AiFeedback>();
     public DbSet<AiRecommendation> AiRecommendations => Set<AiRecommendation>();
@@ -100,6 +116,11 @@ public class AppDbContext : DbContext
     public DbSet<KioskProvisioningCode> KioskProvisioningCodes => Set<KioskProvisioningCode>();
     public DbSet<KioskCredential> KioskCredentials => Set<KioskCredential>();
     public DbSet<CameraRecordingSetting> CameraRecordingSettings => Set<CameraRecordingSetting>();
+    public DbSet<CameraSchedule> CameraSchedules => Set<CameraSchedule>();
+    public DbSet<CameraScheduleAssignment> CameraScheduleAssignments => Set<CameraScheduleAssignment>();
+    public DbSet<CameraScheduleSlot> CameraScheduleSlots => Set<CameraScheduleSlot>();
+    public DbSet<CameraRecordingExecution> CameraRecordingExecutions => Set<CameraRecordingExecution>();
+    public DbSet<CameraRecordingAgent> CameraRecordingAgents => Set<CameraRecordingAgent>();
     public DbSet<AiManagedService> AiManagedServices => Set<AiManagedService>();
     public DbSet<BackupScheduleSetting> BackupScheduleSettings => Set<BackupScheduleSetting>();
     public DbSet<SystemDeployment> SystemDeployments => Set<SystemDeployment>();
@@ -112,14 +133,89 @@ public class AppDbContext : DbContext
 
         // Schema riêng — không đụng bảng Cap_Ras snake_case trong public
         modelBuilder.HasDefaultSchema("be");
+        modelBuilder.Entity<WaterTrainingSample>().HasOne<WaterColorCalibration>().WithMany().HasForeignKey(x=>x.CalibrationId).OnDelete(DeleteBehavior.Restrict);
+        modelBuilder.Entity<WaterTrainingSample>().HasOne<MediaAsset>().WithMany().HasForeignKey(x=>x.MediaId).OnDelete(DeleteBehavior.Restrict);
+        modelBuilder.Entity<WaterTrainingSample>().HasOne<FarmingArea>().WithMany().HasForeignKey(x=>x.FarmingAreaId).OnDelete(DeleteBehavior.Restrict);
+        modelBuilder.Entity<WaterTrainingSample>().Property(x=>x.ImageSha256).HasMaxLength(64);
+        modelBuilder.Entity<WaterTrainingSample>().HasIndex(x=>new{x.FarmingAreaId,x.ImageSha256}).IsUnique();
+        modelBuilder.Entity<WaterTrainingSample>().HasIndex(x=>x.MediaId).IsUnique();
+        modelBuilder.Entity<WaterTrainingSample>().HasIndex(x=>new{x.CalibrationId,x.PreparationId});
+
+        modelBuilder.Entity<WaterCalibrationCheck>().HasIndex(x=>x.MediaId).IsUnique();
+        modelBuilder.Entity<WaterCalibrationCheck>().Property(x=>x.ImageSha256).HasMaxLength(64);
+        modelBuilder.Entity<WaterCalibrationCheck>().HasIndex(x=>new{x.CalibrationId,x.ImageSha256}).IsUnique();
+        modelBuilder.Entity<WaterCalibrationCheck>().HasIndex(x=>new{x.CalibrationId,x.CreatedAt});
+        modelBuilder.Entity<WaterCalibrationCheck>().HasOne<WaterColorCalibration>().WithMany().HasForeignKey(x=>x.CalibrationId).OnDelete(DeleteBehavior.Restrict);
+        modelBuilder.Entity<WaterCalibrationCheck>().HasOne<MediaAsset>().WithMany().HasForeignKey(x=>x.MediaId).OnDelete(DeleteBehavior.Restrict);
+        modelBuilder.Entity<WaterAnalysisRun>().Property(x=>x.SampleSha256).HasMaxLength(64);
+        modelBuilder.Entity<WaterAnalysisRun>().HasIndex(x=>new{x.FarmingAreaId,x.SampleSha256}).IsUnique();
+
+        modelBuilder.Entity<WaterAssayChannel>().HasIndex(x=>new{x.BatchId,x.Analyte}).IsUnique();
+        modelBuilder.Entity<WaterAssayChannel>().HasIndex(x=>x.CapturedMediaId).IsUnique();
+        modelBuilder.Entity<WaterAssayChannel>().HasOne<WaterAnalysisBatch>().WithMany().HasForeignKey(x=>x.BatchId).OnDelete(DeleteBehavior.Restrict);
+        modelBuilder.Entity<WaterAssayChannel>().HasOne<WaterColorCalibration>().WithMany().HasForeignKey(x=>x.CalibrationId).OnDelete(DeleteBehavior.Restrict);
+        modelBuilder.Entity<WaterAssayChannel>().HasOne<MediaAsset>().WithMany().HasForeignKey(x=>x.CapturedMediaId).OnDelete(DeleteBehavior.Restrict);
+        modelBuilder.Entity<WaterAssayChannel>().Property(x=>x.StepIndex).IsConcurrencyToken();
+        modelBuilder.Entity<WaterAssayChannel>().Property(x=>x.State).IsConcurrencyToken();
+        modelBuilder.Entity<WaterAnalysisBatch>().HasIndex(x=>x.FarmingAreaId).IsUnique().HasFilter("\"Status\" = 'waiting_samples'");
+        modelBuilder.Entity<WaterAnalysisBatch>().HasOne<FarmingArea>().WithMany().HasForeignKey(x=>x.FarmingAreaId).OnDelete(DeleteBehavior.Restrict);
+        modelBuilder.Entity<WaterAnalysisBatch>().Property(x=>x.Status).IsConcurrencyToken();
+        modelBuilder.Entity<WaterAnalysisSchedule>().HasIndex(x=>x.FarmingAreaId).IsUnique();
+        modelBuilder.Entity<WaterAnalysisSchedule>().HasOne<FarmingArea>().WithMany().HasForeignKey(x=>x.FarmingAreaId).OnDelete(DeleteBehavior.Restrict);
+        modelBuilder.Entity<WaterAnalysisSchedule>().Property(x=>x.NextRunAt).IsConcurrencyToken();
+        modelBuilder.Entity<WaterAnalysisRun>().HasOne<WaterAnalysisBatch>().WithMany().HasForeignKey(x=>x.BatchId).OnDelete(DeleteBehavior.Restrict);
+        modelBuilder.Entity<WaterAnalysisRun>().HasIndex(x=>new{x.BatchId,x.Analyte}).IsUnique();
+        modelBuilder.Entity<WaterColorCalibration>().HasIndex(x => new { x.FarmingAreaId, x.Analyte });
+        modelBuilder.Entity<WaterColorCalibration>().HasOne<FarmingArea>().WithMany().HasForeignKey(x => x.FarmingAreaId).OnDelete(DeleteBehavior.Restrict);
+        modelBuilder.Entity<WaterColorCalibration>().HasOne<Device>().WithMany().HasForeignKey(x => x.CameraDeviceId).OnDelete(DeleteBehavior.Restrict);
+        modelBuilder.Entity<WaterAnalysisRun>().HasOne<WaterColorCalibration>().WithMany().HasForeignKey(x => x.CalibrationId).OnDelete(DeleteBehavior.Restrict);
+        modelBuilder.Entity<WaterAnalysisRun>().HasIndex(x => x.SampleMediaId).IsUnique();
+        modelBuilder.Entity<WaterAnalysisRun>().HasOne<MediaAsset>().WithMany().HasForeignKey(x=>x.SampleMediaId).OnDelete(DeleteBehavior.Restrict);
+        modelBuilder.Entity<AiManagedService>().Property(x => x.CommandId).IsConcurrencyToken();
+        modelBuilder.Entity<AiModelVersion>().HasIndex(x => new { x.AiServiceId, x.Version }).IsUnique();
+        modelBuilder.Entity<AiCameraAssignment>().HasIndex(x => new { x.AiServiceId, x.DeviceId }).IsUnique();
+        modelBuilder.Entity<AiInferenceJob>().HasIndex(x => new { x.AiServiceId, x.MediaId, x.ModelVersionId }).IsUnique();
+        modelBuilder.Entity<AiInferenceJob>().HasIndex(x => new { x.AiServiceId, x.Status, x.CreatedAt });
+        modelBuilder.Entity<AiInferenceJob>().Property(x => x.LeaseId).IsConcurrencyToken();
+        modelBuilder.Entity<AiDetection>().HasIndex(x => x.InferenceJobId).IsUnique();
+        modelBuilder.Entity<AiDetection>().HasIndex(x => x.AiServiceId);
+        modelBuilder.Entity<AiModelVersion>().HasOne<AiManagedService>().WithMany().HasForeignKey(x => x.AiServiceId).OnDelete(DeleteBehavior.Restrict);
+        modelBuilder.Entity<AiCameraAssignment>().HasOne<AiManagedService>().WithMany().HasForeignKey(x => x.AiServiceId).OnDelete(DeleteBehavior.Restrict);
+        modelBuilder.Entity<AiCameraAssignment>().HasOne<Device>().WithMany().HasForeignKey(x => x.DeviceId).OnDelete(DeleteBehavior.Cascade);
+        modelBuilder.Entity<AiInferenceJob>().HasOne<AiManagedService>().WithMany().HasForeignKey(x => x.AiServiceId).OnDelete(DeleteBehavior.Restrict);
+        modelBuilder.Entity<AiInferenceJob>().HasOne<AiModelVersion>().WithMany().HasForeignKey(x => x.ModelVersionId).OnDelete(DeleteBehavior.Restrict);
+        modelBuilder.Entity<DeviceConnectionEvent>().HasIndex(x=>new{x.SourceType,x.SourceId,x.OccurredAt});
+        modelBuilder.Entity<DeviceConnectionEvent>().HasIndex(x=>x.OccurredAt);
+        modelBuilder.Entity<DeviceConnectionEvent>().HasIndex(x=>new{x.FarmingAreaId,x.OccurredAt});
+        modelBuilder.Entity<DeviceMonitoringState>().HasIndex(x=>new{x.SourceType,x.SourceId}).IsUnique();
+        modelBuilder.Entity<DeviceMonitoringPolicy>().HasIndex(x=>new{x.SourceType,x.SourceId}).IsUnique();
+        modelBuilder.Entity<DeviceMonitoringPolicy>().Property(x=>x.Version).IsConcurrencyToken();
+        modelBuilder.Entity<DeviceMonitoringPolicy>().Property(x=>x.IsInherited).HasDefaultValue(false);
+        modelBuilder.Entity<DeviceHealthEvent>().HasIndex(x=>new{x.SourceType,x.SourceId,x.OccurredAt});
+        modelBuilder.Entity<DeviceHealthEvent>().HasIndex(x=>x.OccurredAt);
+        modelBuilder.Entity<MonitoringWorkerState>().HasIndex(x=>x.WorkerName).IsUnique();
+        modelBuilder.Entity<DeviceMaintenanceWindow>().HasIndex(x=>new{x.SourceType,x.SourceId,x.StartsAt});
         modelBuilder.Entity<Device>().Property(x => x.CapabilityVersion).HasDefaultValue(0).IsConcurrencyToken();
+        modelBuilder.Entity<ControllerEvent>(b =>
+        {
+            b.Property(x => x.EventKey).HasMaxLength(64);
+            b.Property(x => x.Kind).HasMaxLength(24);
+            b.Property(x => x.Summary).HasMaxLength(300);
+            b.HasIndex(x => new { x.DeviceId, x.EventKey }).IsUnique();
+            b.HasIndex(x => new { x.DeviceId, x.Kind, x.CreatedAt });
+            b.HasOne<Device>().WithMany().HasForeignKey(x => x.DeviceId).OnDelete(DeleteBehavior.Restrict);
+        });
         modelBuilder.Entity<ControllerPort>(b =>
         {
             b.Property(x => x.PortCode).HasMaxLength(64);
             b.Property(x => x.PortType).HasMaxLength(32);
             b.Property(x => x.ActiveLevel).HasMaxLength(8);
             b.Property(x => x.SensorCode).HasMaxLength(128);
-            b.Property(x => x.CommissioningStatus).HasMaxLength(16);
+            b.Property(x => x.CommissioningStatus).HasMaxLength(16).IsConcurrencyToken();
+            b.Property(x => x.ConfigVersion).IsConcurrencyToken();
+            b.Property(x => x.IsPresent).IsConcurrencyToken();
+            b.Property(x => x.ReportedOn).IsConcurrencyToken();
+            b.Property(x => x.LastReportedAt).IsConcurrencyToken();
             b.HasIndex(x => new { x.DeviceId, x.PortCode }).IsUnique();
             b.HasOne(x => x.Device).WithMany().HasForeignKey(x => x.DeviceId).OnDelete(DeleteBehavior.Restrict);
         });
@@ -831,6 +927,45 @@ public class AppDbContext : DbContext
         .OnDelete(DeleteBehavior.Restrict);
 });
 
+        modelBuilder.Entity<CameraSchedule>(b =>
+        {
+
+
+            b.Property(x => x.Version).IsConcurrencyToken();
+        });
+        modelBuilder.Entity<CameraScheduleAssignment>(b =>
+        {
+            b.HasIndex(x => x.DeviceId).IsUnique();
+            b.HasIndex(x => x.ScheduleId);
+            b.HasOne<CameraSchedule>().WithMany().HasForeignKey(x => x.ScheduleId).OnDelete(DeleteBehavior.Cascade);
+            b.HasOne<Device>().WithMany().HasForeignKey(x => x.DeviceId).OnDelete(DeleteBehavior.Restrict);
+        });
+        modelBuilder.Entity<CameraScheduleSlot>(b =>
+        {
+            b.HasIndex(x => x.ScheduleId);
+            b.HasOne<CameraSchedule>().WithMany().HasForeignKey(x => x.ScheduleId).OnDelete(DeleteBehavior.Cascade);
+        });
+        modelBuilder.Entity<CameraRecordingAgent>(b =>
+        {
+            b.HasIndex(x=>x.DeviceId).IsUnique();
+            b.HasIndex(x=>x.KioskId);
+            b.Property(x=>x.Version).IsConcurrencyToken();
+            b.Property(x=>x.WorkerVersion).HasMaxLength(80);
+            b.HasOne<Device>().WithMany().HasForeignKey(x=>x.DeviceId).OnDelete(DeleteBehavior.Restrict);
+            b.HasOne<FarmKiosk>().WithMany().HasForeignKey(x=>x.KioskId).OnDelete(DeleteBehavior.SetNull);
+        });
+        modelBuilder.Entity<CameraRecordingExecution>(b =>
+        {
+            b.Property(x => x.Status).IsConcurrencyToken();
+            b.Property(x => x.LastHeartbeatAt).IsConcurrencyToken();
+            b.HasIndex(x => x.DeviceId, "IX_CameraRecordingExecutions_ActiveDevice").IsUnique().HasFilter("\"Status\" = 'Recording'");
+            b.HasIndex(x => x.ScheduleId);
+            b.HasIndex(x => x.DeviceId);
+            b.HasIndex(x => x.MediaAssetId);
+            b.HasOne<CameraSchedule>().WithMany().HasForeignKey(x => x.ScheduleId).OnDelete(DeleteBehavior.Restrict);
+            b.HasOne<Device>().WithMany().HasForeignKey(x => x.DeviceId).OnDelete(DeleteBehavior.Restrict);
+            b.HasOne<MediaAsset>().WithMany().HasForeignKey(x => x.MediaAssetId).OnDelete(DeleteBehavior.SetNull);
+        });
         modelBuilder.Entity<CameraRecordingSetting>()
             .HasIndex(x => x.DeviceId)
             .IsUnique();

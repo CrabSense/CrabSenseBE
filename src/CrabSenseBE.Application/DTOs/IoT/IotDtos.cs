@@ -126,7 +126,8 @@ public record CreateDeviceRequest(
     string? Resolution = null,
     string? InstallationLocation = null,
     string? Note = null,
-    string? Notes = null);
+    string? Notes = null,
+    bool PrepareOnly = false);
 
 /// <remarks>
 /// FarmingRowId = Guid.Empty → gỡ khỏi dãy.
@@ -178,7 +179,12 @@ public record SensorLiveDto(
     string? LocationType = null,
     Guid? FarmingRowId = null,
     string? RowName = null,
-    string? RowCode = null);
+    string? RowCode = null,
+    string? Name = null,
+    string? Status = null,
+    string? DataQuality = null,
+    DateTime? LastReceivedAt = null,
+    Guid? FarmingAreaId = null);
 
 // --- Sensor Data Ingest (ESP32 → BE) ---
 public record SensorDataRequest(

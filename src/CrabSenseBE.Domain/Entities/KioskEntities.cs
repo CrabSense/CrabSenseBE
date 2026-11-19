@@ -14,6 +14,16 @@ public class FarmKiosk : BaseEntity
 
     public DateTime? LastSeenAt { get; set; }
     public string? LanIp { get; set; }
+    // Authenticated, monitor-only process resource evidence.
+    public DateTime? MetricsReportedAt { get; set; }
+    public double? ProcessCpuPercent { get; set; }
+    public long? ProcessMemoryBytes { get; set; }
+    public long? DiskTotalBytes { get; set; }
+    public long? DiskFreeBytes { get; set; }
+    public string? SoftwareVersion { get; set; }
+    public DateTime? EdgeSyncedAt { get; set; }
+    public DateTime? RecordingCheckedAt { get; set; }
+    public DateTime? UploadCheckedAt { get; set; }
 
     public FarmingArea? FarmingArea { get; set; }
 }

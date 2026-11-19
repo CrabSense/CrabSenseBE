@@ -100,6 +100,132 @@ public sealed class KioskProvisioningScopeTests
         uow.Verify(unit => unit.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Never);
     }
 
+    [Fact]
+    public async Task Approve_IsIdempotent_AndDoesNotMarkPendingControllerOnline()
+    {
+        var areaId = Guid.NewGuid();
+        var (uow, current) = Fixture(Guid.NewGuid(), UserRole.SystemAdministrator, null);
+        var kiosk = new FarmKiosk { FarmingAreaId = areaId, Code = "KIOSK-TEST" };
+        var device = new Device { DeviceCode = "ESP-TEST", KioskId = kiosk.Id, FarmingAreaId = areaId, EdgeState = "Pending" };
+        var devices = new Mock<IRepository<Device>>();
+        devices.Setup(r => r.GetByIdAsync(device.Id, It.IsAny<CancellationToken>())).ReturnsAsync(device);
+        var kiosks = new Mock<IRepository<FarmKiosk>>();
+        kiosks.Setup(r => r.GetByIdAsync(kiosk.Id, It.IsAny<CancellationToken>())).ReturnsAsync(kiosk);
+        uow.Setup(x => x.Devices).Returns(devices.Object);
+        uow.Setup(x => x.FarmKiosks).Returns(kiosks.Object);
+        var service = new KioskProvisioningService(uow.Object, current.Object);
+        var first = await service.ApproveControllerAsync(device.Id);
+        first.Data!.EdgeState.Should().Be("Approved");
+        device.Status.Should().Be(DeviceStatus.Offline);
+        var hash = device.CredentialHash;
+        var secret = device.PendingSecret;
+        hash.Should().NotBeNullOrWhiteSpace();
+        await service.ApproveControllerAsync(device.Id);
+        device.CredentialHash.Should().Be(hash);
+        device.PendingSecret.Should().Be(secret);
+        uow.Verify(x => x.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task RevokeKiosk_RevokesAssociatedDeviceCredentials()
+    {
+        var (uow, current) = Fixture(Guid.NewGuid(), UserRole.SystemAdministrator, null);
+        var kiosk = new FarmKiosk { FarmingAreaId = Guid.NewGuid(), Code = "KIOSK-TEST" };
+        var device = new Device { DeviceCode = "ESP-TEST", KioskId = kiosk.Id, EdgeState = "Online",
+            CredentialHash = "test-hash", PendingSecret = "test-pending", Status = DeviceStatus.Online };
+        var devices = new Mock<IRepository<Device>>();
+        devices.Setup(r => r.FindAsync(It.IsAny<System.Linq.Expressions.Expression<Func<Device,bool>>>(), It.IsAny<CancellationToken>())).ReturnsAsync(new[] {device});
+        var kiosks = new Mock<IRepository<FarmKiosk>>();
+        kiosks.Setup(r => r.GetByIdAsync(kiosk.Id, It.IsAny<CancellationToken>())).ReturnsAsync(kiosk);
+        var codes = new Mock<IRepository<KioskProvisioningCode>>();
+        codes.Setup(r => r.FindAsync(It.IsAny<System.Linq.Expressions.Expression<Func<KioskProvisioningCode,bool>>>(), It.IsAny<CancellationToken>())).ReturnsAsync(Array.Empty<KioskProvisioningCode>());
+        var credentials = new Mock<IRepository<KioskCredential>>();
+        credentials.Setup(r => r.FindAsync(It.IsAny<System.Linq.Expressions.Expression<Func<KioskCredential,bool>>>(), It.IsAny<CancellationToken>())).ReturnsAsync(Array.Empty<KioskCredential>());
+        uow.Setup(x => x.Devices).Returns(devices.Object);
+        uow.Setup(x => x.FarmKiosks).Returns(kiosks.Object);
+        uow.Setup(x => x.KioskProvisioningCodes).Returns(codes.Object);
+        uow.Setup(x => x.KioskCredentials).Returns(credentials.Object);
+        var service = new KioskProvisioningService(uow.Object, current.Object);
+        await service.RevokeAsync(kiosk.Id);
+        kiosk.Status.Should().Be("Revoked");
+        device.EdgeState.Should().Be("Revoked");
+        device.CredentialHash.Should().BeNull();
+        device.PendingSecret.Should().BeNull();
+        device.Status.Should().Be(DeviceStatus.Offline);
+    }
+
+    [Theory]
+    [InlineData("Rejected")]
+    [InlineData("Revoked")]
+    [InlineData("Approved")]
+    public async Task Registration_DoesNotRestoreBlockedStateOrClaimOnline(string state)
+    {
+        const string key = "kiosk-test-key";
+        var kiosk = new FarmKiosk { FarmingAreaId = Guid.NewGuid(), Code = "KIOSK-TEST" };
+        var device = new Device { DeviceCode = "ESP-TEST", KioskId = kiosk.Id,
+            FarmingAreaId = kiosk.FarmingAreaId, EdgeState = state, Status = DeviceStatus.Offline };
+        var uow = new Mock<IUnitOfWork>();
+        var credentials = new Mock<IRepository<KioskCredential>>();
+        credentials.Setup(r => r.FirstOrDefaultAsync(It.IsAny<System.Linq.Expressions.Expression<Func<KioskCredential,bool>>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new KioskCredential { KioskId = kiosk.Id, SecretHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(key))) });
+        var kiosks = new Mock<IRepository<FarmKiosk>>();
+        kiosks.Setup(r => r.GetByIdAsync(kiosk.Id, It.IsAny<CancellationToken>())).ReturnsAsync(kiosk);
+        var devices = new Mock<IRepository<Device>>();
+        devices.Setup(r => r.FirstOrDefaultAsync(It.IsAny<System.Linq.Expressions.Expression<Func<Device,bool>>>(), It.IsAny<CancellationToken>())).ReturnsAsync(device);
+        uow.Setup(x => x.KioskCredentials).Returns(credentials.Object);
+        uow.Setup(x => x.FarmKiosks).Returns(kiosks.Object);
+        uow.Setup(x => x.Devices).Returns(devices.Object);
+        var service = new KioskProvisioningService(uow.Object, Mock.Of<ICurrentUserService>());
+        var result = await service.RegisterControllerAsync(key, new CrabSenseBE.Application.DTOs.Kiosk.RegisterControllerRequest(device.DeviceCode,null,null,null,null));
+        result.Data!.EdgeState.Should().Be(state);
+        device.Status.Should().Be(DeviceStatus.Offline);
+        device.LastSeenAt.Should().BeNull();
+        if (state != "Approved") uow.Verify(x => x.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Theory]
+    [InlineData("esp32", "AA:BB:CC:DD:EE:FF", "aa-bb-cc-dd-ee-ff", false)]
+    [InlineData("camera", null, null, true)]
+    [InlineData("esp32", "AA:BB:CC:DD:EE:FF", "11:22:33:44:55:66", true)]
+    public async Task Registration_UsesCaseInsensitiveIdentityAndProtectsExistingDevice(string type,string? storedMac,string? reportedMac,bool rejected)
+    {
+        const string key="kiosk-test-key";
+        var kiosk=new FarmKiosk{FarmingAreaId=Guid.NewGuid(),Code="KIOSK-TEST"};
+        var device=new Device{DeviceCode="ESP-TEST",DeviceType=type,MacAddress=storedMac,FarmingAreaId=kiosk.FarmingAreaId,EdgeState="Unprovisioned"};
+        var uow=new Mock<IUnitOfWork>();
+        var credentials=new Mock<IRepository<KioskCredential>>();
+        credentials.Setup(r=>r.FirstOrDefaultAsync(It.IsAny<System.Linq.Expressions.Expression<Func<KioskCredential,bool>>>(),It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new KioskCredential{KioskId=kiosk.Id,SecretHash=Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(key)))});
+        var kiosks=new Mock<IRepository<FarmKiosk>>();
+        kiosks.Setup(r=>r.GetByIdAsync(kiosk.Id,It.IsAny<CancellationToken>())).ReturnsAsync(kiosk);
+        var devices=new Mock<IRepository<Device>>();
+        devices.Setup(r=>r.FirstOrDefaultAsync(It.IsAny<System.Linq.Expressions.Expression<Func<Device,bool>>>(),It.IsAny<CancellationToken>()))
+            .ReturnsAsync((System.Linq.Expressions.Expression<Func<Device,bool>> predicate,CancellationToken _) => predicate.Compile()(device)?device:null);
+        uow.Setup(x=>x.KioskCredentials).Returns(credentials.Object);
+        uow.Setup(x=>x.FarmKiosks).Returns(kiosks.Object);
+        uow.Setup(x=>x.Devices).Returns(devices.Object);
+        var service=new KioskProvisioningService(uow.Object,Mock.Of<ICurrentUserService>());
+        var request=new CrabSenseBE.Application.DTOs.Kiosk.RegisterControllerRequest("esp-test",reportedMac,null,null,null);
+        if(rejected)
+        {
+            var error=await Assert.ThrowsAsync<AppException>(()=>service.RegisterControllerAsync(key,request));
+            Assert.Equal(409,error.StatusCode);
+            Assert.Null(device.KioskId);
+            uow.Verify(x=>x.SaveChangesAsync(It.IsAny<CancellationToken>()),Times.Never);
+        }
+        else
+        {
+            var result=await service.RegisterControllerAsync(key,request);
+            Assert.Equal(device.Id,result.Data!.DeviceId);
+            Assert.Equal("esp-test",device.DeviceCode);
+            Assert.Equal("esp-test",result.Data.DeviceCode);
+            Assert.Equal("Pending",device.EdgeState);
+            Assert.Equal(kiosk.Id,device.KioskId);
+            Assert.Equal(DeviceStatus.Offline,device.Status);
+            Assert.Null(device.CredentialHash);
+        }
+    }
+
     private static (
         Mock<IUnitOfWork> Uow,
         Mock<ICurrentUserService> Current) Fixture(

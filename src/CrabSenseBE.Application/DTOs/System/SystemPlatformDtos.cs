@@ -91,7 +91,10 @@ public record CameraRecordingDto(
     int? Fps,
     int? MaxStorageGb,
     string? WeeklyScheduleJson,
-    string RuntimeStatus = "NotIntegrated");
+    string RuntimeStatus = "NotIntegrated",
+    Guid? ScheduleId = null,
+    string? ScheduleName = null,
+    string? LastExecutionStatus = null);
 
 public record UpsertCameraRecordingRequest(
     string Mode,
@@ -123,7 +126,14 @@ public record AiServiceDto(
     string DetectionClassesJson,
     DateTime? StartedAt,
     int DetectionCount,
-    string RuntimeStatus = "NotIntegrated");
+    string RuntimeStatus = "NotIntegrated",
+    bool IsEnabled = true,
+    DateTime? LastHeartbeatAt = null,
+    string? ReportedVersion = null,
+    Guid? CommandId = null,
+    string? RequestedVersion = null,
+    DateTime? CommandRequestedAt = null,
+    string? CommandError = null);
 
 public record UpsertAiServiceRequest(
     string Name,

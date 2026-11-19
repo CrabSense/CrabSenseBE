@@ -120,7 +120,7 @@ public class IotService : IIotService
         if (string.IsNullOrWhiteSpace(deviceCode) || channel < 1)
             throw AppException.BadRequest("DeviceCode và channel hợp lệ là bắt buộc.");
         var device = await _uow.Devices.FirstOrDefaultAsync(
-            d => d.DeviceCode == deviceCode.Trim(), ct);
+            d => d.DeviceCode.ToLower() == deviceCode.Trim().ToLower(), ct);
         if (device is null) throw AppException.NotFound("Device");
         if (device.EdgeState is not ("Approved" or "Online"))
             throw AppException.Forbidden("Controller chưa được phê duyệt.");
@@ -573,6 +573,10 @@ public class IotService : IIotService
             foreach (var m in latest) latestBySensor[m.SensorId] = m;
         }
 
+        var ports = (await _uow.ControllerPorts.GetAllAsync(ct)).ToDictionary(p=>p.Id);
+        var errors = (await _uow.Alerts.FindAsync(a=>a.SensorId.HasValue && sensorIds.Contains(a.SensorId.Value)
+            && a.IncidentType=="sensor_read_error" && (a.Status==AlertStatus.Active||a.Status==AlertStatus.Acknowledged||a.Status==AlertStatus.InProgress),ct)).Select(a=>a.SensorId!.Value).ToHashSet();
+        var systems=(await _uow.WaterSystems.GetAllAsync(ct)).ToDictionary(w=>w.Id);
         var list = new List<SensorLiveDto>();
         foreach (var s in sensors.OrderBy(s => s.SensorCode))
         {
@@ -595,7 +599,9 @@ public class IotService : IIotService
                 s.DeviceId, dev?.DeviceCode, dev?.Status.ToString(),
                 latest?.Value, latest?.MeasuredAt, s.LastSeenAt, alarm,
                 loc?.Name, loc?.Type,
-                rowId, row?.Name, row?.Code));
+                rowId, row?.Name, row?.Code, s.Name,
+                SensorStatusPolicy.Status(s,dev,ports.GetValueOrDefault(s.ControllerPortId??s.BusPortId??Guid.Empty),errors.Contains(s.Id)),
+                latest?.DataQuality??"Unknown",latest?.ReceivedAt,s.FarmingAreaId??row?.FarmingAreaId??systems.GetValueOrDefault(s.WaterSystemId??Guid.Empty)?.FarmingAreaId??dev?.FarmingAreaId));
         }
         return ApiResponse<IEnumerable<SensorLiveDto>>.Ok(list);
     }
@@ -732,21 +738,20 @@ public class IotService : IIotService
 
     private async Task<HashSet<Guid>> SensorIdsInAreasAsync(HashSet<Guid> areaIds, CancellationToken ct)
     {
-        if (areaIds.Count == 0) return [];
-        var waterSystemIds = (await _uow.WaterSystems.FindAsync(
-            w => w.FarmingAreaId != null && areaIds.Contains(w.FarmingAreaId.Value), ct))
-            .Select(w => w.Id).ToHashSet();
-        var rowIds = (await _uow.FarmingRows.FindAsync(
-            r => areaIds.Contains(r.FarmingAreaId), ct)).Select(r => r.Id).ToHashSet();
-        var deviceIds = (await _uow.Devices.FindAsync(
-            d => (d.FarmingAreaId != null && areaIds.Contains(d.FarmingAreaId.Value))
-                 || (d.FarmingRowId != null && rowIds.Contains(d.FarmingRowId.Value)), ct))
-            .Select(d => d.Id).ToHashSet();
-        return (await _uow.Sensors.FindAsync(
-            s => (s.FarmingAreaId != null && areaIds.Contains(s.FarmingAreaId.Value)) || (s.WaterSystemId != null && waterSystemIds.Contains(s.WaterSystemId.Value))
-                 || (s.FarmingRowId != null && rowIds.Contains(s.FarmingRowId.Value))
-                 || (s.DeviceId != null && deviceIds.Contains(s.DeviceId.Value)), ct))
-            .Select(s => s.Id).ToHashSet();
+        if(areaIds.Count==0)return [];
+        var rows=(await _uow.FarmingRows.GetAllAsync(ct)).ToDictionary(r=>r.Id);
+        var systems=(await _uow.WaterSystems.GetAllAsync(ct)).ToDictionary(w=>w.Id);
+        var devices=(await _uow.Devices.GetAllAsync(ct)).ToDictionary(d=>d.Id);
+        var result=new HashSet<Guid>();
+        foreach(var s in await _uow.Sensors.GetAllAsync(ct)){
+            var dev=devices.GetValueOrDefault(s.DeviceId??Guid.Empty);
+            var linked=new Guid?[]{s.FarmingAreaId,rows.GetValueOrDefault(s.FarmingRowId??Guid.Empty)?.FarmingAreaId,
+                systems.GetValueOrDefault(s.WaterSystemId??Guid.Empty)?.FarmingAreaId,dev?.FarmingAreaId,
+                rows.GetValueOrDefault(dev?.FarmingRowId??Guid.Empty)?.FarmingAreaId}
+                .Where(x=>x.HasValue).Select(x=>x!.Value).Distinct().ToArray();
+            if(linked.Length==1 && areaIds.Contains(linked[0]))result.Add(s.Id);
+        }
+        return result;
     }
 
     private static string NormalizeSensorType(string sensorType)
@@ -1189,7 +1194,13 @@ public class IotService : IIotService
     {
         if (string.IsNullOrWhiteSpace(req.DeviceCode))
             throw AppException.BadRequest("DeviceCode is required (ESP32 id / MAC).");
+        if (req.PrepareOnly && (CameraConfiguration.IsCamera(req.DeviceType, req.StreamUrl, req.SnapshotUrl) || !string.IsNullOrWhiteSpace(req.ApiKey)))
+            throw AppException.BadRequest("Controller preparation cannot grant credentials or create a Camera.");
         var code = req.DeviceCode.Trim();
+        if (req.PrepareOnly && (code.Length > 100 || code is "." or ".." || !System.Text.RegularExpressions.Regex.IsMatch(code, @"\A[A-Za-z0-9_.:-]+\z")))
+            throw AppException.BadRequest("Mã Controller phải có tối đa 100 ký tự chữ, số, dấu gạch, chấm hoặc hai chấm.");
+        if (req.PrepareOnly && (!req.FarmingAreaId.HasValue || req.FarmingAreaId == Guid.Empty))
+            throw AppException.BadRequest("Chọn khu nuôi cho hồ sơ Controller.");
         var codeKey = code.ToLowerInvariant();
         if (await _uow.Devices.AnyAsync(d => d.DeviceCode.ToLower() == codeKey, ct))
             throw AppException.Conflict($"DeviceCode '{code}' already exists.");
@@ -1198,8 +1209,11 @@ public class IotService : IIotService
             throw AppException.Conflict($"IP '{deviceIp}' đang được thiết bị khác sử dụng.");
 
         if (req.FarmingAreaId is Guid areaId && areaId != Guid.Empty)
-            _ = await _uow.FarmingAreas.GetByIdAsync(areaId, ct)
+        {
+            var targetArea = await _uow.FarmingAreas.GetByIdAsync(areaId, ct)
                 ?? throw AppException.NotFound("FarmingArea");
+            if (req.PrepareOnly && !targetArea.IsActive) throw AppException.BadRequest("Khu nuôi không hoạt động.");
+        }
 
         if (CameraConfiguration.IsCamera(req.DeviceType, req.StreamUrl, req.SnapshotUrl))
         {
@@ -1210,6 +1224,17 @@ public class IotService : IIotService
             {
                 var mac = req.MacAddress.Trim().ToLowerInvariant();
                 if (await _uow.Devices.AnyAsync(d => d.MacAddress != null && d.MacAddress.ToLower() == mac, ct))
+                    throw AppException.Conflict("MAC đã được đăng ký.");
+            }
+        }
+        if (!CameraConfiguration.IsCamera(req.DeviceType, req.StreamUrl, req.SnapshotUrl))
+        {
+            CameraConfiguration.ValidateMetadata(deviceIp, req.MacAddress, null);
+            if (!string.IsNullOrWhiteSpace(req.MacAddress))
+            {
+                var macKey = req.MacAddress.Trim().ToLowerInvariant().Replace(":", "").Replace("-", "");
+                if (macKey.Length != 12 || !macKey.All(Uri.IsHexDigit)) throw AppException.BadRequest("MAC phải gồm 12 ký tự hex.");
+                if (await _uow.Devices.AnyAsync(d => d.MacAddress != null && d.MacAddress.ToLower().Replace(":", "").Replace("-", "") == macKey, ct))
                     throw AppException.Conflict("MAC đã được đăng ký.");
             }
         }
@@ -1228,6 +1253,7 @@ public class IotService : IIotService
             Resolution = Clean(req.Resolution),
             InstallationLocation = Limit(Clean(req.InstallationLocation), 200),
             Notes = Limit(Clean(req.Note ?? req.Notes), 500),
+            EdgeState = req.PrepareOnly ? "Unprovisioned" : "Approved",
             Status = DeviceStatus.Offline
         };
         await ApplyRowAsync(device, req.FarmingRowId, ct);
@@ -1238,7 +1264,7 @@ public class IotService : IIotService
         if (device.FarmingAreaId is Guid aid)
             area = await _uow.FarmingAreas.GetByIdAsync(aid, ct);
         return ApiResponse<DeviceDto>.Ok(
-            MapDevice(device, 0, 0, area, await RowOfAsync(device, ct)), "Controller/ESP32 registered.");
+            MapDevice(device, 0, 0, area, await RowOfAsync(device, ct)), req.PrepareOnly ? "Controller profile prepared; awaiting registration." : "Controller/ESP32 registered.");
     }
 
     public async Task<ApiResponse<DeviceDto>> UpdateDeviceAsync(
@@ -1315,6 +1341,8 @@ public class IotService : IIotService
         {
             if (!Enum.TryParse<DeviceStatus>(req.Status, true, out var st) || !Enum.IsDefined(st))
                 throw AppException.BadRequest("Trạng thái thiết bị không hợp lệ.");
+            // Explicit camera reactivation requires new authenticated evidence; never reuse pre-maintenance heartbeat.
+            if(camera&&st==DeviceStatus.Offline)device.LastSeenAt=null;
             device.Status = st;
         }
         _uow.Devices.Update(device);
@@ -1334,12 +1362,27 @@ public class IotService : IIotService
     {
         var device = await _uow.Devices.GetByIdAsync(id, ct) ?? throw AppException.NotFound("Device");
         if (device.CapabilityVersion > 0) throw AppException.Conflict("Controller has discovered port history; revoke or disable instead of deleting.");
+        if (!CameraConfiguration.IsCamera(device) &&
+            (device.KioskId.HasValue ||
+             await _uow.Sensors.AnyAsync(s => s.DeviceId == id, ct) ||
+             await _uow.RasComponents.AnyAsync(x => x.RelayDeviceId == id, ct) ||
+             await _uow.EdgeCommands.AnyAsync(x => x.DeviceCode == device.DeviceCode, ct)))
+            throw AppException.Conflict("Controller has ownership, linked equipment or command history; unbind safely or disable instead of deleting.");
+        if (CameraConfiguration.IsCamera(device)
+            && (await _uow.CameraScheduleAssignments.AnyAsync(x=>x.DeviceId==id,ct)
+                || await _uow.CameraRecordingExecutions.AnyAsync(x=>x.DeviceId==id,ct)
+                || await _uow.CameraRecordingAgents.AnyAsync(x=>x.DeviceId==id,ct)))
+            throw AppException.Conflict("Camera has recording schedules, agent assignment or execution history; disable instead of deleting.");
         if (CameraConfiguration.IsCamera(device)
             && (await _uow.MediaAssets.AnyAsync(x => x.DeviceId == id, ct)
                 || await _uow.AiDetections.AnyAsync(x => x.DeviceId == id, ct)))
             throw AppException.Conflict("Camera có lịch sử media/AI; hãy ngừng sử dụng thay vì xóa.");
         foreach (var sensor in await _uow.Sensors.FindAsync(s => s.DeviceId == id, ct))
-            sensor.DeviceId = null;
+        {
+            sensor.DeviceId = null; sensor.ControllerPortId=null; sensor.BusPortId=null; sensor.BusAddress=null; sensor.BusRegister=null;
+            sensor.LastSeenAt=null; sensor.ConfigurationVersion++; sensor.AppliedConfigurationVersion=null; sensor.LastConfigurationAppliedAt=null;
+            _uow.Sensors.Update(sensor);
+        }
         foreach (var relay in await _uow.RasComponents.FindAsync(c => c.RelayDeviceId == id, ct))
         {
             relay.RelayDeviceId = null;

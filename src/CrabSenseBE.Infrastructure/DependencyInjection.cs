@@ -65,6 +65,10 @@ public static class DependencyInjection
         services.AddHostedService<DatabaseBackupScheduler>();
         services.AddScoped<ISystemPlatformService, SystemPlatformService>();
         services.AddScoped<CameraRecordingLibrary>();
+        services.AddScoped<CameraRecordingRetentionService>();
+        services.AddHostedService<CameraRecordingRetentionWorker>();
+        services.AddHostedService<CameraRecordingMonitor>();
+        services.AddHostedService<DeviceMonitoringWorker>();
 
         return services;
     }
