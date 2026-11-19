@@ -92,10 +92,12 @@ public sealed class HarvestAssignmentService : IHarvestAssignmentService
             var crab = await _uow.Crabs.GetByIdAsync(crabId, ct)
                 ?? throw AppException.NotFound("Crab");
 
-            // Luồng hiện tại giao task cho cua còn sống hoặc đang lột.
-            if (crab.Status is not (CrabStatus.Alive or CrabStatus.Molting))
+            // Luồng hiện tại giao task cho cua còn sống.
+            if (crab.Status != CrabStatus.Alive)
             {
-                throw AppException.Conflict($"Cua {crab.Code} không còn sống hoặc không đủ điều kiện.");
+                throw AppException.Conflict(
+                    $"Chỉ cua có trạng thái Alive mới được gán vào Assignment. " +
+                    $"Cua {crab.Code} hiện có trạng thái {crab.Status}.");
             }
 
             if (crab.BoxId is not Guid boxId)
@@ -208,6 +210,9 @@ public sealed class HarvestAssignmentService : IHarvestAssignmentService
 
         var linesById = assignmentLines.ToDictionary(line => line.Id);
 
+        var now = DateTime.UtcNow;
+
+
         // Kiểm tra toàn bộ request trước khi sửa entity.
         foreach (var result in submitted)
         {
@@ -242,6 +247,31 @@ public sealed class HarvestAssignmentService : IHarvestAssignmentService
                 && (!result.WeightGram.HasValue || result.WeightGram.Value <= 0))
             {
                 throw AppException.BadRequest("Cua thu hoạch phải có khối lượng lớn hơn 0.");
+            }
+
+            if (result.Outcome == HarvestAssignmentOutcome.Harvested)
+            {
+                if (!result.CarapaceLengthMm.HasValue || result.CarapaceLengthMm.Value <= 0)
+                    throw AppException.BadRequest("Chiều dài mai sau lột phải lớn hơn 0.");
+
+                if (!result.CarapaceWidthMm.HasValue || result.CarapaceWidthMm.Value <= 0)
+                    throw AppException.BadRequest("Chiều rộng mai sau lột phải lớn hơn 0.");
+
+                if (!result.HarvestedAt.HasValue)
+                    throw AppException.BadRequest("Cần nhập ngày giờ thu hoạch.");
+            }
+
+            var crab = await _uow.Crabs.GetByIdAsync(assignmentLine.CrabId, ct)
+    ?? throw AppException.Conflict($"Không tìm thấy cua {assignmentLine.CrabCode}.");
+
+            var hasMolted = result.MoltConfirmed || crab.MoltedAt.HasValue;
+
+            if (result.Outcome == HarvestAssignmentOutcome.ContinueRaising
+                && !hasMolted
+                && now > crab.StockedAt.AddDays(45))
+            {
+                throw AppException.Conflict(
+                    $"Cua {assignmentLine.CrabCode} đã quá 45 ngày từ ngày thả nuôi và chưa lột; bắt buộc thu hoạch.");
             }
         }
 
@@ -287,7 +317,6 @@ public sealed class HarvestAssignmentService : IHarvestAssignmentService
                 requirePositiveWeight: true);
         }
 
-        var now = DateTime.UtcNow;
 
         // Chỉ lưu lựa chọn và thông tin tạm trên Assignment Line.
         // Giữ Status = InProgress để cua vẫn được giữ trong task đang mở.
@@ -295,36 +324,11 @@ public sealed class HarvestAssignmentService : IHarvestAssignmentService
         {
             var line = linesById[result.AssignmentLineId];
 
-            var crab = await _uow.Crabs.GetByIdAsync(line.CrabId, ct)
-                ?? throw AppException.Conflict($"Không tìm thấy cua {line.CrabCode}.");
-
-            if (crab.Status != CrabStatus.Molting)
-            {
-                var oldStatus = crab.Status;
-                var oldCondition = crab.Condition;
-
-                crab.Status = CrabStatus.Molting;
-                _uow.Crabs.Update(crab);
-
-                await _uow.CrabStatusHistories.AddAsync(
-                    new CrabStatusHistory
-                    {
-                        CrabId = crab.Id,
-                        OldStatus = oldStatus,
-                        NewStatus = CrabStatus.Molting,
-                        OldCondition = oldCondition,
-                        NewCondition = crab.Condition,
-                        ChangedAt = now,
-                        Source = "harvest-assignment",
-                        Reason = assignment.AssignmentCode,
-                        ChangedByUserId = _currentUser.UserId
-                    },
-                    ct);
-            }
             line.Outcome = result.Outcome;
             line.CheckedAt = now;
             line.CheckedByUserId = _currentUser.UserId;
             line.Notes = NormalizeNullable(result.Notes);
+            line.PendingMoltConfirmed = result.MoltConfirmed;
 
             // Chưa thu hoạch thật ở bước này nên chưa ghi HarvestedAt.
             line.HarvestedAt = null;
@@ -336,6 +340,9 @@ public sealed class HarvestAssignmentService : IHarvestAssignmentService
                 // Xóa dữ liệu thu hoạch cũ nếu Staff đổi lựa chọn sang nuôi tiếp.
                 line.HarvestWeightGram = null;
                 line.HarvestGrade = null;
+                line.HarvestCarapaceLengthMm = null;
+                line.HarvestCarapaceWidthMm = null;
+                line.PendingHarvestedAt = null;
                 line.HarvestIsSoftshell = null;
                 line.HarvestConditionLabel = null;
                 line.HarvestNotes = null;
@@ -346,6 +353,9 @@ public sealed class HarvestAssignmentService : IHarvestAssignmentService
                 line.EligibilityReason = null;
                 line.HarvestWeightGram = result.WeightGram;
                 line.HarvestGrade = NormalizeNullable(result.Grade);
+                line.HarvestCarapaceLengthMm = result.CarapaceLengthMm;
+                line.HarvestCarapaceWidthMm = result.CarapaceWidthMm;
+                line.PendingHarvestedAt = result.HarvestedAt!.Value.UtcDateTime;
                 line.HarvestIsSoftshell = result.IsSoftshell;
                 line.HarvestConditionLabel =
                     NormalizeNullable(result.ConditionLabel);
@@ -586,7 +596,11 @@ public sealed class HarvestAssignmentService : IHarvestAssignmentService
                 line.HarvestIsSoftshell,
                 line.HarvestConditionLabel,
                 line.HarvestNotes,
-                JsonStringList.Parse(line.HarvestPhotoUrlsJson));
+                line.HarvestCarapaceLengthMm,
+                line.HarvestCarapaceWidthMm,
+                line.PendingHarvestedAt,
+                JsonStringList.Parse(line.HarvestPhotoUrlsJson),
+                line.PendingMoltConfirmed);
         }).ToList();
 
         var voucherDtos = vouchers
@@ -710,18 +724,43 @@ public sealed class HarvestAssignmentService : IHarvestAssignmentService
         var now = DateTime.UtcNow;
         HarvestVoucher? voucher = null;
         var createdHarvestLines = new List<HarvestLine>();
+        foreach (var line in deferredLines)
+        {
+            var crab = await _uow.Crabs.GetByIdAsync(line.CrabId, ct)
+                ?? throw AppException.Conflict($"Không tìm thấy cua {line.CrabCode}.");
+
+            if (!line.PendingMoltConfirmed
+                && crab.MoltedAt is null
+                && now > crab.StockedAt.AddDays(45))
+            {
+                throw AppException.Conflict(
+                    $"Cua {line.CrabCode} đã quá 45 ngày và chưa lột; không thể tiếp tục nuôi.");
+            }
+        }
 
         if (harvestedLines.Count > 0)
         {
-            if (harvestedLines.Any(x => !x.HarvestWeightGram.HasValue
-                || x.HarvestWeightGram.Value <= 0))
+            if (harvestedLines.Any(line =>
+                    !line.HarvestWeightGram.HasValue
+                    || line.HarvestWeightGram.Value <= 0))
             {
-                throw AppException.Conflict("Thiếu khối lượng hợp lệ của cua thu hoạch.");
+                throw AppException.Conflict(
+                    "Thiếu khối lượng hợp lệ của cua thu hoạch.");
             }
 
-            // Chỉ xác thực và ghi nhận thu hoạch khi Staff nộp hoàn tất task.
+            if (harvestedLines.Any(line =>
+                    !line.HarvestCarapaceLengthMm.HasValue
+                    || line.HarvestCarapaceLengthMm.Value <= 0
+                    || !line.HarvestCarapaceWidthMm.HasValue
+                    || line.HarvestCarapaceWidthMm.Value <= 0
+                    || !line.PendingHarvestedAt.HasValue))
+            {
+                throw AppException.Conflict(
+                    "Thiếu chiều dài, chiều rộng hoặc thời điểm thu hoạch của cua.");
+            }
+
             await _harvestRecorder.ValidateCrabsAsync(
-                harvestedLines.Select(x => x.CrabId).Distinct().ToList(),
+                harvestedLines.Select(line => line.CrabId).Distinct().ToList(),
                 assignment.FarmingAreaId,
                 checkAlreadyHarvested: true,
                 currentVoucherId: null,
@@ -776,8 +815,13 @@ public sealed class HarvestAssignmentService : IHarvestAssignmentService
                 harvestLine.HarvestAssignmentLineId = line.Id;
                 harvestLine.AssignmentLine = line;
                 line.HarvestLine = harvestLine;
+
+                harvestLine.CarapaceLengthMm = line.HarvestCarapaceLengthMm;
+                harvestLine.CarapaceWidthMm = line.HarvestCarapaceWidthMm;
+                harvestLine.HarvestedAt = line.PendingHarvestedAt;
+
                 line.Status = HarvestAssignmentLineStatus.Harvested;
-                line.HarvestedAt = now;
+                line.HarvestedAt = line.PendingHarvestedAt;
                 line.EligibilityReason = null;
 
                 voucher.Lines.Add(harvestLine);
@@ -789,7 +833,11 @@ public sealed class HarvestAssignmentService : IHarvestAssignmentService
 
             await _uow.HarvestVouchers.AddAsync(voucher, ct);
 
-            // Chuyển trạng thái cua và ghi lịch sử ở bước hoàn tất, không phải lúc lưu từng cua.
+            foreach (var line in harvestedLines)
+            {
+                await ApplyMoltConfirmationAsync(assignment, line, now, ct);
+            }
+
             await _harvestRecorder.ApplyHarvestAsync(
                 voucher,
                 createdHarvestLines,
@@ -797,13 +845,18 @@ public sealed class HarvestAssignmentService : IHarvestAssignmentService
         }
 
         foreach (var line in deferredLines)
+        {
+            await ApplyMoltConfirmationAsync(assignment, line, now, ct);
             line.Status = HarvestAssignmentLineStatus.Deferred;
+        }
 
         assignment.Status = HarvestAssignmentStatus.Completed;
         assignment.CompletedAt = now;
 
         foreach (var line in lines)
+        {
             _uow.HarvestAssignmentLines.Update(line);
+        }
 
         _uow.HarvestAssignments.Update(assignment);
         await _uow.SaveChangesAsync(ct);
@@ -835,5 +888,78 @@ public sealed class HarvestAssignmentService : IHarvestAssignmentService
         return string.IsNullOrWhiteSpace(user?.FullName)
             ? "Owner"
             : user.FullName.Trim();
+    }
+    private async Task ApplyMoltConfirmationAsync(
+    HarvestAssignment assignment,
+    HarvestAssignmentLine line,
+    DateTime now,
+    CancellationToken ct)
+    {
+        if (!line.PendingMoltConfirmed)
+            return;
+
+        var crab = await _uow.Crabs.GetByIdAsync(line.CrabId, ct)
+            ?? throw AppException.Conflict($"Không tìm thấy cua {line.CrabCode}.");
+
+        if (crab.Status is not (CrabStatus.Alive or CrabStatus.Molting))
+        {
+            throw AppException.Conflict(
+                $"Cua {line.CrabCode} không còn ở trạng thái hợp lệ để xác nhận lột.");
+        }
+
+        var confirmedAt = line.CheckedAt ?? now;
+        if (confirmedAt < crab.StockedAt)
+        {
+            throw AppException.Conflict(
+                $"Thời điểm xác nhận lột của cua {line.CrabCode} không hợp lệ.");
+        }
+
+        if (crab.MoltedAt.HasValue && confirmedAt < crab.MoltedAt.Value)
+        {
+            throw AppException.Conflict(
+                $"Thời điểm xác nhận lột của cua {line.CrabCode} cũ hơn lần lột trước.");
+        }
+        var oldStatus = crab.Status;
+        var oldCondition = crab.Condition;
+
+        var record = new MoltingRecord
+        {
+            CrabId = crab.Id,
+            BoxId = crab.BoxId,
+            MoltTime = confirmedAt,
+            WeightAfterGram = line.HarvestWeightGram,
+            ShellWidthAfterMm = line.HarvestCarapaceWidthMm,
+            ShellLengthAfterMm = line.HarvestCarapaceLengthMm,
+            Result = "success",
+            Source = "harvest-assignment",
+            Notes = line.Notes ?? assignment.AssignmentCode,
+            PhotoUrlsJson = line.HarvestPhotoUrlsJson
+        };
+
+        await _uow.MoltingRecords.AddAsync(record, ct);
+
+        crab.MoltedAt = confirmedAt;
+        crab.MoltingStage = "softshell";
+        crab.Condition = CrabCondition.Softshell;
+        crab.Status = CrabStatus.Alive;
+        _uow.Crabs.Update(crab);
+
+        if (oldStatus != crab.Status || oldCondition != crab.Condition)
+        {
+            await _uow.CrabStatusHistories.AddAsync(
+                new CrabStatusHistory
+                {
+                    CrabId = crab.Id,
+                    OldStatus = oldStatus,
+                    NewStatus = crab.Status,
+                    OldCondition = oldCondition,
+                    NewCondition = crab.Condition,
+                    ChangedAt = confirmedAt,
+                    Source = "harvest-assignment",
+                    Reason = assignment.AssignmentCode,
+                    ChangedByUserId = _currentUser.UserId
+                },
+                ct);
+        }
     }
 }

@@ -2561,6 +2561,14 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.Property<Guid>("HarvestAssignmentId")
                         .HasColumnType("uuid");
 
+                    b.Property<decimal?>("HarvestCarapaceLengthMm")
+                        .HasPrecision(10, 2)
+                        .HasColumnType("numeric(10,2)");
+
+                    b.Property<decimal?>("HarvestCarapaceWidthMm")
+                        .HasPrecision(10, 2)
+                        .HasColumnType("numeric(10,2)");
+
                     b.Property<string>("HarvestConditionLabel")
                         .HasColumnType("text");
 
@@ -2588,6 +2596,14 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
 
                     b.Property<string>("Outcome")
                         .HasColumnType("text");
+
+                    b.Property<DateTime?>("PendingHarvestedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<bool>("PendingMoltConfirmed")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("boolean")
+                        .HasDefaultValue(false);
 
                     b.Property<string>("Status")
                         .IsRequired()
@@ -2625,6 +2641,14 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.Property<Guid?>("BoxId")
                         .HasColumnType("uuid");
 
+                    b.Property<decimal?>("CarapaceLengthMm")
+                        .HasPrecision(10, 2)
+                        .HasColumnType("numeric(10,2)");
+
+                    b.Property<decimal?>("CarapaceWidthMm")
+                        .HasPrecision(10, 2)
+                        .HasColumnType("numeric(10,2)");
+
                     b.Property<string>("ConditionLabel")
                         .HasColumnType("text");
 
@@ -2645,6 +2669,9 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
 
                     b.Property<Guid>("HarvestVoucherId")
                         .HasColumnType("uuid");
+
+                    b.Property<DateTime?>("HarvestedAt")
+                        .HasColumnType("timestamp with time zone");
 
                     b.Property<bool>("IsSoftshell")
                         .HasColumnType("boolean");

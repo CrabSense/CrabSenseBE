@@ -87,7 +87,10 @@ public record HarvestLineDto(
     string? AreaName = null,
     string? RowName = null,
     string? LotCode = null,
-    string? Result = null
+    string? Result = null,
+    decimal? CarapaceLengthMm = null,
+    decimal? CarapaceWidthMm = null,
+    DateTime? HarvestedAt = null
 );
 
 public record CreateHarvestVoucherRequest(
@@ -262,7 +265,11 @@ public record HarvestAssignmentResultRequest(
     string? Reason = null,
     string? Notes = null,
     string? ConditionLabel = null,
-    IReadOnlyList<string>? PhotoUrls = null);
+    decimal? CarapaceLengthMm = null, // Chiều dài mai
+    decimal? CarapaceWidthMm = null, // Chiều rộng mai
+    DateTimeOffset? HarvestedAt = null, // Thời điểm thu hoạch
+    IReadOnlyList<string>? PhotoUrls = null,
+    bool MoltConfirmed = false); // để biết cua thu hoạch do lột hay do hết ngày quy định nhưng vẫn chưa lột
 
 public record SubmitHarvestAssignmentResultsRequest(
     IReadOnlyCollection<HarvestAssignmentResultRequest> Lines,
@@ -312,7 +319,11 @@ public record HarvestAssignmentLineDetailDto(
     bool? PendingIsSoftshell,
     string? PendingConditionLabel,
     string? PendingHarvestNotes,
-    IReadOnlyList<string>? PendingPhotoUrls);
+    decimal? PendingCarapaceLengthMm,
+    decimal? PendingCarapaceWidthMm,
+    DateTime? PendingHarvestedAt,
+    IReadOnlyList<string>? PendingPhotoUrls,
+    bool? PendingMoltConfirmed = null);
 
 public record HarvestAssignmentVoucherDto(
     Guid Id,

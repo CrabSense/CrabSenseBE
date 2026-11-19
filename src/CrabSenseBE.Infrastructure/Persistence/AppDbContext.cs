@@ -1035,6 +1035,9 @@ public class AppDbContext : DbContext
 
             entity.Property(x => x.Outcome)
                 .HasConversion<string>();
+            entity.Property(x => x.HarvestCarapaceLengthMm).HasPrecision(10, 2);
+            entity.Property(x => x.HarvestCarapaceWidthMm).HasPrecision(10, 2);
+            entity.Property(x => x.PendingMoltConfirmed).HasDefaultValue(false);
         });
 
         modelBuilder.Entity<HarvestVoucher>(entity =>
@@ -1049,6 +1052,8 @@ public class AppDbContext : DbContext
             entity.HasIndex(x => x.HarvestAssignmentLineId)
                 .IsUnique()
                 .HasFilter("\"HarvestAssignmentLineId\" IS NOT NULL");
+            entity.Property(x => x.CarapaceLengthMm).HasPrecision(10, 2);
+            entity.Property(x => x.CarapaceWidthMm).HasPrecision(10, 2);
         });
     }
 

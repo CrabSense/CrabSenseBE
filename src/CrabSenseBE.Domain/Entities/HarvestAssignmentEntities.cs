@@ -37,23 +37,18 @@ public class HarvestAssignmentLine : BaseEntity
     public string? CrabCode { get; set; }
     public Guid? BoxId { get; set; }
     public string? BoxCode { get; set; }
-
     public HarvestAssignmentLineStatus Status { get; set; }
         = HarvestAssignmentLineStatus.Assigned;
-
     public DateTime? CheckedAt { get; set; }
     public Guid? CheckedByUserId { get; set; }
     public string? EligibilityReason { get; set; }
-
     public DateTime? HarvestedAt { get; set; }
     public string? Notes { get; set; }
-
     public HarvestAssignment? Assignment { get; set; }
     public Crab? Crab { get; set; }
     public HarvestLine? HarvestLine { get; set; }
     // Kết quả Staff đã chọn nhưng chưa nộp hoàn tất task.
     public HarvestAssignmentOutcome? Outcome { get; set; }
-
     // Thông tin thu hoạch được lưu tạm tại đây.
     // Chỉ tạo HarvestLine khi hoàn tất Assignment.
     public decimal? HarvestWeightGram { get; set; }
@@ -61,5 +56,11 @@ public class HarvestAssignmentLine : BaseEntity
     public bool? HarvestIsSoftshell { get; set; }
     public string? HarvestConditionLabel { get; set; }
     public string? HarvestNotes { get; set; }
+    public decimal? HarvestCarapaceLengthMm { get; set; }
+    public decimal? HarvestCarapaceWidthMm { get; set; }
+
+    // Thời điểm Staff nhập cho lần thu hoạch của cua này, lưu theo UTC.
+    public DateTime? PendingHarvestedAt { get; set; }
+    public bool PendingMoltConfirmed { get; set; } // để biết cua thu hoạch do lột hay do hết ngày quy định nhưng vẫn chưa lột
     public string HarvestPhotoUrlsJson { get; set; } = "[]";
 }

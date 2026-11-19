@@ -71,6 +71,9 @@ public class HarvestLine : BaseEntity
     // Nullable để hỗ trợ các HarvestLine được tạo trước khi có Assignment.
     public Guid? HarvestAssignmentLineId { get; set; }
     public HarvestAssignmentLine? AssignmentLine { get; set; }
+    public decimal? CarapaceLengthMm { get; set; }
+    public decimal? CarapaceWidthMm { get; set; }
+    public DateTime? HarvestedAt { get; set; }
 }
 
 /// <summary>

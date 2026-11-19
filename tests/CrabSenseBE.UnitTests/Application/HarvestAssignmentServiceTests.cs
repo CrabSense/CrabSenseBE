@@ -3,11 +3,11 @@ using CrabSenseBE.Application.Common;
 using CrabSenseBE.Application.DTOs.Harvest;
 using CrabSenseBE.Application.Interfaces;
 using CrabSenseBE.Application.Services;
+using CrabSenseBE.Domain.Common;
 using CrabSenseBE.Domain.Entities;
 using CrabSenseBE.Domain.Enums;
 using CrabSenseBE.Domain.Interfaces;
 using Moq;
-using CrabSenseBE.Domain.Common;
 
 namespace CrabSenseBE.UnitTests.Application;
 
@@ -30,11 +30,85 @@ public sealed class HarvestAssignmentServiceTests
     }
 
     [Fact]
-    public async Task SubmitResults_SavesOutcomesWithoutCreatingVoucherOrHarvestingCrabs()
+    public async Task CreateAssignment_RejectsCrabThatIsNotAlive()
+    {
+        var managerId = Guid.NewGuid();
+        var staffId = Guid.NewGuid();
+        var areaId = Guid.NewGuid();
+
+        var manager = new AppUser
+        {
+            Id = managerId,
+            Role = UserRole.FarmManager,
+            IsActive = true,
+            FullName = "Manager"
+        };
+
+        var staff = new AppUser
+        {
+            Id = staffId,
+            Role = UserRole.FarmStaff,
+            IsActive = true,
+            FullName = "Staff"
+        };
+
+        var crab = new Crab
+        {
+            Id = Guid.NewGuid(),
+            Code = "CRAB-MOLT",
+            Status = CrabStatus.Molting,
+            StockedAt = DateTime.UtcNow.AddDays(-10)
+        };
+
+        var currentUser = new Mock<ICurrentUserService>();
+        currentUser.Setup(x => x.UserId).Returns(managerId);
+        currentUser.Setup(x => x.IsAuthenticated).Returns(true);
+
+        var unitOfWork = new Mock<IUnitOfWork>();
+        unitOfWork.Setup(x => x.Users)
+            .Returns(CreateRepository(new List<AppUser> { manager, staff }).Object);
+        unitOfWork.Setup(x => x.FarmManagerAssignments)
+            .Returns(CreateRepository(
+            [
+                new FarmManagerAssignment
+                {
+                    ManagerUserId = managerId,
+                    FarmingAreaId = areaId,
+                    AssignedByUserId = managerId
+                }
+            ]).Object);
+        unitOfWork.Setup(x => x.FarmStaffAssignments)
+            .Returns(CreateRepository(
+            [
+                new FarmStaffAssignment
+                {
+                    StaffUserId = staffId,
+                    ManagerUserId = managerId,
+                    FarmingAreaId = areaId,
+                    AssignedByUserId = managerId
+                }
+            ]).Object);
+        unitOfWork.Setup(x => x.Crabs)
+            .Returns(CreateRepository(new List<Crab> { crab }).Object);
+
+        var service = new HarvestAssignmentService(
+            unitOfWork.Object,
+            currentUser.Object,
+            new HarvestRecorder(unitOfWork.Object, currentUser.Object));
+
+        var request = new CreateHarvestAssignmentRequest(
+            areaId,
+            staffId,
+            [crab.Id]);
+
+        await Assert.ThrowsAsync<AppException>(() =>
+            service.CreateAssignmentAsync(request));
+    }
+
+    [Fact]
+    public async Task SubmitResults_SavesOutcomesWithoutCreatingVoucherOrChangingCrabStatus()
     {
         var fixture = new Fixture(HarvestAssignmentStatus.InProgress, lineCount: 2);
-        var harvestedCrab = fixture.Crabs[0];
-        var deferredCrab = fixture.Crabs[1];
 
         var request = new SubmitHarvestAssignmentResultsRequest(
         [
@@ -43,28 +117,41 @@ public sealed class HarvestAssignmentServiceTests
                 Outcome: HarvestAssignmentOutcome.Harvested,
                 WeightGram: 350,
                 Grade: "M",
+                CarapaceLengthMm: 72,
+                CarapaceWidthMm: 85,
+                HarvestedAt: DateTimeOffset.UtcNow,
                 PhotoUrls: ["https://example.test/crab.jpg"]),
             new HarvestAssignmentResultRequest(
                 AssignmentLineId: fixture.Lines[1].Id,
                 Outcome: HarvestAssignmentOutcome.ContinueRaising,
-                Reason: "Chưa đủ kích thước")
+                Reason: "Chưa đủ kích thước",
+                MoltConfirmed: false)
         ]);
 
         await fixture.Service.SubmitAssignmentResultsAsync(
             fixture.Assignment.Id,
             request);
 
-        Assert.Equal(HarvestAssignmentOutcome.Harvested, fixture.Lines[0].Outcome);
+        Assert.Equal(
+            HarvestAssignmentOutcome.Harvested,
+            fixture.Lines[0].Outcome);
         Assert.Equal(350, fixture.Lines[0].HarvestWeightGram);
         Assert.Equal("M", fixture.Lines[0].HarvestGrade);
-        Assert.Equal(HarvestAssignmentOutcome.ContinueRaising, fixture.Lines[1].Outcome);
-        Assert.Equal("Chưa đủ kích thước", fixture.Lines[1].EligibilityReason);
+        Assert.Equal(72, fixture.Lines[0].HarvestCarapaceLengthMm);
+        Assert.Equal(85, fixture.Lines[0].HarvestCarapaceWidthMm);
+        Assert.NotNull(fixture.Lines[0].PendingHarvestedAt);
 
-        // Chưa hoàn tất task nên các dòng vẫn mở và cua chưa bị chuyển trạng thái.
+        Assert.Equal(
+            HarvestAssignmentOutcome.ContinueRaising,
+            fixture.Lines[1].Outcome);
+        Assert.Equal(
+            "Chưa đủ kích thước",
+            fixture.Lines[1].EligibilityReason);
+
         Assert.All(fixture.Lines, line =>
             Assert.Equal(HarvestAssignmentLineStatus.InProgress, line.Status));
         Assert.All(fixture.Crabs, crab =>
-            Assert.Equal(CrabStatus.Molting, crab.Status));
+            Assert.Equal(CrabStatus.Alive, crab.Status));
 
         Assert.Empty(fixture.Vouchers);
         fixture.VoucherRepository.Verify(
@@ -72,8 +159,29 @@ public sealed class HarvestAssignmentServiceTests
                 It.IsAny<HarvestVoucher>(),
                 It.IsAny<CancellationToken>()),
             Times.Never);
-        Assert.NotEqual(CrabStatus.Harvested, harvestedCrab.Status);
-        Assert.NotEqual(CrabStatus.Harvested, deferredCrab.Status);
+    }
+
+    [Fact]
+    public async Task SubmitResults_RejectsContinueRaisingAfter45DaysWithoutMolt()
+    {
+        var fixture = new Fixture(HarvestAssignmentStatus.InProgress, lineCount: 1);
+        fixture.Crabs[0].StockedAt = DateTime.UtcNow.AddDays(-46);
+
+        var request = new SubmitHarvestAssignmentResultsRequest(
+        [
+            new HarvestAssignmentResultRequest(
+                AssignmentLineId: fixture.Lines[0].Id,
+                Outcome: HarvestAssignmentOutcome.ContinueRaising,
+                Reason: "Chưa lột",
+                MoltConfirmed: false)
+        ]);
+
+        await Assert.ThrowsAsync<AppException>(() =>
+            fixture.Service.SubmitAssignmentResultsAsync(
+                fixture.Assignment.Id,
+                request));
+
+        Assert.Null(fixture.Lines[0].Outcome);
     }
 
     [Fact]
@@ -82,7 +190,6 @@ public sealed class HarvestAssignmentServiceTests
         var fixture = new Fixture(HarvestAssignmentStatus.InProgress, lineCount: 2);
         fixture.Lines[0].Outcome = HarvestAssignmentOutcome.ContinueRaising;
         fixture.Lines[0].EligibilityReason = "Chưa đủ kích thước";
-        // Dòng thứ hai chưa có Outcome.
 
         await Assert.ThrowsAsync<AppException>(() =>
             fixture.Service.CompleteAssignmentAsync(
@@ -97,6 +204,113 @@ public sealed class HarvestAssignmentServiceTests
     }
 
     [Fact]
+    public async Task CompleteAssignment_RejectsDeferredCrabThatPassed45DaysWithoutMolt()
+    {
+        var fixture = new Fixture(HarvestAssignmentStatus.InProgress, lineCount: 1);
+        fixture.Crabs[0].StockedAt = DateTime.UtcNow.AddDays(-46);
+
+        fixture.Lines[0].Outcome = HarvestAssignmentOutcome.ContinueRaising;
+        fixture.Lines[0].EligibilityReason = "Chưa lột";
+        fixture.Lines[0].PendingMoltConfirmed = false;
+
+        await Assert.ThrowsAsync<AppException>(() =>
+            fixture.Service.CompleteAssignmentAsync(
+                fixture.Assignment.Id,
+                new CompleteHarvestAssignmentRequest()));
+
+        Assert.Equal(
+            HarvestAssignmentStatus.InProgress,
+            fixture.Assignment.Status);
+        Assert.Empty(fixture.Vouchers);
+    }
+
+    [Fact]
+    public async Task CompleteAssignment_DeferredWithoutMolt_LeavesCrabAliveWithoutMoltRecord()
+    {
+        var fixture = new Fixture(HarvestAssignmentStatus.InProgress, lineCount: 1);
+        var crab = fixture.Crabs[0];
+        var line = fixture.Lines[0];
+
+        line.Outcome = HarvestAssignmentOutcome.ContinueRaising;
+        line.EligibilityReason = "Chưa đủ kích thước";
+        line.PendingMoltConfirmed = false;
+
+        await fixture.Service.CompleteAssignmentAsync(
+            fixture.Assignment.Id,
+            new CompleteHarvestAssignmentRequest());
+
+        Assert.Equal(CrabStatus.Alive, crab.Status);
+        Assert.Null(crab.MoltedAt);
+        Assert.Empty(fixture.MoltingRecords);
+        Assert.Equal(HarvestAssignmentLineStatus.Deferred, line.Status);
+        Assert.Equal(HarvestAssignmentStatus.Completed, fixture.Assignment.Status);
+    }
+
+    [Fact]
+    public async Task CompleteAssignment_DeferredWithConfirmedMolt_RecordsMoltAndLeavesCrabAlive()
+    {
+        var fixture = new Fixture(HarvestAssignmentStatus.InProgress, lineCount: 1);
+        var crab = fixture.Crabs[0];
+        var line = fixture.Lines[0];
+
+        line.Outcome = HarvestAssignmentOutcome.ContinueRaising;
+        line.EligibilityReason = "Đã lột, tiếp tục nuôi";
+        line.PendingMoltConfirmed = true;
+        line.CheckedAt = DateTime.UtcNow;
+
+        await fixture.Service.CompleteAssignmentAsync(
+            fixture.Assignment.Id,
+            new CompleteHarvestAssignmentRequest());
+
+        Assert.Equal(CrabStatus.Alive, crab.Status);
+        Assert.Equal(CrabCondition.Softshell, crab.Condition);
+        Assert.NotNull(crab.MoltedAt);
+
+        var moltRecord = Assert.Single(fixture.MoltingRecords);
+        Assert.Equal(crab.Id, moltRecord.CrabId);
+        Assert.Equal("success", moltRecord.Result);
+        Assert.Equal("harvest-assignment", moltRecord.Source);
+
+        Assert.Equal(HarvestAssignmentLineStatus.Deferred, line.Status);
+        Assert.Equal(HarvestAssignmentStatus.Completed, fixture.Assignment.Status);
+        Assert.Empty(fixture.Vouchers);
+    }
+
+    [Fact]
+    public async Task CompleteAssignment_CreatesVoucherAndHarvestsCrabAfterConfirmedMolt()
+    {
+        var fixture = new Fixture(HarvestAssignmentStatus.InProgress, lineCount: 1);
+        var crab = fixture.Crabs[0];
+        var line = fixture.Lines[0];
+
+        line.Outcome = HarvestAssignmentOutcome.Harvested;
+        line.CheckedAt = DateTime.UtcNow;
+        line.PendingMoltConfirmed = true;
+        line.HarvestWeightGram = 350;
+        line.HarvestGrade = "M";
+        line.HarvestIsSoftshell = true;
+        line.HarvestCarapaceLengthMm = 72;
+        line.HarvestCarapaceWidthMm = 85;
+        line.PendingHarvestedAt = DateTime.UtcNow;
+
+        await fixture.Service.CompleteAssignmentAsync(
+            fixture.Assignment.Id,
+            new CompleteHarvestAssignmentRequest("Thu hoạch sau khi lột"));
+
+        Assert.Equal(CrabStatus.Harvested, crab.Status);
+        Assert.Equal(HarvestAssignmentStatus.Completed, fixture.Assignment.Status);
+
+        var moltRecord = Assert.Single(fixture.MoltingRecords);
+        Assert.Equal(crab.Id, moltRecord.CrabId);
+        Assert.Equal("success", moltRecord.Result);
+
+        var voucher = Assert.Single(fixture.Vouchers);
+        Assert.Equal(1, voucher.TotalQuantity);
+        Assert.Equal(HarvestStatus.Completed, voucher.Status);
+        Assert.Single(voucher.Lines);
+    }
+
+    [Fact]
     public async Task CompleteAssignment_CreatesOneVoucherForHarvestedCrabsAndDefersOthers()
     {
         var fixture = new Fixture(HarvestAssignmentStatus.InProgress, lineCount: 2);
@@ -107,6 +321,9 @@ public sealed class HarvestAssignmentServiceTests
         fixture.Lines[0].HarvestWeightGram = 350;
         fixture.Lines[0].HarvestGrade = "M";
         fixture.Lines[0].HarvestIsSoftshell = true;
+        fixture.Lines[0].HarvestCarapaceLengthMm = 72;
+        fixture.Lines[0].HarvestCarapaceWidthMm = 85;
+        fixture.Lines[0].PendingHarvestedAt = DateTime.UtcNow;
 
         fixture.Lines[1].Outcome = HarvestAssignmentOutcome.ContinueRaising;
         fixture.Lines[1].EligibilityReason = "Chưa đủ kích thước";
@@ -129,8 +346,9 @@ public sealed class HarvestAssignmentServiceTests
 
         Assert.Equal(CrabStatus.Harvested, harvestedCrab.Status);
         Assert.Equal(HarvestAssignmentLineStatus.Harvested, fixture.Lines[0].Status);
-        Assert.Equal(CrabStatus.Molting, deferredCrab.Status);
+        Assert.Equal(CrabStatus.Alive, deferredCrab.Status);
         Assert.Equal(HarvestAssignmentLineStatus.Deferred, fixture.Lines[1].Status);
+        Assert.Empty(fixture.MoltingRecords);
     }
 
     private sealed class Fixture
@@ -144,6 +362,7 @@ public sealed class HarvestAssignmentServiceTests
         public List<HarvestAssignmentLine> Lines { get; }
         public List<Crab> Crabs { get; }
         public List<HarvestVoucher> Vouchers { get; }
+        public List<MoltingRecord> MoltingRecords { get; }
 
         public Fixture(HarvestAssignmentStatus status, int lineCount)
         {
@@ -201,7 +420,9 @@ public sealed class HarvestAssignmentServiceTests
                 {
                     Id = line.CrabId,
                     Code = line.CrabCode,
-                    Status = CrabStatus.Molting,
+                    Status = CrabStatus.Alive,
+                    Condition = CrabCondition.Normal,
+                    StockedAt = DateTime.UtcNow.AddDays(-10),
                     BoxId = boxId
                 });
 
@@ -227,6 +448,8 @@ public sealed class HarvestAssignmentServiceTests
             };
 
             Vouchers = new List<HarvestVoucher>();
+            MoltingRecords = new List<MoltingRecord>();
+
             var harvestLines = new List<HarvestLine>();
             var harvestHistories = new List<CrabHarvestHistory>();
             var crabStatusHistories = new List<CrabStatusHistory>();
@@ -269,6 +492,8 @@ public sealed class HarvestAssignmentServiceTests
                 .Returns(CreateRepository(harvestHistories).Object);
             UnitOfWork.Setup(x => x.CrabStatusHistories)
                 .Returns(CreateRepository(crabStatusHistories).Object);
+            UnitOfWork.Setup(x => x.MoltingRecords)
+                .Returns(CreateRepository(MoltingRecords).Object);
             UnitOfWork.Setup(x => x.BoxStatusHistories)
                 .Returns(CreateRepository(boxStatusHistories).Object);
             UnitOfWork.Setup(x => x.CrabBoxAllocations)

@@ -346,10 +346,10 @@ public class FarmingService : IFarmingService
             if (hasRows)
                 throw AppException.Conflict("Cannot delete area that still has rows. Delete rows first.");
 
-        _uow.FarmingAreas.Remove(area);
-        await AuditConfigAsync("DeleteFarmingArea", "FarmingArea", area.Id, area.Code, ct);
-        await _uow.SaveChangesAsync(ct);
-        return ApiResponse.Ok("Deleted.");
+            _uow.FarmingAreas.Remove(area);
+            await AuditConfigAsync("DeleteFarmingArea", "FarmingArea", area.Id, area.Code, ct);
+            await _uow.SaveChangesAsync(ct);
+            return ApiResponse.Ok("Deleted.");
         }
 
         // ── Cascade: gom khu → hàng → hộp → cua ────────────────────────────────
@@ -374,7 +374,7 @@ public class FarmingService : IFarmingService
         foreach (var row in rows) _uow.FarmingRows.Remove(row);
         _uow.FarmingAreas.Remove(area);
 
-            await ClearOperationRefsAsync(boxIds, crabIds, ct);
+        await ClearOperationRefsAsync(boxIds, crabIds, ct);
 
         // Một SaveChanges duy nhất => gói trong 1 transaction: lỗi giữa đường thì
         // rollback, không để lại khu bị xoá dở.
@@ -877,9 +877,13 @@ public class FarmingService : IFarmingService
         if (string.Equals(oldStatus, box.Status, StringComparison.OrdinalIgnoreCase) && oldOccupied == box.IsOccupied) return;
         await _uow.BoxStatusHistories.AddAsync(new BoxStatusHistory
         {
-            BoxId = box.Id, OldStatus = oldStatus, NewStatus = box.Status,
-            OldIsOccupied = oldOccupied, NewIsOccupied = box.IsOccupied,
-            ChangedAt = DateTime.UtcNow, Reason = reason,
+            BoxId = box.Id,
+            OldStatus = oldStatus,
+            NewStatus = box.Status,
+            OldIsOccupied = oldOccupied,
+            NewIsOccupied = box.IsOccupied,
+            ChangedAt = DateTime.UtcNow,
+            Reason = reason,
             ChangedByUserId = (await _areas.CurrentUserAsync(ct))?.Id
         }, ct);
     }
@@ -1342,7 +1346,12 @@ public class FarmingService : IFarmingService
 
     public async Task<ApiResponse<CrabDto>> UpdateCrabAsync(Guid id, UpdateCrabRequest req, CancellationToken ct = default)
     {
-        var crab = await _uow.Crabs.GetByIdAsync(id, ct) ?? throw AppException.NotFound("Crab");
+        // var crab = await _uow.Crabs.GetByIdAsync(id, ct) ?? throw AppException.NotFound("Crab");
+        //sử dụng query để moltCount được load luôn
+        var crab = await _uow.Crabs.Query()
+            .Include(c => c.MoltingRecords)
+            .FirstOrDefaultAsync(c => c.Id == id, ct)
+    ?? throw AppException.NotFound("Crab");
         await EnsureCrabAreaAsync(crab, ct);
         if (crab.Status is CrabStatus.Dead or CrabStatus.Harvested or CrabStatus.Sold or CrabStatus.Missing)
             throw AppException.Conflict(
@@ -1581,18 +1590,29 @@ public class FarmingService : IFarmingService
     {
         var crab = await _uow.Crabs.GetByIdAsync(crabId, ct) ?? throw AppException.NotFound("Crab");
         await EnsureCrabAreaAsync(crab, ct);
+        //tải toàn bộ record trước, tính tổng số lần trên toàn lịch sử
+        var allMolts = (await _uow.MoltingRecords.FindAsync(
+            m => m.CrabId == crabId, ct)).ToList();
+
+        var moltCount = allMolts.Count(m =>
+            !m.IsVoided
+            && string.Equals(
+                m.Result,
+                "success",
+                StringComparison.OrdinalIgnoreCase));
+
         var weights = (await _uow.CrabWeightHistories.FindAsync(h => h.CrabId == crabId, ct))
             .Where(h => (!from.HasValue || h.MeasuredAt >= from.Value) && (!to.HasValue || h.MeasuredAt <= to.Value))
             .OrderBy(h => h.MeasuredAt)
             .Select(MapWeight)
             .ToList();
-        var molts = (await _uow.MoltingRecords.FindAsync(m => m.CrabId == crabId, ct))
+        var molts = allMolts
             .Where(m => (!from.HasValue || m.MoltTime >= from.Value) && (!to.HasValue || m.MoltTime <= to.Value))
             .OrderBy(m => m.MoltTime)
             .Select(FarmHistoryService.MapMolt)
             .ToList();
         return ApiResponse<CrabGrowthMoltDto>.Ok(new CrabGrowthMoltDto(
-            weights, molts, crab.WeightGram, crab.CarapaceWidthMm, crab.CarapaceLengthMm));
+            weights, molts, crab.WeightGram, crab.CarapaceWidthMm, crab.CarapaceLengthMm, moltCount));
     }
 
     public async Task<ApiResponse<CrabLifecycleEventsDto>> GetCrabLifecycleEventsAsync(
@@ -3325,7 +3345,10 @@ public class FarmingService : IFarmingService
             AiRecommendation: FirstNonEmpty(
                 latestAi?.AnomalyNote,
                 RecommendFromPrediction(c.AiPrediction ?? latestAi?.Prediction)),
-            AvatarUrl: JsonStringList.Parse(c.ImageUrlsJson).FirstOrDefault());
+            AvatarUrl: JsonStringList.Parse(c.ImageUrlsJson).FirstOrDefault(),
+            // đếm cua đã lột thành công
+            MoltCount: c.MoltingRecords.Count(m =>
+                !m.IsVoided && string.Equals(m.Result, "success", StringComparison.OrdinalIgnoreCase)));
     }
 
     private async Task<IReadOnlyList<CrabTimelineEventDto>> BuildCrabTimelineAsync(

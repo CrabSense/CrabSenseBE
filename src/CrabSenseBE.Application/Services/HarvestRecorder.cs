@@ -319,7 +319,7 @@ public sealed class HarvestRecorder
                 {
                     CrabId = crab.Id,
                     HarvestLineId = line.Id,
-                    HarvestedAt = voucher.HarvestDate,
+                    HarvestedAt = line.HarvestedAt ?? voucher.HarvestDate,
                     WeightGram = line.WeightGram,
                     Grade = line.Grade,
                     Notes = line.Notes
