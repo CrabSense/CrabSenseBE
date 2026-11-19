@@ -272,6 +272,14 @@ public class UnitOfWork : IUnitOfWork
     public IRepository<KioskCredential> KioskCredentials =>
         _kioskCredentials ??= new GenericRepository<KioskCredential>(_context);
 
+    private IRepository<HarvestAssignment>? _harvestAssignments;
+    public IRepository<HarvestAssignment> HarvestAssignments =>
+        _harvestAssignments ??= new GenericRepository<HarvestAssignment>(_context);
+
+    private IRepository<HarvestAssignmentLine>? _harvestAssignmentLines;
+    public IRepository<HarvestAssignmentLine> HarvestAssignmentLines =>
+        _harvestAssignmentLines ??= new GenericRepository<HarvestAssignmentLine>(_context);
+
     public Task<int> SaveChangesAsync(CancellationToken ct = default)
         => _context.SaveChangesAsync(ct);
 

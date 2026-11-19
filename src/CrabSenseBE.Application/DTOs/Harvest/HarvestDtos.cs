@@ -1,5 +1,6 @@
 namespace CrabSenseBE.Application.DTOs.Harvest;
 
+using CrabSenseBE.Domain.Enums;
 // ─────────────────────────────────────────────────────────────────────────────
 // Harvest Voucher
 // ─────────────────────────────────────────────────────────────────────────────
@@ -86,7 +87,10 @@ public record HarvestLineDto(
     string? AreaName = null,
     string? RowName = null,
     string? LotCode = null,
-    string? Result = null
+    string? Result = null,
+    decimal? CarapaceLengthMm = null,
+    decimal? CarapaceWidthMm = null,
+    DateTime? HarvestedAt = null
 );
 
 public record CreateHarvestVoucherRequest(
@@ -238,3 +242,109 @@ public record BoxHarvestVoucherDto(
     int CrabCount,
     decimal TotalWeightGram
 );
+
+public record HarvestAssignmentDto(
+    Guid Id,
+    string AssignmentCode,
+    Guid FarmingAreaId,
+    Guid AssignedToUserId,
+    string Status,
+    int LineCount);
+public record CreateHarvestAssignmentRequest(
+    Guid FarmingAreaId,
+    Guid AssignedToUserId,
+    IReadOnlyCollection<Guid> CrabIds,
+    string? Notes = null);
+
+public record HarvestAssignmentResultRequest(
+    Guid AssignmentLineId,
+    HarvestAssignmentOutcome Outcome,
+    decimal? WeightGram = null,
+    string? Grade = null,
+    bool IsSoftshell = true,
+    string? Reason = null,
+    string? Notes = null,
+    string? ConditionLabel = null,
+    decimal? CarapaceLengthMm = null, // Chiều dài mai
+    decimal? CarapaceWidthMm = null, // Chiều rộng mai
+    DateTimeOffset? HarvestedAt = null, // Thời điểm thu hoạch
+    IReadOnlyList<string>? PhotoUrls = null,
+    bool MoltConfirmed = false); // để biết cua thu hoạch do lột hay do hết ngày quy định nhưng vẫn chưa lột
+
+public record SubmitHarvestAssignmentResultsRequest(
+    IReadOnlyCollection<HarvestAssignmentResultRequest> Lines,
+    string? Notes = null);
+
+public record HarvestAssignmentResultDto(
+    Guid AssignmentId,
+    string AssignmentCode,
+    string AssignmentStatus,
+    Guid? VoucherId,
+    string? VoucherCode,
+    int HarvestedCount,
+    int DeferredCount);
+
+public record HarvestAssignmentListItemDto(
+Guid Id,
+string AssignmentCode,
+Guid FarmingAreaId,
+Guid AssignedToUserId,
+string Status,
+DateTime CreatedAt,
+DateTime? StartedAt,
+DateTime? CompletedAt,
+int LineCount,
+int HarvestedCount,
+int DeferredCount,
+int VoucherCount);
+
+public record HarvestAssignmentLineDetailDto(
+    Guid Id,
+    Guid CrabId,
+    string? CrabCode,
+    Guid? BoxId,
+    string? BoxCode,
+    string Status,
+    DateTime? CheckedAt,
+    Guid? CheckedByUserId,
+    string? EligibilityReason,
+    DateTime? HarvestedAt,
+    string? Notes,
+    Guid? HarvestLineId,
+    decimal? WeightGram,
+    string? Grade,
+    HarvestAssignmentOutcome? Outcome,
+    decimal? PendingWeightGram,
+    string? PendingGrade,
+    bool? PendingIsSoftshell,
+    string? PendingConditionLabel,
+    string? PendingHarvestNotes,
+    decimal? PendingCarapaceLengthMm,
+    decimal? PendingCarapaceWidthMm,
+    DateTime? PendingHarvestedAt,
+    IReadOnlyList<string>? PendingPhotoUrls,
+    bool? PendingMoltConfirmed = null);
+
+public record HarvestAssignmentVoucherDto(
+    Guid Id,
+    string VoucherCode,
+    string Status,
+    DateTime HarvestDate,
+    int TotalQuantity,
+    decimal TotalWeightKg);
+
+public record HarvestAssignmentDetailDto(
+    Guid Id,
+    string AssignmentCode,
+    Guid FarmingAreaId,
+    Guid AssignedByUserId,
+    Guid AssignedToUserId,
+    string Status,
+    DateTime CreatedAt,
+    DateTime? StartedAt,
+    DateTime? CompletedAt,
+    string? Notes,
+    IReadOnlyCollection<HarvestAssignmentLineDetailDto> Lines,
+    IReadOnlyCollection<HarvestAssignmentVoucherDto> Vouchers);
+
+public record CompleteHarvestAssignmentRequest(string? VoucherNotes = null);

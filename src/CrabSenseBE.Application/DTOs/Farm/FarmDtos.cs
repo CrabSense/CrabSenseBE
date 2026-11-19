@@ -300,7 +300,8 @@ public record CrabDto(
     DateTime? ImportDate = null,
     DateTime? AiAnalyzedAt = null,
     string? AiRecommendation = null,
-    string? AvatarUrl = null);
+    string? AvatarUrl = null,
+    int MoltCount = 0);
 
 /// <summary>Hồ sơ vòng đời cua — gom snapshot + lịch sử, không ghi đè bảng Crabs.</summary>
 public record CrabProfileDto(
@@ -390,7 +391,8 @@ public record CrabGrowthMoltDto(
     IReadOnlyList<MoltingRecordDto> Molts,
     decimal? CurrentWeightGram,
     decimal? CurrentWidthMm,
-    decimal? CurrentLengthMm);
+    decimal? CurrentLengthMm,
+    int MoltCount = 0);
 
 /// <summary>Nhật ký vòng đời một cá thể cua (audit + timeline).</summary>
 public record CrabLifecycleEventsDto(

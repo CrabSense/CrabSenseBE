@@ -2829,6 +2829,14 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.Property<Guid?>("BoxId")
                         .HasColumnType("uuid");
 
+                    b.Property<decimal?>("CarapaceLengthMm")
+                        .HasPrecision(10, 2)
+                        .HasColumnType("numeric(10,2)");
+
+                    b.Property<decimal?>("CarapaceWidthMm")
+                        .HasPrecision(10, 2)
+                        .HasColumnType("numeric(10,2)");
+
                     b.Property<string>("ConditionLabel")
                         .HasColumnType("text");
 
@@ -2844,8 +2852,14 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.Property<string>("Grade")
                         .HasColumnType("text");
 
+                    b.Property<Guid?>("HarvestAssignmentLineId")
+                        .HasColumnType("uuid");
+
                     b.Property<Guid>("HarvestVoucherId")
                         .HasColumnType("uuid");
+
+                    b.Property<DateTime?>("HarvestedAt")
+                        .HasColumnType("timestamp with time zone");
 
                     b.Property<bool>("IsSoftshell")
                         .HasColumnType("boolean");
@@ -2878,6 +2892,10 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.HasIndex("BoxId");
 
                     b.HasIndex("CrabId");
+
+                    b.HasIndex("HarvestAssignmentLineId")
+                        .IsUnique()
+                        .HasFilter("\"HarvestAssignmentLineId\" IS NOT NULL");
 
                     b.HasIndex("HarvestVoucherId");
 
@@ -2941,6 +2959,9 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.Property<Guid?>("FarmingAreaId")
                         .HasColumnType("uuid");
 
+                    b.Property<Guid?>("HarvestAssignmentId")
+                        .HasColumnType("uuid");
+
                     b.Property<DateTime>("HarvestDate")
                         .HasColumnType("timestamp with time zone");
 
@@ -2960,6 +2981,10 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.Property<string>("RejectionReason")
                         .HasMaxLength(500)
                         .HasColumnType("character varying(500)");
+
+                    b.Property<string>("ReviewStatus")
+                        .IsRequired()
+                        .HasColumnType("text");
 
                     b.Property<string>("Status")
                         .IsRequired()
@@ -2981,6 +3006,8 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.HasKey("Id");
 
                     b.HasIndex("FarmingAreaId");
+
+                    b.HasIndex("HarvestAssignmentId");
 
                     b.ToTable("HarvestVouchers", "be");
                 });
@@ -5583,11 +5610,18 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                         .WithMany()
                         .HasForeignKey("CrabId");
 
+                    b.HasOne("CrabSenseBE.Domain.Entities.HarvestAssignmentLine", "AssignmentLine")
+                        .WithOne("HarvestLine")
+                        .HasForeignKey("CrabSenseBE.Domain.Entities.HarvestLine", "HarvestAssignmentLineId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
                     b.HasOne("CrabSenseBE.Domain.Entities.HarvestVoucher", "HarvestVoucher")
                         .WithMany("Lines")
                         .HasForeignKey("HarvestVoucherId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
+
+                    b.Navigation("AssignmentLine");
 
                     b.Navigation("Box");
 
@@ -6208,6 +6242,228 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                         .IsRequired();
                 });
 
+
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.HarvestAssignment", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("AssignedByUserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("AssignedToUserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("AssignmentCode")
+                        .IsRequired()
+                        .HasMaxLength(40)
+                        .HasColumnType("character varying(40)");
+
+                    b.Property<DateTime?>("CompletedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("FarmingAreaId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Notes")
+                        .HasColumnType("text");
+
+                    b.Property<DateTime?>("StartedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<DateTime?>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("AssignedByUserId");
+
+                    b.HasIndex("AssignedToUserId");
+
+                    b.HasIndex("AssignmentCode")
+                        .IsUnique();
+
+                    b.HasIndex("FarmingAreaId", "AssignedToUserId", "Status");
+
+                    b.ToTable("HarvestAssignments", "be");
+                });
+
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.HarvestAssignment", b =>
+                {
+                    b.HasOne("CrabSenseBE.Domain.Entities.AppUser", "AssignedBy")
+                        .WithMany()
+                        .HasForeignKey("AssignedByUserId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("CrabSenseBE.Domain.Entities.AppUser", "AssignedTo")
+                        .WithMany()
+                        .HasForeignKey("AssignedToUserId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("CrabSenseBE.Domain.Entities.FarmingArea", null)
+                        .WithMany()
+                        .HasForeignKey("FarmingAreaId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("AssignedBy");
+
+                    b.Navigation("AssignedTo");
+                });
+
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.HarvestAssignment", b =>
+                {
+                    b.Navigation("Lines");
+
+                    b.Navigation("Vouchers");
+                });
+
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.HarvestAssignmentLine", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("BoxCode")
+                        .HasColumnType("text");
+
+                    b.Property<Guid?>("BoxId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime?>("CheckedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("CheckedByUserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("CrabCode")
+                        .HasColumnType("text");
+
+                    b.Property<Guid>("CrabId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("EligibilityReason")
+                        .HasColumnType("text");
+
+                    b.Property<Guid>("HarvestAssignmentId")
+                        .HasColumnType("uuid");
+
+                    b.Property<decimal?>("HarvestCarapaceLengthMm")
+                        .HasPrecision(10, 2)
+                        .HasColumnType("numeric(10,2)");
+
+                    b.Property<decimal?>("HarvestCarapaceWidthMm")
+                        .HasPrecision(10, 2)
+                        .HasColumnType("numeric(10,2)");
+
+                    b.Property<string>("HarvestConditionLabel")
+                        .HasColumnType("text");
+
+                    b.Property<string>("HarvestGrade")
+                        .HasColumnType("text");
+
+                    b.Property<bool?>("HarvestIsSoftshell")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("HarvestNotes")
+                        .HasColumnType("text");
+
+                    b.Property<string>("HarvestPhotoUrlsJson")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<decimal?>("HarvestWeightGram")
+                        .HasColumnType("numeric");
+
+                    b.Property<DateTime?>("HarvestedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Notes")
+                        .HasColumnType("text");
+
+                    b.Property<string>("Outcome")
+                        .HasColumnType("text");
+
+                    b.Property<DateTime?>("PendingHarvestedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<bool>("PendingMoltConfirmed")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("boolean")
+                        .HasDefaultValue(false);
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<DateTime?>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("CheckedByUserId");
+
+                    b.HasIndex("CrabId")
+                        .IsUnique()
+                        .HasFilter("\"Status\" IN ('Assigned', 'Eligible', 'InProgress')");
+
+                    b.HasIndex("HarvestAssignmentId", "CrabId")
+                        .IsUnique();
+
+                    b.ToTable("HarvestAssignmentLines", "be");
+                });
+
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.HarvestAssignmentLine", b =>
+                {
+                    b.HasOne("CrabSenseBE.Domain.Entities.AppUser", null)
+                        .WithMany()
+                        .HasForeignKey("CheckedByUserId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("CrabSenseBE.Domain.Entities.Crab", "Crab")
+                        .WithMany()
+                        .HasForeignKey("CrabId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("CrabSenseBE.Domain.Entities.HarvestAssignment", "Assignment")
+                        .WithMany("Lines")
+                        .HasForeignKey("HarvestAssignmentId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Assignment");
+
+                    b.Navigation("Crab");
+                });
+
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.HarvestAssignmentLine", b =>
+                {
+                    b.Navigation("HarvestLine");
+                });
+
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.HarvestVoucher", b =>
+                {
+                    b.HasOne("CrabSenseBE.Domain.Entities.HarvestAssignment", "Assignment")
+                        .WithMany("Vouchers")
+                        .HasForeignKey("HarvestAssignmentId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.Navigation("Assignment");
+                });
         }
     }
 }

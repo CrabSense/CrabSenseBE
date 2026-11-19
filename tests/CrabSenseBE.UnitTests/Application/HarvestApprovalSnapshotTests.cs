@@ -335,8 +335,10 @@ public sealed class HarvestApprovalSnapshotTests
 
         var fixture = new HarvestFixture(
             uow,
-            new HarvestService(uow.Object, current.Object),
-            voucher,
+new HarvestService(
+    uow.Object,
+    current.Object,
+    new HarvestRecorder(uow.Object, current.Object)), voucher,
             crabA,
             crabB,
             crabC,

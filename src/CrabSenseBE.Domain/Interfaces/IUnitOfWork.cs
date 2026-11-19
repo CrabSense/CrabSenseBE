@@ -80,6 +80,8 @@ public interface IUnitOfWork : IDisposable
     IRepository<KioskProvisioningCode> KioskProvisioningCodes { get; }
     IRepository<KioskCredential> KioskCredentials { get; }
 
+    IRepository<HarvestAssignment> HarvestAssignments { get; }
+    IRepository<HarvestAssignmentLine> HarvestAssignmentLines { get; }
     Task<int> SaveChangesAsync(CancellationToken ct = default);
 
     /// <summary>Lấy các ID khu được gán cho từng Farm Administrator trong danh sách đầu vào.</summary>
@@ -87,7 +89,7 @@ public interface IUnitOfWork : IDisposable
         IReadOnlyCollection<Guid> userIds,
         CancellationToken ct = default);
     Task<List<CrabMortalityRecord>> GetMortalityRecordsWithDetailsAsync(CancellationToken ct = default);
-    Task<Crab?> GetCrabWithDetailsAsync(Guid crabId,CancellationToken cancellationToken = default);
+    Task<Crab?> GetCrabWithDetailsAsync(Guid crabId, CancellationToken cancellationToken = default);
     /// <summary>Số tiếp theo trong dãy UserCode của đúng role.</summary>
     Task<long> GetNextUserCodeNumberAsync(UserRole role, CancellationToken ct = default);
 }

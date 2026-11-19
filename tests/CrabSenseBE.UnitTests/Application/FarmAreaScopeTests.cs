@@ -254,8 +254,10 @@ public sealed class FarmAreaScopeTests
                 VoucherCode = "HV-OTHER",
                 FarmingAreaId = Guid.NewGuid()
             }).Object);
-        var service = new HarvestService(uow.Object, current.Object);
-
+        var service = new HarvestService(
+            uow.Object,
+            current.Object,
+            new HarvestRecorder(uow.Object, current.Object));
         var response = await service.GetAllAsync();
 
         response.Data.Should().BeEmpty();

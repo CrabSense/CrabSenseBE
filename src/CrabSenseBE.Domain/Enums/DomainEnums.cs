@@ -304,3 +304,48 @@ public static class BoxStatuses
 
     public static string Normalize(string status) => status.Trim().ToLowerInvariant();
 }
+
+
+public enum HarvestAssignmentStatus
+{
+    Assigned,
+    InProgress,
+    Completed,
+    Cancelled
+}
+
+public enum HarvestAssignmentLineStatus
+{
+    Assigned,
+    Eligible,
+    InProgress,
+    Harvested,
+
+    // Staff đã kiểm tra nhưng cua chưa đạt; cua tiếp tục được nuôi.
+    // Lần kiểm tra tiếp theo sẽ nằm trong Assignment mới.
+    Deferred,
+
+    // Giữ lại cho trường hợp không đủ điều kiện hoặc các luồng hiện hữu.
+    Ineligible,
+    Skipped,
+    Cancelled
+}
+
+public enum HarvestReviewStatus
+{
+    NotSubmitted,
+    Pending,
+    ChangesRequested,
+    Approved,
+    Rejected
+}
+
+/// Harvested → tạo HarvestLine, ghi CrabHarvestHistory, chuyển cua sang Harvested.
+///ContinueRaising → dòng Assignment thành Deferred; không tạo Harvest Line hay lịch sử thu hoạch thành công.
+[System.Text.Json.Serialization.JsonConverter(
+    typeof(System.Text.Json.Serialization.JsonStringEnumConverter))]
+public enum HarvestAssignmentOutcome
+{
+    Harvested,
+    ContinueRaising
+}

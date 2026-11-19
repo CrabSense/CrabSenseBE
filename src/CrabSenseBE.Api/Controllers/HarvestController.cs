@@ -1,5 +1,6 @@
 using CrabSenseBE.Application.DTOs.Harvest;
 using CrabSenseBE.Application.Interfaces;
+using CrabSenseBE.Domain.Entities;
 using CrabSenseBE.Domain.Enums;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -20,10 +21,13 @@ public class HarvestController : ControllerBase
     private readonly IHarvestService _harvestService;
     private readonly ICrabImageService _images;
 
-    public HarvestController(IHarvestService harvestService, ICrabImageService images)
+    private readonly IHarvestAssignmentService _assignmentService;
+
+    public HarvestController(IHarvestService harvestService, ICrabImageService images, IHarvestAssignmentService assignmentService)
     {
         _harvestService = harvestService;
         _images = images;
+        _assignmentService = assignmentService;
     }
 
     /// <summary>
@@ -259,6 +263,56 @@ public class HarvestController : ControllerBase
 
         return Ok(result);
     }
+
+    //Manager tạo task
+    [HttpPost("~/api/harvest-assignments")]
+    [Authorize(Roles = AppRoles.FarmManager)]
+    public async Task<IActionResult> CreateAssignment(
+    [FromBody] CreateHarvestAssignmentRequest request,
+    CancellationToken ct)
+    => Ok(await _assignmentService.CreateAssignmentAsync(request, ct));
+
+
+    //Staff gửi kết quả xử lý task
+    [HttpPost("~/api/harvest-assignments/{id:guid}/results")]
+    [Authorize(Roles = AppRoles.FarmStaff)]
+    public async Task<IActionResult> SubmitAssignmentResults(
+        Guid id,
+        [FromBody] SubmitHarvestAssignmentResultsRequest request,
+        CancellationToken ct)
+        => Ok(await _assignmentService.SubmitAssignmentResultsAsync(id, request, ct));
+
+    //Manager thấy task trong khu được phân công; Staff chỉ thấy task giao cho mình
+    [HttpGet("~/api/harvest-assignments")]
+    [Authorize(Roles = AppRoles.FarmManager + "," + AppRoles.FarmStaff)]
+    public async Task<IActionResult> GetAssignments(
+    [FromQuery] Guid? farmingAreaId,
+    CancellationToken ct)
+    => Ok(await _assignmentService.GetAssignmentsAsync(farmingAreaId, ct));
+
+    //Manager xem task trong khu của mình; Staff chỉ xem task được giao cho mình (theo ID)
+    [HttpGet("~/api/harvest-assignments/{id:guid}")]
+    [Authorize(Roles = AppRoles.FarmManager + "," + AppRoles.FarmStaff)]
+    public async Task<IActionResult> GetAssignmentById(
+        Guid id,
+        CancellationToken ct)
+        => Ok(await _assignmentService.GetAssignmentByIdAsync(id, ct));
+
+    //Staff nhận task được giao
+    [HttpPost("~/api/harvest-assignments/{id:guid}/accept")]
+    [Authorize(Roles = AppRoles.FarmStaff)]
+    public async Task<IActionResult> AcceptAssignment(Guid id, CancellationToken ct)
+    => Ok(await _assignmentService.AcceptAssignmentAsync(id, ct));
+
+    //Staff hoàn tất task được giao
+    // Staff hoàn tất task; backend tạo Voucher từ các cua đã chọn thu hoạch.
+    [HttpPost("~/api/harvest-assignments/{id:guid}/complete")]
+    [Authorize(Roles = AppRoles.FarmStaff)]
+    public async Task<IActionResult> CompleteAssignment(
+        Guid id,
+        [FromBody] CompleteHarvestAssignmentRequest request,
+        CancellationToken ct)
+        => Ok(await _assignmentService.CompleteAssignmentAsync(id, request, ct));
 
     private static IReadOnlyList<CrabImageFile> ToImageFiles(List<IFormFile>? files, IFormFile? file)
     {

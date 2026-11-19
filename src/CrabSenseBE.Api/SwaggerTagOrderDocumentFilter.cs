@@ -104,7 +104,7 @@ public sealed class SwaggerTagOrderDocumentFilter : IDocumentFilter
         if (Is("api/operations") || Is("api/inspections") || Is("api/allocations")
             || Is("api/moltings") || Is("api/box-status-histories"))
             return "14. Farm - Operations & Inspections";
-        if (Is("api/harvest-vouchers") || Is("api/frozen-lots") || Is("api/frozen-storage-transactions")
+        if (Is("api/harvest-vouchers") || Is("api/harvest-assignments") || Is("api/frozen-lots") || Is("api/frozen-storage-transactions")
             || Is("api/frozen-inventory-adjustments") || Is("api/frozen-opening-balances"))
             return "16. Farm - Harvest & Frozen Storage";
 
