@@ -1346,12 +1346,8 @@ public class FarmingService : IFarmingService
 
     public async Task<ApiResponse<CrabDto>> UpdateCrabAsync(Guid id, UpdateCrabRequest req, CancellationToken ct = default)
     {
-        // var crab = await _uow.Crabs.GetByIdAsync(id, ct) ?? throw AppException.NotFound("Crab");
-        //sử dụng query để moltCount được load luôn
-        var crab = await _uow.Crabs.Query()
-            .Include(c => c.MoltingRecords)
-            .FirstOrDefaultAsync(c => c.Id == id, ct)
-    ?? throw AppException.NotFound("Crab");
+        var crab = await _uow.Crabs.GetByIdAsync(id, ct)
+            ?? throw AppException.NotFound("Crab");
         await EnsureCrabAreaAsync(crab, ct);
         if (crab.Status is CrabStatus.Dead or CrabStatus.Harvested or CrabStatus.Sold or CrabStatus.Missing)
             throw AppException.Conflict(
@@ -1467,6 +1463,13 @@ public class FarmingService : IFarmingService
         }
 
         await _uow.SaveChangesAsync(ct);
+
+        // Load the full molt history for the returned snapshot only after
+        // validation and saving. Repository GetByIdAsync also supports test mocks
+        // that do not implement EF Core's async IQueryable provider.
+        crab.MoltingRecords = (await _uow.MoltingRecords.FindAsync(
+            m => m.CrabId == crab.Id, ct)).ToList();
+
         var ctx = await LoadBoxContextAsync(ct);
         return ApiResponse<CrabDto>.Ok(MapCrab(crab, ctx));
     }

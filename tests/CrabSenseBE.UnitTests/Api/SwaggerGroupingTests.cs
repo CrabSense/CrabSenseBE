@@ -16,6 +16,8 @@ public sealed class SwaggerGroupingTests
     [InlineData("/api/boxes/{boxId:guid}/qr", "15. Farm - QR & Traceability")]
     [InlineData("/api/boxes/{boxId:guid}/moltings", "14. Farm - Operations & Inspections")]
     [InlineData("/api/frozen-lots/{frozenLotId:guid}/qr", "15. Farm - QR & Traceability")]
+    [InlineData("/api/harvest-assignments", "16. Farm - Harvest & Frozen Storage")]
+    [InlineData("/api/harvest-assignments/{id:guid}/complete", "16. Farm - Harvest & Frozen Storage")]
     [InlineData("/api/areas/{areaId:guid}/ras-flow", "23. IoT - RAS & Water Systems")]
     [InlineData("/api/areas/{areaId:guid}/water-analysis/batches", "24. Water - Chemical Analysis")]
     [InlineData("/api/iot/sensor-tests/pending", "20. IoT - Sensors")]
