@@ -143,9 +143,8 @@ builder.Services.AddCors(options =>
                 if (string.IsNullOrWhiteSpace(origin)) return false;
                 if (allowedOrigins.Contains(origin, StringComparer.OrdinalIgnoreCase)) return true;
 
-                // Dev: cho phép mọi cổng loopback để tooling local không phải thêm config.
-                return builder.Environment.IsDevelopment()
-                       && Uri.TryCreate(origin, UriKind.Absolute, out var uri)
+                // Flutter web đổi cổng mỗi lần chạy. Mọi cổng loopback đều là máy người dùng, không phải origin công khai.
+                return Uri.TryCreate(origin, UriKind.Absolute, out var uri)
                        && uri.IsLoopback;
             })
             .AllowAnyHeader()
