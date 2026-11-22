@@ -314,6 +314,16 @@ public class HarvestController : ControllerBase
         CancellationToken ct)
         => Ok(await _assignmentService.CompleteAssignmentAsync(id, request, ct));
 
+    /// <summary>
+    /// Manager lấy nhân viên thuộc khu được chọn.
+    /// </summary>
+    [HttpGet("~/api/harvest-assignments/staff")]
+    [Authorize(Roles = AppRoles.FarmManager)]
+    public async Task<IActionResult> GetStaffForArea(
+        [FromQuery] Guid farmingAreaId,
+        CancellationToken ct)
+        => Ok(await _assignmentService.GetStaffForAreaAsync(farmingAreaId, ct));
+
     private static IReadOnlyList<CrabImageFile> ToImageFiles(List<IFormFile>? files, IFormFile? file)
     {
         var list = new List<IFormFile>();

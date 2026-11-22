@@ -872,6 +872,54 @@ public sealed class HarvestAssignmentService : IHarvestAssignmentService
                 deferredLines.Count),
             "Đã hoàn tất nhiệm vụ thu hoạch.");
     }
+
+    public async Task<ApiResponse<IEnumerable<HarvestAssignmentStaffDto>>>
+    GetStaffForAreaAsync(
+        Guid farmingAreaId,
+        CancellationToken ct = default)
+    {
+        if (farmingAreaId == Guid.Empty)
+            throw AppException.BadRequest("Cần chọn khu nuôi.");
+
+        var manager = await _areas.CurrentUserAsync(ct)
+            ?? throw AppException.Unauthorized("Không xác định được Manager.");
+
+        if (manager.Role != UserRole.FarmManager)
+            throw AppException.Forbidden("Chỉ Farm Manager được xem nhân viên trong khu.");
+
+        // Chỉ cho phép truy vấn các khu được gán cho Manager hiện tại.
+        await _areas.EnsureAsync(farmingAreaId, manage: false, ct);
+
+        var staffIds = (await _uow.FarmStaffAssignments.FindAsync(
+                x => x.ManagerUserId == manager.Id
+                    && x.FarmingAreaId == farmingAreaId,
+                ct))
+            .Select(x => x.StaffUserId)
+            .Distinct()
+            .ToList();
+
+        if (staffIds.Count == 0)
+        {
+            return ApiResponse<IEnumerable<HarvestAssignmentStaffDto>>.Ok(
+                Array.Empty<HarvestAssignmentStaffDto>());
+        }
+
+        var staff = await _uow.Users.FindAsync(
+            x => staffIds.Contains(x.Id)
+                && x.Role == UserRole.FarmStaff
+                && x.IsActive,
+            ct);
+
+        var result = staff
+            .OrderBy(x => x.FullName)
+            .Select(x => new HarvestAssignmentStaffDto(
+                x.Id,
+                x.FullName,
+                x.UserCode))
+            .ToList();
+
+        return ApiResponse<IEnumerable<HarvestAssignmentStaffDto>>.Ok(result);
+    }
     private static string? NormalizeNullable(string? value)
     => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 

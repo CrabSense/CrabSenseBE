@@ -347,4 +347,8 @@ public record HarvestAssignmentDetailDto(
     IReadOnlyCollection<HarvestAssignmentLineDetailDto> Lines,
     IReadOnlyCollection<HarvestAssignmentVoucherDto> Vouchers);
 
+public record HarvestAssignmentStaffDto(
+    Guid Id,
+    string FullName,
+    string? UserCode);
 public record CompleteHarvestAssignmentRequest(string? VoucherNotes = null);

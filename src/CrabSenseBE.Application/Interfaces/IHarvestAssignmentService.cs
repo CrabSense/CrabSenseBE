@@ -30,4 +30,8 @@ public interface IHarvestAssignmentService
     Guid assignmentId,
     CompleteHarvestAssignmentRequest request,
     CancellationToken ct = default);
+
+    Task<ApiResponse<IEnumerable<HarvestAssignmentStaffDto>>> GetStaffForAreaAsync(
+    Guid farmingAreaId,
+    CancellationToken ct = default);
 }
