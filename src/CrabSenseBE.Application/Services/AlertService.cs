@@ -412,8 +412,12 @@ public class AlertService : IAlertService
         var sensors = await _uow.Sensors.FindAsync(
             s => s.IsActive && s.LastSeenAt != null, ct);
         sensors = sensors.Where(s => s.LastSeenAt < DateTime.UtcNow.AddSeconds(-(s.DisconnectTimeoutSeconds ?? timeoutMinutes*60)));
+        var parentIds=sensors.Where(x=>x.DeviceId.HasValue).Select(x=>x.DeviceId!.Value).Distinct().ToArray();
+        var parents=parentIds.Length==0?new Dictionary<Guid,Device>():(await _uow.Devices.FindAsync(d=>parentIds.Contains(d.Id),ct)).ToDictionary(x=>x.Id);
         foreach (var sensor in sensors)
         {
+            if(sensor.DeviceId is Guid parentId&&parents.TryGetValue(parentId,out var parent)&&(parent.Status==DeviceStatus.Maintenance||parent.EdgeState is "Revoked" or "Rejected" or "Pending" or "Unprovisioned"))continue;
+            var timeoutSeconds = sensor.DisconnectTimeoutSeconds ?? timeoutMinutes * 60;
             var areaId = await AreaOfSensorAsync(sensor, ct);
             var existing = (await _uow.Alerts.FindAsync(
                 a => a.SensorId == sensor.Id
@@ -425,7 +429,6 @@ public class AlertService : IAlertService
             {
                 existing.OccurrenceCount = Math.Max(1, existing.OccurrenceCount) + 1;
                 existing.LastOccurredAt = DateTime.UtcNow;
-                _uow.Alerts.Update(existing);
                 continue;
             }
 
@@ -436,7 +439,7 @@ public class AlertService : IAlertService
                 IncidentType = "sensor_disconnect",
                 SourceType = "Sensor",
                 SourceId = sensor.Id.ToString("N"),
-                Message = $"Cảm biến mất kết nối: {sensor.SensorCode} (>{timeoutMinutes} phút)",
+                Message = $"Cảm biến mất kết nối: {sensor.SensorCode} (>{timeoutSeconds} giây)",
                 Severity = AlertSeverity.Critical,
                 Status = AlertStatus.Active,
                 OccurrenceCount = 1,
@@ -456,17 +459,17 @@ public class AlertService : IAlertService
                     ["sensor"] = sensor.SensorType,
                     ["code"] = sensor.SensorCode,
                     ["name"] = sensor.SensorType,
-                    ["minutes"] = timeoutMinutes.ToString()
+                    ["minutes"] = (timeoutSeconds / 60.0).ToString(System.Globalization.CultureInfo.InvariantCulture)
                 }, ct);
         }
 
         var devices = await _uow.Devices.FindAsync(
             d => d.LastSeenAt != null && d.LastSeenAt < cutoff
-                 && d.Status != DeviceStatus.Maintenance, ct);
+                 && d.Status != DeviceStatus.Maintenance
+                 && (d.EdgeState == "Approved" || d.EdgeState == "Online"), ct);
         foreach (var device in devices)
         {
             device.Status = DeviceStatus.Offline;
-            _uow.Devices.Update(device);
 
             var kind = string.IsNullOrWhiteSpace(device.DeviceType) ? "thiết bị" : device.DeviceType;
             var msg = $"{kind} mất kết nối: {device.DeviceCode}";
@@ -481,7 +484,6 @@ public class AlertService : IAlertService
             {
                 existing.OccurrenceCount = Math.Max(1, existing.OccurrenceCount) + 1;
                 existing.LastOccurredAt = DateTime.UtcNow;
-                _uow.Alerts.Update(existing);
                 continue;
             }
 
@@ -530,7 +532,7 @@ public class AlertService : IAlertService
                         || a.Status == AlertStatus.InProgress), ct))
                 .FirstOrDefault();
 
-            if (kiosk.LastSeenAt is not null && kiosk.LastSeenAt >= kioskCutoff)
+            if (kiosk.LastSeenAt is not null && kiosk.LastSeenAt >= kioskCutoff && kiosk.LastSeenAt <= DateTime.UtcNow.AddSeconds(5))
             {
                 if (active is not null)
                 {
@@ -538,7 +540,6 @@ public class AlertService : IAlertService
                     active.ResolvedAt = DateTime.UtcNow;
                     active.ResolutionReason =
                         "Kiosk heartbeat recovered.";
-                    _uow.Alerts.Update(active);
                 }
                 continue;
             }
@@ -592,7 +593,6 @@ public class AlertService : IAlertService
             alert.Status = AlertStatus.Recovered;
             alert.ResolvedAt = DateTime.UtcNow;
             alert.ResolutionReason = "Heartbeat recovered.";
-            _uow.Alerts.Update(alert);
         }
 
         await _uow.SaveChangesAsync(ct);
@@ -1051,7 +1051,8 @@ public class AlertService : IAlertService
         {
             var sensor = await _uow.Sensors.GetByIdAsync(sensorId, ct);
             return sensor?.IsActive == true
-                && sensor.LastSeenAt >= cutoff;
+                && sensor.LastSeenAt >= DateTime.UtcNow.AddSeconds(-Math.Min(300, sensor.DisconnectTimeoutSeconds ?? 900))
+                && sensor.LastSeenAt <= DateTime.UtcNow.AddSeconds(5);
         }
         if (alert.IncidentType == "device_disconnect"
             && Guid.TryParse(alert.SourceId, out var deviceId))
@@ -1059,6 +1060,7 @@ public class AlertService : IAlertService
             var device = await _uow.Devices.GetByIdAsync(deviceId, ct);
             return device?.Status == DeviceStatus.Online
                 && device.LastSeenAt >= cutoff
+                && device.LastSeenAt <= DateTime.UtcNow.AddSeconds(5)
                 && device.EdgeState is "Approved" or "Online";
         }
         if (alert.IncidentType == "kiosk_disconnect"

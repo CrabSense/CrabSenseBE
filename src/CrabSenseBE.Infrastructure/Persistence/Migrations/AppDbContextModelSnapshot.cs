@@ -79,11 +79,23 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.Property<DateTime?>("UpdatedAt")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<Guid?>("AiServiceId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid?>("InferenceJobId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid?>("FarmingAreaId").HasColumnType("uuid");
+
                     b.HasKey("Id");
 
                     b.HasIndex("CrabId");
 
                     b.HasIndex("DeviceId");
+
+                    b.HasIndex("AiServiceId");
+
+                    b.HasIndex("InferenceJobId").IsUnique();
 
                     b.ToTable("AiDetections", "be");
                 });
@@ -174,9 +186,167 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                         .IsRequired()
                         .HasColumnType("text");
 
+                    b.Property<bool>("IsEnabled")
+                        .HasColumnType("boolean");
+
+                    b.Property<DateTime?>("LastHeartbeatAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("ReportedState")
+                        .HasColumnType("text");
+
+                    b.Property<string>("ReportedVersion")
+                        .HasColumnType("text");
+
+                    b.Property<Guid?>("CommandId")
+                        .IsConcurrencyToken()
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("RequestedVersion")
+                        .HasColumnType("text");
+
+                    b.Property<DateTime?>("CommandRequestedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("CommandError")
+                        .HasColumnType("text");
+
                     b.HasKey("Id");
 
                     b.ToTable("AiManagedServices", "be");
+                });
+
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.AiModelVersion", b =>
+                {
+                    b.Property<Guid>("Id").ValueGeneratedOnAdd().HasColumnType("uuid");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTime?>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("AiServiceId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Version")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("ArtifactName")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("Sha256")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("AiServiceId", "Version").IsUnique();
+
+                    b.ToTable("AiModelVersions", "be");
+                });
+
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.AiCameraAssignment", b =>
+                {
+                    b.Property<Guid>("Id").ValueGeneratedOnAdd().HasColumnType("uuid");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTime?>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("AiServiceId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("DeviceId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("DeviceId");
+                    b.HasIndex("AiServiceId", "DeviceId").IsUnique();
+
+                    b.ToTable("AiCameraAssignments", "be");
+                });
+
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.AiInferenceJob", b =>
+                {
+                    b.Property<Guid>("Id").ValueGeneratedOnAdd().HasColumnType("uuid");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTime?>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("AiServiceId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("ModelVersionId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("MediaId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("DeviceId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("BoxId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("FarmingAreaId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid?>("CrabId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("ModelVersion")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<decimal>("ConfidenceThreshold")
+                        .HasColumnType("numeric");
+
+                    b.Property<decimal>("FrameSamplingFps")
+                        .HasColumnType("numeric");
+
+                    b.Property<string>("DetectionClassesJson")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<int>("Attempts")
+                        .HasColumnType("integer");
+
+                    b.Property<Guid?>("LeaseId")
+                        .IsConcurrencyToken()
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime?>("LeaseUntil")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTime?>("CompletedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Error")
+                        .HasColumnType("text");
+
+                    b.Property<long?>("DurationMs")
+                        .HasColumnType("bigint");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ModelVersionId");
+                    b.HasIndex("AiServiceId", "MediaId", "ModelVersionId").IsUnique();
+                    b.HasIndex("AiServiceId", "Status", "CreatedAt");
+
+                    b.ToTable("AiInferenceJobs", "be");
                 });
 
             modelBuilder.Entity("CrabSenseBE.Domain.Entities.AiRecommendation", b =>
@@ -463,17 +633,10 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                         .IsRequired()
                         .HasColumnType("text");
 
-                    b.Property<DateTime?>("LastAttemptSlotUtc")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("LastBackupFile")
-                        .HasColumnType("text");
-
-                    b.Property<DateTime?>("LastCompletedAtUtc")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("LastResult")
-                        .HasColumnType("text");
+                    b.Property<DateTime?>("LastAttemptSlotUtc").HasColumnType("timestamp with time zone");
+                    b.Property<DateTime?>("LastCompletedAtUtc").HasColumnType("timestamp with time zone");
+                    b.Property<string>("LastResult").HasColumnType("text");
+                    b.Property<string>("LastBackupFile").HasColumnType("text");
 
                     b.Property<int>("RetentionDays")
                         .HasColumnType("integer");
@@ -578,6 +741,197 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.ToTable("BoxStatusHistories", "be");
                 });
 
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.CameraSchedule", b =>
+                {
+                    b.Property<Guid>("Id").ValueGeneratedOnAdd().HasColumnType("uuid");
+                    b.Property<DateTime>("CreatedAt").HasColumnType("timestamp with time zone");
+                    b.Property<DateTime?>("UpdatedAt").HasColumnType("timestamp with time zone");
+                    b.Property<string>("Name").IsRequired().HasColumnType("text");
+                    b.Property<string>("Mode").IsRequired().HasColumnType("text");
+                    b.Property<bool>("Enabled").HasColumnType("boolean");
+                    b.Property<string>("Timezone").IsRequired().HasColumnType("text");
+                    b.Property<int>("RetentionDays").HasColumnType("integer");
+                    b.Property<bool>("AutoDeleteExpired").HasColumnType("boolean");
+                    b.Property<string>("VideoQuality").HasColumnType("text");
+                    b.Property<int?>("Fps").HasColumnType("integer");
+                    b.Property<int?>("MaxStorageGb").HasColumnType("integer");
+                    b.Property<int>("Version").IsConcurrencyToken().HasColumnType("integer");
+                    b.Property<bool>("Deleted").HasColumnType("boolean");
+                    b.HasKey("Id");
+
+                    b.ToTable("CameraSchedules", "be");
+                });
+
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.CameraScheduleAssignment", b =>
+                {
+                    b.Property<Guid>("Id").ValueGeneratedOnAdd().HasColumnType("uuid");
+                    b.Property<DateTime>("CreatedAt").HasColumnType("timestamp with time zone");
+                    b.Property<DateTime?>("UpdatedAt").HasColumnType("timestamp with time zone");
+                    b.Property<Guid>("ScheduleId").HasColumnType("uuid");
+                    b.Property<Guid>("DeviceId").HasColumnType("uuid");
+                    b.HasKey("Id");
+                    b.HasIndex("DeviceId").IsUnique();
+                    b.HasIndex("ScheduleId");
+                    b.ToTable("CameraScheduleAssignments", "be");
+                });
+
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.CameraScheduleSlot", b =>
+                {
+                    b.Property<Guid>("Id").ValueGeneratedOnAdd().HasColumnType("uuid");
+                    b.Property<DateTime>("CreatedAt").HasColumnType("timestamp with time zone");
+                    b.Property<DateTime?>("UpdatedAt").HasColumnType("timestamp with time zone");
+                    b.Property<Guid>("ScheduleId").HasColumnType("uuid");
+                    b.Property<int>("Day").HasColumnType("integer");
+                    b.Property<int>("StartMinute").HasColumnType("integer");
+                    b.Property<int>("EndMinute").HasColumnType("integer");
+                    b.HasKey("Id");
+                    b.HasIndex("ScheduleId");
+                    b.ToTable("CameraScheduleSlots", "be");
+                });
+
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.DeviceConnectionEvent", b =>
+                {
+                    b.Property<Guid>("Id").ValueGeneratedOnAdd().HasColumnType("uuid");
+                    b.Property<DateTime>("CreatedAt").HasColumnType("timestamp with time zone");
+                    b.Property<DateTime?>("UpdatedAt").HasColumnType("timestamp with time zone");
+                    b.Property<string>("SourceType").IsRequired().HasColumnType("text");
+                    b.Property<Guid>("SourceId").HasColumnType("uuid");
+                    b.Property<Guid?>("FarmingAreaId").HasColumnType("uuid");
+                    b.Property<string>("PreviousStatus").HasColumnType("text");
+                    b.Property<string>("NewStatus").IsRequired().HasColumnType("text");
+                    b.Property<string>("ReasonCode").IsRequired().HasColumnType("text");
+                    b.Property<DateTime>("OccurredAt").HasColumnType("timestamp with time zone");
+                    b.Property<DateTime?>("LastSeenAt").HasColumnType("timestamp with time zone");
+                    b.Property<DateTime?>("PreviousObservedAt").HasColumnType("timestamp with time zone");
+                    b.HasKey("Id");
+                    b.HasIndex("SourceType","SourceId","OccurredAt");
+                    b.HasIndex("OccurredAt");
+                    b.HasIndex("FarmingAreaId","OccurredAt");
+                    b.ToTable("DeviceConnectionEvents","be");
+                });
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.DeviceMaintenanceWindow", b =>
+                {
+                    b.Property<Guid>("Id").ValueGeneratedOnAdd().HasColumnType("uuid");
+                    b.Property<DateTime>("CreatedAt").HasColumnType("timestamp with time zone");
+                    b.Property<DateTime?>("UpdatedAt").HasColumnType("timestamp with time zone");
+                    b.Property<string>("SourceType").IsRequired().HasColumnType("text");
+                    b.Property<Guid>("SourceId").HasColumnType("uuid");
+                    b.Property<DateTime>("StartsAt").HasColumnType("timestamp with time zone");
+                    b.Property<DateTime>("EndsAt").HasColumnType("timestamp with time zone");
+                    b.Property<string>("Reason").IsRequired().HasColumnType("text");
+                    b.Property<Guid>("CreatedBy").HasColumnType("uuid");
+                    b.Property<DateTime?>("CancelledAt").HasColumnType("timestamp with time zone");
+                    b.Property<Guid?>("CancelledBy").HasColumnType("uuid");
+                    b.HasKey("Id");
+                    b.HasIndex("SourceType","SourceId","StartsAt");
+                    b.ToTable("DeviceMaintenanceWindows","be");
+                });
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.DeviceHealthEvent", b =>
+                {
+                    b.Property<Guid>("Id").ValueGeneratedOnAdd().HasColumnType("uuid");
+                    b.Property<DateTime>("CreatedAt").HasColumnType("timestamp with time zone");
+                    b.Property<DateTime?>("UpdatedAt").HasColumnType("timestamp with time zone");
+                    b.Property<string>("SourceType").IsRequired().HasColumnType("text");
+                    b.Property<Guid>("SourceId").HasColumnType("uuid");
+                    b.Property<Guid?>("FarmingAreaId").HasColumnType("uuid");
+                    b.Property<DateTime>("OccurredAt").HasColumnType("timestamp with time zone");
+                    b.Property<string>("PreviousHealth").HasColumnType("text");
+                    b.Property<string>("HealthStatus").IsRequired().HasColumnType("text");
+                    b.Property<string>("ReasonCode").HasColumnType("text");
+                    b.Property<string>("AgentStatus").HasColumnType("text");
+                    b.HasKey("Id");
+                    b.HasIndex("SourceType","SourceId","OccurredAt");
+                    b.HasIndex("OccurredAt");
+                    b.ToTable("DeviceHealthEvents","be");
+                });
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.MonitoringWorkerState", b =>
+                {
+                    b.Property<Guid>("Id").ValueGeneratedOnAdd().HasColumnType("uuid");
+                    b.Property<DateTime>("CreatedAt").HasColumnType("timestamp with time zone");
+                    b.Property<DateTime?>("UpdatedAt").HasColumnType("timestamp with time zone");
+                    b.Property<string>("WorkerName").IsRequired().HasColumnType("text");
+                    b.Property<DateTime>("LastSucceededAt").HasColumnType("timestamp with time zone");
+                    b.Property<int>("DeviceCount").HasColumnType("integer");
+                    b.HasKey("Id");
+                    b.HasIndex("WorkerName").IsUnique();
+                    b.ToTable("MonitoringWorkerStates","be");
+                });
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.DeviceMonitoringPolicy", b =>
+                {
+                    b.Property<Guid>("Id").ValueGeneratedOnAdd().HasColumnType("uuid");
+                    b.Property<DateTime>("CreatedAt").HasColumnType("timestamp with time zone");
+                    b.Property<DateTime?>("UpdatedAt").HasColumnType("timestamp with time zone");
+                    b.Property<string>("SourceType").IsRequired().HasColumnType("text");
+                    b.Property<Guid>("SourceId").HasColumnType("uuid");
+                    b.Property<int>("TimeoutSeconds").HasColumnType("integer");
+                    b.Property<bool>("IsInherited").ValueGeneratedOnAdd().HasColumnType("boolean").HasDefaultValue(false);
+                    b.Property<int>("Version").IsConcurrencyToken().HasColumnType("integer");
+                    b.Property<Guid>("UpdatedBy").HasColumnType("uuid");
+                    b.HasKey("Id");
+                    b.HasIndex("SourceType","SourceId").IsUnique();
+                    b.ToTable("DeviceMonitoringPolicies","be");
+                });
+
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.DeviceMonitoringState", b =>
+                {
+                    b.Property<Guid>("Id").ValueGeneratedOnAdd().HasColumnType("uuid");
+                    b.Property<DateTime>("CreatedAt").HasColumnType("timestamp with time zone");
+                    b.Property<DateTime?>("UpdatedAt").HasColumnType("timestamp with time zone");
+                    b.Property<string>("SourceType").IsRequired().HasColumnType("text");
+                    b.Property<Guid>("SourceId").HasColumnType("uuid");
+                    b.Property<Guid?>("FarmingAreaId").HasColumnType("uuid");
+                    b.Property<string>("Status").IsRequired().HasColumnType("text");
+                    b.Property<DateTime>("ObservedAt").HasColumnType("timestamp with time zone");
+                    b.Property<string>("HealthStatus").HasColumnType("text");
+                    b.Property<string>("HealthReason").HasColumnType("text");
+                    b.Property<string>("AgentStatus").HasColumnType("text");
+                    b.HasKey("Id");
+                    b.HasIndex("SourceType","SourceId").IsUnique();
+                    b.ToTable("DeviceMonitoringStates","be");
+                });
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.CameraRecordingAgent", b =>
+                {
+                    b.Property<Guid>("Id").ValueGeneratedOnAdd().HasColumnType("uuid");
+                    b.Property<DateTime>("CreatedAt").HasColumnType("timestamp with time zone");
+                    b.Property<DateTime?>("UpdatedAt").HasColumnType("timestamp with time zone");
+                    b.Property<Guid>("DeviceId").HasColumnType("uuid");
+                    b.Property<Guid?>("KioskId").HasColumnType("uuid");
+                    b.Property<bool>("Enabled").HasColumnType("boolean");
+                    b.Property<int>("Version").IsConcurrencyToken().HasColumnType("integer");
+                    b.Property<DateTime?>("LastSeenAt").HasColumnType("timestamp with time zone");
+                    b.Property<string>("WorkerVersion").HasMaxLength(80).HasColumnType("character varying(80)");
+                    b.Property<int>("PendingClips").HasColumnType("integer");
+                    b.Property<string>("StreamProbeStatus").HasColumnType("text");
+                    b.Property<DateTime?>("StreamProbedAt").HasColumnType("timestamp with time zone");
+                    b.Property<DateTime?>("LastFrameObservedAt").HasColumnType("timestamp with time zone");
+                    b.HasKey("Id");
+                    b.HasIndex("DeviceId").IsUnique();
+                    b.HasIndex("KioskId");
+                    b.ToTable("CameraRecordingAgents", "be");
+                });
+
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.CameraRecordingExecution", b =>
+                {
+                    b.Property<Guid>("Id").ValueGeneratedOnAdd().HasColumnType("uuid");
+                    b.Property<DateTime>("CreatedAt").HasColumnType("timestamp with time zone");
+                    b.Property<DateTime?>("UpdatedAt").HasColumnType("timestamp with time zone");
+                    b.Property<Guid>("ScheduleId").HasColumnType("uuid");
+                    b.Property<Guid>("DeviceId").HasColumnType("uuid");
+                    b.Property<int>("ScheduleVersion").HasColumnType("integer");
+                    b.Property<string>("Status").IsRequired().IsConcurrencyToken().HasColumnType("text");
+                    b.Property<DateTime>("StartedAt").HasColumnType("timestamp with time zone");
+                    b.Property<DateTime>("LastHeartbeatAt").IsConcurrencyToken().HasColumnType("timestamp with time zone");
+                    b.Property<DateTime?>("EndedAt").HasColumnType("timestamp with time zone");
+                    b.Property<string>("Error").HasColumnType("text");
+                    b.Property<Guid?>("MediaAssetId").HasColumnType("uuid");
+                    b.HasKey("Id");
+                    b.HasIndex("ScheduleId");
+                    b.HasIndex("DeviceId");
+                    b.HasIndex(new[] { "DeviceId" }, "IX_CameraRecordingExecutions_ActiveDevice").IsUnique().HasFilter("\"Status\" = 'Recording'");
+                    b.HasIndex("MediaAssetId");
+                    b.ToTable("CameraRecordingExecutions", "be");
+                });
+
             modelBuilder.Entity("CrabSenseBE.Domain.Entities.CameraRecordingSetting", b =>
                 {
                     b.Property<Guid>("Id")
@@ -620,73 +974,6 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.ToTable("CameraRecordingSettings", "be");
                 });
 
-            modelBuilder.Entity("CrabSenseBE.Domain.Entities.ControllerPort", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uuid");
-
-                    b.Property<string>("ActiveLevel")
-                        .HasMaxLength(8)
-                        .HasColumnType("character varying(8)");
-
-                    b.Property<int?>("Channel")
-                        .HasColumnType("integer");
-
-                    b.Property<string>("CommissioningStatus")
-                        .IsRequired()
-                        .HasMaxLength(16)
-                        .HasColumnType("character varying(16)");
-
-                    b.Property<int>("ConfigVersion")
-                        .HasColumnType("integer");
-
-                    b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<Guid>("DeviceId")
-                        .HasColumnType("uuid");
-
-                    b.Property<int>("Gpio")
-                        .HasColumnType("integer");
-
-                    b.Property<bool>("IsPresent")
-                        .HasColumnType("boolean");
-
-                    b.Property<DateTime>("LastReportedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("PortCode")
-                        .IsRequired()
-                        .HasMaxLength(64)
-                        .HasColumnType("character varying(64)");
-
-                    b.Property<string>("PortType")
-                        .IsRequired()
-                        .HasMaxLength(32)
-                        .HasColumnType("character varying(32)");
-
-                    b.Property<bool?>("ReportedOn")
-                        .HasColumnType("boolean");
-
-                    b.Property<int?>("SecondaryGpio")
-                        .HasColumnType("integer");
-
-                    b.Property<string>("SensorCode")
-                        .HasMaxLength(128)
-                        .HasColumnType("character varying(128)");
-
-                    b.Property<DateTime?>("UpdatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("DeviceId", "PortCode")
-                        .IsUnique();
-
-                    b.ToTable("ControllerPorts", "be");
-                });
-
             modelBuilder.Entity("CrabSenseBE.Domain.Entities.Crab", b =>
                 {
                     b.Property<Guid>("Id")
@@ -716,12 +1003,6 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                         .HasMaxLength(32)
                         .HasColumnType("character varying(32)");
 
-                    b.Property<long>("ConcurrencyVersion")
-                        .IsConcurrencyToken()
-                        .ValueGeneratedOnAddOrUpdate()
-                        .HasColumnType("bigint")
-                        .HasDefaultValue(0L);
-
                     b.Property<string>("Condition")
                         .IsRequired()
                         .HasColumnType("text");
@@ -731,6 +1012,12 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
 
                     b.Property<string>("CrabType")
                         .HasColumnType("text");
+
+                    b.Property<long>("ConcurrencyVersion")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("bigint")
+                        .HasDefaultValue(0L);
 
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("timestamp with time zone");
@@ -1409,6 +1696,46 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.ToTable("Deliveries", "be");
                 });
 
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.ControllerEvent", b =>
+                {
+                    b.Property<Guid>("Id").ValueGeneratedOnAdd().HasColumnType("uuid");
+                    b.Property<DateTime>("CreatedAt").HasColumnType("timestamp with time zone");
+                    b.Property<string>("DetailsJson").HasColumnType("text");
+                    b.Property<Guid>("DeviceId").HasColumnType("uuid");
+                    b.Property<string>("EventKey").IsRequired().HasMaxLength(64).HasColumnType("character varying(64)");
+                    b.Property<int>("InventoryRevision").HasColumnType("integer");
+                    b.Property<string>("Kind").IsRequired().HasMaxLength(24).HasColumnType("character varying(24)");
+                    b.Property<string>("Summary").IsRequired().HasMaxLength(300).HasColumnType("character varying(300)");
+                    b.Property<DateTime?>("UpdatedAt").HasColumnType("timestamp with time zone");
+                    b.HasKey("Id");
+                    b.HasIndex("DeviceId", "EventKey").IsUnique();
+                    b.HasIndex("DeviceId", "Kind", "CreatedAt");
+                    b.ToTable("ControllerEvents", "be");
+                });
+
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.ControllerPort", b =>
+                {
+                    b.Property<Guid>("Id").ValueGeneratedOnAdd().HasColumnType("uuid");
+                    b.Property<string>("ActiveLevel").HasMaxLength(8).HasColumnType("character varying(8)");
+                    b.Property<int?>("Channel").HasColumnType("integer");
+                    b.Property<string>("CommissioningStatus").IsConcurrencyToken().IsRequired().HasMaxLength(16).HasColumnType("character varying(16)");
+                    b.Property<int>("ConfigVersion").IsConcurrencyToken().HasColumnType("integer");
+                    b.Property<DateTime>("CreatedAt").HasColumnType("timestamp with time zone");
+                    b.Property<Guid>("DeviceId").HasColumnType("uuid");
+                    b.Property<int>("Gpio").HasColumnType("integer");
+                    b.Property<bool>("IsPresent").IsConcurrencyToken().HasColumnType("boolean");
+                    b.Property<DateTime>("LastReportedAt").IsConcurrencyToken().HasColumnType("timestamp with time zone");
+                    b.Property<string>("PortCode").IsRequired().HasMaxLength(64).HasColumnType("character varying(64)");
+                    b.Property<string>("PortType").IsRequired().HasMaxLength(32).HasColumnType("character varying(32)");
+                    b.Property<bool?>("ReportedOn").IsConcurrencyToken().HasColumnType("boolean");
+                    b.Property<int?>("SecondaryGpio").HasColumnType("integer");
+                    b.Property<string>("SensorCode").HasMaxLength(128).HasColumnType("character varying(128)");
+                    b.Property<DateTime?>("UpdatedAt").HasColumnType("timestamp with time zone");
+                    b.HasKey("Id");
+                    b.HasIndex("DeviceId", "PortCode").IsUnique();
+                    b.ToTable("ControllerPorts", "be");
+                });
+
             modelBuilder.Entity("CrabSenseBE.Domain.Entities.Device", b =>
                 {
                     b.Property<Guid>("Id")
@@ -1421,14 +1748,10 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.Property<decimal?>("BatteryLevel")
                         .HasColumnType("numeric");
 
-                    b.Property<string>("CapabilityHash")
-                        .HasColumnType("text");
-
+                    b.Property<string>("CapabilityHash").HasColumnType("text");
                     b.Property<int>("CapabilityVersion")
-                        .IsConcurrencyToken()
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("integer")
-                        .HasDefaultValue(0);
+                        .IsConcurrencyToken().IsConcurrencyToken().ValueGeneratedOnAdd().HasColumnType("integer").HasDefaultValue(0);
+                    b.Property<string>("HardwareModel").HasColumnType("text");
 
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("timestamp with time zone");
@@ -1455,9 +1778,6 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                         .HasColumnType("uuid");
 
                     b.Property<string>("FirmwareVersion")
-                        .HasColumnType("text");
-
-                    b.Property<string>("HardwareModel")
                         .HasColumnType("text");
 
                     b.Property<string>("InstallationLocation")
@@ -1508,6 +1828,12 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.Property<DateTime?>("UpdatedAt")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<bool?>("ControllerCommandStorageReady").HasColumnType("boolean");
+                    b.Property<bool?>("ControllerSensorReadSupported").HasColumnType("boolean");
+                    b.Property<int?>("ControllerRssiDbm").HasColumnType("integer");
+                    b.Property<long?>("ControllerFreeHeapBytes").HasColumnType("bigint");
+                    b.Property<long?>("ControllerUptimeSeconds").HasColumnType("bigint");
+                    b.Property<DateTime?>("ControllerHealthAt").HasColumnType("timestamp with time zone");
                     b.HasKey("Id");
 
                     b.HasIndex("FarmingAreaId");
@@ -1647,6 +1973,15 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.Property<DateTime?>("UpdatedAt")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<DateTime?>("MetricsReportedAt").HasColumnType("timestamp with time zone");
+                    b.Property<double?>("ProcessCpuPercent").HasColumnType("double precision");
+                    b.Property<long?>("ProcessMemoryBytes").HasColumnType("bigint");
+                    b.Property<long?>("DiskTotalBytes").HasColumnType("bigint");
+                    b.Property<long?>("DiskFreeBytes").HasColumnType("bigint");
+                    b.Property<string>("SoftwareVersion").HasColumnType("text");
+                    b.Property<DateTime?>("EdgeSyncedAt").HasColumnType("timestamp with time zone");
+                    b.Property<DateTime?>("RecordingCheckedAt").HasColumnType("timestamp with time zone");
+                    b.Property<DateTime?>("UploadCheckedAt").HasColumnType("timestamp with time zone");
                     b.HasKey("Id");
 
                     b.HasIndex("Code")
@@ -1679,6 +2014,8 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                         .HasColumnType("timestamp with time zone");
 
                     b.HasKey("Id");
+
+                    b.HasAlternateKey("ManagerUserId", "FarmingAreaId");
 
                     b.HasIndex("AssignedByUserId");
 
@@ -1840,10 +2177,12 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
 
                     b.HasIndex("FarmingAreaId");
 
-                    b.HasIndex("StaffUserId")
-                        .IsUnique();
+                    b.HasIndex("ManagerUserId");
 
                     b.HasIndex("ManagerUserId", "FarmingAreaId");
+
+                    b.HasIndex("StaffUserId")
+                        .IsUnique();
 
                     b.ToTable("FarmStaffAssignments", "be");
                 });
@@ -2473,157 +2812,6 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                         .IsUnique();
 
                     b.ToTable("HarvestApprovedLines", "be");
-                });
-
-            modelBuilder.Entity("CrabSenseBE.Domain.Entities.HarvestAssignment", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uuid");
-
-                    b.Property<Guid>("AssignedByUserId")
-                        .HasColumnType("uuid");
-
-                    b.Property<Guid>("AssignedToUserId")
-                        .HasColumnType("uuid");
-
-                    b.Property<string>("AssignmentCode")
-                        .IsRequired()
-                        .HasMaxLength(40)
-                        .HasColumnType("character varying(40)");
-
-                    b.Property<DateTime?>("CompletedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<Guid>("FarmingAreaId")
-                        .HasColumnType("uuid");
-
-                    b.Property<string>("Notes")
-                        .HasColumnType("text");
-
-                    b.Property<DateTime?>("StartedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("Status")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<DateTime?>("UpdatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("AssignedByUserId");
-
-                    b.HasIndex("AssignedToUserId");
-
-                    b.HasIndex("AssignmentCode")
-                        .IsUnique();
-
-                    b.HasIndex("FarmingAreaId", "AssignedToUserId", "Status");
-
-                    b.ToTable("HarvestAssignments", "be");
-                });
-
-            modelBuilder.Entity("CrabSenseBE.Domain.Entities.HarvestAssignmentLine", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uuid");
-
-                    b.Property<string>("BoxCode")
-                        .HasColumnType("text");
-
-                    b.Property<Guid?>("BoxId")
-                        .HasColumnType("uuid");
-
-                    b.Property<DateTime?>("CheckedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<Guid?>("CheckedByUserId")
-                        .HasColumnType("uuid");
-
-                    b.Property<string>("CrabCode")
-                        .HasColumnType("text");
-
-                    b.Property<Guid>("CrabId")
-                        .HasColumnType("uuid");
-
-                    b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("EligibilityReason")
-                        .HasColumnType("text");
-
-                    b.Property<Guid>("HarvestAssignmentId")
-                        .HasColumnType("uuid");
-
-                    b.Property<decimal?>("HarvestCarapaceLengthMm")
-                        .HasPrecision(10, 2)
-                        .HasColumnType("numeric(10,2)");
-
-                    b.Property<decimal?>("HarvestCarapaceWidthMm")
-                        .HasPrecision(10, 2)
-                        .HasColumnType("numeric(10,2)");
-
-                    b.Property<string>("HarvestConditionLabel")
-                        .HasColumnType("text");
-
-                    b.Property<string>("HarvestGrade")
-                        .HasColumnType("text");
-
-                    b.Property<bool?>("HarvestIsSoftshell")
-                        .HasColumnType("boolean");
-
-                    b.Property<string>("HarvestNotes")
-                        .HasColumnType("text");
-
-                    b.Property<string>("HarvestPhotoUrlsJson")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<decimal?>("HarvestWeightGram")
-                        .HasColumnType("numeric");
-
-                    b.Property<DateTime?>("HarvestedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("Notes")
-                        .HasColumnType("text");
-
-                    b.Property<string>("Outcome")
-                        .HasColumnType("text");
-
-                    b.Property<DateTime?>("PendingHarvestedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<bool>("PendingMoltConfirmed")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("boolean")
-                        .HasDefaultValue(false);
-
-                    b.Property<string>("Status")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<DateTime?>("UpdatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("CheckedByUserId");
-
-                    b.HasIndex("CrabId")
-                        .IsUnique()
-                        .HasFilter("\"Status\" IN ('Assigned', 'Eligible', 'InProgress')");
-
-                    b.HasIndex("HarvestAssignmentId", "CrabId")
-                        .IsUnique();
-
-                    b.ToTable("HarvestAssignmentLines", "be");
                 });
 
             modelBuilder.Entity("CrabSenseBE.Domain.Entities.HarvestLine", b =>
@@ -3663,8 +3851,7 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.Property<string>("ControlMode")
                         .HasColumnType("text");
 
-                    b.Property<Guid?>("ControllerPortId")
-                        .HasColumnType("uuid");
+                    b.Property<Guid?>("ControllerPortId").HasColumnType("uuid");
 
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("timestamp with time zone");
@@ -3728,8 +3915,7 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasIndex("ControllerPortId")
-                        .IsUnique();
+                    b.HasIndex("ControllerPortId").IsUnique();
 
                     b.HasIndex("RelayDeviceId");
 
@@ -4016,24 +4202,21 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uuid");
 
-                    b.Property<int?>("AppliedConfigurationVersion")
-                        .HasColumnType("integer");
-
-                    b.Property<string>("BusAddress")
-                        .HasColumnType("text");
-
-                    b.Property<Guid?>("BusPortId")
-                        .HasColumnType("uuid");
-
-                    b.Property<string>("BusRegister")
-                        .HasColumnType("text");
-
-                    b.Property<int>("ConfigurationVersion")
-                        .IsConcurrencyToken()
-                        .HasColumnType("integer");
-
-                    b.Property<Guid?>("ControllerPortId")
-                        .HasColumnType("uuid");
+                    b.Property<Guid?>("ControllerPortId").HasColumnType("uuid");
+                    b.Property<string>("Name").HasColumnType("text");
+                    b.Property<string>("InstallationLocation").HasColumnType("text");
+                    b.Property<Guid?>("FarmingAreaId").HasColumnType("uuid");
+                    b.Property<int?>("SamplingIntervalSeconds").HasColumnType("integer");
+                    b.Property<int?>("DisconnectTimeoutSeconds").HasColumnType("integer");
+                    b.Property<string>("SourceType").HasColumnType("text");
+                    b.Property<Guid?>("BusPortId").HasColumnType("uuid");
+                    b.Property<string>("BusAddress").HasColumnType("text");
+                    b.Property<string>("BusRegister").HasColumnType("text");
+                    b.Property<int>("ConfigurationVersion").IsConcurrencyToken().HasColumnType("integer");
+                    b.Property<int?>("AppliedConfigurationVersion").HasColumnType("integer");
+                    b.Property<DateTime?>("LastConfigurationAppliedAt").HasColumnType("timestamp with time zone");
+                    b.HasIndex("FarmingAreaId");
+                    b.HasIndex("BusPortId", "BusAddress", "BusRegister").IsUnique();
 
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("timestamp with time zone");
@@ -4041,23 +4224,11 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.Property<Guid?>("DeviceId")
                         .HasColumnType("uuid");
 
-                    b.Property<int?>("DisconnectTimeoutSeconds")
-                        .HasColumnType("integer");
-
-                    b.Property<Guid?>("FarmingAreaId")
-                        .HasColumnType("uuid");
-
                     b.Property<Guid?>("FarmingRowId")
                         .HasColumnType("uuid");
 
-                    b.Property<string>("InstallationLocation")
-                        .HasColumnType("text");
-
                     b.Property<bool>("IsActive")
                         .HasColumnType("boolean");
-
-                    b.Property<DateTime?>("LastConfigurationAppliedAt")
-                        .HasColumnType("timestamp with time zone");
 
                     b.Property<DateTime?>("LastSeenAt")
                         .HasColumnType("timestamp with time zone");
@@ -4068,14 +4239,8 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.Property<decimal?>("MinThreshold")
                         .HasColumnType("numeric");
 
-                    b.Property<string>("Name")
-                        .HasColumnType("text");
-
                     b.Property<Guid?>("RasComponentId")
                         .HasColumnType("uuid");
-
-                    b.Property<int?>("SamplingIntervalSeconds")
-                        .HasColumnType("integer");
 
                     b.Property<string>("SensorCode")
                         .IsRequired()
@@ -4083,9 +4248,6 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
 
                     b.Property<string>("SensorType")
                         .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<string>("SourceType")
                         .HasColumnType("text");
 
                     b.Property<string>("Unit")
@@ -4099,135 +4261,60 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasIndex("ControllerPortId")
-                        .IsUnique();
+                    b.HasIndex("ControllerPortId").IsUnique();
+                    b.HasIndex("SensorCode").IsUnique();
 
                     b.HasIndex("DeviceId");
-
-                    b.HasIndex("FarmingAreaId");
 
                     b.HasIndex("FarmingRowId");
 
                     b.HasIndex("RasComponentId");
 
-                    b.HasIndex("SensorCode")
-                        .IsUnique();
-
                     b.HasIndex("WaterSystemId");
-
-                    b.HasIndex("BusPortId", "BusAddress", "BusRegister")
-                        .IsUnique();
 
                     b.ToTable("Sensors", "be");
                 });
 
             modelBuilder.Entity("CrabSenseBE.Domain.Entities.SensorCalibration", b =>
                 {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uuid");
-
-                    b.Property<Guid>("ActorId")
-                        .HasColumnType("uuid");
-
-                    b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("Method")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<string>("Note")
-                        .HasColumnType("text");
-
-                    b.Property<decimal>("ObservedValue")
-                        .HasColumnType("numeric");
-
-                    b.Property<DateTime>("PerformedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<decimal>("ReferenceValue")
-                        .HasColumnType("numeric");
-
-                    b.Property<string>("Result")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<Guid>("SensorId")
-                        .HasColumnType("uuid");
-
-                    b.Property<string>("Unit")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<DateTime?>("UpdatedAt")
-                        .HasColumnType("timestamp with time zone");
-
+                    b.Property<Guid>("Id").ValueGeneratedOnAdd().HasColumnType("uuid");
+                    b.Property<DateTime>("CreatedAt").HasColumnType("timestamp with time zone");
+                    b.Property<DateTime?>("UpdatedAt").HasColumnType("timestamp with time zone");
+                    b.Property<Guid>("SensorId").HasColumnType("uuid");
+                    b.Property<Guid>("ActorId").HasColumnType("uuid");
+                    b.Property<DateTime>("PerformedAt").HasColumnType("timestamp with time zone");
+                    b.Property<decimal>("ReferenceValue").HasColumnType("numeric");
+                    b.Property<decimal>("ObservedValue").HasColumnType("numeric");
+                    b.Property<string>("Unit").IsRequired().HasColumnType("text");
+                    b.Property<string>("Method").IsRequired().HasColumnType("text");
+                    b.Property<string>("Result").IsRequired().HasColumnType("text");
+                    b.Property<string>("Note").HasColumnType("text");
                     b.HasKey("Id");
-
                     b.HasIndex("SensorId", "PerformedAt");
-
                     b.ToTable("SensorCalibrations", "be");
                 });
 
             modelBuilder.Entity("CrabSenseBE.Domain.Entities.SensorDiagnosticRun", b =>
                 {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uuid");
-
-                    b.Property<DateTime?>("CompletedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<int>("ConfigurationVersion")
-                        .HasColumnType("integer");
-
-                    b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<Guid>("DeviceId")
-                        .HasColumnType("uuid");
-
-                    b.Property<DateTime>("ExpiresAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<DateTime?>("MeasuredAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<Guid>("RequestedBy")
-                        .HasColumnType("uuid");
-
-                    b.Property<string>("ResultMessage")
-                        .HasColumnType("text");
-
-                    b.Property<Guid>("SensorId")
-                        .HasColumnType("uuid");
-
-                    b.Property<string>("Status")
-                        .IsConcurrencyToken()
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<string>("Unit")
-                        .HasColumnType("text");
-
-                    b.Property<DateTime?>("UpdatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<decimal?>("Value")
-                        .HasColumnType("numeric");
-
+                    b.Property<Guid>("Id").ValueGeneratedOnAdd().HasColumnType("uuid");
+                    b.Property<DateTime>("CreatedAt").HasColumnType("timestamp with time zone");
+                    b.Property<DateTime?>("UpdatedAt").HasColumnType("timestamp with time zone");
+                    b.Property<Guid>("SensorId").HasColumnType("uuid");
+                    b.Property<Guid>("DeviceId").HasColumnType("uuid");
+                    b.Property<Guid>("RequestedBy").HasColumnType("uuid");
+                    b.Property<int>("ConfigurationVersion").HasColumnType("integer");
+                    b.Property<string>("Status").IsRequired().IsConcurrencyToken().HasColumnType("text");
+                    b.Property<DateTime>("ExpiresAt").HasColumnType("timestamp with time zone");
+                    b.Property<DateTime?>("CompletedAt").HasColumnType("timestamp with time zone");
+                    b.Property<DateTime?>("MeasuredAt").HasColumnType("timestamp with time zone");
+                    b.Property<decimal?>("Value").HasColumnType("numeric");
+                    b.Property<string>("Unit").HasColumnType("text");
+                    b.Property<string>("ResultMessage").HasColumnType("text");
                     b.HasKey("Id");
-
-                    b.HasIndex("SensorId")
-                        .IsUnique()
-                        .HasFilter("\"Status\" = 'Pending'");
-
-                    b.HasIndex("SensorId", "CreatedAt");
-
-                    b.HasIndex("DeviceId", "Status", "ExpiresAt");
-
-                    b.ToTable("SensorDiagnosticRuns", "be");
+                    b.HasIndex("SensorId").IsUnique().HasFilter("\"Status\" = 'Pending'");
+                    b.HasIndex("SensorId","CreatedAt");
+                    b.HasIndex("DeviceId","Status","ExpiresAt");
+                    b.ToTable("SensorDiagnosticRuns","be");
                 });
 
             modelBuilder.Entity("CrabSenseBE.Domain.Entities.ServiceApiKey", b =>
@@ -4499,14 +4586,168 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasIndex("Token")
-                        .IsUnique()
-                        .HasFilter("\"IsActive\" = true");
+                    b.HasIndex("Token").IsUnique().HasFilter("\"IsActive\" = true");
 
                     b.HasIndex("UserId", "Token")
                         .IsUnique();
 
                     b.ToTable("UserPushTokens", "be");
+                });
+
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.WaterAnalysisBatch", b =>
+                {
+                    b.Property<Guid>("Id").ValueGeneratedOnAdd().HasColumnType("uuid");
+                    b.Property<DateTime>("CreatedAt").HasColumnType("timestamp with time zone");
+                    b.Property<DateTime?>("UpdatedAt").HasColumnType("timestamp with time zone");
+                    b.Property<Guid>("FarmingAreaId").HasColumnType("uuid");
+                    b.Property<string>("Trigger").IsRequired().HasColumnType("text");
+                    b.Property<string>("Status").IsRequired().IsConcurrencyToken().HasColumnType("text");
+                    b.Property<string>("TargetsJson").IsRequired().HasColumnType("text");
+                    b.Property<string>("SampleSource").IsRequired().HasColumnType("text");
+                    b.Property<Guid?>("ScheduleId").HasColumnType("uuid");
+                    b.Property<DateTime?>("ScheduledFor").HasColumnType("timestamp with time zone");
+                    b.Property<Guid?>("RequestedBy").HasColumnType("uuid");
+                    b.Property<DateTime?>("CompletedAt").HasColumnType("timestamp with time zone");
+                    b.HasKey("Id");
+                    b.HasIndex("FarmingAreaId").IsUnique().HasFilter("\"Status\" = 'waiting_samples'");
+                    b.ToTable("WaterAnalysisBatches", "be");
+                });
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.WaterAnalysisSchedule", b =>
+                {
+                    b.Property<Guid>("Id").ValueGeneratedOnAdd().HasColumnType("uuid");
+                    b.Property<DateTime>("CreatedAt").HasColumnType("timestamp with time zone");
+                    b.Property<DateTime?>("UpdatedAt").HasColumnType("timestamp with time zone");
+                    b.Property<Guid>("FarmingAreaId").HasColumnType("uuid");
+                    b.Property<string>("TargetsJson").IsRequired().HasColumnType("text");
+                    b.Property<string>("SampleSource").IsRequired().HasColumnType("text");
+                    b.Property<int>("IntervalMinutes").HasColumnType("integer");
+                    b.Property<bool>("Enabled").HasColumnType("boolean");
+                    b.Property<DateTime>("NextRunAt").IsConcurrencyToken().HasColumnType("timestamp with time zone");
+                    b.Property<DateTime?>("LastAttemptAt").HasColumnType("timestamp with time zone");
+                    b.Property<string>("LastOutcome").HasColumnType("text");
+                    b.HasKey("Id");
+                    b.HasIndex("FarmingAreaId").IsUnique();
+                    b.ToTable("WaterAnalysisSchedules", "be");
+                });
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.WaterAssayChannel", b =>
+                {
+                    b.Property<Guid>("Id").ValueGeneratedOnAdd().HasColumnType("uuid");
+                    b.Property<DateTime>("CreatedAt").HasColumnType("timestamp with time zone");
+                    b.Property<DateTime?>("UpdatedAt").HasColumnType("timestamp with time zone");
+                    b.Property<Guid>("BatchId").HasColumnType("uuid");
+                    b.Property<Guid>("CalibrationId").HasColumnType("uuid");
+                    b.Property<string>("Analyte").IsRequired().HasColumnType("text");
+                    b.Property<string>("ProfileId").IsRequired().HasColumnType("text");
+                    b.Property<string>("ProfileJson").IsRequired().HasColumnType("text");
+                    b.Property<string>("ProtocolJson").IsRequired().HasColumnType("text");
+                    b.Property<string>("EventsJson").IsRequired().HasColumnType("text");
+                    b.Property<string>("State").IsRequired().IsConcurrencyToken().HasColumnType("text");
+                    b.Property<int>("StepIndex").IsConcurrencyToken().HasColumnType("integer");
+                    b.Property<DateTime>("StepStartedAt").HasColumnType("timestamp with time zone");
+                    b.Property<DateTime?>("ReactionReadyAt").HasColumnType("timestamp with time zone");
+                    b.Property<Guid?>("CapturedMediaId").HasColumnType("uuid");
+                    b.Property<string>("Failure").HasColumnType("text");
+                    b.HasKey("Id");
+                    b.HasIndex("BatchId","Analyte").IsUnique();
+                    b.HasIndex("CalibrationId");
+                    b.HasIndex("CapturedMediaId").IsUnique();
+                    b.ToTable("WaterAssayChannels","be");
+                });
+
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.WaterCalibrationCheck", b =>
+                {
+                    b.Property<Guid>("Id").ValueGeneratedOnAdd().HasColumnType("uuid");
+                    b.Property<DateTime>("CreatedAt").HasColumnType("timestamp with time zone");
+                    b.Property<DateTime?>("UpdatedAt").HasColumnType("timestamp with time zone");
+                    b.Property<Guid>("CalibrationId").HasColumnType("uuid");
+                    b.Property<Guid>("MediaId").HasColumnType("uuid");
+                    b.Property<Guid>("PerformedBy").HasColumnType("uuid");
+                    b.Property<string>("Status").IsRequired().HasColumnType("text");
+                    b.Property<string>("Unit").IsRequired().HasColumnType("text");
+                    b.Property<string>("EvidenceJson").IsRequired().HasColumnType("text");
+                    b.Property<decimal>("Expected").HasColumnType("numeric");
+                    b.Property<decimal>("Estimated").HasColumnType("numeric");
+                    b.Property<decimal>("AbsoluteError").HasColumnType("numeric");
+                    b.Property<decimal>("MaxError").HasColumnType("numeric");
+                    b.Property<string>("ImageSha256").IsRequired().HasMaxLength(64).HasColumnType("character varying(64)");
+                    b.HasKey("Id");
+                    b.HasIndex("MediaId").IsUnique();
+                    b.HasIndex("CalibrationId","CreatedAt");
+                    b.HasIndex("CalibrationId","ImageSha256").IsUnique();
+                    b.ToTable("WaterCalibrationChecks","be");
+                });
+
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.WaterTrainingSample", b =>
+                {
+                    b.Property<Guid>("Id").ValueGeneratedOnAdd().HasColumnType("uuid");
+                    b.Property<DateTime>("CreatedAt").HasColumnType("timestamp with time zone");
+                    b.Property<DateTime?>("UpdatedAt").HasColumnType("timestamp with time zone");
+                    b.Property<Guid>("CalibrationId").HasColumnType("uuid");
+                    b.Property<Guid>("FarmingAreaId").HasColumnType("uuid");
+                    b.Property<Guid>("MediaId").HasColumnType("uuid");
+                    b.Property<Guid>("ReviewedBy").HasColumnType("uuid");
+                    b.Property<string>("PreparationId").IsRequired().HasColumnType("text");
+                    b.Property<string>("Split").IsRequired().HasColumnType("text");
+                    b.Property<string>("LabelSource").IsRequired().HasColumnType("text");
+                    b.Property<string>("ReferenceId").IsRequired().HasColumnType("text");
+                    b.Property<decimal>("Concentration").HasColumnType("numeric");
+                    b.Property<int>("ReactionSeconds").HasColumnType("integer");
+                    b.Property<decimal>("SalinityPpt").HasColumnType("numeric");
+                    b.Property<DateTime>("ReviewedAt").HasColumnType("timestamp with time zone");
+                    b.Property<DateTime?>("WithdrawnAt").HasColumnType("timestamp with time zone");
+                    b.Property<string>("ImageSha256").IsRequired().HasMaxLength(64).HasColumnType("character varying(64)");
+                    b.HasKey("Id");
+                    b.HasIndex("FarmingAreaId","ImageSha256").IsUnique();
+                    b.HasIndex("MediaId").IsUnique();
+                    b.HasIndex("CalibrationId","PreparationId");
+                    b.ToTable("WaterTrainingSamples","be");
+                });
+
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.WaterColorCalibration", b =>
+                {
+                    b.Property<Guid>("Id").ValueGeneratedOnAdd().HasColumnType("uuid");
+                    b.Property<DateTime>("CreatedAt").HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTime?>("UpdatedAt").HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("FarmingAreaId").HasColumnType("uuid");
+
+                    b.Property<Guid>("CameraDeviceId").HasColumnType("uuid");
+
+                    b.Property<Guid>("CreatedBy").HasColumnType("uuid");
+
+                    b.Property<string>("Analyte").IsRequired().HasColumnType("text");
+
+                    b.Property<string>("KitName").IsRequired().HasColumnType("text");
+
+                    b.Property<string>("ReagentLot").IsRequired().HasColumnType("text");
+
+                    b.Property<string>("Unit").IsRequired().HasColumnType("text");
+
+                    b.Property<string>("ProtocolJson").IsRequired().HasColumnType("text");
+
+                    b.Property<string>("CurveJson").IsRequired().HasColumnType("text");
+
+                    b.Property<string>("ValidationJson").IsRequired().HasColumnType("text");
+
+                    b.Property<DateTime>("ValidUntil").HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTime?>("RevokedAt").HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("AiAlgorithm").HasColumnType("text");
+
+                    b.Property<string>("AiCalibrationId").HasColumnType("text");
+
+                    b.Property<string>("KitRevision").HasColumnType("text");
+
+                    b.Property<string>("AiCalibrationToken").HasColumnType("text");
+
+                    b.Property<DateTime?>("QualityCheckDueAt").HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+                    b.HasIndex("CameraDeviceId");
+                    b.HasIndex("FarmingAreaId", "Analyte");
+                    b.ToTable("WaterColorCalibrations", "be");
                 });
 
             modelBuilder.Entity("CrabSenseBE.Domain.Entities.WaterAnalysisRun", b =>
@@ -4625,6 +4866,17 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.Property<DateTime?>("UpdatedAt")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<Guid?>("CalibrationId").HasColumnType("uuid");
+
+                    b.Property<Guid?>("SampleMediaId").HasColumnType("uuid");
+
+                    b.Property<string>("ColorEvidenceJson").HasColumnType("text");
+
+                    b.Property<Guid?>("BatchId").HasColumnType("uuid");
+                    b.Property<decimal?>("MeasuredValue").HasColumnType("numeric");
+                    b.Property<string>("MeasuredUnit").HasColumnType("text");
+                    b.Property<string>("SampleSha256").HasMaxLength(64).HasColumnType("character varying(64)");
+
                     b.HasKey("Id");
 
                     b.HasIndex("FarmingAreaId")
@@ -4632,6 +4884,12 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                         .HasFilter("\"Status\" IN ('running', 'stopping')");
 
                     b.HasIndex("FarmingAreaId", "StartedAt");
+
+                    b.HasIndex("CalibrationId");
+                    b.HasIndex("SampleMediaId").IsUnique();
+
+                    b.HasIndex("BatchId","Analyte").IsUnique();
+                    b.HasIndex("FarmingAreaId","SampleSha256").IsUnique();
 
                     b.ToTable("WaterAnalysisRuns", "be");
                 });
@@ -4689,17 +4947,14 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("timestamp with time zone");
 
-                    b.Property<string>("DataQuality")
-                        .HasColumnType("text");
+                    b.Property<DateTime?>("ReceivedAt").HasColumnType("timestamp with time zone");
+                    b.Property<string>("DataQuality").HasColumnType("text");
 
                     b.Property<string>("EdgeEventKey")
                         .HasMaxLength(64)
                         .HasColumnType("character varying(64)");
 
                     b.Property<DateTime>("MeasuredAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<DateTime?>("ReceivedAt")
                         .HasColumnType("timestamp with time zone");
 
                     b.Property<Guid>("SensorId")
@@ -4875,23 +5130,36 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.Navigation("ChangedByUser");
                 });
 
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.CameraScheduleAssignment", b =>
+                {
+                    b.HasOne("CrabSenseBE.Domain.Entities.CameraSchedule", null).WithMany().HasForeignKey("ScheduleId").OnDelete(DeleteBehavior.Cascade).IsRequired();
+                    b.HasOne("CrabSenseBE.Domain.Entities.Device", null).WithMany().HasForeignKey("DeviceId").OnDelete(DeleteBehavior.Restrict).IsRequired();
+                });
+
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.CameraScheduleSlot", b =>
+                {
+                    b.HasOne("CrabSenseBE.Domain.Entities.CameraSchedule", null).WithMany().HasForeignKey("ScheduleId").OnDelete(DeleteBehavior.Cascade).IsRequired();
+                });
+
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.CameraRecordingAgent", b =>
+                {
+                    b.HasOne("CrabSenseBE.Domain.Entities.Device", null).WithMany().HasForeignKey("DeviceId").OnDelete(DeleteBehavior.Restrict).IsRequired();
+                    b.HasOne("CrabSenseBE.Domain.Entities.FarmKiosk", null).WithMany().HasForeignKey("KioskId").OnDelete(DeleteBehavior.SetNull);
+                });
+
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.CameraRecordingExecution", b =>
+                {
+                    b.HasOne("CrabSenseBE.Domain.Entities.CameraSchedule", null).WithMany().HasForeignKey("ScheduleId").OnDelete(DeleteBehavior.Restrict).IsRequired();
+                    b.HasOne("CrabSenseBE.Domain.Entities.Device", null).WithMany().HasForeignKey("DeviceId").OnDelete(DeleteBehavior.Restrict).IsRequired();
+                    b.HasOne("CrabSenseBE.Domain.Entities.MediaAsset", null).WithMany().HasForeignKey("MediaAssetId").OnDelete(DeleteBehavior.SetNull);
+                });
+
             modelBuilder.Entity("CrabSenseBE.Domain.Entities.CameraRecordingSetting", b =>
                 {
                     b.HasOne("CrabSenseBE.Domain.Entities.Device", "Device")
                         .WithMany()
                         .HasForeignKey("DeviceId")
                         .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("Device");
-                });
-
-            modelBuilder.Entity("CrabSenseBE.Domain.Entities.ControllerPort", b =>
-                {
-                    b.HasOne("CrabSenseBE.Domain.Entities.Device", "Device")
-                        .WithMany()
-                        .HasForeignKey("DeviceId")
-                        .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
 
                     b.Navigation("Device");
@@ -5059,14 +5327,6 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.Navigation("Crab");
                 });
 
-            modelBuilder.Entity("CrabSenseBE.Domain.Entities.Customer", b =>
-                {
-                    b.HasOne("CrabSenseBE.Domain.Entities.FarmingArea", null)
-                        .WithMany()
-                        .HasForeignKey("FarmingAreaId")
-                        .OnDelete(DeleteBehavior.Restrict);
-                });
-
             modelBuilder.Entity("CrabSenseBE.Domain.Entities.Delivery", b =>
                 {
                     b.HasOne("CrabSenseBE.Domain.Entities.SalesOrder", "SalesOrder")
@@ -5124,6 +5384,14 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.Navigation("FarmingArea");
 
                     b.Navigation("Manager");
+                });
+
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.NotificationRule", b =>
+                {
+                    b.HasOne("CrabSenseBE.Domain.Entities.FarmingArea", null)
+                        .WithMany()
+                        .HasForeignKey("FarmingAreaId")
+                        .OnDelete(DeleteBehavior.Restrict);
                 });
 
             modelBuilder.Entity("CrabSenseBE.Domain.Entities.FarmSettings", b =>
@@ -5332,55 +5600,6 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.Navigation("HarvestVoucher");
                 });
 
-            modelBuilder.Entity("CrabSenseBE.Domain.Entities.HarvestAssignment", b =>
-                {
-                    b.HasOne("CrabSenseBE.Domain.Entities.AppUser", "AssignedBy")
-                        .WithMany()
-                        .HasForeignKey("AssignedByUserId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-
-                    b.HasOne("CrabSenseBE.Domain.Entities.AppUser", "AssignedTo")
-                        .WithMany()
-                        .HasForeignKey("AssignedToUserId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-
-                    b.HasOne("CrabSenseBE.Domain.Entities.FarmingArea", null)
-                        .WithMany()
-                        .HasForeignKey("FarmingAreaId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-
-                    b.Navigation("AssignedBy");
-
-                    b.Navigation("AssignedTo");
-                });
-
-            modelBuilder.Entity("CrabSenseBE.Domain.Entities.HarvestAssignmentLine", b =>
-                {
-                    b.HasOne("CrabSenseBE.Domain.Entities.AppUser", null)
-                        .WithMany()
-                        .HasForeignKey("CheckedByUserId")
-                        .OnDelete(DeleteBehavior.Restrict);
-
-                    b.HasOne("CrabSenseBE.Domain.Entities.Crab", "Crab")
-                        .WithMany()
-                        .HasForeignKey("CrabId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-
-                    b.HasOne("CrabSenseBE.Domain.Entities.HarvestAssignment", "Assignment")
-                        .WithMany("Lines")
-                        .HasForeignKey("HarvestAssignmentId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-
-                    b.Navigation("Assignment");
-
-                    b.Navigation("Crab");
-                });
-
             modelBuilder.Entity("CrabSenseBE.Domain.Entities.HarvestLine", b =>
                 {
                     b.HasOne("CrabSenseBE.Domain.Entities.Box", "Box")
@@ -5409,16 +5628,6 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.Navigation("Crab");
 
                     b.Navigation("HarvestVoucher");
-                });
-
-            modelBuilder.Entity("CrabSenseBE.Domain.Entities.HarvestVoucher", b =>
-                {
-                    b.HasOne("CrabSenseBE.Domain.Entities.HarvestAssignment", "Assignment")
-                        .WithMany("Vouchers")
-                        .HasForeignKey("HarvestAssignmentId")
-                        .OnDelete(DeleteBehavior.Restrict);
-
-                    b.Navigation("Assignment");
                 });
 
             modelBuilder.Entity("CrabSenseBE.Domain.Entities.Hdf5Upload", b =>
@@ -5550,14 +5759,6 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.Navigation("Notification");
                 });
 
-            modelBuilder.Entity("CrabSenseBE.Domain.Entities.NotificationRule", b =>
-                {
-                    b.HasOne("CrabSenseBE.Domain.Entities.FarmingArea", null)
-                        .WithMany()
-                        .HasForeignKey("FarmingAreaId")
-                        .OnDelete(DeleteBehavior.Restrict);
-                });
-
             modelBuilder.Entity("CrabSenseBE.Domain.Entities.ObservationEvent", b =>
                 {
                     b.HasOne("CrabSenseBE.Domain.Entities.Box", null)
@@ -5622,11 +5823,6 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
 
             modelBuilder.Entity("CrabSenseBE.Domain.Entities.RasComponent", b =>
                 {
-                    b.HasOne("CrabSenseBE.Domain.Entities.ControllerPort", "ControllerPort")
-                        .WithMany()
-                        .HasForeignKey("ControllerPortId")
-                        .OnDelete(DeleteBehavior.Restrict);
-
                     b.HasOne("CrabSenseBE.Domain.Entities.Device", "RelayDevice")
                         .WithMany()
                         .HasForeignKey("RelayDeviceId")
@@ -5637,8 +5833,6 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                         .HasForeignKey("WaterSystemId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
-
-                    b.Navigation("ControllerPort");
 
                     b.Navigation("RelayDevice");
 
@@ -5675,24 +5869,9 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
 
             modelBuilder.Entity("CrabSenseBE.Domain.Entities.Sensor", b =>
                 {
-                    b.HasOne("CrabSenseBE.Domain.Entities.ControllerPort", null)
-                        .WithMany()
-                        .HasForeignKey("BusPortId")
-                        .OnDelete(DeleteBehavior.Restrict);
-
-                    b.HasOne("CrabSenseBE.Domain.Entities.ControllerPort", "ControllerPort")
-                        .WithMany()
-                        .HasForeignKey("ControllerPortId")
-                        .OnDelete(DeleteBehavior.Restrict);
-
                     b.HasOne("CrabSenseBE.Domain.Entities.Device", "Device")
                         .WithMany("Sensors")
                         .HasForeignKey("DeviceId");
-
-                    b.HasOne("CrabSenseBE.Domain.Entities.FarmingArea", null)
-                        .WithMany()
-                        .HasForeignKey("FarmingAreaId")
-                        .OnDelete(DeleteBehavior.Restrict);
 
                     b.HasOne("CrabSenseBE.Domain.Entities.RasComponent", "RasComponent")
                         .WithMany("Sensors")
@@ -5703,31 +5882,11 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                         .WithMany("Sensors")
                         .HasForeignKey("WaterSystemId");
 
-                    b.Navigation("ControllerPort");
-
                     b.Navigation("Device");
 
                     b.Navigation("RasComponent");
 
                     b.Navigation("WaterSystem");
-                });
-
-            modelBuilder.Entity("CrabSenseBE.Domain.Entities.SensorCalibration", b =>
-                {
-                    b.HasOne("CrabSenseBE.Domain.Entities.Sensor", null)
-                        .WithMany()
-                        .HasForeignKey("SensorId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-                });
-
-            modelBuilder.Entity("CrabSenseBE.Domain.Entities.SensorDiagnosticRun", b =>
-                {
-                    b.HasOne("CrabSenseBE.Domain.Entities.Sensor", null)
-                        .WithMany()
-                        .HasForeignKey("SensorId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
                 });
 
             modelBuilder.Entity("CrabSenseBE.Domain.Entities.TraceabilityLink", b =>
@@ -5892,7 +6051,27 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
 
             modelBuilder.Entity("CrabSenseBE.Domain.Entities.Customer", b =>
                 {
+                    b.HasOne("CrabSenseBE.Domain.Entities.FarmingArea", null)
+                        .WithMany()
+                        .HasForeignKey("FarmingAreaId")
+                        .OnDelete(DeleteBehavior.Restrict);
+                });
+
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.Customer", b =>
+                {
                     b.Navigation("SalesOrders");
+                });
+
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.ControllerEvent", b =>
+                {
+                    b.HasOne("CrabSenseBE.Domain.Entities.Device", null).WithMany()
+                        .HasForeignKey("DeviceId").OnDelete(DeleteBehavior.Restrict).IsRequired();
+                });
+
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.ControllerPort", b =>
+                {
+                    b.HasOne("CrabSenseBE.Domain.Entities.Device", "Device").WithMany().HasForeignKey("DeviceId").OnDelete(DeleteBehavior.Restrict).IsRequired();
+                    b.Navigation("Device");
                 });
 
             modelBuilder.Entity("CrabSenseBE.Domain.Entities.Device", b =>
@@ -5922,18 +6101,6 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.Navigation("Adjustments");
                 });
 
-            modelBuilder.Entity("CrabSenseBE.Domain.Entities.HarvestAssignment", b =>
-                {
-                    b.Navigation("Lines");
-
-                    b.Navigation("Vouchers");
-                });
-
-            modelBuilder.Entity("CrabSenseBE.Domain.Entities.HarvestAssignmentLine", b =>
-                {
-                    b.Navigation("HarvestLine");
-                });
-
             modelBuilder.Entity("CrabSenseBE.Domain.Entities.HarvestVoucher", b =>
                 {
                     b.Navigation("ApprovedLines");
@@ -5948,6 +6115,10 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
 
             modelBuilder.Entity("CrabSenseBE.Domain.Entities.RasComponent", b =>
                 {
+                    b.HasOne("CrabSenseBE.Domain.Entities.ControllerPort", "ControllerPort").WithMany().HasForeignKey("ControllerPortId").OnDelete(DeleteBehavior.Restrict);
+
+                    b.Navigation("ControllerPort");
+
                     b.Navigation("IncomingFlows");
 
                     b.Navigation("OutgoingFlows");
@@ -5968,7 +6139,23 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
 
             modelBuilder.Entity("CrabSenseBE.Domain.Entities.Sensor", b =>
                 {
+                    b.HasOne("CrabSenseBE.Domain.Entities.ControllerPort", "ControllerPort").WithMany().HasForeignKey("ControllerPortId").OnDelete(DeleteBehavior.Restrict);
+                    b.HasOne("CrabSenseBE.Domain.Entities.FarmingArea", null).WithMany().HasForeignKey("FarmingAreaId").OnDelete(DeleteBehavior.Restrict);
+                    b.HasOne("CrabSenseBE.Domain.Entities.ControllerPort", null).WithMany().HasForeignKey("BusPortId").OnDelete(DeleteBehavior.Restrict);
+
+                    b.Navigation("ControllerPort");
+
                     b.Navigation("Measurements");
+                });
+
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.SensorCalibration", b =>
+                {
+                    b.HasOne("CrabSenseBE.Domain.Entities.Sensor", null).WithMany().HasForeignKey("SensorId").OnDelete(DeleteBehavior.Restrict).IsRequired();
+                });
+
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.SensorDiagnosticRun", b =>
+                {
+                    b.HasOne("CrabSenseBE.Domain.Entities.Sensor", null).WithMany().HasForeignKey("SensorId").OnDelete(DeleteBehavior.Restrict).IsRequired();
                 });
 
             modelBuilder.Entity("CrabSenseBE.Domain.Entities.WaterSystem", b =>
@@ -5981,7 +6168,302 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
 
                     b.Navigation("WaterMeasurements");
                 });
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.WaterColorCalibration", b =>
+                {
+                    b.HasOne("CrabSenseBE.Domain.Entities.FarmingArea", null).WithMany().HasForeignKey("FarmingAreaId").OnDelete(DeleteBehavior.Restrict).IsRequired();
+                    b.HasOne("CrabSenseBE.Domain.Entities.Device", null).WithMany().HasForeignKey("CameraDeviceId").OnDelete(DeleteBehavior.Restrict).IsRequired();
+                });
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.WaterAnalysisRun", b =>
+                {
+                    b.HasOne("CrabSenseBE.Domain.Entities.WaterColorCalibration", null).WithMany().HasForeignKey("CalibrationId").OnDelete(DeleteBehavior.Restrict);
+                });
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.WaterAnalysisBatch", b =>
+                { b.HasOne("CrabSenseBE.Domain.Entities.FarmingArea", null).WithMany().HasForeignKey("FarmingAreaId").OnDelete(DeleteBehavior.Restrict).IsRequired(); });
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.WaterAnalysisSchedule", b =>
+                { b.HasOne("CrabSenseBE.Domain.Entities.FarmingArea", null).WithMany().HasForeignKey("FarmingAreaId").OnDelete(DeleteBehavior.Restrict).IsRequired(); });
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.WaterAnalysisRun", b =>
+                { b.HasOne("CrabSenseBE.Domain.Entities.WaterAnalysisBatch", null).WithMany().HasForeignKey("BatchId").OnDelete(DeleteBehavior.Restrict); });
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.WaterAnalysisRun", b =>
+                { b.HasOne("CrabSenseBE.Domain.Entities.MediaAsset", null).WithMany().HasForeignKey("SampleMediaId").OnDelete(DeleteBehavior.Restrict); });
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.WaterAssayChannel", b =>
+                {
+                    b.HasOne("CrabSenseBE.Domain.Entities.WaterAnalysisBatch",null).WithMany().HasForeignKey("BatchId").OnDelete(DeleteBehavior.Restrict).IsRequired();
+                    b.HasOne("CrabSenseBE.Domain.Entities.WaterColorCalibration",null).WithMany().HasForeignKey("CalibrationId").OnDelete(DeleteBehavior.Restrict).IsRequired();
+                    b.HasOne("CrabSenseBE.Domain.Entities.MediaAsset",null).WithMany().HasForeignKey("CapturedMediaId").OnDelete(DeleteBehavior.Restrict);
+                });
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.WaterCalibrationCheck", b =>
+                {
+                    b.HasOne("CrabSenseBE.Domain.Entities.WaterColorCalibration",null).WithMany().HasForeignKey("CalibrationId").OnDelete(DeleteBehavior.Restrict).IsRequired();
+                    b.HasOne("CrabSenseBE.Domain.Entities.MediaAsset",null).WithMany().HasForeignKey("MediaId").OnDelete(DeleteBehavior.Restrict).IsRequired();
+                });
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.WaterTrainingSample", b =>
+                {
+                    b.HasOne("CrabSenseBE.Domain.Entities.WaterColorCalibration",null).WithMany().HasForeignKey("CalibrationId").OnDelete(DeleteBehavior.Restrict).IsRequired();
+                    b.HasOne("CrabSenseBE.Domain.Entities.MediaAsset",null).WithMany().HasForeignKey("MediaId").OnDelete(DeleteBehavior.Restrict).IsRequired();
+                    b.HasOne("CrabSenseBE.Domain.Entities.FarmingArea",null).WithMany().HasForeignKey("FarmingAreaId").OnDelete(DeleteBehavior.Restrict).IsRequired();
+                });
 #pragma warning restore 612, 618
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.AiModelVersion", b =>
+                {
+                    b.HasOne("CrabSenseBE.Domain.Entities.AiManagedService", null)
+                        .WithMany()
+                        .HasForeignKey("AiServiceId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.AiCameraAssignment", b =>
+                {
+                    b.HasOne("CrabSenseBE.Domain.Entities.AiManagedService", null)
+                        .WithMany()
+                        .HasForeignKey("AiServiceId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("CrabSenseBE.Domain.Entities.Device", null)
+                        .WithMany()
+                        .HasForeignKey("DeviceId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.AiInferenceJob", b =>
+                {
+                    b.HasOne("CrabSenseBE.Domain.Entities.AiManagedService", null)
+                        .WithMany()
+                        .HasForeignKey("AiServiceId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("CrabSenseBE.Domain.Entities.AiModelVersion", null)
+                        .WithMany()
+                        .HasForeignKey("ModelVersionId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.HarvestAssignment", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("AssignedByUserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("AssignedToUserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("AssignmentCode")
+                        .IsRequired()
+                        .HasMaxLength(40)
+                        .HasColumnType("character varying(40)");
+
+                    b.Property<DateTime?>("CompletedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("FarmingAreaId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Notes")
+                        .HasColumnType("text");
+
+                    b.Property<DateTime?>("StartedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<DateTime?>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("AssignedByUserId");
+
+                    b.HasIndex("AssignedToUserId");
+
+                    b.HasIndex("AssignmentCode")
+                        .IsUnique();
+
+                    b.HasIndex("FarmingAreaId", "AssignedToUserId", "Status");
+
+                    b.ToTable("HarvestAssignments", "be");
+                });
+
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.HarvestAssignment", b =>
+                {
+                    b.HasOne("CrabSenseBE.Domain.Entities.AppUser", "AssignedBy")
+                        .WithMany()
+                        .HasForeignKey("AssignedByUserId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("CrabSenseBE.Domain.Entities.AppUser", "AssignedTo")
+                        .WithMany()
+                        .HasForeignKey("AssignedToUserId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("CrabSenseBE.Domain.Entities.FarmingArea", null)
+                        .WithMany()
+                        .HasForeignKey("FarmingAreaId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("AssignedBy");
+
+                    b.Navigation("AssignedTo");
+                });
+
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.HarvestAssignment", b =>
+                {
+                    b.Navigation("Lines");
+
+                    b.Navigation("Vouchers");
+                });
+
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.HarvestAssignmentLine", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("BoxCode")
+                        .HasColumnType("text");
+
+                    b.Property<Guid?>("BoxId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime?>("CheckedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("CheckedByUserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("CrabCode")
+                        .HasColumnType("text");
+
+                    b.Property<Guid>("CrabId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("EligibilityReason")
+                        .HasColumnType("text");
+
+                    b.Property<Guid>("HarvestAssignmentId")
+                        .HasColumnType("uuid");
+
+                    b.Property<decimal?>("HarvestCarapaceLengthMm")
+                        .HasPrecision(10, 2)
+                        .HasColumnType("numeric(10,2)");
+
+                    b.Property<decimal?>("HarvestCarapaceWidthMm")
+                        .HasPrecision(10, 2)
+                        .HasColumnType("numeric(10,2)");
+
+                    b.Property<string>("HarvestConditionLabel")
+                        .HasColumnType("text");
+
+                    b.Property<string>("HarvestGrade")
+                        .HasColumnType("text");
+
+                    b.Property<bool?>("HarvestIsSoftshell")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("HarvestNotes")
+                        .HasColumnType("text");
+
+                    b.Property<string>("HarvestPhotoUrlsJson")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<decimal?>("HarvestWeightGram")
+                        .HasColumnType("numeric");
+
+                    b.Property<DateTime?>("HarvestedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Notes")
+                        .HasColumnType("text");
+
+                    b.Property<string>("Outcome")
+                        .HasColumnType("text");
+
+                    b.Property<DateTime?>("PendingHarvestedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<bool>("PendingMoltConfirmed")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("boolean")
+                        .HasDefaultValue(false);
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<DateTime?>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("CheckedByUserId");
+
+                    b.HasIndex("CrabId")
+                        .IsUnique()
+                        .HasFilter("\"Status\" IN ('Assigned', 'Eligible', 'InProgress')");
+
+                    b.HasIndex("HarvestAssignmentId", "CrabId")
+                        .IsUnique();
+
+                    b.ToTable("HarvestAssignmentLines", "be");
+                });
+
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.HarvestAssignmentLine", b =>
+                {
+                    b.HasOne("CrabSenseBE.Domain.Entities.AppUser", null)
+                        .WithMany()
+                        .HasForeignKey("CheckedByUserId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("CrabSenseBE.Domain.Entities.Crab", "Crab")
+                        .WithMany()
+                        .HasForeignKey("CrabId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("CrabSenseBE.Domain.Entities.HarvestAssignment", "Assignment")
+                        .WithMany("Lines")
+                        .HasForeignKey("HarvestAssignmentId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Assignment");
+
+                    b.Navigation("Crab");
+                });
+
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.HarvestAssignmentLine", b =>
+                {
+                    b.Navigation("HarvestLine");
+                });
+
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.HarvestVoucher", b =>
+                {
+                    b.HasOne("CrabSenseBE.Domain.Entities.HarvestAssignment", "Assignment")
+                        .WithMany("Vouchers")
+                        .HasForeignKey("HarvestAssignmentId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.Navigation("Assignment");
+                });
         }
     }
 }

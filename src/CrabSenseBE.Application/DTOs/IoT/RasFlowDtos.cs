@@ -62,7 +62,11 @@ public record RasFlowNodeDto(
     bool? DesiredIsOn = null,
     string? CommandStatus = null,
     Guid? CommandId = null,
-    DateTime? LastReportedAt = null);
+    DateTime? LastReportedAt = null,
+    Guid? ControllerPortId = null,
+    string? PortCode = null,
+    string? CommissioningStatus = null,
+    bool? PortPresent = null);
 
 public record RasFlowDiagramDto(
     Guid AreaId,
@@ -79,7 +83,8 @@ public record RasFlowDiagramDto(
     int OnlineCount,
     int OffCount = 0,
     int FaultCount = 0,
-    IReadOnlyList<RasControlEventDto>? Activity = null);
+    IReadOnlyList<RasControlEventDto>? Activity = null,
+    bool HardwareControlDisabled = true);
 
 public record RasControlEventDto(
     DateTime At,

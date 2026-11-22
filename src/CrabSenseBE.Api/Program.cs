@@ -30,6 +30,8 @@ builder.Services.AddInfrastructure(builder.Configuration);
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddScoped<ICurrentUserService, CurrentUserService>();
 builder.Services.AddApplication(builder.Configuration);
+builder.Services.AddHostedService<WaterBatchScheduleWorker>();
+builder.Services.AddHttpClient<WaterAiClient>().ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
 
 // ─── JWT Authentication ─────────────────────────────────────────────────────
 builder.Services.AddCrabSenseJwtAuthentication(builder.Configuration);
@@ -82,6 +84,9 @@ builder.Services.AddControllers()
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(c =>
 {
+    // Use qualified CLR names: controllers may define nested DTOs with identical short names.
+    c.CustomSchemaIds(CrabSenseBE.Api.SwaggerSchemaIds.For);
+
     c.SwaggerDoc("v1", new OpenApiInfo
     {
         Title = "CrabSense API",
@@ -138,9 +143,8 @@ builder.Services.AddCors(options =>
                 if (string.IsNullOrWhiteSpace(origin)) return false;
                 if (allowedOrigins.Contains(origin, StringComparer.OrdinalIgnoreCase)) return true;
 
-                // Dev: cho phép mọi cổng loopback để tooling local không phải thêm config.
-                return builder.Environment.IsDevelopment()
-                       && Uri.TryCreate(origin, UriKind.Absolute, out var uri)
+                // Flutter web đổi cổng mỗi lần chạy. Mọi cổng loopback đều là máy người dùng, không phải origin công khai.
+                return Uri.TryCreate(origin, UriKind.Absolute, out var uri)
                        && uri.IsLoopback;
             })
             .AllowAnyHeader()
@@ -172,6 +176,8 @@ if (builder.Configuration.GetValue("Swagger:Enabled", app.Environment.IsDevelopm
     {
         c.SwaggerEndpoint("/swagger/v1/swagger.json", "CrabSense API v1");
         c.RoutePrefix = "swagger";
+        // Large API surface: show business groups collapsed by default.
+        c.DocExpansion(Swashbuckle.AspNetCore.SwaggerUI.DocExpansion.None);
     });
 }
 

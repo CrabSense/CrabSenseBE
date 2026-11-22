@@ -28,6 +28,14 @@ public class AiManagedService : BaseEntity
     public int BatchSize { get; set; } = 4;
     public string DetectionClassesJson { get; set; } = "[]";
     public DateTime? StartedAt { get; set; }
+    public bool IsEnabled { get; set; } = true;
+    public DateTime? LastHeartbeatAt { get; set; }
+    public string? ReportedState { get; set; }
+    public string? ReportedVersion { get; set; }
+    public Guid? CommandId { get; set; }
+    public string? RequestedVersion { get; set; }
+    public DateTime? CommandRequestedAt { get; set; }
+    public string? CommandError { get; set; }
 }
 
 public class BackupScheduleSetting : BaseEntity

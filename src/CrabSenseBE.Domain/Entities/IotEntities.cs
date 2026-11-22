@@ -163,6 +163,13 @@ public class Device : BaseEntity
     public int CapabilityVersion { get; set; }
     public string? CapabilityHash { get; set; }
     public string? HardwareModel { get; set; }
+    // Last signed heartbeat monitoring fields; not control authorization.
+    public bool? ControllerCommandStorageReady { get; set; }
+    public bool? ControllerSensorReadSupported { get; set; }
+    public int? ControllerRssiDbm { get; set; }
+    public long? ControllerFreeHeapBytes { get; set; }
+    public long? ControllerUptimeSeconds { get; set; }
+    public DateTime? ControllerHealthAt { get; set; }
     public decimal? BatteryLevel { get; set; }
     public decimal? RssiDbm { get; set; }
     public DeviceStatus Status { get; set; } = DeviceStatus.Offline;

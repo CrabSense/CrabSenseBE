@@ -45,7 +45,14 @@ public class SystemPlatformService : ISystemPlatformService
     {
         var database = await _db.Database.CanConnectAsync(ct);
         var drive = CurrentDrive();
-        var aiTotal = await _db.AiManagedServices.CountAsync(ct);
+        var ai = await _db.AiManagedServices.AsNoTracking().ToListAsync(ct);
+        var aiTotal = ai.Count;
+        var aiEnabled = ai.Where(x => x.IsEnabled).ToList();
+        var aiOnline = aiEnabled.Count(x => AiRuntimeState.Health(x, DateTime.UtcNow) == "Online");
+        var aiStatus = aiTotal == 0 ? "NotConfigured" : aiEnabled.Count == 0 ? "Disabled" :
+            aiOnline == aiEnabled.Count ? "Running" : aiOnline > 0 ? "Degraded" :
+            aiEnabled.All(x => x.LastHeartbeatAt == null) ? "NotIntegrated" :
+            aiEnabled.All(x => AiRuntimeState.Health(x, DateTime.UtcNow) == "Stopped") ? "Stopped" : "Degraded";
         var mqtt = await ProbeMqttAsync(ct);
 
         var services = new List<SystemServiceDto>
@@ -54,8 +61,8 @@ public class SystemPlatformService : ISystemPlatformService
             new("Database", database ? "Running" : "Error", database ? "PostgreSQL connected" : "Cannot connect"),
             new("Local Server Disk", drive?.IsReady == true ? "Running" : "Warning", drive?.Name),
             new("Media Storage", "NotVerified", "Provider health requires a real storage probe; local disk is not cloud storage."),
-            new("AI Inference Service", aiTotal == 0 ? "NotConfigured" : "NotIntegrated",
-                $"{aiTotal} registered configurations; runtime inference has not been verified."),
+            new("AI Inference Service", aiStatus,
+                $"{aiOnline}/{aiEnabled.Count} enabled workers online; {aiTotal} registered."),
             mqtt,
         };
         return ApiResponse<IReadOnlyList<SystemServiceDto>>.Ok(services);
@@ -276,11 +283,16 @@ public class SystemPlatformService : ISystemPlatformService
         var device = await RequireDevice(deviceId, ct);
         if (CameraConfiguration.IsCamera(device))
         {
-            await AuditAsync(userId, "TestConnection", "Device", device.Id, "Camera Agent not integrated", ip, ct);
+            var agent=await _db.CameraRecordingAgents.AsNoTracking().SingleOrDefaultAsync(x=>x.DeviceId==device.Id,ct);
+            var valid=agent?.Enabled==true&&agent.KioskId.HasValue&&await _db.FarmKiosks.AnyAsync(x=>x.Id==agent.KioskId&&x.Status!="Revoked"&&x.FarmingAreaId==device.FarmingAreaId,ct);
+            var now=DateTime.UtcNow;
+            var evidence=valid&&device.Status!=DeviceStatus.Maintenance&&agent!.StreamProbedAt>=now.AddMinutes(-3)&&agent.StreamProbedAt<=now.AddSeconds(5)?agent.StreamProbeStatus:null;
+            var verification=evidence is "Verified" or "Failed" or "Synthetic"?evidence:agent==null?"NotIntegrated":"Unverified";
+            var cameraMessage=verification=="Verified"?"Kiosk đã xác minh frame gần đây; đây là bằng chứng đã lưu, không phải phép thử trực tiếp.":verification=="Failed"?"Lần kiểm tra frame gần nhất thất bại.":verification=="Synthetic"?"Chỉ có frame thử nghiệm, chưa xác minh camera thật.":"Chưa có bằng chứng stream mới từ Camera Agent.";
+            await AuditAsync(userId, "TestConnection", "Device", device.Id, verification, ip, ct);
             await _db.SaveChangesAsync(ct);
             return ApiResponse<DeviceConnectionTestDto>.Ok(new DeviceConnectionTestDto(
-                device.Id, false, "Camera Agent chưa tích hợp; chưa xác minh được kết nối/stream Camera.",
-                device.IpAddress, null, device.LastSeenAt, device.RssiDbm, "NotIntegrated"));
+                device.Id, verification=="Verified", cameraMessage, device.IpAddress, null, device.LastSeenAt, device.RssiDbm, verification));
         }
         if (string.IsNullOrWhiteSpace(device.IpAddress))
         {
@@ -334,7 +346,7 @@ public class SystemPlatformService : ISystemPlatformService
         var deviceSource = deviceId.ToString("N");
         var alerts = await _db.Alerts.AsNoTracking()
             .Where(a => (a.SensorId != null && sensorIds.Contains(a.SensorId.Value) && a.IncidentType == "sensor_disconnect")
-                || (a.IncidentType == "device_disconnect" && a.SourceType == "Device" && a.SourceId == deviceSource))
+                || ((a.IncidentType == "device_disconnect" || a.IncidentType == "camera_recording_failure" || a.IncidentType == "camera_recording_stalled" || a.IncidentType == "camera_storage_limit" || a.IncidentType == "camera_recording_missed" || a.IncidentType == "camera_agent_offline" || a.IncidentType == "camera_stream_failed") && a.SourceType == "Device" && a.SourceId == deviceSource))
             .OrderByDescending(a => a.CreatedAt)
             .Take(100)
             .ToListAsync(ct);
@@ -351,10 +363,26 @@ public class SystemPlatformService : ISystemPlatformService
         var devices = await CameraDevices(ct);
         var settings = await _db.CameraRecordingSettings.AsNoTracking().ToListAsync(ct);
         var areas = await _db.FarmingAreas.AsNoTracking().ToDictionaryAsync(a => a.Id, a => a.Name, ct);
+        var assignments = await (from a in _db.CameraScheduleAssignments.AsNoTracking()
+            join s in _db.CameraSchedules.AsNoTracking() on a.ScheduleId equals s.Id
+            where !s.Deleted select new { a.DeviceId, Schedule = s }).ToDictionaryAsync(x => x.DeviceId, ct);
+        var latest = await _db.CameraRecordingExecutions.AsNoTracking()
+            .GroupBy(x => x.DeviceId).Select(g => g.OrderByDescending(x => x.StartedAt).ThenByDescending(x => x.Id).First())
+            .ToListAsync(ct);
+        var executions = latest.ToDictionary(x => x.DeviceId);
+        var now = DateTime.UtcNow;
         var rows = devices.Select(device =>
         {
             var setting = settings.FirstOrDefault(x => x.DeviceId == device.Id);
-            return MapCamera(device, setting, device.FarmingAreaId is Guid areaId ? areas.GetValueOrDefault(areaId) : null);
+            var mapped = MapCamera(device, setting, device.FarmingAreaId is Guid areaId ? areas.GetValueOrDefault(areaId) : null);
+            if (!assignments.TryGetValue(device.Id, out var a)) return mapped;
+            executions.TryGetValue(device.Id, out var execution);
+            var runtime = execution?.Status == "Recording"
+                ? (execution.LastHeartbeatAt >= now.AddSeconds(-90) ? "Recording" : "Unknown")
+                : !a.Schedule.Enabled || device.Status == DeviceStatus.Maintenance ? "Disabled"
+                : execution is null ? "AwaitingAgent" : execution.Status == "Failed" ? "Failed" : execution.Status == "Uploading" ? "Uploading" : "Idle";
+            return mapped with { ScheduleId = a.Schedule.Id, ScheduleName = a.Schedule.Name,
+                RuntimeStatus = runtime, LastExecutionStatus = execution?.Status };
         }).ToList();
         return ApiResponse<IReadOnlyList<CameraRecordingDto>>.Ok(rows);
     }
@@ -369,6 +397,8 @@ public class SystemPlatformService : ISystemPlatformService
         CameraConfiguration.ValidateSchedule(request.WeeklyScheduleJson, request.Mode == "Scheduled");
         var device = await RequireDevice(deviceId, ct);
         if (!IsCameraDevice(device)) throw AppException.BadRequest("Thiết bị không phải camera.");
+        if (await _db.CameraScheduleAssignments.AnyAsync(x => x.DeviceId == deviceId, ct))
+            throw AppException.Conflict("Camera thuộc lịch dùng chung; cập nhật qua Camera Schedules.");
         var setting = await _db.CameraRecordingSettings.FirstOrDefaultAsync(x => x.DeviceId == deviceId, ct);
         if (setting is null)
         {
@@ -386,7 +416,7 @@ public class SystemPlatformService : ISystemPlatformService
         var areaName = device.FarmingAreaId is Guid areaId
             ? await _db.FarmingAreas.Where(x => x.Id == areaId).Select(x => x.Name).FirstOrDefaultAsync(ct) : null;
         return ApiResponse<CameraRecordingDto>.Ok(MapCamera(device, setting, areaName),
-            "Đã lưu cấu hình; worker ghi hình chưa được tích hợp, chưa xác nhận đang ghi.");
+            "Đã lưu cấu hình cũ; tạo lịch dùng chung để recording agent thực thi. Chưa xác nhận đang ghi.");
     }
 
     public async Task<ApiResponse<IReadOnlyList<RecordingHistoryDto>>> GetRecordingHistoryAsync(Guid? deviceId, CancellationToken ct = default)
@@ -407,12 +437,13 @@ public class SystemPlatformService : ISystemPlatformService
     {
         var services = await _db.AiManagedServices.AsNoTracking().OrderBy(x => x.Name).ToListAsync(ct);
         var counts = await _db.AiDetections.AsNoTracking()
-            .GroupBy(x => x.ModelVersion)
+            .Where(x => x.AiServiceId != null)
+            .GroupBy(x => x.AiServiceId)
             .Select(g => new { g.Key, Count = g.Count() })
             .ToListAsync(ct);
         return ApiResponse<IReadOnlyList<AiServiceDto>>.Ok(services.Select(service =>
         {
-            var count = counts.FirstOrDefault(x => x.Key == service.Version)?.Count ?? 0;
+            var count = counts.FirstOrDefault(x => x.Key == service.Id)?.Count ?? 0;
             return MapAi(service, count);
         }).ToList());
     }
@@ -423,6 +454,9 @@ public class SystemPlatformService : ISystemPlatformService
         if (string.IsNullOrWhiteSpace(request.Name) || string.IsNullOrWhiteSpace(request.ModelName)
             || string.IsNullOrWhiteSpace(request.Version))
             throw AppException.BadRequest("Name, ModelName và Version là bắt buộc.");
+        if (request.Name.Trim().Length > 120 || request.ModelName.Trim().Length > 120 || request.DeviceLabel?.Length > 200 ||
+            !System.Text.RegularExpressions.Regex.IsMatch(request.Version.Trim(), @"^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$"))
+            throw AppException.BadRequest("Tên, máy chạy hoặc phiên bản không hợp lệ.");
         if (request.ConfidenceThreshold is < 0 or > 1 || request.FrameSamplingFps is <= 0 or > 120
             || request.BatchSize is < 1 or > 128)
             throw AppException.BadRequest("Confidence, FPS hoặc BatchSize không hợp lệ.");
@@ -432,7 +466,7 @@ public class SystemPlatformService : ISystemPlatformService
             {
                 using var labels = System.Text.Json.JsonDocument.Parse(request.DetectionClassesJson);
                 if (labels.RootElement.ValueKind != System.Text.Json.JsonValueKind.Array
-                    || labels.RootElement.EnumerateArray().Any(x => x.ValueKind != System.Text.Json.JsonValueKind.String))
+                    || labels.RootElement.GetArrayLength() > 100 || labels.RootElement.EnumerateArray().Any(x => x.ValueKind != System.Text.Json.JsonValueKind.String || string.IsNullOrWhiteSpace(x.GetString()) || x.GetString()!.Length > 80))
                     throw AppException.BadRequest("DetectionClassesJson phải là mảng chuỗi.");
             }
             catch (System.Text.Json.JsonException) { throw AppException.BadRequest("DetectionClassesJson không hợp lệ."); }
@@ -455,50 +489,37 @@ public class SystemPlatformService : ISystemPlatformService
         return ApiResponse<AiServiceDto>.Ok(MapAi(row, 0));
     }
 
-    public async Task<ApiResponse<AiServiceDto>> RestartAiServiceAsync(Guid id, Guid? userId, string? ip, CancellationToken ct = default)
-    {
-        var row = await RequireAi(id, ct);
-        row.Status = "RestartRequested";
-        await AuditAsync(userId, "RestartAiService", "AiManagedService", row.Id, row.Name, ip, ct);
-        await _db.SaveChangesAsync(ct);
-        return ApiResponse<AiServiceDto>.Ok(
-            MapAi(row, 0), "Yêu cầu restart đã được ghi nhận; chưa có worker xác nhận.");
-    }
+    public Task<ApiResponse<AiServiceDto>> RestartAiServiceAsync(Guid id, Guid? userId, string? ip, CancellationToken ct = default)
+        => RequestAiCommandAsync(id, "Restart", null, userId, ip, ct);
+    public Task<ApiResponse<AiServiceDto>> StopAiServiceAsync(Guid id, Guid? userId, string? ip, CancellationToken ct = default)
+        => RequestAiCommandAsync(id, "Stop", null, userId, ip, ct);
+    public Task<ApiResponse<AiServiceDto>> DeployAiModelAsync(Guid id, DeployModelRequest request, Guid? userId, string? ip, CancellationToken ct = default)
+        => RequestAiCommandAsync(id, "Deploy", request.Version, userId, ip, ct);
+    public Task<ApiResponse<AiServiceDto>> RollbackAiModelAsync(Guid id, Guid? userId, string? ip, CancellationToken ct = default)
+        => RequestAiCommandAsync(id, "Rollback", null, userId, ip, ct);
 
-    public async Task<ApiResponse<AiServiceDto>> StopAiServiceAsync(Guid id, Guid? userId, string? ip, CancellationToken ct = default)
+    private async Task<ApiResponse<AiServiceDto>> RequestAiCommandAsync(Guid id, string action, string? version, Guid? userId, string? ip, CancellationToken ct)
     {
         var row = await RequireAi(id, ct);
-        row.Status = "StopRequested";
-        await AuditAsync(userId, "StopAiService", "AiManagedService", row.Id, row.Name, ip, ct);
-        await _db.SaveChangesAsync(ct);
-        return ApiResponse<AiServiceDto>.Ok(
-            MapAi(row, 0), "Yêu cầu stop đã được ghi nhận; chưa có worker xác nhận.");
-    }
-
-    public async Task<ApiResponse<AiServiceDto>> DeployAiModelAsync(
-        Guid id, DeployModelRequest request, Guid? userId, string? ip, CancellationToken ct = default)
-    {
-        if (string.IsNullOrWhiteSpace(request.Version))
-            throw AppException.BadRequest("Version là bắt buộc.");
-        var row = await RequireAi(id, ct);
-        var requestedVersion = request.Version.Trim();
-        row.Status = "DeployRequested";
-        await AuditAsync(userId, "DeployAiModelRequested", "AiManagedService", row.Id, requestedVersion, ip, ct);
-        await _db.SaveChangesAsync(ct);
-        return ApiResponse<AiServiceDto>.Ok(
-            MapAi(row, 0), $"Đã ghi nhận yêu cầu deploy model {requestedVersion}; version hiện tại chưa đổi.");
-    }
-
-    public async Task<ApiResponse<AiServiceDto>> RollbackAiModelAsync(Guid id, Guid? userId, string? ip, CancellationToken ct = default)
-    {
-        var row = await RequireAi(id, ct);
-        if (string.IsNullOrWhiteSpace(row.PreviousVersion))
-            throw AppException.BadRequest("Không có version trước.");
-        row.Status = "RollbackRequested";
-        await AuditAsync(userId, "RollbackAiModelRequested", "AiManagedService", row.Id, row.PreviousVersion, ip, ct);
-        await _db.SaveChangesAsync(ct);
-        return ApiResponse<AiServiceDto>.Ok(
-            MapAi(row, 0), $"Đã ghi nhận yêu cầu rollback về {row.PreviousVersion}; version hiện tại chưa đổi.");
+        var now = DateTime.UtcNow;
+        if (row.LastHeartbeatAt is null || row.LastHeartbeatAt < now.AddSeconds(-90))
+            throw new AppException("Worker AI chưa kết nối hoặc heartbeat đã hết hạn.", 503);
+        if (!row.IsEnabled && action != "Stop") throw AppException.Conflict("Dịch vụ AI đang bị vô hiệu hóa.");
+        if (row.Status.EndsWith("Requested") && row.CommandRequestedAt > now.AddMinutes(-5))
+            throw AppException.Conflict("Đang có lệnh AI chờ xác nhận.");
+        var target = action switch { "Rollback" => row.PreviousVersion, "Restart" => row.Version, "Deploy" => version?.Trim(), _ => null };
+        if (action != "Stop" && (string.IsNullOrWhiteSpace(target) ||
+            !await _db.AiModelVersions.AnyAsync(x => x.AiServiceId == id && x.Version == target, ct)))
+            throw AppException.BadRequest("Phiên bản model chưa được đăng ký cho dịch vụ.");
+        row.CommandId = Guid.NewGuid();
+        row.CommandRequestedAt = now;
+        row.RequestedVersion = target;
+        row.CommandError = null;
+        row.Status = action + "Requested";
+        await AuditAsync(userId, action switch { "Deploy" => "DeployAiModelRequested", "Rollback" => "RollbackAiModelRequested", "Stop" => "StopAiService", _ => "RestartAiService" }, "AiManagedService", id, $"{row.CommandId}: {target}", ip, ct);
+        try { await _db.SaveChangesAsync(ct); }
+        catch (DbUpdateConcurrencyException) { throw AppException.Conflict("Lệnh AI đã thay đổi; tải lại trước khi thao tác."); }
+        return ApiResponse<AiServiceDto>.Ok(MapAi(row, await _db.AiDetections.CountAsync(x => x.AiServiceId == id, ct)), "Đã gửi yêu cầu; chờ worker xác nhận.");
     }
 
     public Task<ApiResponse<StorageCapacityDto>> GetStorageCapacityAsync(CancellationToken ct = default)
@@ -687,7 +708,7 @@ public class SystemPlatformService : ISystemPlatformService
     // Explicit technical incident allowlist. Do not infer authorization from free-text messages.
     private IQueryable<Alert> TechnicalAlerts() => _db.Alerts.AsNoTracking().Where(a =>
         ((a.IncidentType == "sensor_disconnect" || a.IncidentType == "sensor_read_error") && a.SourceType == "Sensor") ||
-        (a.IncidentType == "device_disconnect" && a.SourceType == "Device") ||
+        ((a.IncidentType == "device_disconnect" || a.IncidentType == "camera_recording_failure" || a.IncidentType == "camera_recording_stalled" || a.IncidentType == "camera_storage_limit" || a.IncidentType == "camera_recording_missed" || a.IncidentType == "camera_agent_offline" || a.IncidentType == "camera_stream_failed") && a.SourceType == "Device") ||
         (a.IncidentType == "kiosk_disconnect" && a.SourceType == "Kiosk"));
 
     private static readonly string[] TechnicalActions =
@@ -698,7 +719,8 @@ public class SystemPlatformService : ISystemPlatformService
         "TerminateSession", "CreateApiKey", "RotateApiKey", "RevokeApiKey", "UpdateSecurityPolicy",
         "CreateSensor", "UpdateSensor", "DeleteSensor", "RegisterSensorFromPort", "UpdateSensorBinding", "EnableSensor", "DisableSensor", "UpdateSensorConfiguration", "SensorTestRequested", "RecordSensorCalibration",
         "DeleteCameraRecordingRequested", "DeleteCameraRecordingFailed", "DeleteCameraRecording",
-        "Login", "LoginFailed", "LoginFailureThresholdReached"
+        "CreateCameraSchedule", "UpdateCameraSchedule", "ChangeCameraScheduleStatus", "DeleteCameraSchedule", "AssignCameraAgent", "RevokeCameraAgent",
+        "Login", "LoginFailed", "LoginFailureThresholdReached", "AcknowledgeDeviceMonitoringAlert", "ProcessDeviceMonitoringAlert", "NoteDeviceMonitoringAlert", "CloseDeviceMonitoringAlert", "UpdateDeviceMonitoringPolicy", "ResetDeviceMonitoringPolicy", "ScheduleDeviceMaintenance", "CancelDeviceMaintenance"
     ];
 
     private IQueryable<OperationLog> TechnicalOperations() => _db.OperationLogs.AsNoTracking()
@@ -811,7 +833,8 @@ public class SystemPlatformService : ISystemPlatformService
     private static AiServiceDto MapAi(AiManagedService row, int detections) => new(
         row.Id, row.Name, row.ModelName, row.Version, row.PreviousVersion, row.Status, row.DeviceLabel,
         row.ConfidenceThreshold, row.FrameSamplingFps, row.BatchSize, row.DetectionClassesJson,
-        row.StartedAt, detections);
+        row.StartedAt, detections, AiRuntimeState.Health(row, DateTime.UtcNow), row.IsEnabled,
+        row.LastHeartbeatAt, row.ReportedVersion, row.CommandId, row.RequestedVersion, row.CommandRequestedAt, row.CommandError);
 
     private static ApiKeyDto MapKey(ServiceApiKey row) => new(
         row.Id, row.Name, row.Prefix, row.CreatedAt, row.LastUsedAt, row.RevokedAt != null);

@@ -84,9 +84,10 @@ public class CameraManagementController(IIotService iot, ISystemPlatformService 
     public async Task<IActionResult> Capabilities(Guid id, CancellationToken ct)
     {
         await RequireCamera(id, ct);
+        var row = (await platform.GetRecordingSettingsAsync(ct)).Data!.Single(x => x.DeviceId == id);
         return Ok(ApiResponse<object>.Ok(new { configuration = true, heartbeat = true,
-            liveStreaming = false, snapshotCapture = false, recordingRuntime = false, restart = false,
-            firmwareUpdate = false, runtimeStatus = "NotIntegrated" }));
+            liveStreaming = false, snapshotCapture = false, recordingRuntime = true, restart = false,
+            firmwareUpdate = false, runtimeStatus = row.RuntimeStatus, scheduleId = row.ScheduleId }));
     }
 
     [HttpGet("{id:guid}/recording")]

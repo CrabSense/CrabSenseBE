@@ -99,6 +99,9 @@ public class UnitOfWork : IUnitOfWork
     private IRepository<Sensor>? _sensors;
     public IRepository<Sensor> Sensors => _sensors ??= new GenericRepository<Sensor>(_context);
 
+    private IRepository<ControllerEvent>? _controllerEvents;
+    public IRepository<ControllerEvent> ControllerEvents => _controllerEvents ??= new GenericRepository<ControllerEvent>(_context);
+
     private IRepository<ControllerPort>? _controllerPorts;
     public IRepository<ControllerPort> ControllerPorts => _controllerPorts ??= new GenericRepository<ControllerPort>(_context);
     private IRepository<Device>? _devices;
@@ -140,6 +143,12 @@ public class UnitOfWork : IUnitOfWork
     public IRepository<UserPushToken> UserPushTokens =>
         _userPushTokens ??= new GenericRepository<UserPushToken>(_context);
 
+    private IRepository<CameraScheduleAssignment>? _cameraAssignments;
+    public IRepository<CameraScheduleAssignment> CameraScheduleAssignments=>_cameraAssignments??=new GenericRepository<CameraScheduleAssignment>(_context);
+    private IRepository<CameraRecordingExecution>? _cameraExecutions;
+    public IRepository<CameraRecordingExecution> CameraRecordingExecutions=>_cameraExecutions??=new GenericRepository<CameraRecordingExecution>(_context);
+    private IRepository<CameraRecordingAgent>? _cameraAgents;
+    public IRepository<CameraRecordingAgent> CameraRecordingAgents=>_cameraAgents??=new GenericRepository<CameraRecordingAgent>(_context);
     private IRepository<MediaAsset>? _mediaAssets;
     public IRepository<MediaAsset> MediaAssets =>
         _mediaAssets ??= new GenericRepository<MediaAsset>(_context);

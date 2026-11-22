@@ -11,6 +11,16 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
         /// <inheritdoc />
         protected override void Up(MigrationBuilder migrationBuilder)
         {
+            // Some existing deployments already have these columns at numeric(8,2),
+            // while a clean database built from the earlier migrations does not.
+            // Ensure both columns exist before widening their precision.
+            migrationBuilder.Sql("""
+                ALTER TABLE be."HarvestLines"
+                    ADD COLUMN IF NOT EXISTS "CarapaceLengthMm" numeric(8,2);
+                ALTER TABLE be."HarvestLines"
+                    ADD COLUMN IF NOT EXISTS "CarapaceWidthMm" numeric(8,2);
+                """);
+
             migrationBuilder.AlterColumn<decimal>(
                 name: "CarapaceLengthMm",
                 schema: "be",
