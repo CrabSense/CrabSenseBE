@@ -35,7 +35,10 @@ public record HarvestVoucherDto(
     int ApprovalVersion = 0,
     int ApprovedQuantity = 0,
     int ExecutionShortfallCount = 0,
-    string? ExecutionShortfallReason = null
+    string? ExecutionShortfallReason = null,
+    Guid? AdjustmentRequestedByUserId = null,
+    DateTime? AdjustmentRequestedAt = null,
+    string? AdjustmentReason = null
 );
 
 public record HarvestVoucherDetailDto(
@@ -69,7 +72,10 @@ public record HarvestVoucherDetailDto(
     int ApprovedQuantity = 0,
     int ExecutionShortfallCount = 0,
     string? ExecutionShortfallReason = null,
-    IReadOnlyCollection<HarvestApprovedLineDto>? ApprovedLines = null
+    IReadOnlyCollection<HarvestApprovedLineDto>? ApprovedLines = null,
+    Guid? AdjustmentRequestedByUserId = null,
+    DateTime? AdjustmentRequestedAt = null,
+    string? AdjustmentReason = null
 );
 
 public record HarvestLineDto(
