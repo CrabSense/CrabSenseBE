@@ -31,6 +31,7 @@ public class GoogleDriveMediaStorageService : IMediaStorageService
     private readonly ConcurrentDictionary<string, string> _folderCache = new(StringComparer.Ordinal);
     private string? _resolvedRootId;
     private readonly SemaphoreSlim _rootLock = new(1, 1);
+    private readonly SemaphoreSlim _folderLock = new(1, 1);
 
     public string ProviderName => "GoogleDrive";
 
@@ -320,24 +321,34 @@ public class GoogleDriveMediaStorageService : IMediaStorageService
         if (_folderCache.TryGetValue(cacheKey, out var cached))
             return cached;
 
-        var current = parentId;
-        var walked = parentId;
-        foreach (var segment in relativePath.Split('/', StringSplitOptions.RemoveEmptyEntries))
+        await _folderLock.WaitAsync(ct);
+        try
         {
-            var safe = Sanitize(segment);
-            walked = $"{walked}/{safe}";
-            if (_folderCache.TryGetValue(walked, out var hit))
+            if (_folderCache.TryGetValue(cacheKey, out cached))
+                return cached;
+            var current = parentId;
+            var walked = parentId;
+            foreach (var segment in relativePath.Split('/', StringSplitOptions.RemoveEmptyEntries))
             {
-                current = hit;
-                continue;
+                var safe = Sanitize(segment);
+                walked = $"{walked}/{safe}";
+                if (_folderCache.TryGetValue(walked, out var hit))
+                {
+                    current = hit;
+                    continue;
+                }
+    
+                current = await FindOrCreateFolderAsync(current, safe, ct);
+                _folderCache[walked] = current;
             }
-
-            current = await FindOrCreateFolderAsync(current, safe, ct);
-            _folderCache[walked] = current;
+    
+            _folderCache[cacheKey] = current;
+            return current;
         }
-
-        _folderCache[cacheKey] = current;
-        return current;
+        finally
+        {
+            _folderLock.Release();
+        }
     }
 
     private async Task EnsureDriveRootAsync(string folderId, CancellationToken ct)
@@ -345,9 +356,11 @@ public class GoogleDriveMediaStorageService : IMediaStorageService
         try
         {
             var get = _drive.Files.Get(folderId);
-            get.Fields = "id, name, driveId, mimeType";
+            get.Fields = "id, name, driveId, mimeType, trashed";
             get.SupportsAllDrives = true;
             var file = await get.ExecuteAsync(ct);
+            if (file.Trashed == true || file.MimeType != "application/vnd.google-apps.folder")
+                throw AppException.BadRequest("Configured Drive root is not an active folder.");
             _logger.LogInformation(
                 "Drive root {Name} id={Id} myDrive={MyDrive}",
                 file.Name, file.Id, string.IsNullOrWhiteSpace(file.DriveId));
@@ -381,17 +394,71 @@ public class GoogleDriveMediaStorageService : IMediaStorageService
         string fileId,
         CancellationToken ct)
     {
-        var list = _drive.Permissions.List(fileId);
-        list.SupportsAllDrives = true;
-        list.Fields = "permissions(id,type,role,allowFileDiscovery,permissionDetails)";
-        var permissions = await list.ExecuteAsync(ct);
-        if (permissions.Permissions?.Any(permission =>
-                string.Equals(
-                    permission.Type,
-                    "anyone",
-                    StringComparison.OrdinalIgnoreCase)) == true)
-            throw AppException.Conflict(
-                "Private media đang có quyền public hoặc thừa hưởng quyền anyone.");
+        string? token = null;
+        do
+        {
+            var list = _drive.Permissions.List(fileId);
+            list.SupportsAllDrives = true;
+            list.PageSize = 100;
+            list.PageToken = token;
+            list.Fields = "nextPageToken,permissions(id,type,role,allowFileDiscovery,permissionDetails)";
+            var permissions = await list.ExecuteAsync(ct);
+            if (permissions.Permissions?.Any(permission =>
+                    string.Equals(permission.Type, "anyone", StringComparison.OrdinalIgnoreCase)) == true)
+                throw AppException.Conflict(
+                    "Private media đang có quyền public hoặc thừa hưởng quyền anyone.");
+            token = permissions.NextPageToken;
+        } while (!string.IsNullOrEmpty(token));
+    }
+
+    public sealed record RootReadiness(string Status, string? DriveType, bool? CanAddChildren);
+
+    public async Task<object> ReadinessAsync(CancellationToken ct = default)
+    {
+        var publicId = ConfiguredFolderId;
+        var privateId = PrivateFolderId;
+        var distinct = !string.IsNullOrWhiteSpace(publicId) && !string.IsNullOrWhiteSpace(privateId)
+            && !string.Equals(publicId, privateId, StringComparison.Ordinal);
+        var publicRoot = await CheckRootAsync(publicId, false, ct);
+        var privateRoot = distinct
+            ? await CheckRootAsync(privateId, true, ct)
+            : new RootReadiness("missing_or_overlapping_root", null, null);
+        return new
+        {
+            provider = ProviderName, checkedAtUtc = DateTime.UtcNow,
+            distinctRoots = distinct, publicRoot, privateRoot,
+            writeVerified = false, quotaVerified = false,
+            status = distinct && privateRoot.Status == "metadata_ready" && publicRoot.Status == "metadata_ready"
+                ? "metadata_ready" : "attention_required"
+        };
+    }
+
+    private async Task<RootReadiness> CheckRootAsync(string? id, bool privateRoot, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(id))
+            return new("not_configured", null, null);
+        try
+        {
+            var get = _drive.Files.Get(id);
+            get.SupportsAllDrives = true;
+            get.Fields = "id,mimeType,trashed,driveId,capabilities(canAddChildren)";
+            var item = await get.ExecuteAsync(ct);
+            var driveType = string.IsNullOrWhiteSpace(item.DriveId) ? "MyDrive" : "SharedDrive";
+            if (item.Trashed == true || item.MimeType != "application/vnd.google-apps.folder")
+                return new("invalid_folder", driveType, false);
+            if (privateRoot)
+            {
+                try { await EnsureNoPublicPermissionAsync(id, ct); }
+                catch (AppException) { return new("public_permission_detected", driveType, item.Capabilities?.CanAddChildren); }
+            }
+            var writable = item.Capabilities?.CanAddChildren;
+            return new(writable == true ? "metadata_ready" : "write_permission_unconfirmed", driveType, writable);
+        }
+        catch (Google.GoogleApiException ex)
+        {
+            _logger.LogWarning("Drive readiness metadata check failed with HTTP {Status}", ex.HttpStatusCode);
+            return new("provider_access_failed", null, null);
+        }
     }
 
     private async Task<MediaUploadResult?> TryWebhookUploadAsync(
