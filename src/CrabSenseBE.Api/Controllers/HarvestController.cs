@@ -110,6 +110,7 @@ public class HarvestController : ControllerBase
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status401Unauthorized)]
     [ProducesResponseType(StatusCodes.Status409Conflict)]
+    [HarvestMutation]
     public async Task<IActionResult> Create(
         [FromBody] CreateHarvestVoucherRequest request,
         CancellationToken ct)
@@ -122,6 +123,7 @@ public class HarvestController : ControllerBase
     /// <summary>[DECISION] FM duyệt yêu cầu thu hoạch.</summary>
     [HttpPost("{id:guid}/approve")]
     [Authorize(Roles = AppRoles.FarmManager)]
+    [HarvestMutation]
     public async Task<IActionResult> Approve(
         Guid id, [FromBody] ApproveHarvestRequest? request, CancellationToken ct)
         => Ok(await _harvestService.ApproveAsync(id, request ?? new ApproveHarvestRequest(), ct));
@@ -129,6 +131,7 @@ public class HarvestController : ControllerBase
     /// <summary>[DECISION] FM từ chối yêu cầu thu hoạch.</summary>
     [HttpPost("{id:guid}/reject")]
     [Authorize(Roles = AppRoles.FarmManager)]
+    [HarvestMutation]
     public async Task<IActionResult> Reject(
         Guid id, [FromBody] RejectHarvestRequest request, CancellationToken ct)
         => Ok(await _harvestService.RejectAsync(id, request, ct));
@@ -136,6 +139,7 @@ public class HarvestController : ControllerBase
     /// <summary>[EXECUTE] FS nhập cân nặng, số lượng và hoàn thành thao tác thực tế.</summary>
     [HttpPost("{id:guid}/execute")]
     [Authorize(Roles = AppRoles.FarmStaff)]
+    [HarvestMutation]
     public async Task<IActionResult> Execute(
         Guid id, [FromBody] ExecuteHarvestRequest request, CancellationToken ct)
         => Ok(await _harvestService.ExecuteAsync(id, request, ct));
@@ -143,6 +147,7 @@ public class HarvestController : ControllerBase
     /// <summary>[ADJUSTMENT] Yêu cầu thay đổi danh sách đã duyệt; FM phải duyệt lại trước khi thực hiện.</summary>
     [HttpPost("{id:guid}/adjustment-request")]
     [Authorize(Roles = AppRoles.FarmManager + "," + AppRoles.FarmStaff)]
+    [HarvestMutation]
     public async Task<IActionResult> RequestAdjustment(
         Guid id, [FromBody] RequestHarvestAdjustmentRequest request, CancellationToken ct)
         => Ok(await _harvestService.RequestAdjustmentAsync(id, request, ct));
@@ -150,6 +155,7 @@ public class HarvestController : ControllerBase
     /// <summary>[DECISION] FM xác nhận kết quả cuối sau khi FS thực hiện.</summary>
     [HttpPost("{id:guid}/confirm")]
     [Authorize(Roles = AppRoles.FarmManager)]
+    [HarvestMutation]
     public async Task<IActionResult> Confirm(
         Guid id, [FromBody] ConfirmHarvestRequest? request, CancellationToken ct)
         => Ok(await _harvestService.ConfirmAsync(id, request ?? new ConfirmHarvestRequest(), ct));
@@ -169,6 +175,7 @@ public class HarvestController : ControllerBase
     [ProducesResponseType(StatusCodes.Status401Unauthorized)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     [ProducesResponseType(StatusCodes.Status409Conflict)]
+    [HarvestMutation]
     public async Task<IActionResult> Delete(
         Guid id,
         CancellationToken ct)
@@ -267,6 +274,7 @@ public class HarvestController : ControllerBase
     //Manager tạo task
     [HttpPost("~/api/harvest-assignments")]
     [Authorize(Roles = AppRoles.FarmManager)]
+    [HarvestMutation]
     public async Task<IActionResult> CreateAssignment(
     [FromBody] CreateHarvestAssignmentRequest request,
     CancellationToken ct)
@@ -276,6 +284,7 @@ public class HarvestController : ControllerBase
     //Staff gửi kết quả xử lý task
     [HttpPost("~/api/harvest-assignments/{id:guid}/results")]
     [Authorize(Roles = AppRoles.FarmStaff)]
+    [HarvestMutation]
     public async Task<IActionResult> SubmitAssignmentResults(
         Guid id,
         [FromBody] SubmitHarvestAssignmentResultsRequest request,
@@ -301,6 +310,7 @@ public class HarvestController : ControllerBase
     //Staff nhận task được giao
     [HttpPost("~/api/harvest-assignments/{id:guid}/accept")]
     [Authorize(Roles = AppRoles.FarmStaff)]
+    [HarvestMutation]
     public async Task<IActionResult> AcceptAssignment(Guid id, CancellationToken ct)
     => Ok(await _assignmentService.AcceptAssignmentAsync(id, ct));
 
@@ -308,6 +318,7 @@ public class HarvestController : ControllerBase
     // Staff hoàn tất task; backend tạo Voucher từ các cua đã chọn thu hoạch.
     [HttpPost("~/api/harvest-assignments/{id:guid}/complete")]
     [Authorize(Roles = AppRoles.FarmStaff)]
+    [HarvestMutation]
     public async Task<IActionResult> CompleteAssignment(
         Guid id,
         [FromBody] CompleteHarvestAssignmentRequest request,

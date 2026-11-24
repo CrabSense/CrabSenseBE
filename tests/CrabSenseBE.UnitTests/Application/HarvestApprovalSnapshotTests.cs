@@ -262,6 +262,7 @@ public sealed class HarvestApprovalSnapshotTests
             Approved(voucher, crabB, boxId, areaId, managerId)
         };
         var uow = new Mock<IUnitOfWork>();
+        uow.Setup(unit => unit.HarvestAssignmentLines).Returns(Repo(new List<HarvestAssignmentLine>(), item => item.Id).Object);
         var current = new Mock<ICurrentUserService>();
         current.SetupGet(service => service.IsAuthenticated).Returns(true);
         current.SetupGet(service => service.UserId).Returns(() => activeUser);

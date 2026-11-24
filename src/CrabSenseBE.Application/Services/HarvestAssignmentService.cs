@@ -133,6 +133,9 @@ public sealed class HarvestAssignmentService : IHarvestAssignmentService
                 throw AppException.Conflict($"Cua {crab.Code} đang nằm trong một task chưa hoàn tất.");
             }
 
+            await _harvestRecorder.ValidateCrabsAsync([crab.Id], request.FarmingAreaId,
+                checkAlreadyHarvested: true, currentVoucherId: null, ct: ct);
+
             // Lưu snapshot vị trí và mã cua tại thời điểm Manager giao việc.
             assignment.Lines.Add(new HarvestAssignmentLine
             {
@@ -286,7 +289,7 @@ public sealed class HarvestAssignmentService : IHarvestAssignmentService
             assignment.FarmingAreaId,
             checkAlreadyHarvested: true,
             currentVoucherId: null,
-            ct: ct);
+            ct: ct, currentAssignmentId: assignment.Id);
 
         // Chạy các kiểm tra thu hoạch chỉ trên những cua Staff chọn thu hoạch.
         var harvestedResults = submitted
@@ -764,7 +767,7 @@ public sealed class HarvestAssignmentService : IHarvestAssignmentService
                 assignment.FarmingAreaId,
                 checkAlreadyHarvested: true,
                 currentVoucherId: null,
-                ct: ct);
+                ct: ct, currentAssignmentId: assignment.Id);
 
             var requests = harvestedLines.Select(line =>
                 new HarvestLineRequest(
