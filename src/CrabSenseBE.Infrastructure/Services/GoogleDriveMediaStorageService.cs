@@ -27,7 +27,6 @@ public class GoogleDriveMediaStorageService : IMediaStorageService
     private readonly IConfiguration _config;
     private readonly DriveService _drive;
     private readonly string _shareMode;
-    private readonly string _projectFolder;
     private readonly ILogger<GoogleDriveMediaStorageService> _logger;
     private readonly ConcurrentDictionary<string, string> _folderCache = new(StringComparer.Ordinal);
     private string? _resolvedRootId;
@@ -57,8 +56,6 @@ public class GoogleDriveMediaStorageService : IMediaStorageService
         _logger = logger;
         _shareMode = (First(config, "GoogleDrive:ShareMode", "GOOGLE_DRIVE_SHARE_MODE") ?? "anyone")
             .ToLowerInvariant();
-        _projectFolder = First(config, "GoogleDrive:ProjectFolder", "MediaStorage:ProjectFolder")
-            ?? "CrabSense";
 
         var credential = LoadCredential(config);
         _drive = new DriveService(new BaseClientService.Initializer
@@ -76,13 +73,12 @@ public class GoogleDriveMediaStorageService : IMediaStorageService
         if (!relative.Contains('/', StringComparison.Ordinal))
             relative = MediaFolderPath.Build(relative, null, relative);
 
-        // Folder share đã tên CrabSense → không tạo thêm tầng CrabSense bên trong.
-        var nestProject = string.IsNullOrWhiteSpace(ConfiguredFolderId);
-        var underProject = !nestProject
-            || string.IsNullOrWhiteSpace(_projectFolder)
-            || relative.StartsWith($"{_projectFolder}/", StringComparison.OrdinalIgnoreCase)
-            ? relative
-            : $"{_projectFolder}/{relative}";
+        // The configured folder already represents the storage root.
+        // Existing objects continue to be retrieved by their stored Drive IDs.
+        var underProject = MediaStorageLayout.Canonicalize(relative);
+        if (!string.IsNullOrWhiteSpace(PrivateFolderId)
+            && string.Equals(PrivateFolderId, ConfiguredFolderId, StringComparison.Ordinal))
+            throw AppException.BadRequest("Google Drive public and private roots must be different.");
 
         try
         {

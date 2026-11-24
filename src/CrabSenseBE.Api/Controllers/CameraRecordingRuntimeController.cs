@@ -184,7 +184,17 @@ public sealed class CameraRecordingRuntimeController(AppDbContext db, IConfigura
         if(!input.CanSeek) throw AppException.BadRequest("Seekable upload required.");
         input.Position=0;
         var filename=$"camera-{deviceId:N}-{executionId:N}.mp4";
-        var uploaded=await storage.UploadAsync(input,filename,"video/mp4","video",ct,publicRead:false);
+        var camera=await Camera(deviceId,ct);
+        var cameraRow=camera.FarmingRowId is Guid rid
+            ? await db.FarmingRows.AsNoTracking().FirstOrDefaultAsync(x=>x.Id==rid,ct) : null;
+        var areaId=camera.FarmingAreaId ?? cameraRow?.FarmingAreaId;
+        var area=areaId is Guid aid
+            ? await db.FarmingAreas.AsNoTracking().FirstOrDefaultAsync(x=>x.Id==aid,ct) : null;
+        var folder=MediaStorageLayout.CameraRecording(
+            area is null ? areaId?.ToString("D") : MediaFolderPath.Leaf(area.Id,area.Code),
+            cameraRow is null ? camera.FarmingRowId?.ToString("D") : MediaFolderPath.Leaf(cameraRow.Id,cameraRow.Code),
+            deviceId,MediaFolderPath.Leaf(deviceId,camera.DeviceCode),row.StartedAt,schedule.Mode);
+        var uploaded=await storage.UploadAsync(input,filename,"video/mp4",folder,ct,publicRead:false);
         var asset=new MediaAsset{DeviceId=deviceId,Category="video",FileName=filename,ContentType="video/mp4",
             SizeBytes=uploaded.SizeBytes,Provider=storage.ProviderName,StorageKey=uploaded.StorageKey,
             RelatedEntityType="Device",RelatedEntityId=deviceId,IsShared=false};
