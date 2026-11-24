@@ -21,3 +21,9 @@ Configure distinct public and private folder IDs: `GoogleDrive:SharedFolderId` a
 Dates in new camera and water paths are UTC. Camera runtime uploads derive location, start time and mode from the server-side execution and schedule; the agent need not know the path. A water upload linked to an already-created run resolves by its batch and analyte. Samples uploaded before a run exists still use their existing upload contract; linking or reorganizing these samples requires a separate batch-aware upload feature. No new automatic deletion policy is introduced by this change. Existing camera retention policies remain authoritative. Public legacy upload routes retain their existing sharing behavior.
 
 Before deployment: confirm distinct public/private roots, service-account quota and permissions, test a public image, a private crab image and a scheduled MP4; verify download via authenticated API and verify old files remain readable.
+
+## Batch capture and inventory extension
+
+Use multipart field `file` at POST `/api/areas/{areaId}/water-analysis/batches/{batchId}/channels/{analyte}/sample` after the channel reaches the capture step. The backend derives the camera from the valid calibration and the folder from the batch. Pass the returned media ID to the existing capture confirmation endpoint. Existing device-image uploads remain supported. A dedicated batch sample cannot be published or confirmed for another channel. The file stays in its original folder after analysis; no second copy is written.
+
+GET `/api/system/media-storage/summary` is restricted to the platform role. Its counts and bytes come from registered MediaAssets, grouped by provider, media category and share state. These are not live Google Drive quota readings and do not include unregistered/orphan objects. No automated orphan deletion is enabled.
