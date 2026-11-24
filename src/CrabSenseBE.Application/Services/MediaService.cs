@@ -74,7 +74,15 @@ public class MediaService : IMediaService
             RelatedEntityType = meta.RelatedEntityType,
             RelatedEntityId = meta.RelatedEntityId
         }, ct);
-        var folder = await MediaFolderCodeResolver.ResolvePathAsync(_uow, entityType, entityId, ct);
+        if (meta.ServerFolder is not null &&
+            (meta.SharePublic || category != "image" || meta.DeviceId is null ||
+             !meta.ServerFolder.StartsWith(MediaStorageLayout.Water + "/", StringComparison.Ordinal)))
+            throw AppException.BadRequest("Invalid private water sample storage context.");
+        if (meta.ServerFolder is null &&
+            meta.Notes?.StartsWith("water-batch:", StringComparison.OrdinalIgnoreCase) == true)
+            throw AppException.BadRequest("Reserved media notes.");
+        var folder = meta.ServerFolder ??
+            await MediaFolderCodeResolver.ResolvePathAsync(_uow, entityType, entityId, ct);
         var uploaded = await _storage.UploadAsync(
             fileStream, safeFileName, validatedContentType, folder, ct,
             publicRead: meta.SharePublic);
@@ -177,6 +185,8 @@ public class MediaService : IMediaService
             ?? throw AppException.NotFound("MediaAsset");
         await _areaGuard.EnsureAsync(asset, ct);
 
+        if (asset.Notes?.StartsWith("water-batch:", StringComparison.OrdinalIgnoreCase) == true)
+            throw AppException.Forbidden("Water batch evidence must remain private.");
         var link = await _storage.EnsureShareLinkAsync(asset.StorageKey, ct);
         asset.ShareLink = link;
         asset.IsShared = true;

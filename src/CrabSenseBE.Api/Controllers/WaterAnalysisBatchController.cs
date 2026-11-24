@@ -2,6 +2,7 @@ using System.Text.Json;
 using CrabSenseBE.Api.Services;
 using CrabSenseBE.Application.Common;
 using CrabSenseBE.Application.Interfaces;
+using CrabSenseBE.Application.DTOs.Media;
 using CrabSenseBE.Application.Services;
 using CrabSenseBE.Domain.Entities;
 using CrabSenseBE.Domain.Enums;
@@ -67,6 +68,46 @@ public sealed class WaterAnalysisBatchController(AppDbContext db,IUnitOfWork uow
                 result=runs.FirstOrDefault(x=>x.Analyte==t.Analyte)};
         }),dispatch="not_integrated",execution="operator_assisted"}));
     }
+    private static string SampleMarker(Guid batchId,string analyte) =>
+        $"water-batch:{batchId:D}:{analyte}";
+
+    [HttpPost("batches/{id:guid}/channels/{analyte}/sample")]
+    [RequestSizeLimit(6 * 1024 * 1024)]
+    [RequestFormLimits(MultipartBodyLengthLimit = 6 * 1024 * 1024)]
+    public async Task<IActionResult> UploadSample(Guid areaId,Guid id,string analyte,IFormFile file,CancellationToken ct)
+    {
+        await scope.EnsureAsync(areaId,false,ct);
+        if(file is null||file.Length<=0||file.Length>5*1024*1024)
+            throw AppException.BadRequest("Ảnh mẫu phải có kích thước tối đa 5 MiB.");
+        var batch=await db.WaterAnalysisBatches.AsNoTracking().SingleOrDefaultAsync(
+            x=>x.Id==id&&x.FarmingAreaId==areaId&&x.Status=="waiting_samples",ct)
+            ??throw AppException.Conflict("Phiên không tồn tại hoặc đã kết thúc.");
+        var chemical=analyte.Trim().ToUpperInvariant();
+        var channel=await db.WaterAssayChannels.AsNoTracking().SingleOrDefaultAsync(
+            x=>x.BatchId==id&&x.Analyte==chemical,ct)
+            ??throw AppException.NotFound("Water assay channel");
+        var now=DateTime.UtcNow;
+        if(WaterAssayFlow.Current(channel)!="capture"||channel.ReactionReadyAt is not DateTime ready||now<ready)
+            throw AppException.Conflict("Kênh chưa đến bước chụp ảnh.");
+        var profile=await db.WaterColorCalibrations.AsNoTracking().SingleOrDefaultAsync(
+            x=>x.Id==channel.CalibrationId&&x.FarmingAreaId==areaId&&x.Analyte==chemical&&
+                x.RevokedAt==null&&x.ValidUntil>now&&(x.QualityCheckDueAt==null||x.QualityCheckDueAt>now),ct)
+            ??throw AppException.Conflict("Hiệu chuẩn không còn hiệu lực.");
+        var protocol=JsonSerializer.Deserialize<ColorProtocol>(channel.ProtocolJson,WaterBatchPlanning.Json)
+            ??throw AppException.Conflict("Thiếu cấu hình thời gian đọc màu.");
+        if(now>ready.AddSeconds(protocol.TimingToleranceSeconds))
+            throw AppException.Conflict("Đã quá cửa sổ đọc màu.");
+        if(!await db.Devices.AnyAsync(x=>x.Id==profile.CameraDeviceId&&x.FarmingAreaId==areaId,ct))
+            throw AppException.BadRequest("Camera không thuộc khu phân tích.");
+        var area=await db.FarmingAreas.AsNoTracking().SingleAsync(x=>x.Id==areaId,ct);
+        var folder=MediaStorageLayout.WaterRun(MediaFolderPath.Leaf(area.Id,area.Code),
+            id,id,chemical,batch.CreatedAt);
+        var meta=new MediaUploadMeta("image",null,null,profile.CameraDeviceId,"device",
+            profile.CameraDeviceId,SampleMarker(id,chemical),false){ServerFolder=folder};
+        await using var stream=file.OpenReadStream();
+        return Ok(await media.UploadAsync(stream,file.FileName,file.ContentType,meta,user.UserId,ct));
+    }
+
     public record StepRequest(string Step,string Action,Guid? MediaId=null,string? Reason=null,bool KitInstructionsConfirmed=false);
 
     [HttpPost("batches/{id:guid}/channels/{analyte}/steps")]
@@ -100,6 +141,8 @@ public sealed class WaterAnalysisBatchController(AppDbContext db,IUnitOfWork uow
                 var asset=await db.MediaAssets.AsNoTracking().FirstOrDefaultAsync(x=>x.Id==mediaId,ct)??throw AppException.NotFound("Media");
                 if(asset.DeviceId!=profile.CameraDeviceId||asset.Category!="image"||asset.BoxId!=null||asset.CrabId!=null||
                     asset.RelatedEntityType!="device"||asset.RelatedEntityId!=profile.CameraDeviceId||asset.IsShared||
+                    (asset.Notes!=null&&asset.Notes.StartsWith("water-batch:",StringComparison.OrdinalIgnoreCase)&&
+                        asset.Notes!=SampleMarker(id,channel.Analyte))||
                     asset.SizeBytes<=0||asset.SizeBytes>5*1024*1024||channel.ReactionReadyAt is not DateTime ready||
                     asset.CreatedAt<ready||asset.CreatedAt>now.AddSeconds(1)||
                     await db.WaterAssayChannels.AnyAsync(x=>x.CapturedMediaId==mediaId&&x.Id!=channel.Id,ct))

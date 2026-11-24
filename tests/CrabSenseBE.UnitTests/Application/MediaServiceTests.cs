@@ -86,6 +86,43 @@ public class MediaServiceTests
     }
 
     [Fact]
+    public async Task Upload_ReservedWaterMarkerWithoutServerContext_IsRejected()
+    {
+        await using var stream = Jpeg();
+        var deviceId=Guid.NewGuid();
+        var meta=new MediaUploadMeta("image",null,null,deviceId,"device",deviceId,
+            $"water-batch:{Guid.NewGuid():D}:NO2");
+        var ex=await Assert.ThrowsAsync<AppException>(()=>
+            Create().UploadAsync(stream,"sample.jpg","image/jpeg",meta,null));
+        Assert.Equal(400,ex.StatusCode);
+        _storage.Verify(s=>s.UploadAsync(It.IsAny<Stream>(),It.IsAny<string>(),It.IsAny<string>(),
+            It.IsAny<string>(),It.IsAny<CancellationToken>(),It.IsAny<bool>()),Times.Never);
+    }
+
+    [Fact]
+    public async Task Upload_WaterContextUsesPrivateFolder()
+    {
+        var deviceId=Guid.NewGuid();
+        var folder="04_PhanTichNuoc/AREA/2026/11/24/batch/NO2/Raw";
+        _storage.SetupGet(s=>s.ProviderName).Returns("GoogleDrive");
+        _storage.Setup(s=>s.UploadAsync(It.IsAny<Stream>(),"sample.jpg","image/jpeg",
+            folder,It.IsAny<CancellationToken>(),false))
+            .ReturnsAsync(new MediaUploadResult("sample-key",null,null,null,3));
+        var repo=new Mock<IRepository<MediaAsset>>();
+        repo.Setup(r=>r.AddAsync(It.IsAny<MediaAsset>(),It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+        _uow.Setup(u=>u.MediaAssets).Returns(repo.Object);
+        _uow.Setup(u=>u.SaveChangesAsync(It.IsAny<CancellationToken>())).ReturnsAsync(1);
+        await using var stream=Jpeg();
+        var meta=new MediaUploadMeta("image",null,null,deviceId,"device",deviceId,
+            $"water-batch:{Guid.NewGuid():D}:NO2"){ServerFolder=folder};
+        var result=await Create().UploadAsync(stream,"sample.jpg","image/jpeg",meta,null);
+        Assert.False(result.Data!.IsShared);
+        _storage.Verify(s=>s.UploadAsync(It.IsAny<Stream>(),"sample.jpg","image/jpeg",
+            folder,It.IsAny<CancellationToken>(),false),Times.Once);
+    }
+
+    [Fact]
     public async Task Upload_InvalidCategory_Throws()
     {
         await using var stream = new MemoryStream(new byte[] { 1 });

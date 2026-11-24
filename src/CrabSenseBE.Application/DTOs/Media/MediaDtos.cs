@@ -32,7 +32,11 @@ public record MediaUploadMeta(
     string? RelatedEntityType,
     Guid? RelatedEntityId,
     string? Notes,
-    bool SharePublic = false);
+    bool SharePublic = false)
+{
+    // Only trusted server-side endpoints set this; never bind a client folder.
+    public string? ServerFolder { get; init; }
+}
 
 public record MediaShareResultDto(Guid Id, string ShareLink, bool IsShared);
 
