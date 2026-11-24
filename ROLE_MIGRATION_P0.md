@@ -1,0 +1,3 @@
+# P0 canonical role deployment
+Before deploying, back up PostgreSQL and inspect role counts: SELECT "Role", count(*) FROM be."AppUsers" GROUP BY "Role";
+Only SystemAdministrator, FarmAdministrator, FarmManager, FarmStaff are accepted by runtime authorization. The existing configured-admin bootstrap remaps FarmOwner and Staff and the configured SystemAdmin; other ambiguous values are disabled, not silently granted access. Resolve all remaining invalid role rows manually against verified assignments before rollout: EF intentionally rejects invalid storage values, including on administrative listings. Review token revocation and require sign-in after remediation. Do not rewrite historical migrations.

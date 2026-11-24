@@ -60,7 +60,7 @@ public class NotificationRulesController : ControllerBase
     {
         var environmental = NotificationTypeCodes.IsWarningType(typeCode.Trim().ToLowerInvariant());
         if (environmental)
-            return User.IsInRole(AppRoles.FarmAdministrator) || User.IsInRole("FarmOwner");
-        return User.IsInRole(AppRoles.SystemAdministrator) || User.IsInRole("SystemAdmin");
+            return User.IsInRole(AppRoles.FarmAdministrator);
+        return User.IsInRole(AppRoles.SystemAdministrator);
     }
 }
