@@ -2,6 +2,7 @@ using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using System.Text;
 using CrabSenseBE.Domain.Interfaces;
+using CrabSenseBE.Domain.Enums;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.IdentityModel.Tokens;
 
@@ -63,7 +64,7 @@ public static class JwtAuthenticationExtensions
         var rawTokenVersion = principal?.FindFirstValue("token_version");
 
         if (!Guid.TryParse(rawUserId, out var userId)
-            || string.IsNullOrWhiteSpace(tokenRole)
+            || !UserRoleParsing.TryParse(tokenRole, out _)
             || !int.TryParse(rawTokenVersion, out var tokenVersion))
         {
             context.Fail("Access token is missing required security claims.");

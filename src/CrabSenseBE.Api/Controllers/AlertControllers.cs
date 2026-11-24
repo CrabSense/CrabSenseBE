@@ -66,21 +66,21 @@ public class AlertsController : ControllerBase
 
     /// <summary>[UPDATE] Bắt đầu xử lý cảnh báo vận hành. Manager giám sát, Staff thực hiện.</summary>
     [HttpPost("{id:guid}/process")]
-    [Authorize(Roles = AppRoles.FarmManager + "," + AppRoles.FarmStaff + ",Staff")]
+    [Authorize(Roles = AppRoles.FarmManager + "," + AppRoles.FarmStaff)]
     public async Task<IActionResult> StartProcessing(
         Guid id, [FromBody] StartProcessingRequest? req, CancellationToken ct)
         => Ok(await _service.StartProcessingAsync(id, req, ct));
 
     /// <summary>[UPDATE] Resolve alert vận hành. Manager giám sát, Staff thực hiện.</summary>
     [HttpPatch("{id:guid}/resolve")]
-    [Authorize(Roles = AppRoles.FarmManager + "," + AppRoles.FarmStaff + ",Staff")]
+    [Authorize(Roles = AppRoles.FarmManager + "," + AppRoles.FarmStaff)]
     public async Task<IActionResult> Resolve(
         Guid id, [FromBody] ResolveAlertRequest? req, CancellationToken ct)
         => Ok(await _service.ResolveAsync(id, req, ct));
 
     /// <summary>[UPDATE] Resolve / dismiss alias (POST)</summary>
     [HttpPost("{id:guid}/resolve")]
-    [Authorize(Roles = AppRoles.FarmManager + "," + AppRoles.FarmStaff + ",Staff")]
+    [Authorize(Roles = AppRoles.FarmManager + "," + AppRoles.FarmStaff)]
     public async Task<IActionResult> ResolvePost(
         Guid id, [FromBody] ResolveAlertRequest? req, CancellationToken ct)
         => Ok(await _service.ResolveAsync(id, req, ct));
@@ -109,7 +109,7 @@ public class AlertsController : ControllerBase
     }
 
     private bool IsSystemAdmin =>
-        User.IsInRole(AppRoles.SystemAdministrator) || User.IsInRole("SystemAdmin");
+        User.IsInRole(AppRoles.SystemAdministrator);
 
     private static bool IsTechnicalAlert(AlertDto alert) =>
         alert.Category is "Device" or "System" or "AI";

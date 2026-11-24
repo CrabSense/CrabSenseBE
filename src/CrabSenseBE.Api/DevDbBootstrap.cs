@@ -1134,31 +1134,33 @@ public static class DevDbBootstrap
     private static async Task RemapLegacyRolesAsync(
         AppDbContext db, ILogger logger, string adminUsername)
     {
-        await db.Database.ExecuteSqlInterpolatedAsync($"""
+        // Only unambiguous historical aliases are migrated automatically.
+        // Ambiguous/unknown values must be reviewed by an administrator.
+        await db.Database.ExecuteSqlRawAsync("""
             UPDATE be."AppUsers" SET "Role" = 'FarmAdministrator'
-            WHERE "Role" IN ('FarmOwner', 'Admin', 'SystemAdmin')
-              AND lower("Username") <> lower({adminUsername})
+            WHERE "Role" = 'FarmOwner'
             """);
 
         await db.Database.ExecuteSqlRawAsync("""
             UPDATE be."AppUsers" SET "Role" = 'FarmStaff'
-            WHERE "Role" IN ('Staff', 'Viewer', 'Sales', 'Operator')
+            WHERE "Role" = 'Staff'
             """);
 
-        var updated = await db.Database.ExecuteSqlRawAsync("""
-            UPDATE be."AppUsers" SET "Role" = CASE "Role"
-                WHEN 'SystemAdministrator' THEN 'SystemAdministrator'
-                WHEN 'FarmAdministrator' THEN 'FarmAdministrator'
-                WHEN 'FarmManager' THEN 'FarmManager'
-                WHEN 'FarmStaff' THEN 'FarmStaff'
-                ELSE 'FarmStaff'
-            END
-            WHERE "Role" NOT IN (
-                'SystemAdministrator', 'FarmAdministrator', 'FarmManager', 'FarmStaff')
+        // Preserve the configured administrator recovery path.
+        await db.Database.ExecuteSqlInterpolatedAsync($"""
+            UPDATE be."AppUsers" SET "Role" = 'SystemAdministrator'
+            WHERE lower("Username") = lower({adminUsername})
+              AND "Role" = 'SystemAdmin'
             """);
 
-        if (updated > 0)
-            logger.LogInformation("Remapped {N} legacy user role string(s).", updated);
+        var disabled = await db.Database.ExecuteSqlRawAsync("""
+            UPDATE be."AppUsers" SET "IsActive" = FALSE
+            WHERE "IsActive" = TRUE
+              AND ("Role" IS NULL OR "Role" NOT IN (
+                'SystemAdministrator', 'FarmAdministrator', 'FarmManager', 'FarmStaff'))
+            """);
+        if (disabled > 0)
+            logger.LogWarning("Disabled {N} accounts with unmigrated roles. Review them before assigning a canonical role.", disabled);
     }
 
     /// <summary>

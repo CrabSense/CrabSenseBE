@@ -12,7 +12,7 @@ public enum UserRole
     FarmStaff = 3,
 }
 
-/// <summary>Chuỗi dùng trong [Authorize(Roles = ...)]. Gồm alias legacy trong thời gian migrate DB.</summary>
+/// <summary>Chuỗi dùng trong [Authorize(Roles = ...)]. Chỉ dùng tên role chính thức.</summary>
 public static class AppRoles
 {
     public const string SystemAdministrator = nameof(UserRole.SystemAdministrator);
@@ -22,17 +22,17 @@ public static class AppRoles
 
     /// <summary>Mọi user đăng nhập hợp lệ.</summary>
     public const string Any =
-        "SystemAdministrator,FarmAdministrator,FarmManager,FarmStaff,SystemAdmin,FarmOwner,Staff";
+        "SystemAdministrator,FarmAdministrator,FarmManager,FarmStaff";
 
     /// <summary>Cổng trang trại. Không gồm System Administrator.</summary>
     public const string FarmPortal =
-        "FarmAdministrator,FarmManager,FarmStaff,FarmOwner,Staff";
+        "FarmAdministrator,FarmManager,FarmStaff";
 
     /// <summary>Thao tác vận hành trại — Farm Administrator và role trại.</summary>
     public const string FarmWrite = FarmPortal;
 
     /// <summary>Quản trị cấu trúc trại — Farm Administrator.</summary>
-    public const string FarmManage = "FarmAdministrator,FarmOwner";
+    public const string FarmManage = "FarmAdministrator";
 
     /// <summary>FarmWrite + System Administrator (admin vẫn thao tác được khi cần).</summary>
     public const string FarmWriteWithPlatform = FarmWrite + "," + Platform;
@@ -44,7 +44,7 @@ public static class AppRoles
     /// Camera, sensor, controller, AI, lịch ghi, trạng thái thiết bị,
     /// lưu trữ, backup, triển khai và bảo mật hệ thống.
     /// </summary>
-    public const string Platform = "SystemAdministrator,SystemAdmin";
+    public const string Platform = "SystemAdministrator";
 
     public static bool IsFarmPortalRole(UserRole role) =>
         role is UserRole.FarmAdministrator or UserRole.FarmManager or UserRole.FarmStaff;
@@ -52,44 +52,27 @@ public static class AppRoles
 
 public static class UserRoleParsing
 {
+    // Do not accept numeric enum values, case variations or legacy aliases.
     public static bool TryParse(string? raw, out UserRole role)
     {
-        role = default;
-        if (string.IsNullOrWhiteSpace(raw))
-            return false;
-
-        var key = raw.Trim();
-        if (key.Equals("System Administrator", StringComparison.OrdinalIgnoreCase)
-            || key.Equals("SystemAdmin", StringComparison.OrdinalIgnoreCase))
+        switch (raw)
         {
-            role = UserRole.SystemAdministrator;
-            return true;
+            case nameof(UserRole.SystemAdministrator):
+                role = UserRole.SystemAdministrator; return true;
+            case nameof(UserRole.FarmAdministrator):
+                role = UserRole.FarmAdministrator; return true;
+            case nameof(UserRole.FarmManager):
+                role = UserRole.FarmManager; return true;
+            case nameof(UserRole.FarmStaff):
+                role = UserRole.FarmStaff; return true;
+            default:
+                role = default; return false;
         }
-
-        if (key.Equals("Farm Administrator", StringComparison.OrdinalIgnoreCase)
-            || key.Equals("FarmOwner", StringComparison.OrdinalIgnoreCase))
-        {
-            role = UserRole.FarmAdministrator;
-            return true;
-        }
-
-        if (key.Equals("Farm Manager", StringComparison.OrdinalIgnoreCase))
-        {
-            role = UserRole.FarmManager;
-            return true;
-        }
-
-        if (key.Equals("Farm Staff", StringComparison.OrdinalIgnoreCase)
-            || key.Equals("Staff", StringComparison.OrdinalIgnoreCase))
-        {
-            role = UserRole.FarmStaff;
-            return true;
-        }
-
-        return Enum.TryParse(key, ignoreCase: true, out role) && Enum.IsDefined(role);
     }
 
-    /// <summary>Đọc cột Role từ Postgres (kể cả chuỗi legacy trước khi bootstrap remap).</summary>
+    /// <summary>Reject corrupt or unmigrated storage values instead of granting a role.</summary>
     public static UserRole FromStorage(string? raw) =>
-        TryParse(raw, out var role) ? role : UserRole.FarmStaff;
+        TryParse(raw, out var role)
+            ? role
+            : throw new InvalidOperationException("Invalid stored user role; administrative remediation required.");
 }
