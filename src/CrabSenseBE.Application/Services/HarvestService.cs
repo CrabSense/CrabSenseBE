@@ -831,7 +831,10 @@ public class HarvestService : IHarvestService
             ApprovalVersion: voucher.ApprovalVersion,
             ApprovedQuantity: voucher.ApprovedQuantity,
             ExecutionShortfallCount: voucher.ExecutionShortfallCount,
-            ExecutionShortfallReason: voucher.ExecutionShortfallReason);
+            ExecutionShortfallReason: voucher.ExecutionShortfallReason,
+            AdjustmentRequestedByUserId: voucher.AdjustmentRequestedByUserId,
+            AdjustmentRequestedAt: voucher.AdjustmentRequestedAt,
+            AdjustmentReason: voucher.AdjustmentReason);
     }
 
     private static HarvestVoucherDetailDto MapVoucherDetail(
@@ -886,6 +889,9 @@ public class HarvestService : IHarvestService
             ApprovedQuantity: voucher.ApprovedQuantity,
             ExecutionShortfallCount: voucher.ExecutionShortfallCount,
             ExecutionShortfallReason: voucher.ExecutionShortfallReason,
+            AdjustmentRequestedByUserId: voucher.AdjustmentRequestedByUserId,
+            AdjustmentRequestedAt: voucher.AdjustmentRequestedAt,
+            AdjustmentReason: voucher.AdjustmentReason,
             ApprovedLines: (approvedLines ?? Enumerable.Empty<HarvestApprovedLine>())
                 .OrderBy(line => line.CreatedAt)
                 .Select(MapApprovedLine)

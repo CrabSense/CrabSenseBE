@@ -70,11 +70,11 @@ public sealed class HarvestAssignmentService : IHarvestAssignmentService
         var staffAssignment =
             await _uow.FarmStaffAssignments.FirstOrDefaultAsync(
                 x => x.StaffUserId == staff.Id
-                    // && x.ManagerUserId == manager.Id
+                    && x.ManagerUserId == manager.Id
                     && x.FarmingAreaId == request.FarmingAreaId, ct);
 
         if (staffAssignment is null)
-            throw AppException.Forbidden("Nhân viên không thuộc khu được chọn.");
+            throw AppException.Forbidden("Nhân viên không thuộc Manager và khu được chọn.");
 
         var assignment = new HarvestAssignment
         {
