@@ -199,10 +199,9 @@ public static class MediaFolderCodeResolver
     {
         var run = await uow.WaterAnalysisRuns.GetByIdAsync(id, ct);
         var branch = await FarmBranchAsync(uow, null, null, run?.FarmingAreaId, ct);
-        var day = (run?.StartedAt ?? DateTime.UtcNow).ToString("yyyyMMdd");
-        return branch.Length > 0
-            ? MediaFolderPath.Join(MediaFolderPath.Join(branch), MediaFolderPath.WaterFolder, day)
-            : MediaFolderPath.Join(MediaFolderPath.WaterFolder, day);
+        return MediaStorageLayout.WaterRun(
+            branch.FirstOrDefault(), id, run?.BatchId, run?.Analyte,
+            run?.StartedAt ?? DateTime.UtcNow);
     }
 
     private static async Task<string[]> FarmBranchAsync(
