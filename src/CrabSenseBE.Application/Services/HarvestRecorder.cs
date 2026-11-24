@@ -84,7 +84,8 @@ public sealed class HarvestRecorder
         Guid farmingAreaId,
         bool checkAlreadyHarvested,
         Guid? currentVoucherId,
-        CancellationToken ct)
+        CancellationToken ct,
+        Guid? currentAssignmentId = null)
     {
         foreach (var crabId in crabIds)
         {
@@ -112,12 +113,18 @@ public sealed class HarvestRecorder
                     || await HasActiveHarvestReservationAsync(
                         crabId,
                         currentVoucherId,
-                        ct));
+                        ct)
+                    || await _uow.HarvestAssignmentLines.AnyAsync(
+                        line => line.CrabId == crabId
+                            && (!currentAssignmentId.HasValue || line.HarvestAssignmentId != currentAssignmentId.Value)
+                            && (line.Status == HarvestAssignmentLineStatus.Assigned
+                                || line.Status == HarvestAssignmentLineStatus.Eligible
+                                || line.Status == HarvestAssignmentLineStatus.InProgress), ct));
 
             if (alreadyHarvested)
             {
                 throw AppException.Conflict(
-                    $"Crab '{crabId}' has already been recorded in another harvest voucher.");
+                    $"Crab '{crabId}' has already been recorded in another harvest voucher or open assignment.");
             }
         }
     }

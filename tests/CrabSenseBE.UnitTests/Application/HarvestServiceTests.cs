@@ -20,6 +20,7 @@ public class HarvestServiceTests
     {
         _currentUser.Setup(c => c.UserId).Returns(userId ?? Guid.NewGuid());
         _currentUser.Setup(c => c.IsAuthenticated).Returns(true);
+        _uow.Setup(u => u.HarvestAssignmentLines).Returns(new Mock<IRepository<HarvestAssignmentLine>>().Object);
         return new HarvestService(
     _uow.Object,
     _currentUser.Object,
