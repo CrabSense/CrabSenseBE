@@ -230,6 +230,10 @@ public sealed class HarvestRecorder
             crab.Status = CrabStatus.Harvested;
             crab.Condition = CrabCondition.Harvested;
             crab.WeightGram = line.WeightGram;
+            if (line.CarapaceWidthMm is decimal width && width > 0)
+                crab.CarapaceWidthMm = width;
+            if (line.CarapaceLengthMm is decimal length && length > 0)
+                crab.CarapaceLengthMm = length;
 
             // Giữ ảnh thu hoạch trong hồ sơ cua.
             var harvestPhotos = JsonStringList.Parse(voucher.PhotoUrlsJson)
@@ -274,7 +278,11 @@ public sealed class HarvestRecorder
                                 || other.Status == CrabStatus.Quarantined),
                         ct)).Any();
 
-                    if (!hasOtherLiveCrabs)
+                    var hasOtherOpenAllocation = await _uow.CrabBoxAllocations.AnyAsync(
+                        allocation => allocation.BoxId == boxId
+                            && allocation.CrabId != crab.Id && allocation.EndTime == null, ct);
+
+                    if (!hasOtherLiveCrabs && !hasOtherOpenAllocation)
                     {
                         var oldBoxStatus = box.Status;
                         var oldIsOccupied = box.IsOccupied;
@@ -298,6 +306,7 @@ public sealed class HarvestRecorder
                                     OldIsOccupied = oldIsOccupied,
                                     NewIsOccupied = box.IsOccupied,
                                     ChangedAt = DateTime.UtcNow,
+                                    ChangedByUserId = _currentUser.UserId,
                                     Reason = $"Thu hoạch hoàn tất: {voucher.VoucherCode}"
                                 },
                                 ct);

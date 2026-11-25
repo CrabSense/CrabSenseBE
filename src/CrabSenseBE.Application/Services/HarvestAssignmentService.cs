@@ -267,6 +267,10 @@ public sealed class HarvestAssignmentService : IHarvestAssignmentService
             var crab = await _uow.Crabs.GetByIdAsync(assignmentLine.CrabId, ct)
     ?? throw AppException.Conflict($"Không tìm thấy cua {assignmentLine.CrabCode}.");
 
+            EnsureAssignmentLocation(assignmentLine, crab);
+            if (result.Outcome == HarvestAssignmentOutcome.Harvested)
+                EnsureHarvestTime(crab, result.HarvestedAt!.Value.UtcDateTime, now);
+
             var hasMolted = result.MoltConfirmed || crab.MoltedAt.HasValue;
 
             if (result.Outcome == HarvestAssignmentOutcome.ContinueRaising
@@ -725,6 +729,21 @@ public sealed class HarvestAssignmentService : IHarvestAssignmentService
             throw AppException.Conflict("Cần có lý do nuôi tiếp cho tất cả cua được hoãn.");
 
         var now = DateTime.UtcNow;
+        // Revalidate ALL pending outcomes, including deferred crabs, before
+        // creating a voucher or applying any molt/harvest effects.
+        await _harvestRecorder.ValidateCrabsAsync(
+            lines.Select(line => line.CrabId).Distinct().ToList(),
+            assignment.FarmingAreaId, checkAlreadyHarvested: true,
+            currentVoucherId: null, ct: ct, currentAssignmentId: assignment.Id);
+        foreach (var line in lines)
+        {
+            var crab = await _uow.Crabs.GetByIdAsync(line.CrabId, ct)
+                ?? throw AppException.Conflict($"Không tìm thấy cua {line.CrabCode}.");
+            EnsureAssignmentLocation(line, crab);
+            if (line.Outcome == HarvestAssignmentOutcome.Harvested && line.PendingHarvestedAt is DateTime at)
+                EnsureHarvestTime(crab, at, now);
+        }
+
         HarvestVoucher? voucher = null;
         var createdHarvestLines = new List<HarvestLine>();
         foreach (var line in deferredLines)
@@ -940,6 +959,18 @@ public sealed class HarvestAssignmentService : IHarvestAssignmentService
             ? "Owner"
             : user.FullName.Trim();
     }
+    private static void EnsureAssignmentLocation(HarvestAssignmentLine line, Crab crab)
+    {
+        if (crab.BoxId is null || crab.BoxId != line.BoxId)
+            throw AppException.Conflict($"Cua {line.CrabCode} đã đổi vị trí so với nhiệm vụ; cần đối soát trước khi tiếp tục.");
+    }
+
+    private static void EnsureHarvestTime(Crab crab, DateTime at, DateTime now)
+    {
+        if (at < crab.StockedAt || at > now.AddMinutes(5))
+            throw AppException.BadRequest($"Thời điểm thu hoạch của cua {crab.Code} phải sau khi thả và không ở tương lai.");
+    }
+
     private async Task ApplyMoltConfirmationAsync(
     HarvestAssignment assignment,
     HarvestAssignmentLine line,

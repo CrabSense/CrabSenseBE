@@ -20,12 +20,14 @@ public class FarmHistoryController : ControllerBase
     /// <summary>[CREATE] Allocate / move crab into a box (closes previous allocation)</summary>
     [HttpPost("api/allocations")]
     [Authorize(Roles = AppRoles.FarmStaff)]
+    [HarvestMutation]
     public async Task<IActionResult> Allocate([FromBody] AllocateCrabRequest req, CancellationToken ct)
         => Ok(await _service.AllocateCrabAsync(req, ct));
 
     /// <summary>[CREATE] Mobile transfer alias — crabId + destinationBoxId (+ sourceBoxId)</summary>
     [HttpPost("api/allocations/transfer")]
     [Authorize(Roles = AppRoles.FarmStaff)]
+    [HarvestMutation]
     public async Task<IActionResult> Transfer([FromBody] MobileTransferCrabRequest req, CancellationToken ct)
         => Ok(await _service.TransferCrabAsync(req, ct));
 
@@ -57,6 +59,7 @@ public class FarmHistoryController : ControllerBase
     /// <summary>[CREATE] Record molting event (lịch sử lột xác)</summary>
     [HttpPost("api/crabs/{crabId:guid}/moltings")]
     [Authorize(Roles = AppRoles.FarmStaff)]
+    [HarvestMutation]
     public async Task<IActionResult> CreateMolting(
         Guid crabId, [FromBody] CreateMoltingRecordRequest req, CancellationToken ct)
         => Ok(await _service.CreateMoltingAsync(req with { CrabId = crabId }, ct));

@@ -184,6 +184,55 @@ public sealed class HarvestAssignmentServiceTests
         Assert.Null(fixture.Lines[0].Outcome);
     }
 
+    [Theory]
+    [InlineData(-30)]
+    [InlineData(1)]
+    public async Task SubmitResults_RejectsHarvestOutsideStockingWindow(int days)
+    {
+        var fixture = new Fixture(HarvestAssignmentStatus.InProgress, lineCount: 1);
+        var request = new SubmitHarvestAssignmentResultsRequest(
+        [
+            new HarvestAssignmentResultRequest(
+                AssignmentLineId: fixture.Lines[0].Id,
+                Outcome: HarvestAssignmentOutcome.Harvested,
+                WeightGram: 200, CarapaceWidthMm: 80, CarapaceLengthMm: 60,
+                HarvestedAt: DateTimeOffset.UtcNow.AddDays(days))
+        ]);
+        await Assert.ThrowsAsync<AppException>(() =>
+            fixture.Service.SubmitAssignmentResultsAsync(fixture.Assignment.Id, request));
+        Assert.Null(fixture.Lines[0].Outcome);
+        Assert.Empty(fixture.Vouchers);
+        fixture.UnitOfWork.Verify(x => x.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task CompleteAssignment_RejectsDeferredCrabWithChangedLocation()
+    {
+        var fixture = new Fixture(HarvestAssignmentStatus.InProgress, lineCount: 1);
+        fixture.Lines[0].Outcome = HarvestAssignmentOutcome.ContinueRaising;
+        fixture.Lines[0].EligibilityReason = "Chưa lột";
+        fixture.Lines[0].BoxId = Guid.NewGuid();
+        await Assert.ThrowsAsync<AppException>(() =>
+            fixture.Service.CompleteAssignmentAsync(fixture.Assignment.Id, new CompleteHarvestAssignmentRequest()));
+        Assert.Equal(HarvestAssignmentStatus.InProgress, fixture.Assignment.Status);
+        Assert.Empty(fixture.Vouchers);
+        fixture.UnitOfWork.Verify(x => x.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task CompleteAssignment_RejectsDeferredTerminalCrab()
+    {
+        var fixture = new Fixture(HarvestAssignmentStatus.InProgress, lineCount: 1);
+        fixture.Lines[0].Outcome = HarvestAssignmentOutcome.ContinueRaising;
+        fixture.Lines[0].EligibilityReason = "Chưa lột";
+        fixture.Crabs[0].Status = CrabStatus.Dead;
+        await Assert.ThrowsAsync<AppException>(() =>
+            fixture.Service.CompleteAssignmentAsync(fixture.Assignment.Id, new CompleteHarvestAssignmentRequest()));
+        Assert.Equal(HarvestAssignmentStatus.InProgress, fixture.Assignment.Status);
+        Assert.Empty(fixture.Vouchers);
+        fixture.UnitOfWork.Verify(x => x.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Never);
+    }
+
     [Fact]
     public async Task CompleteAssignment_RejectsTaskWithUnprocessedCrabs()
     {
