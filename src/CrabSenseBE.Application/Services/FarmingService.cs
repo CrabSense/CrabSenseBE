@@ -1135,12 +1135,7 @@ public class FarmingService : IFarmingService
         if (liveInBox)
             throw AppException.Conflict($"Hộp '{box.Code}' vừa được sử dụng.");
 
-        if (req.WeightGram is null or <= 0)
-            throw AppException.BadRequest("WeightGram is required and must be > 0.");
-        if (req.CarapaceWidthMm is null or <= 0)
-            throw AppException.BadRequest("CarapaceWidthMm (bề rộng mai) is required and must be > 0.");
-        if (req.CarapaceLengthMm is null or <= 0)
-            throw AppException.BadRequest("CarapaceLengthMm (bề ngang mai) is required and must be > 0.");
+        CrabRegistrationRules.ValidateMeasurements(req.WeightGram, req.CarapaceWidthMm, req.CarapaceLengthMm);
 
         var code = await AllocateCrabCodeAsync(ct);
         var condition = string.IsNullOrWhiteSpace(req.Condition)
@@ -1178,28 +1173,8 @@ public class FarmingService : IFarmingService
         await MediaReferenceGuard.BindCrabAsync(_uow, _areas, crab, JsonStringList.Parse(crab.ImageUrlsJson), ct);
         await _uow.Crabs.AddAsync(crab, ct);
 
-        await _uow.CrabStatusHistories.AddAsync(new CrabStatusHistory
-        {
-            CrabId = crab.Id,
-            NewCondition = condition,
-            NewStatus = status,
-            ChangedAt = DateTime.UtcNow,
-            Source = req.AutoAssignEmptyBox ? "AUTO_ASSIGN" : "MANUAL_ASSIGN",
-            Reason = "CRAB_CREATED"
-        }, ct);
-        if (initialWeight is decimal w)
-        {
-            await _uow.CrabWeightHistories.AddAsync(new CrabWeightHistory
-            {
-                CrabId = crab.Id,
-                WeightGram = w,
-                CarapaceWidthMm = req.CarapaceWidthMm,
-                CarapaceLengthMm = req.CarapaceLengthMm,
-                MeasuredAt = crab.StockedAt,
-                Source = "INITIAL",
-                Notes = "Đo lường ban đầu"
-            }, ct);
-        }
+        await CrabRegistrationRules.AddInitialHistoryAsync(_uow, _areas, crab,
+            req.AutoAssignEmptyBox ? "AUTO_ASSIGN" : "MANUAL_ASSIGN", ct);
 
         await _uow.QrCodes.AddAsync(new QrCode
         {
@@ -3516,11 +3491,7 @@ public class FarmingService : IFarmingService
             _uow, lotId, adding, ct);
     }
 
-    private static bool IsBoxUnusable(string? status)
-    {
-        var s = (status ?? "").Trim().ToLowerInvariant();
-        return s is "maintenance" or "quarantine" or "harvested" or "suspended" or "closed";
-    }
+    private static bool IsBoxUnusable(string? status) => CrabRegistrationRules.IsBoxUnusable(status);
 
     private async Task<Crab> PersistNewCrabAsync(
         CreateCrabRequest req, Box box, bool autoAssign, CancellationToken ct, string? forcedCode = null)
@@ -3562,28 +3533,8 @@ public class FarmingService : IFarmingService
         await MediaReferenceGuard.BindCrabAsync(_uow, _areas, crab, JsonStringList.Parse(crab.ImageUrlsJson), ct);
         await _uow.Crabs.AddAsync(crab, ct);
 
-        await _uow.CrabStatusHistories.AddAsync(new CrabStatusHistory
-        {
-            CrabId = crab.Id,
-            NewCondition = condition,
-            NewStatus = status,
-            ChangedAt = DateTime.UtcNow,
-            Source = autoAssign ? "AUTO_ASSIGN" : "MANUAL_ASSIGN",
-            Reason = "CRAB_CREATED"
-        }, ct);
-        if (initialWeight is decimal w)
-        {
-            await _uow.CrabWeightHistories.AddAsync(new CrabWeightHistory
-            {
-                CrabId = crab.Id,
-                WeightGram = w,
-                CarapaceWidthMm = req.CarapaceWidthMm,
-                CarapaceLengthMm = req.CarapaceLengthMm,
-                MeasuredAt = crab.StockedAt,
-                Source = "INITIAL",
-                Notes = "Đo lường ban đầu"
-            }, ct);
-        }
+        await CrabRegistrationRules.AddInitialHistoryAsync(_uow, _areas, crab,
+            autoAssign ? "AUTO_ASSIGN" : "MANUAL_ASSIGN", ct);
 
         await _uow.QrCodes.AddAsync(new QrCode
         {
