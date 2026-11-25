@@ -1344,6 +1344,11 @@ public class FarmingService : IFarmingService
         var oldCondition = crab.Condition;
         var oldStatus = crab.Status;
         var oldWeight = crab.WeightGram;
+        var oldWidth = crab.CarapaceWidthMm;
+        var oldLength = crab.CarapaceLengthMm;
+        var oldMoltedAt = crab.MoltedAt;
+        var actor = await _areas.CurrentUserAsync(ct);
+        var recordedAt = DateTime.UtcNow;
         var oldType = crab.CrabType;
         var oldGender = crab.Gender;
         var oldNotes = crab.Notes;
@@ -1383,7 +1388,10 @@ public class FarmingService : IFarmingService
             || !string.Equals(oldType, crab.CrabType, StringComparison.Ordinal)
             || oldGender != crab.Gender
             || !string.Equals(oldNotes, crab.Notes, StringComparison.Ordinal)
-            || !string.Equals(oldStage, crab.MoltingStage, StringComparison.Ordinal);
+            || !string.Equals(oldStage, crab.MoltingStage, StringComparison.Ordinal)
+            || oldMoltedAt != crab.MoltedAt
+            || oldWidth != crab.CarapaceWidthMm
+            || oldLength != crab.CarapaceLengthMm;
         if (profileChanged)
         {
             await _uow.CrabStatusHistories.AddAsync(new CrabStatusHistory
@@ -1393,17 +1401,22 @@ public class FarmingService : IFarmingService
                 NewCondition = crab.Condition,
                 OldStatus = oldStatus,
                 NewStatus = crab.Status,
-                ChangedAt = DateTime.UtcNow,
+                ChangedAt = recordedAt,
+                ChangedByUserId = actor?.Id,
                 Source = "manual",
                 Reason = "CRAB_PROFILE_UPDATED"
                     + $"|health={ConditionVi(oldCondition, oldStatus)}→{ConditionVi(crab.Condition, crab.Status)}"
                     + $"|stage={oldStage}→{crab.MoltingStage}"
                     + $"|type={oldType}→{crab.CrabType}"
                     + $"|gender={oldGender}→{crab.Gender}"
+                    + $"|widthMm={oldWidth}→{crab.CarapaceWidthMm}"
+                    + $"|lengthMm={oldLength}→{crab.CarapaceLengthMm}"
+                    + $"|moltedAt={oldMoltedAt:O}→{crab.MoltedAt:O}"
             }, ct);
         }
 
-        if (req.WeightGram is decimal nextWeight && oldWeight != nextWeight)
+        if (crab.WeightGram is decimal nextWeight &&
+            (oldWeight != nextWeight || oldWidth != crab.CarapaceWidthMm || oldLength != crab.CarapaceLengthMm))
         {
             await _uow.CrabWeightHistories.AddAsync(new CrabWeightHistory
             {
@@ -1411,6 +1424,9 @@ public class FarmingService : IFarmingService
                 WeightGram = nextWeight,
                 CarapaceWidthMm = crab.CarapaceWidthMm,
                 CarapaceLengthMm = crab.CarapaceLengthMm,
+                MeasuredAt = recordedAt,
+                RecordedByName = actor is null ? null : string.IsNullOrWhiteSpace(actor.FullName) ? actor.Username : actor.FullName,
+                Notes = oldWeight == nextWeight ? "Cập nhật kích thước mai; giữ số cân hiện tại" : null,
                 Source = "manual"
             }, ct);
         }
@@ -1965,7 +1981,8 @@ public class FarmingService : IFarmingService
             events.Add(new CrabLifecycleEventDto(
                 $"MLC-{m.Id:N}",
                 crab.Id, crabCode, "MOLT_COMPLETE", completedAt,
-                "Hoàn tất lột xác",
+                string.Equals(m.Result, "success", StringComparison.OrdinalIgnoreCase)
+                    ? "Hoàn tất lột xác" : "Ghi nhận lột xác chưa thành công",
                 string.Join(" • ", parts),
                 Loc(m.BoxId) ?? LocAt(completedAt),
                 Actor(m.Source == "ai" ? "AI" : "USER", null, m.Source == "ai" ? "AI System" : "Người dùng"),

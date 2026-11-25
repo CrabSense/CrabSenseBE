@@ -265,6 +265,34 @@ public class FarmHistoryServiceTests
         _uow.Verify(x => x.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Never);
     }
 
+    [Theory]
+    [InlineData("failed")]
+    [InlineData("monitoring")]
+    [InlineData("abnormal")]
+    public async Task CreateMolting_NonSuccess_DoesNotAdvanceLastSuccessfulMolt(string observation)
+    {
+        var last = DateTime.UtcNow.AddDays(-2);
+        var crab = new Crab { Id = Guid.NewGuid(), StockedAt = last.AddDays(-2),
+            MoltedAt = last, Status = CrabStatus.Alive, Condition = CrabCondition.Normal };
+        var crabs = new Mock<IRepository<Crab>>();
+        crabs.Setup(r => r.GetByIdAsync(crab.Id, It.IsAny<CancellationToken>())).ReturnsAsync(crab);
+        var molts = new Mock<IRepository<MoltingRecord>>();
+        molts.Setup(r => r.AddAsync(It.IsAny<MoltingRecord>(), It.IsAny<CancellationToken>())).Returns(Task.CompletedTask);
+        var history = new Mock<IRepository<CrabStatusHistory>>();
+        history.Setup(r => r.AddAsync(It.IsAny<CrabStatusHistory>(), It.IsAny<CancellationToken>())).Returns(Task.CompletedTask);
+        _uow.Setup(u => u.Crabs).Returns(crabs.Object);
+        _uow.Setup(u => u.MoltingRecords).Returns(molts.Object);
+        _uow.Setup(u => u.CrabStatusHistories).Returns(history.Object);
+        _uow.Setup(u => u.SaveChangesAsync(It.IsAny<CancellationToken>())).ReturnsAsync(1);
+        var result = await Create().CreateMoltingAsync(new CreateMoltingRecordRequest(
+            crab.Id, null, null, null, observation, "manual", null));
+        result.Success.Should().BeTrue();
+        crab.MoltedAt.Should().Be(last);
+        crab.Status.Should().Be(CrabStatus.Alive);
+        crab.Condition.Should().Be(CrabCondition.Problem);
+        crab.MoltingStage.Should().Be("unknown");
+    }
+
     [Fact]
     public async Task CreateMolting_AllowsCrabWithoutBox()
     {
