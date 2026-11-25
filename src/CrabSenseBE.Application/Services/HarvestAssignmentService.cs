@@ -633,7 +633,9 @@ public sealed class HarvestAssignmentService : IHarvestAssignmentService
             assignment.CompletedAt,
             assignment.Notes,
             lineDtos,
-            voucherDtos);
+            voucherDtos,
+            assignment.SubmittedAt, assignment.SubmissionNotes, assignment.ReviewedAt,
+            assignment.ReviewedByUserId, assignment.ReviewNotes);
 
         return ApiResponse<HarvestAssignmentDetailDto>.Ok(response);
     }
@@ -692,129 +694,85 @@ public sealed class HarvestAssignmentService : IHarvestAssignmentService
     // Staff hoàn tất task được giao
     //--------------------------------
     public async Task<ApiResponse<HarvestAssignmentResultDto>> CompleteAssignmentAsync(
-    Guid assignmentId,
-    CompleteHarvestAssignmentRequest request,
-    CancellationToken ct = default)
+        Guid assignmentId, CompleteHarvestAssignmentRequest request, CancellationToken ct = default)
     {
         var assignment = await _uow.HarvestAssignments.GetByIdAsync(assignmentId, ct)
             ?? throw AppException.NotFound("HarvestAssignment");
-
-        if (assignment.AssignedToUserId != _currentUser.UserId)
+        var caller = await _areas.CurrentUserAsync(ct) ?? throw AppException.Unauthorized();
+        if (caller.Role != UserRole.FarmStaff || assignment.AssignedToUserId != caller.Id)
             throw AppException.Forbidden("Bạn không được giao nhiệm vụ này.");
-
         await _areas.EnsureAsync(assignment.FarmingAreaId, manage: false, ct);
-
         if (assignment.Status != HarvestAssignmentStatus.InProgress)
-            throw AppException.Conflict("Chỉ có thể hoàn tất task đang xử lý.");
-
-        var lines = (await _uow.HarvestAssignmentLines.FindAsync(
-            x => x.HarvestAssignmentId == assignmentId,
-            ct)).ToList();
-
-        if (lines.Count == 0)
-            throw AppException.Conflict("Assignment không có cua được giao.");
-
-        if (lines.Any(x => x.Outcome is null))
-            throw AppException.Conflict("Cần xử lý tất cả cua trước khi hoàn tất task.");
-
-        var harvestedLines = lines
-            .Where(x => x.Outcome == HarvestAssignmentOutcome.Harvested)
-            .ToList();
-
-        var deferredLines = lines
-            .Where(x => x.Outcome == HarvestAssignmentOutcome.ContinueRaising)
-            .ToList();
-
-        if (deferredLines.Any(x => string.IsNullOrWhiteSpace(x.EligibilityReason)))
-            throw AppException.Conflict("Cần có lý do nuôi tiếp cho tất cả cua được hoãn.");
-
+            throw AppException.Conflict("Chỉ có thể gửi nhiệm vụ đang xử lý.");
         var now = DateTime.UtcNow;
-        // Revalidate ALL pending outcomes, including deferred crabs, before
-        // creating a voucher or applying any molt/harvest effects.
-        await _harvestRecorder.ValidateCrabsAsync(
-            lines.Select(line => line.CrabId).Distinct().ToList(),
-            assignment.FarmingAreaId, checkAlreadyHarvested: true,
-            currentVoucherId: null, ct: ct, currentAssignmentId: assignment.Id);
-        foreach (var line in lines)
-        {
-            var crab = await _uow.Crabs.GetByIdAsync(line.CrabId, ct)
-                ?? throw AppException.Conflict($"Không tìm thấy cua {line.CrabCode}.");
-            EnsureAssignmentLocation(line, crab);
-            if (line.Outcome == HarvestAssignmentOutcome.Harvested && line.PendingHarvestedAt is DateTime at)
-                EnsureHarvestTime(crab, at, now);
-        }
+        var (_, harvestedLines, deferredLines) = await ValidateCompletionAsync(assignment, now, ct);
+        assignment.Status = HarvestAssignmentStatus.PendingReview;
+        assignment.SubmittedAt = now;
+        assignment.SubmissionNotes = NormalizeNullable(request.VoucherNotes);
+        _uow.HarvestAssignments.Update(assignment);
+        await _uow.SaveChangesAsync(ct);
+        return ApiResponse<HarvestAssignmentResultDto>.Ok(
+            new HarvestAssignmentResultDto(assignment.Id, assignment.AssignmentCode,
+                assignment.Status.ToString(), null, null, harvestedLines.Count, deferredLines.Count),
+            "Đã gửi kết quả, chờ Farm Manager xác nhận.");
+    }
 
+    private async Task<HarvestAssignment> GetReviewableAssignmentAsync(Guid id, CancellationToken ct)
+    {
+        var caller = await _areas.CurrentUserAsync(ct) ?? throw AppException.Unauthorized();
+        if (caller.Role != UserRole.FarmManager)
+            throw AppException.Forbidden("Chỉ Farm Manager được duyệt nhiệm vụ.");
+        var assignment = await _uow.HarvestAssignments.GetByIdAsync(id, ct)
+            ?? throw AppException.NotFound("HarvestAssignment");
+        await _areas.EnsureAsync(assignment.FarmingAreaId, manage: false, ct);
+        if (assignment.Status != HarvestAssignmentStatus.PendingReview)
+            throw AppException.Conflict("Nhiệm vụ không ở trạng thái chờ xác nhận.");
+        return assignment;
+    }
+
+    public async Task<ApiResponse<HarvestAssignmentResultDto>> ReturnAssignmentAsync(
+        Guid assignmentId, ReviewHarvestAssignmentRequest request, CancellationToken ct = default)
+    {
+        var assignment = await GetReviewableAssignmentAsync(assignmentId, ct);
+        var reason = NormalizeNullable(request.Notes);
+        if (reason is null || reason.Length > 1000)
+            throw AppException.BadRequest("Cần lý do yêu cầu bổ sung (tối đa 1000 ký tự).");
+        assignment.Status = HarvestAssignmentStatus.InProgress;
+        assignment.ReviewedAt = DateTime.UtcNow;
+        assignment.ReviewedByUserId = _currentUser.UserId;
+        assignment.ReviewNotes = reason;
+        _uow.HarvestAssignments.Update(assignment);
+        await _uow.SaveChangesAsync(ct);
+        return ApiResponse<HarvestAssignmentResultDto>.Ok(
+            new HarvestAssignmentResultDto(assignment.Id, assignment.AssignmentCode,
+                assignment.Status.ToString(), null, null, 0, 0),
+            "Đã yêu cầu Staff bổ sung kết quả.");
+    }
+
+    public async Task<ApiResponse<HarvestAssignmentResultDto>> ConfirmAssignmentAsync(
+        Guid assignmentId, ReviewHarvestAssignmentRequest request, CancellationToken ct = default)
+    {
+        var assignment = await GetReviewableAssignmentAsync(assignmentId, ct);
+        var now = DateTime.UtcNow;
+        var (lines, harvestedLines, deferredLines) = await ValidateCompletionAsync(assignment, now, ct);
         HarvestVoucher? voucher = null;
         var createdHarvestLines = new List<HarvestLine>();
-        foreach (var line in deferredLines)
-        {
-            var crab = await _uow.Crabs.GetByIdAsync(line.CrabId, ct)
-                ?? throw AppException.Conflict($"Không tìm thấy cua {line.CrabCode}.");
-
-            if (!line.PendingMoltConfirmed
-                && crab.MoltedAt is null
-                && now > crab.StockedAt.AddDays(45))
-            {
-                throw AppException.Conflict(
-                    $"Cua {line.CrabCode} đã quá 45 ngày và chưa lột; không thể tiếp tục nuôi.");
-            }
-        }
-
         if (harvestedLines.Count > 0)
         {
-            if (harvestedLines.Any(line =>
-                    !line.HarvestWeightGram.HasValue
-                    || line.HarvestWeightGram.Value <= 0))
-            {
-                throw AppException.Conflict(
-                    "Thiếu khối lượng hợp lệ của cua thu hoạch.");
-            }
-
-            if (harvestedLines.Any(line =>
-                    !line.HarvestCarapaceLengthMm.HasValue
-                    || line.HarvestCarapaceLengthMm.Value <= 0
-                    || !line.HarvestCarapaceWidthMm.HasValue
-                    || line.HarvestCarapaceWidthMm.Value <= 0
-                    || !line.PendingHarvestedAt.HasValue))
-            {
-                throw AppException.Conflict(
-                    "Thiếu chiều dài, chiều rộng hoặc thời điểm thu hoạch của cua.");
-            }
-
-            await _harvestRecorder.ValidateCrabsAsync(
-                harvestedLines.Select(line => line.CrabId).Distinct().ToList(),
-                assignment.FarmingAreaId,
-                checkAlreadyHarvested: true,
-                currentVoucherId: null,
-                ct: ct, currentAssignmentId: assignment.Id);
-
-            var requests = harvestedLines.Select(line =>
-                new HarvestLineRequest(
-                    CrabId: line.CrabId,
-                    WeightGram: line.HarvestWeightGram!.Value,
-                    Grade: line.HarvestGrade,
-                    IsSoftshell: line.HarvestIsSoftshell ?? true,
-                    Notes: line.HarvestNotes,
-                    ConditionLabel: line.HarvestConditionLabel,
-                    PhotoUrls: JsonStringList.Parse(line.HarvestPhotoUrlsJson),
-                    Result: "passed")).ToList();
-
-            _harvestRecorder.ValidateHarvestLines(
-                requests,
-                requirePositiveWeight: true);
-
             voucher = new HarvestVoucher
             {
                 VoucherCode = await _harvestRecorder.GenerateVoucherCodeAsync(ct),
                 HarvestAssignmentId = assignment.Id,
-                HarvestDate = now,
+                HarvestDate = harvestedLines.Max(line => line.PendingHarvestedAt!.Value),
                 Status = HarvestStatus.Completed,
-                CreatedBy = _currentUser.UserId,
-                PerformedByUserId = _currentUser.UserId,
-                PerformedByName = await ResolveUserNameAsync(ct),
+                CreatedBy = assignment.AssignedToUserId,
+                PerformedByUserId = assignment.AssignedToUserId,
+                PerformedByName = (await _uow.Users.GetByIdAsync(assignment.AssignedToUserId, ct))?.FullName,
+                ConfirmedByUserId = _currentUser.UserId,
+                ConfirmedAt = now,
                 FarmingAreaId = assignment.FarmingAreaId,
-                ExecutionCompletedAt = now,
-                Notes = NormalizeNullable(request.VoucherNotes)
+                ExecutionCompletedAt = assignment.SubmittedAt ?? now,
+                Notes = assignment.SubmissionNotes
             };
 
             foreach (var line in harvestedLines)
@@ -874,6 +832,9 @@ public sealed class HarvestAssignmentService : IHarvestAssignmentService
 
         assignment.Status = HarvestAssignmentStatus.Completed;
         assignment.CompletedAt = now;
+        assignment.ReviewedAt = now;
+        assignment.ReviewedByUserId = _currentUser.UserId;
+        assignment.ReviewNotes = NormalizeNullable(request.Notes);
 
         foreach (var line in lines)
         {
@@ -893,6 +854,100 @@ public sealed class HarvestAssignmentService : IHarvestAssignmentService
                 harvestedLines.Count,
                 deferredLines.Count),
             "Đã hoàn tất nhiệm vụ thu hoạch.");
+    }
+
+    private async Task<(List<HarvestAssignmentLine> Lines, List<HarvestAssignmentLine> Harvested, List<HarvestAssignmentLine> Deferred)>
+        ValidateCompletionAsync(HarvestAssignment assignment, DateTime now, CancellationToken ct)
+    {
+        var lines = (await _uow.HarvestAssignmentLines.FindAsync(
+            x => x.HarvestAssignmentId == assignment.Id,
+            ct)).ToList();
+
+        if (lines.Count == 0)
+            throw AppException.Conflict("Assignment không có cua được giao.");
+
+        if (lines.Any(x => x.Outcome is null))
+            throw AppException.Conflict("Cần xử lý tất cả cua trước khi hoàn tất task.");
+
+        var harvestedLines = lines
+            .Where(x => x.Outcome == HarvestAssignmentOutcome.Harvested)
+            .ToList();
+
+        var deferredLines = lines
+            .Where(x => x.Outcome == HarvestAssignmentOutcome.ContinueRaising)
+            .ToList();
+
+        if (deferredLines.Any(x => string.IsNullOrWhiteSpace(x.EligibilityReason)))
+            throw AppException.Conflict("Cần có lý do nuôi tiếp cho tất cả cua được hoãn.");
+
+        // Revalidate ALL pending outcomes, including deferred crabs, before
+        // creating a voucher or applying any molt/harvest effects.
+        await _harvestRecorder.ValidateCrabsAsync(
+            lines.Select(line => line.CrabId).Distinct().ToList(),
+            assignment.FarmingAreaId, checkAlreadyHarvested: true,
+            currentVoucherId: null, ct: ct, currentAssignmentId: assignment.Id);
+        foreach (var line in lines)
+        {
+            var crab = await _uow.Crabs.GetByIdAsync(line.CrabId, ct)
+                ?? throw AppException.Conflict($"Không tìm thấy cua {line.CrabCode}.");
+            EnsureAssignmentLocation(line, crab);
+            if (line.Outcome == HarvestAssignmentOutcome.Harvested && line.PendingHarvestedAt is DateTime at)
+                EnsureHarvestTime(crab, at, now);
+        }
+
+        foreach (var line in deferredLines)
+        {
+            var crab = await _uow.Crabs.GetByIdAsync(line.CrabId, ct)
+                ?? throw AppException.Conflict($"Không tìm thấy cua {line.CrabCode}.");
+
+            if (!line.PendingMoltConfirmed
+                && crab.MoltedAt is null
+                && now > crab.StockedAt.AddDays(45))
+            {
+                throw AppException.Conflict(
+                    $"Cua {line.CrabCode} đã quá 45 ngày và chưa lột; không thể tiếp tục nuôi.");
+            }
+        }
+
+        if (harvestedLines.Count > 0)
+        {
+            if (harvestedLines.Any(line =>
+                    !line.HarvestWeightGram.HasValue
+                    || line.HarvestWeightGram.Value <= 0))
+            {
+                throw AppException.Conflict(
+                    "Thiếu khối lượng hợp lệ của cua thu hoạch.");
+            }
+
+            if (harvestedLines.Any(line =>
+                    !line.HarvestCarapaceLengthMm.HasValue
+                    || line.HarvestCarapaceLengthMm.Value <= 0
+                    || !line.HarvestCarapaceWidthMm.HasValue
+                    || line.HarvestCarapaceWidthMm.Value <= 0
+                    || !line.PendingHarvestedAt.HasValue))
+            {
+                throw AppException.Conflict(
+                    "Thiếu chiều dài, chiều rộng hoặc thời điểm thu hoạch của cua.");
+            }
+
+            var requests = harvestedLines.Select(line =>
+                new HarvestLineRequest(
+                    CrabId: line.CrabId,
+                    WeightGram: line.HarvestWeightGram!.Value,
+                    Grade: line.HarvestGrade,
+                    IsSoftshell: line.HarvestIsSoftshell ?? true,
+                    Notes: line.HarvestNotes,
+                    ConditionLabel: line.HarvestConditionLabel,
+                    PhotoUrls: JsonStringList.Parse(line.HarvestPhotoUrlsJson),
+                    Result: "passed")).ToList();
+
+            _harvestRecorder.ValidateHarvestLines(
+                requests,
+                requirePositiveWeight: true);
+
+        }
+
+        return (lines, harvestedLines, deferredLines);
     }
 
     public async Task<ApiResponse<IEnumerable<HarvestAssignmentStaffDto>>>
@@ -1039,7 +1094,7 @@ public sealed class HarvestAssignmentService : IHarvestAssignmentService
                     ChangedAt = confirmedAt,
                     Source = "harvest-assignment",
                     Reason = assignment.AssignmentCode,
-                    ChangedByUserId = _currentUser.UserId
+                    ChangedByUserId = line.CheckedByUserId ?? assignment.AssignedToUserId
                 },
                 ct);
         }

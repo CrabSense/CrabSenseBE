@@ -311,7 +311,8 @@ public enum HarvestAssignmentStatus
     Assigned,
     InProgress,
     Completed,
-    Cancelled
+    Cancelled,
+    PendingReview
 }
 
 public enum HarvestAssignmentLineStatus

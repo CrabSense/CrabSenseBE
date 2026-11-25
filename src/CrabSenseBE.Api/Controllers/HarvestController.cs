@@ -325,6 +325,18 @@ public class HarvestController : ControllerBase
         CancellationToken ct)
         => Ok(await _assignmentService.CompleteAssignmentAsync(id, request, ct));
 
+    [HttpPost("~/api/harvest-assignments/{id:guid}/confirm")]
+    [Authorize(Roles = AppRoles.FarmManager)]
+    [HarvestMutation]
+    public async Task<IActionResult> ConfirmAssignment(Guid id, [FromBody] ReviewHarvestAssignmentRequest request, CancellationToken ct)
+        => Ok(await _assignmentService.ConfirmAssignmentAsync(id, request, ct));
+
+    [HttpPost("~/api/harvest-assignments/{id:guid}/return")]
+    [Authorize(Roles = AppRoles.FarmManager)]
+    [HarvestMutation]
+    public async Task<IActionResult> ReturnAssignment(Guid id, [FromBody] ReviewHarvestAssignmentRequest request, CancellationToken ct)
+        => Ok(await _assignmentService.ReturnAssignmentAsync(id, request, ct));
+
     /// <summary>
     /// Manager lấy nhân viên thuộc khu được chọn.
     /// </summary>
