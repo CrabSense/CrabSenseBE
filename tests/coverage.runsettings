@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<RunSettings>
+  <DataCollectionRunSettings>
+    <DataCollectors>
+      <DataCollector friendlyName="XPlat Code Coverage">
+        <Configuration>
+          <Format>opencover</Format>
+          <Include>[CrabSenseBE.Api]*,[CrabSenseBE.Application]*,[CrabSenseBE.Domain]*,[CrabSenseBE.Infrastructure]*</Include>
+          <Exclude>[CrabSenseBE.Infrastructure]CrabSenseBE.Infrastructure.Persistence.Migrations.*</Exclude>
+          <ExcludeByFile>**/Migrations/**/*.cs</ExcludeByFile>
+          <IncludeTestAssembly>false</IncludeTestAssembly>
+        </Configuration>
+      </DataCollector>
+    </DataCollectors>
+  </DataCollectionRunSettings>
+</RunSettings>

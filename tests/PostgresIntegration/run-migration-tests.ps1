@@ -1,7 +1,8 @@
 param(
     [string]$PostgresBin = "",
     [int]$Port = 55440,
-    [string]$MigrationBundle = ""
+    [string]$MigrationBundle = "",
+    [switch]$UseExistingBuild
 )
 
 $ErrorActionPreference = "Stop"
@@ -95,8 +96,16 @@ try {
     $env:DOTNET_ENVIRONMENT = "Production"
     $env:Jwt__Secret = "migration-test-only-local-secret-not-for-production-2026"
 
-    & dotnet build src/CrabSenseBE.Api/CrabSenseBE.Api.csproj -c Release --no-restore
-    Assert-Exit "Could not compile migration assembly"
+    # CI has just built the same commit via dotnet ef migrations bundle.
+    # Keep standalone execution unchanged and fall back to build if outputs are missing.
+    $apiAssembly = "src/CrabSenseBE.Api/bin/Release/net8.0/CrabSenseBE.Api.dll"
+    $migrationAssembly = "src/CrabSenseBE.Infrastructure/bin/Release/net8.0/CrabSenseBE.Infrastructure.dll"
+    if ($UseExistingBuild -and $MigrationBundle -and (Test-Path $apiAssembly) -and (Test-Path $migrationAssembly)) {
+        Write-Host "Reusing Release assemblies from current CI migration bundle build."
+    } else {
+        & dotnet build src/CrabSenseBE.Api/CrabSenseBE.Api.csproj -c Release --no-restore
+        Assert-Exit "Could not compile migration assembly"
+    }
 
     & $createdb -h 127.0.0.1 -p $Port -U postgres clean_migration
     Assert-Exit "Could not create clean database"
