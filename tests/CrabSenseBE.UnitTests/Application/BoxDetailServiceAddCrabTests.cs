@@ -32,6 +32,8 @@ public class BoxDetailServiceAddCrabTests
     private Crab? _saved;
     private QrCode? _savedQr;
     private int _saveCalls;
+    private readonly List<CrabStatusHistory> _statusHistory = [];
+    private readonly List<CrabWeightHistory> _weightHistory = [];
 
     private BoxDetailService Create(
         Guid boxId,
@@ -159,6 +161,17 @@ public class BoxDetailServiceAddCrabTests
         _uow.Setup(u => u.FarmingRows).Returns(rows.Object);
         _uow.Setup(u => u.FarmingAreas).Returns(areas.Object);
         _uow.Setup(u => u.CrabLotAreas).Returns(lotAreas.Object);
+        var statuses = new Mock<IRepository<CrabStatusHistory>>();
+        statuses.Setup(r => r.AddAsync(It.IsAny<CrabStatusHistory>(), It.IsAny<CancellationToken>()))
+            .Callback<CrabStatusHistory, CancellationToken>((h, _) => _statusHistory.Add(h))
+            .Returns(Task.CompletedTask);
+        var weights = new Mock<IRepository<CrabWeightHistory>>();
+        weights.Setup(r => r.AddAsync(It.IsAny<CrabWeightHistory>(), It.IsAny<CancellationToken>()))
+            .Callback<CrabWeightHistory, CancellationToken>((h, _) => _weightHistory.Add(h))
+            .Returns(Task.CompletedTask);
+        _uow.Setup(u => u.CrabStatusHistories).Returns(statuses.Object);
+        _uow.Setup(u => u.CrabWeightHistories).Returns(weights.Object);
+        _uow.Setup(u => u.OperationLogs).Returns(new Mock<IRepository<OperationLog>>().Object);
         if (currentUser is not null)
         {
             var users = new Mock<IRepository<AppUser>>();
@@ -192,10 +205,10 @@ public class BoxDetailServiceAddCrabTests
     }
 
     private static MobileAddCrabRequest Minimal(string? condition = null, string? molt = null) =>
-        new(CrabLotId: LotId, WeightGram: 200m, Condition: condition, MoltingStage: molt);
+        new(CrabLotId: LotId, WeightGram: 200m, CarapaceWidthMm: 72m, CarapaceLengthMm: 95m, Condition: condition, MoltingStage: molt);
 
     private static MobileAddCrabRequest AutoSelect() =>
-        new(CrabLotId: null, WeightGram: 200m);
+        new(CrabLotId: null, WeightGram: 200m, CarapaceWidthMm: 72m, CarapaceLengthMm: 95m);
 
     private static CrabLot Lot(
         Guid id,
@@ -221,7 +234,20 @@ public class BoxDetailServiceAddCrabTests
 
         result.Success.Should().BeTrue();
         _saved.Should().NotBeNull();
+        _statusHistory.Should().ContainSingle(h => h.CrabId == _saved!.Id);
+        _weightHistory.Should().ContainSingle(h => h.CrabId == _saved!.Id && h.WeightGram == 200m);
         _saveCalls.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task AddCrab_RejectsMissingDimensionsBeforeWrite()
+    {
+        var boxId = Guid.NewGuid();
+        var service = Create(boxId);
+        var act = () => service.AddCrabAsync(boxId, new MobileAddCrabRequest(CrabLotId: LotId, WeightGram: 200m));
+        await act.Should().ThrowAsync<CrabSenseBE.Application.Common.AppException>();
+        _saved.Should().BeNull();
+        _saveCalls.Should().Be(0);
     }
 
     [Fact]
@@ -524,7 +550,7 @@ public class BoxDetailServiceAddCrabTests
     {
         var boxId = Guid.NewGuid();
         var req = new MobileAddCrabRequest(
-            CrabLotId: LotId, WeightGram: 200m, Gender: gender);
+            CrabLotId: LotId, WeightGram: 200m, CarapaceWidthMm: 72m, CarapaceLengthMm: 95m, Gender: gender);
 
         await Create(boxId).AddCrabAsync(boxId, req);
 
@@ -536,7 +562,7 @@ public class BoxDetailServiceAddCrabTests
     {
         var boxId = Guid.NewGuid();
         var req = new MobileAddCrabRequest(
-            CrabLotId: LotId, WeightGram: 200m, CrabType: "   ", Notes: "  ");
+            CrabLotId: LotId, WeightGram: 200m, CarapaceWidthMm: 72m, CarapaceLengthMm: 95m, CrabType: "   ", Notes: "  ");
 
         await Create(boxId).AddCrabAsync(boxId, req);
 

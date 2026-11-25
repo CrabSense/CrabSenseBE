@@ -383,6 +383,10 @@ public class BoxDetailService : IBoxDetailService
         var row = await _uow.FarmingRows.GetByIdAsync(box.FarmingRowId, ct)
             ?? throw AppException.NotFound("FarmingRow");
         var boxAreaId = row.FarmingAreaId;
+        var area = await _uow.FarmingAreas.GetByIdAsync(boxAreaId, ct)
+            ?? throw AppException.NotFound("FarmingArea");
+        if (!row.IsActive || !area.IsActive || CrabRegistrationRules.IsBoxUnusable(box.Status))
+            throw AppException.BadRequest("Khu, dãy hoặc hộp không thể sử dụng.");
 
         var liveInBox = (await LiveCrabsInBoxAsync(boxId, ct)).Count > 0;
         if (liveInBox)
@@ -443,6 +447,7 @@ public class BoxDetailService : IBoxDetailService
             _uow, crabLotId, boxId, ct);
 
         var weight = req.WeightGram ?? req.Weight;
+        CrabRegistrationRules.ValidateMeasurements(weight, req.CarapaceWidthMm, req.CarapaceLengthMm);
         var molt = req.MoltingStage ?? req.MoltingStatus ?? "hardShell";
 
         // Explicit owner stance wins; otherwise derive from molting stage — same rule as desktop CreateCrabAsync.
@@ -468,6 +473,7 @@ public class BoxDetailService : IBoxDetailService
             Gender = CrabConditions.ParseGender(req.Gender),
             WeightGram = weight,
             InitialWeightGram = weight,
+            InitialCondition = "Khỏe mạnh",
             CarapaceLengthMm = req.CarapaceLengthMm,
             CarapaceWidthMm = req.CarapaceWidthMm,
             Notes = string.IsNullOrWhiteSpace(req.Notes) ? null : req.Notes.Trim(),
@@ -479,6 +485,7 @@ public class BoxDetailService : IBoxDetailService
         };
         await MediaReferenceGuard.BindCrabAsync(_uow, _areas, crab, JsonStringList.Parse(crab.ImageUrlsJson), ct);
         await _uow.Crabs.AddAsync(crab, ct);
+        await CrabRegistrationRules.AddInitialHistoryAsync(_uow, _areas, crab, "MANUAL_ASSIGN", ct);
 
         // Tem QR cấp cho cá thể — desktop làm ở CreateCrabAsync; thiếu thì tem có mã nhưng quét không ra.
         await _uow.QrCodes.AddAsync(new QrCode
@@ -505,15 +512,12 @@ public class BoxDetailService : IBoxDetailService
             box.Status = "active";
         _uow.Boxes.Update(box);
 
-        var area = await _uow.FarmingAreas.GetByIdAsync(row.FarmingAreaId, ct);
-        var administratorId = area is null
-            ? Guid.Empty
-            : await AreaAdministratorQuery.IdAsync(_uow.FarmingAreas.Query(), area.Id, ct);
-        if (administratorId != Guid.Empty)
+        var actor = await _areas.CurrentUserAsync(ct);
+        if (actor is not null)
         {
             await _uow.OperationLogs.AddAsync(new OperationLog
             {
-                UserId = administratorId,
+                UserId = actor.Id,
                 Action = "crab_added",
                 EntityType = "Crab",
                 EntityId = crab.Id,
