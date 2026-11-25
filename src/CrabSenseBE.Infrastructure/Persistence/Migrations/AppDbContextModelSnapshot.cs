@@ -1318,6 +1318,9 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                         .HasMaxLength(32)
                         .HasColumnType("character varying(32)");
 
+                    b.Property<int?>("MissingCountAtClose")
+                        .HasColumnType("integer");
+
                     b.Property<int?>("MoltedCountAtClose")
                         .HasColumnType("integer");
 

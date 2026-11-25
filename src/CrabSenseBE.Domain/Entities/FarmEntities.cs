@@ -207,6 +207,9 @@ public class CrabLot : BaseEntity
     /// <summary>Số cua thuộc trạng thái chết tại thời điểm đóng.</summary>
     public int? DeadCountAtClose { get; set; }
 
+    /// <summary>Số cua thất lạc tại thời điểm đóng lô; null nếu snapshot cũ không xác định.</summary>
+    public int? MissingCountAtClose { get; set; }
+
     /// <summary>Số cua dự kiến chưa được thả, sau khi trừ cua chết khi nhập.</summary>
     public int? UnstockedCountAtClose { get; set; }
 

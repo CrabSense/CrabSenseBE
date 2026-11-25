@@ -263,7 +263,8 @@ public sealed class CrabLotComparisonReportService
                 partial ? null : lot.MoltedCountAtClose,
                 partial ? null : lot.HarvestedCountAtClose,
                 partial ? null : lot.DeadCountAtClose,
-                partial ? null : lot.UnstockedCountAtClose));
+                partial ? null : lot.UnstockedCountAtClose,
+                partial ? null : lot.MissingCountAtClose));
         }
 
         return result;

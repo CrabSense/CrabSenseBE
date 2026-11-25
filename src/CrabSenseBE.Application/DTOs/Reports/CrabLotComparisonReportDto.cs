@@ -23,4 +23,5 @@ public sealed record CrabLotCompareRowDto(
     int? MoltedCountAtClose,
     int? HarvestedCountAtClose,
     int? DeadCountAtClose,
-    int? UnstockedCountAtClose);
+    int? UnstockedCountAtClose,
+    int? MissingCountAtClose = null);

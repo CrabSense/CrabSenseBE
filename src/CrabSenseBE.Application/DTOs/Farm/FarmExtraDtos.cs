@@ -34,7 +34,8 @@ public record CrabLotDto(
     int? MoltedCountAtClose = null,
     int? HarvestedCountAtClose = null,
     int? DeadCountAtClose = null,
-    int? UnstockedCountAtClose = null);
+    int? UnstockedCountAtClose = null,
+    int? MissingCountAtClose = null);
 
 public record NextCrabLotCodeDto(string Code);
 

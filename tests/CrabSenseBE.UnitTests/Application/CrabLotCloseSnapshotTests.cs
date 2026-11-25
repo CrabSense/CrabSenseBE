@@ -31,10 +31,28 @@ public sealed class CrabLotCloseSnapshotTests
         result.Data.MoltedCountAtClose.Should().Be(0);
         result.Data.HarvestedCountAtClose.Should().Be(0);
         result.Data.DeadCountAtClose.Should().Be(0);
+        result.Data.MissingCountAtClose.Should().Be(0);
         result.Data.UnstockedCountAtClose.Should().Be(8);
         lot.CloseDisposition.Should().BeNull();
         fixture.Uow.Verify(
             unit => unit.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task Close_separates_missing_from_dead_and_preserves_snapshot()
+    {
+        var stockedAt = DateTime.UtcNow.AddDays(-2);
+        var lot = Lot(stockedAt, quantity: 3);
+        var missing = Crab(lot.Id, CrabStatus.Missing);
+        var fixture = Fixture(lot, [missing, Crab(lot.Id, CrabStatus.Dead)]);
+        var result = await fixture.Service.CloseLotAsync(lot.Id,
+            new CloseCrabLotRequest(ClosedAt: stockedAt.AddDays(1)));
+        result.Data!.MissingCountAtClose.Should().Be(1);
+        result.Data.DeadCountAtClose.Should().Be(1);
+        result.Data.RegisteredCountAtClose.Should().Be(2);
+        result.Data.UnstockedCountAtClose.Should().Be(1);
+        missing.Status = CrabStatus.Alive;
+        lot.MissingCountAtClose.Should().Be(1);
     }
 
     [Fact]

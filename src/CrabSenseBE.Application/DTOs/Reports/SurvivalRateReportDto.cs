@@ -15,7 +15,9 @@ public record SurvivalRateReportDto
     decimal HarvestRate,
 
     List<SurvivalByAreaDto> ByAreas,
-    List<SurvivalTrendDto> Trend               // Xu hướng theo thời gian
+    List<SurvivalTrendDto> Trend,
+    int? MissingCrabs = null,
+    decimal? MissingRate = null
 );
 
 /// <summary>
@@ -33,7 +35,9 @@ public record SurvivalByAreaDto
 
     decimal SurvivalRate,
     decimal MortalityRate,
-    decimal HarvestRate
+    decimal HarvestRate,
+    int MissingCrabs = 0,
+    decimal MissingRate = 0
 );
 
 /// <summary>
@@ -55,5 +59,7 @@ public record SurvivalTrendDto
     int AliveCrabs,
     int DeadCrabs,
     int HarvestedCrabs,
-    decimal SurvivalRate
+    decimal SurvivalRate,
+    int MissingCrabs = 0,
+    decimal MissingRate = 0
 );
