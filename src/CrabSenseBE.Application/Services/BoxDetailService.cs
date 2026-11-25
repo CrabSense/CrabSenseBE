@@ -388,9 +388,7 @@ public class BoxDetailService : IBoxDetailService
         if (!row.IsActive || !area.IsActive || CrabRegistrationRules.IsBoxUnusable(box.Status))
             throw AppException.BadRequest("Khu, dãy hoặc hộp không thể sử dụng.");
 
-        var liveInBox = (await LiveCrabsInBoxAsync(boxId, ct)).Count > 0;
-        if (liveInBox)
-            throw AppException.Conflict($"Box '{box.Code}' already has a live crab.");
+        await CrabRegistrationRules.EnsureAvailableAsync(_uow, box, ct);
 
         Guid crabLotId;
         CrabLot? lot;

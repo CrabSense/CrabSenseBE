@@ -100,10 +100,7 @@ public class FarmHistoryService : IFarmHistoryService
                 throw AppException.Conflict("Crab is not in the given sourceBoxId.");
         }
 
-        var allocsWithCrab = await _uow.CrabBoxAllocations.FindAsync(
-            a => a.BoxId == boxId && a.EndTime == null && a.CrabId != req.CrabId, ct);
-        if (allocsWithCrab.Any())
-            throw AppException.Conflict($"Hộp '{box.Code}' vừa được sử dụng. Vui lòng chọn hộp khác.");
+        await CrabRegistrationRules.EnsureAvailableAsync(_uow, box, ct);
 
         var open = await _uow.CrabBoxAllocations.FindAsync(
             a => a.CrabId == req.CrabId && a.EndTime == null, ct);
@@ -120,7 +117,9 @@ public class FarmHistoryService : IFarmHistoryService
             {
                 var stillAlloc = await _uow.CrabBoxAllocations.FindAsync(
                     a => a.BoxId == prevBox.Id && a.EndTime == null && a.CrabId != crab.Id, ct);
-                if (!stillAlloc.Any())
+                if (!stillAlloc.Any() && !await _uow.Crabs.AnyAsync(c =>
+                    c.BoxId == prevBox.Id && c.Id != crab.Id &&
+                    (c.Status == CrabStatus.Alive || c.Status == CrabStatus.Molting || c.Status == CrabStatus.Quarantined), ct))
                     await ApplyBoxStatusAsync(prevBox, BoxStatuses.Empty, false, "Crab moved out", ct);
             }
         }
