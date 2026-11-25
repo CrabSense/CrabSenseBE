@@ -129,7 +129,10 @@ public class SurvivalRateReportService
                 MortalityRate: CalculateRate(snapshotDead, registered),
                 HarvestRate: CalculateRate(snapshotHarvested, registered),
                 ByAreas: [],
-                Trend: []);
+                Trend: [],
+                MissingCrabs: selectedLot.MissingCountAtClose,
+                MissingRate: selectedLot.MissingCountAtClose is int snapshotMissing
+                    ? CalculateRate(snapshotMissing, registered) : null);
         }
 
         // ============================================================
@@ -431,7 +434,9 @@ public class SurvivalRateReportService
                     HarvestRate:
                         CalculateRate(
                             areaHarvested,
-                            areaTotal)
+                            areaTotal),
+                    MissingCrabs: areaMissing,
+                    MissingRate: CalculateRate(areaMissing, areaTotal)
                 );
             })
 
@@ -469,7 +474,7 @@ public class SurvivalRateReportService
                 return new SurvivalTrendDto(
                     g.Key,
                     gTotal, gAlive, gDead, gHarvested,
-                    CalculateRate(gAlive, gTotal));
+                    CalculateRate(gAlive, gTotal), gMissing, CalculateRate(gMissing, gTotal));
             })
             .OrderBy(x => x.Date)
             .ToList();
@@ -486,7 +491,9 @@ public class SurvivalRateReportService
             MortalityRate: CalculateRate(dead, total),
             HarvestRate: CalculateRate(harvested, total),
             ByAreas: byAreas,
-            Trend: trend);
+            Trend: trend,
+            MissingCrabs: missing,
+            MissingRate: CalculateRate(missing, total));
     }
 
     // ================================================================

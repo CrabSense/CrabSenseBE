@@ -246,6 +246,7 @@ public class FarmLotService : IFarmLotService
         var harvested = crabs.Count(
             crab => crab.Status is CrabStatus.Harvested or CrabStatus.Sold);
         var dead = crabs.Count(crab => crab.Status == CrabStatus.Dead);
+        var missing = crabs.Count(crab => crab.Status == CrabStatus.Missing);
         var unstocked = Math.Max(0, lot.Quantity - lot.DeadOnArrival - registered);
         var disposition = TrimOrNull(req.Disposition);
         if (unmolted > 0 && disposition is null)
@@ -258,6 +259,7 @@ public class FarmLotService : IFarmLotService
         lot.MoltedCountAtClose = molted;
         lot.HarvestedCountAtClose = harvested;
         lot.DeadCountAtClose = dead;
+        lot.MissingCountAtClose = missing;
         lot.UnstockedCountAtClose = unstocked;
         lot.CloseDisposition = disposition;
         lot.ConcurrencyVersion++;
@@ -266,7 +268,7 @@ public class FarmLotService : IFarmLotService
             _uow, (await _areas.CurrentUserAsync(ct))?.Id,
             "CloseCrabLot", "CrabLot", lot.Id,
             $"{lot.LotCode}|registered={registered}|alive={alive}|unmolted={unmolted}"
-            + $"|molted={molted}|harvested={harvested}|dead={dead}|unstocked={unstocked}",
+            + $"|molted={molted}|harvested={harvested}|dead={dead}|missing={missing}|unstocked={unstocked}",
             ct);
         try
         {
@@ -453,7 +455,8 @@ public class FarmLotService : IFarmLotService
             partial ? null : l.MoltedCountAtClose,
             partial ? null : l.HarvestedCountAtClose,
             partial ? null : l.DeadCountAtClose,
-            partial ? null : l.UnstockedCountAtClose);
+            partial ? null : l.UnstockedCountAtClose,
+            partial ? null : l.MissingCountAtClose);
     }
 
     private async Task<List<Guid>> RequireCreateAreasAsync(CreateCrabLotRequest req, CancellationToken ct)
