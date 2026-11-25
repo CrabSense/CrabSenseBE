@@ -104,6 +104,12 @@ public sealed class FarmStaffOperationPermissionTests : IAsyncLifetime
             HttpMethod.Post, $"/api/crabs/{CrabId}/missing", missing);
         await Expect(failures, "SA ghi thất lạc", 403, AppRoles.SystemAdministrator, SystemId,
             HttpMethod.Post, $"/api/crabs/{CrabId}/missing", missing);
+        await Expect(failures, "FS khôi phục cua", 403, AppRoles.FarmStaff, StaffId,
+            HttpMethod.Post, $"/api/crabs/{CrabId}/recover", missing);
+        await Expect(failures, "FA khôi phục cua", 403, AppRoles.FarmAdministrator, AdminId,
+            HttpMethod.Post, $"/api/crabs/{CrabId}/recover", missing);
+        await Expect(failures, "SA khôi phục cua", 403, AppRoles.SystemAdministrator, SystemId,
+            HttpMethod.Post, $"/api/crabs/{CrabId}/recover", missing);
         await Expect(failures, "FS xóa cua", 403, AppRoles.FarmStaff, StaffId,
             HttpMethod.Delete, $"/api/crabs/{CrabId}", null);
         await Expect(failures, "FM xử lý bản ghi cua cuối vòng đời", 200, AppRoles.FarmManager, ManagerId,
