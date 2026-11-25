@@ -5,6 +5,8 @@ using CrabSenseBE.Application.DTOs.Mortality;
 using CrabSenseBE.Application.DTOs.Ops;
 using CrabSenseBE.Application.Interfaces;
 using CrabSenseBE.Domain.Enums;
+using CrabSenseBE.Infrastructure.Persistence;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Moq;
 
@@ -62,6 +64,8 @@ public sealed class FarmStaffOperationPermissionTests : IAsyncLifetime
 
         _api = PermissionApiFactory.Create(services =>
         {
+            services.AddDbContext<AppDbContext>(options =>
+                options.UseInMemoryDatabase($"staff-permissions-{Guid.NewGuid():N}"));
             services.AddSingleton(farming.Object);
             services.AddSingleton(history.Object);
             services.AddSingleton(mortality.Object);
@@ -97,7 +101,9 @@ public sealed class FarmStaffOperationPermissionTests : IAsyncLifetime
             HttpMethod.Put, $"/api/crabs/{CrabId}", updateCrab);
         var missing = $"{{\"boxId\":\"{BoxId}\",\"reason\":\"Không tìm thấy cua sau kiểm tra\"}}";
         // The production action uses the same advisory lock as harvest.
-        // This HTTP fixture has no database; verify forbidden roles here.
+        // The InMemory context exercises the non-Npgsql branch of the filter.
+        await Expect(failures, "FS ghi thất lạc", 200, AppRoles.FarmStaff, StaffId,
+            HttpMethod.Post, $"/api/crabs/{CrabId}/missing", missing);
         await Expect(failures, "FM ghi thất lạc thay Staff", 403, AppRoles.FarmManager, ManagerId,
             HttpMethod.Post, $"/api/crabs/{CrabId}/missing", missing);
         await Expect(failures, "FA ghi thất lạc", 403, AppRoles.FarmAdministrator, AdminId,

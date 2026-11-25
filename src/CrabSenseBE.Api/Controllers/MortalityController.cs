@@ -28,6 +28,7 @@ public class MortalityController : ControllerBase
     /// </summary>
     [HttpPost]
     [Authorize(Roles = AppRoles.FarmStaff)]
+    [HarvestMutation]
     public async Task<IActionResult> RecordMortality(
         [FromBody] RecordMortalityRequest request,
         CancellationToken cancellationToken)

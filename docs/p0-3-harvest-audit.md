@@ -1,0 +1,5 @@
+# Harvest P0.3 audit
+
+P0: validate assignment snapshot location and harvest time at result and completion; revalidate deferred outcomes; keep other open allocations occupied; update harvested dimensions and actor; serialize transfer, mortality and molt HTTP mutations against harvest. Existing explicit voucher approval snapshot, scope checks, and harvest advisory lock retained. No migration.
+
+P1: two existing paths differ: voucher request/approval/execution/manager confirmation vs manager assignment/staff submission/complete creates completed voucher immediately. Do not silently alter established assignment semantics; design manager review, cancellation/reassignment and exception handling, coordinate App contracts. Review pending reservation transfer/mortality/lot-close conflicts, harvest readiness including 45-day rule and current softshell vs historical molt, approved box snapshots, failed quality vs non-harvest outcome, date/report semantics, media ownership, and stock boundary. P2/P3: Desktop/Mobile parity and KPI/report reconciliation. P4: CI/deploy and consolidated manual test. No hardware operations.
