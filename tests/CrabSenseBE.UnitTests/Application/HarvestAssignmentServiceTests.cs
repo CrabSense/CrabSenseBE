@@ -287,6 +287,12 @@ public sealed class HarvestAssignmentServiceTests
         await fixture.Service.CompleteAssignmentAsync(
             fixture.Assignment.Id,
             new CompleteHarvestAssignmentRequest());
+        Assert.Equal(HarvestAssignmentStatus.PendingReview, fixture.Assignment.Status);
+        Assert.Empty(fixture.Vouchers);
+        Assert.All(fixture.Crabs, c => Assert.Equal(CrabStatus.Alive, c.Status));
+        fixture.UseManager();
+        await fixture.Service.ConfirmAssignmentAsync(fixture.Assignment.Id, new ReviewHarvestAssignmentRequest());
+
 
         Assert.Equal(CrabStatus.Alive, crab.Status);
         Assert.Null(crab.MoltedAt);
@@ -310,6 +316,12 @@ public sealed class HarvestAssignmentServiceTests
         await fixture.Service.CompleteAssignmentAsync(
             fixture.Assignment.Id,
             new CompleteHarvestAssignmentRequest());
+        Assert.Equal(HarvestAssignmentStatus.PendingReview, fixture.Assignment.Status);
+        Assert.Empty(fixture.Vouchers);
+        Assert.All(fixture.Crabs, c => Assert.Equal(CrabStatus.Alive, c.Status));
+        fixture.UseManager();
+        await fixture.Service.ConfirmAssignmentAsync(fixture.Assignment.Id, new ReviewHarvestAssignmentRequest());
+
 
         Assert.Equal(CrabStatus.Alive, crab.Status);
         Assert.Equal(CrabCondition.Softshell, crab.Condition);
@@ -345,6 +357,12 @@ public sealed class HarvestAssignmentServiceTests
         await fixture.Service.CompleteAssignmentAsync(
             fixture.Assignment.Id,
             new CompleteHarvestAssignmentRequest("Thu hoạch sau khi lột"));
+        Assert.Equal(HarvestAssignmentStatus.PendingReview, fixture.Assignment.Status);
+        Assert.Empty(fixture.Vouchers);
+        Assert.All(fixture.Crabs, c => Assert.Equal(CrabStatus.Alive, c.Status));
+        fixture.UseManager();
+        await fixture.Service.ConfirmAssignmentAsync(fixture.Assignment.Id, new ReviewHarvestAssignmentRequest());
+
 
         Assert.Equal(CrabStatus.Harvested, crab.Status);
         Assert.Equal(HarvestAssignmentStatus.Completed, fixture.Assignment.Status);
@@ -380,6 +398,12 @@ public sealed class HarvestAssignmentServiceTests
         await fixture.Service.CompleteAssignmentAsync(
             fixture.Assignment.Id,
             new CompleteHarvestAssignmentRequest("Thu hoạch theo task"));
+        Assert.Equal(HarvestAssignmentStatus.PendingReview, fixture.Assignment.Status);
+        Assert.Empty(fixture.Vouchers);
+        Assert.All(fixture.Crabs, c => Assert.Equal(CrabStatus.Alive, c.Status));
+        fixture.UseManager();
+        await fixture.Service.ConfirmAssignmentAsync(fixture.Assignment.Id, new ReviewHarvestAssignmentRequest());
+
 
         Assert.Equal(HarvestAssignmentStatus.Completed, fixture.Assignment.Status);
         Assert.NotNull(fixture.Assignment.CompletedAt);
@@ -400,9 +424,27 @@ public sealed class HarvestAssignmentServiceTests
         Assert.Empty(fixture.MoltingRecords);
     }
 
+    [Fact]
+    public async Task Staff_cannot_confirm_and_manager_can_return_for_correction()
+    {
+        var fixture = new Fixture(HarvestAssignmentStatus.InProgress, 1);
+        fixture.Lines[0].Outcome = HarvestAssignmentOutcome.ContinueRaising;
+        fixture.Lines[0].EligibilityReason = "Chưa lột";
+        await fixture.Service.CompleteAssignmentAsync(fixture.Assignment.Id, new CompleteHarvestAssignmentRequest());
+        await Assert.ThrowsAsync<AppException>(() => fixture.Service.ConfirmAssignmentAsync(fixture.Assignment.Id, new ReviewHarvestAssignmentRequest()));
+        fixture.UseManager();
+        await fixture.Service.ReturnAssignmentAsync(fixture.Assignment.Id, new ReviewHarvestAssignmentRequest("Kiểm tra lại"));
+        Assert.Equal(HarvestAssignmentStatus.InProgress, fixture.Assignment.Status);
+        Assert.Equal("Kiểm tra lại", fixture.Assignment.ReviewNotes);
+        Assert.Equal(HarvestAssignmentLineStatus.InProgress, fixture.Lines[0].Status);
+        Assert.Empty(fixture.Vouchers);
+    }
+
     private sealed class Fixture
     {
         private readonly Mock<ICurrentUserService> _currentUser = new();
+        private readonly Guid _managerId = Guid.NewGuid();
+        public void UseManager() => _currentUser.Setup(x => x.UserId).Returns(_managerId);
 
         public Mock<IUnitOfWork> UnitOfWork { get; } = new();
         public Mock<IRepository<HarvestVoucher>> VoucherRepository { get; }
@@ -435,7 +477,7 @@ public sealed class HarvestAssignmentServiceTests
                 Id = Guid.NewGuid(),
                 FarmingAreaId = areaId,
                 AssignedToUserId = staffId,
-                AssignedByUserId = Guid.NewGuid(),
+                AssignedByUserId = _managerId,
                 AssignmentCode = "HA-TEST",
                 Status = status
             };
@@ -505,7 +547,9 @@ public sealed class HarvestAssignmentServiceTests
             var boxStatusHistories = new List<BoxStatusHistory>();
 
             UnitOfWork.Setup(x => x.Users)
-                .Returns(CreateRepository([staff]).Object);
+                .Returns(CreateRepository([staff, new AppUser { Id = _managerId, Role = UserRole.FarmManager, IsActive = true, FullName = "Test Manager" }]).Object);
+            UnitOfWork.Setup(x => x.FarmManagerAssignments)
+                .Returns(CreateRepository([new FarmManagerAssignment { ManagerUserId = _managerId, FarmingAreaId = areaId, AssignedByUserId = _managerId }]).Object);
             UnitOfWork.Setup(x => x.FarmStaffAssignments)
                 .Returns(CreateRepository(
                 [

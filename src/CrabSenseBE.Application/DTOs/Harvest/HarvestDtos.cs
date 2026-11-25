@@ -351,10 +351,17 @@ public record HarvestAssignmentDetailDto(
     DateTime? CompletedAt,
     string? Notes,
     IReadOnlyCollection<HarvestAssignmentLineDetailDto> Lines,
-    IReadOnlyCollection<HarvestAssignmentVoucherDto> Vouchers);
+    IReadOnlyCollection<HarvestAssignmentVoucherDto> Vouchers,
+    DateTime? SubmittedAt = null,
+    string? SubmissionNotes = null,
+    DateTime? ReviewedAt = null,
+    Guid? ReviewedByUserId = null,
+    string? ReviewNotes = null);
 
 public record HarvestAssignmentStaffDto(
     Guid Id,
     string FullName,
     string? UserCode);
 public record CompleteHarvestAssignmentRequest(string? VoucherNotes = null);
+
+public record ReviewHarvestAssignmentRequest(string? Notes = null);

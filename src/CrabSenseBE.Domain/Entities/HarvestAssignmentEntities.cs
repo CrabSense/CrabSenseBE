@@ -13,6 +13,11 @@ public class HarvestAssignment : BaseEntity
 
     public DateTime? StartedAt { get; set; }
     public DateTime? CompletedAt { get; set; }
+    public DateTime? SubmittedAt { get; set; }
+    public string? SubmissionNotes { get; set; }
+    public DateTime? ReviewedAt { get; set; }
+    public Guid? ReviewedByUserId { get; set; }
+    public string? ReviewNotes { get; set; }
 
     public HarvestAssignmentStatus Status { get; set; }
         = HarvestAssignmentStatus.Assigned;
