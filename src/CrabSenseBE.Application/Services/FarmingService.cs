@@ -2147,7 +2147,8 @@ public class FarmingService : IFarmingService
             dated.Count(e => e.EventType is "ALERT_CREATED" or "ALERT_RESOLVED"),
             dated.Count(e => e.EventType is "HARVESTED" or "HARVEST_READY"),
             dated.Count(e => e.EventType == "SYSTEM"),
-            dated.Count(e => e.EventType == "NOTE_UPDATED"));
+            dated.Count(e => e.EventType == "NOTE_UPDATED"),
+            dated.Count(e => e.EventType == "MISSING"));
 
         var typeKey = (eventType ?? "").Trim().ToUpperInvariant();
         if (typeKey is not ("" or "ALL" or "TẤT CẢ"))

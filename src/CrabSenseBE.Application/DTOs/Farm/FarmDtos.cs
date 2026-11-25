@@ -412,7 +412,8 @@ public record CrabLifecycleSummaryDto(
     int Alert,
     int Harvest,
     int System,
-    int Note);
+    int Note,
+    int Missing = 0);
 
 public record CrabLifecycleEventDto(
     string Id,
