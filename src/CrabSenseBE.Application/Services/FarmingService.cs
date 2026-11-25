@@ -1500,6 +1500,95 @@ public class FarmingService : IFarmingService
         return ApiResponse.Ok("Đã ghi nhận cua thất lạc; giữ hồ sơ và lịch sử phân hộp.");
     }
 
+    public async Task<ApiResponse> RecoverMissingCrabAsync(Guid id, RecoverMissingCrabRequest request, CancellationToken ct = default)
+    {
+        var reason = request.Reason?.Trim();
+        if (string.IsNullOrWhiteSpace(reason) || reason.Length > 1000 || request.BoxId == Guid.Empty)
+            throw AppException.BadRequest("Cần hộp trống và lý do tìm thấy cua (tối đa 1000 ký tự).");
+
+        var actor = await _areas.CurrentUserAsync(ct);
+        if (actor is not null && actor.Role != UserRole.FarmManager)
+            throw AppException.Forbidden("Chỉ Farm Manager xác nhận khôi phục cua thất lạc.");
+        var crab = await _uow.GetCrabWithDetailsAsync(id, ct) ?? throw AppException.NotFound("Crab");
+        await EnsureCrabAreaAsync(crab, ct);
+        if (crab.Status != CrabStatus.Missing || crab.BoxId is not null)
+            throw AppException.Conflict("Chỉ khôi phục cua thất lạc chưa có hộp hiện tại.");
+
+        var allocations = (await _uow.CrabBoxAllocations.FindAsync(a => a.CrabId == id, ct)).ToList();
+        if (allocations.Any(a => a.EndTime == null))
+            throw AppException.Conflict("Cua vẫn có phân bổ đang mở. Cần kiểm tra dữ liệu.");
+        var last = allocations.OrderByDescending(a => a.StartTime).FirstOrDefault()
+            ?? throw AppException.Conflict("Không xác định được khu cuối của cua.");
+        var previous = await RequireBoxAsync(last.BoxId, ct);
+        var oldArea = await AreaIdOfBoxAsync(previous, ct);
+
+        var box = await RequireBoxAsync(request.BoxId, ct);
+        var row = await RequireRowAsync(box.FarmingRowId, requireActive: true, ct);
+        await EnsureAreaAsync(row.FarmingAreaId, manage: false, ct);
+        if (row.FarmingAreaId != oldArea)
+            throw AppException.Conflict("Chỉ khôi phục vào hộp cùng khu cuối của cua.");
+        var area = await _uow.FarmingAreas.GetByIdAsync(row.FarmingAreaId, ct)
+            ?? throw AppException.NotFound("FarmingArea");
+        if (!area.IsActive || box.IsOccupied || !string.Equals(box.Status, BoxStatuses.Empty, StringComparison.OrdinalIgnoreCase)
+            || await HasLiveCrabAsync(box.Id, ct))
+            throw AppException.Conflict("Hộp đích không trống hoặc khu không hoạt động.");
+
+        var lot = await _uow.CrabLots.GetByIdAsync(crab.CrabLotId, ct)
+            ?? throw AppException.NotFound("CrabLot");
+        if (!CrabLotRegistrationGuard.IsOpen(lot))
+            throw AppException.Conflict("Lô đã đóng hoặc hủy; không thay đổi ảnh chụp kết thúc lô.");
+        await CrabLotRegistrationGuard.EnsureLotAllowsAreaAsync(_uow, lot.Id, row.FarmingAreaId, ct);
+
+        // Missing cannot be recovered over an inconsistent terminal or reserved harvest record.
+        if (await _uow.CrabHarvestHistories.AnyAsync(h => h.CrabId == id, ct)
+            || await _uow.CrabMortalityRecords.AnyAsync(h => h.CrabId == id, ct)
+            || await _uow.HarvestAssignmentLines.AnyAsync(line => line.CrabId == id
+                && (line.Status == HarvestAssignmentLineStatus.Assigned
+                    || line.Status == HarvestAssignmentLineStatus.Eligible
+                    || line.Status == HarvestAssignmentLineStatus.InProgress), ct))
+            throw AppException.Conflict("Cua có lịch sử kết thúc hoặc nhiệm vụ thu hoạch xung đột.");
+        var voucherIds = (await _uow.HarvestLines.FindAsync(line => line.CrabId == id, ct))
+            .Select(line => line.HarvestVoucherId).Distinct().ToHashSet();
+        if (voucherIds.Count > 0 && await _uow.HarvestVouchers.AnyAsync(v => voucherIds.Contains(v.Id)
+            && v.Status != HarvestStatus.Rejected && v.Status != HarvestStatus.Cancelled, ct))
+            throw AppException.Conflict("Cua đang có phiếu thu hoạch.");
+
+        var now = DateTime.UtcNow;
+        var oldCondition = crab.Condition;
+        crab.Status = CrabStatus.Alive;
+        // Do not infer healthy/softshell from pre-loss measurements; Staff must inspect again.
+        crab.Condition = CrabCondition.Problem;
+        crab.MoltingStage = "unknown";
+        crab.AiPrediction = null;
+        crab.AiConfidence = null;
+        crab.BoxId = box.Id;
+        crab.UpdatedAt = now;
+        _uow.Crabs.Update(crab);
+        await _uow.CrabBoxAllocations.AddAsync(new CrabBoxAllocation
+        {
+            CrabId = id, BoxId = box.Id, StartTime = now,
+            Notes = "CRAB_RECOVERED | " + reason
+        }, ct);
+        await _uow.CrabStatusHistories.AddAsync(new CrabStatusHistory
+        {
+            CrabId = id, OldStatus = CrabStatus.Missing, NewStatus = CrabStatus.Alive,
+            OldCondition = oldCondition, NewCondition = CrabCondition.Problem,
+            ChangedAt = now, ChangedByUserId = actor?.Id, Source = "manual",
+            Reason = reason
+        }, ct);
+        var oldBoxStatus = box.Status;
+        var oldOccupied = box.IsOccupied;
+        box.IsOccupied = true;
+        box.Status = BoxStatuses.Active;
+        _uow.Boxes.Update(box);
+        await RecordBoxStateChangeAsync(box, oldBoxStatus, oldOccupied, "Crab recovered", ct);
+        // Participate in lot concurrency without changing its original quantity or registration count.
+        lot.ConcurrencyVersion++;
+        _uow.CrabLots.Update(lot);
+        await _uow.SaveChangesAsync(ct);
+        return ApiResponse.Ok("Đã khôi phục cua vào hộp; cần kiểm tra sức khỏe lại.");
+    }
+
     public async Task<ApiResponse> DeleteCrabAsync(Guid id, CancellationToken ct = default)
     {
         var crab = await _uow.Crabs.GetByIdAsync(id, ct) ?? throw AppException.NotFound("Crab");
@@ -1927,6 +2016,7 @@ public class FarmingService : IFarmingService
                 CrabStatus.Sold => "HARVESTED",
                 CrabStatus.Dead => "DEAD",
                 CrabStatus.Missing => "MISSING",
+                CrabStatus.Alive when h.OldStatus == CrabStatus.Missing => "RECOVERED",
                 _ when (h.Reason ?? "").StartsWith("CRAB_CREATED", StringComparison.OrdinalIgnoreCase)
                     => "CRAB_CREATED",
                 _ when (h.Reason ?? "").StartsWith("CRAB_PROFILE_UPDATED", StringComparison.OrdinalIgnoreCase)
@@ -1941,6 +2031,7 @@ public class FarmingService : IFarmingService
                 "HARVESTED" => h.NewStatus == CrabStatus.Sold ? "Đã bán" : "Thu hoạch",
                 "DEAD" => "Ghi nhận chết",
                 "MISSING" => "Ghi nhận thất lạc",
+                "RECOVERED" => "Tìm thấy cua và khôi phục phân hộp",
                 "HARVEST_READY" => "Sẵn sàng thu hoạch",
                 "CRAB_CREATED" => "Tạo cá thể",
                 "CRAB_PROFILE_UPDATED" => "Cập nhật thông tin cua",
@@ -2148,7 +2239,8 @@ public class FarmingService : IFarmingService
             dated.Count(e => e.EventType is "HARVESTED" or "HARVEST_READY"),
             dated.Count(e => e.EventType == "SYSTEM"),
             dated.Count(e => e.EventType == "NOTE_UPDATED"),
-            dated.Count(e => e.EventType == "MISSING"));
+            dated.Count(e => e.EventType == "MISSING"),
+            dated.Count(e => e.EventType == "RECOVERED"));
 
         var typeKey = (eventType ?? "").Trim().ToUpperInvariant();
         if (typeKey is not ("" or "ALL" or "TẤT CẢ"))
@@ -2184,6 +2276,7 @@ public class FarmingService : IFarmingService
         "PROFILE" or "CRAB_PROFILE_UPDATED" => eventType == "CRAB_PROFILE_UPDATED",
         "CREATED" or "CRAB_CREATED" or "TAOCATHE" => eventType == "CRAB_CREATED",
         "DEAD" => eventType == "DEAD",
+        "MISSING" => eventType is "MISSING" or "RECOVERED",
         _ => eventType.Equals(filter, StringComparison.OrdinalIgnoreCase)
     };
 

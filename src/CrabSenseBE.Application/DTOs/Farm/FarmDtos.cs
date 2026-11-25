@@ -413,7 +413,8 @@ public record CrabLifecycleSummaryDto(
     int Harvest,
     int System,
     int Note,
-    int Missing = 0);
+    int Missing = 0,
+    int Recovered = 0);
 
 public record CrabLifecycleEventDto(
     string Id,
@@ -516,6 +517,7 @@ public record CreateCrabsBulkDto(
     int CreatedCount);
 
 public record RecordMissingCrabRequest(Guid BoxId, string? Reason = null);
+public record RecoverMissingCrabRequest(Guid BoxId, string? Reason = null);
 
 public record UpdateCrabRequest(
     string? MoltingStage,

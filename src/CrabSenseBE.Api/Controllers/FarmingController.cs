@@ -457,6 +457,13 @@ public class CrabsController : ControllerBase
     public async Task<IActionResult> RecordMissing(Guid id, [FromBody] RecordMissingCrabRequest req, CancellationToken ct)
         => Ok(await _service.RecordMissingCrabAsync(id, req, ct));
 
+    /// <summary>[CORRECTION] Manager xác nhận tìm thấy cua thất lạc và phân vào hộp trống cùng khu.</summary>
+    [HttpPost("{id:guid}/recover")]
+    [Authorize(Roles = AppRoles.FarmManager)]
+    [HarvestMutation]
+    public async Task<IActionResult> RecoverMissing(Guid id, [FromBody] RecoverMissingCrabRequest req, CancellationToken ct)
+        => Ok(await _service.RecoverMissingCrabAsync(id, req, ct));
+
     /// <summary>[DELETE] Soft-delete crab (IsAlive=false, free box, keep history)</summary>
     [HttpDelete("{id:guid}")]
     [Authorize(Roles = AppRoles.FarmManager)]
