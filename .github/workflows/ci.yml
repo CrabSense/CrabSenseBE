@@ -79,17 +79,27 @@ jobs:
         run: |
           python3 - <<'PY'
           from pathlib import Path
+          import hashlib
           import xml.etree.ElementTree as ET
 
           root = Path('TestResults')
-          trx = list(root.rglob('unit-tests.trx'))
-          reports = list(root.rglob('coverage.opencover.xml'))
+          trx = sorted(root.rglob('unit-tests.trx'))
+          reports = sorted(root.rglob('coverage.opencover.xml'))
+          print('TRX files:', [str(p) for p in trx])
+          print('OpenCover files:', [str(p) for p in reports])
           assert len(trx) == 1, 'Missing or ambiguous TRX report'
-          assert len(reports) == 1, 'Missing or ambiguous OpenCover report'
+          assert reports, 'Missing OpenCover report'
+          # VSTest may retain the original report and a copied attachment.
+          # Accept only identical copies; never merge or discard different reports.
+          digests = {hashlib.sha256(p.read_bytes()).hexdigest() for p in reports}
+          assert len(digests) == 1, 'Multiple different OpenCover reports'
           counters = ET.parse(trx[0]).find('.//{*}Counters')
           assert counters is not None and int(counters.attrib['total']) > 0
+          assert int(counters.attrib.get('failed', '0')) == 0
           print('Test counters:', counters.attrib)
-          modules = {node.text for node in ET.parse(reports[0]).findall('.//Module/ModuleName')}
+          coverage = ET.parse(reports[0])
+          assert coverage.getroot().tag == 'CoverageSession', 'Invalid OpenCover document'
+          modules = {node.text for node in coverage.findall('.//Module/ModuleName')}
           expected = {'CrabSenseBE.Api', 'CrabSenseBE.Application', 'CrabSenseBE.Domain', 'CrabSenseBE.Infrastructure'}
           assert expected <= modules, f'Coverage missing production assemblies: {expected - modules}'
           print('Covered production assemblies:', sorted(expected))
