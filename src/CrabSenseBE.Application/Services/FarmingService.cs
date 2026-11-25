@@ -1336,8 +1336,8 @@ public class FarmingService : IFarmingService
         }
         if (req.WeightGram is <= 0 || req.CarapaceWidthMm is <= 0 || req.CarapaceLengthMm is <= 0)
             throw AppException.BadRequest("Số đo cua phải lớn hơn 0.");
-        if (req.MoltedAt is DateTime moltAt && moltAt.ToUniversalTime() > DateTime.UtcNow.AddMinutes(5))
-            throw AppException.BadRequest("Thời điểm lột không được ở tương lai.");
+        if (req.MoltedAt.HasValue && req.MoltedAt != crab.MoltedAt)
+            throw AppException.BadRequest("Ghi nhận thời điểm lột thành công phải dùng POST /api/crabs/{id}/moltings; không sửa trực tiếp qua hồ sơ.");
         if (crab.Status == CrabStatus.Quarantined && (!string.IsNullOrWhiteSpace(req.Condition)
             || req.MoltingStage is not null || req.MoltedAt.HasValue))
             throw AppException.Conflict("Không thay đổi tình trạng hoặc giai đoạn lột của cua đang cách ly qua hồ sơ thường.");
@@ -1346,7 +1346,6 @@ public class FarmingService : IFarmingService
         var oldWeight = crab.WeightGram;
         var oldWidth = crab.CarapaceWidthMm;
         var oldLength = crab.CarapaceLengthMm;
-        var oldMoltedAt = crab.MoltedAt;
         var actor = await _areas.CurrentUserAsync(ct);
         var recordedAt = DateTime.UtcNow;
         var oldType = crab.CrabType;
@@ -1355,7 +1354,6 @@ public class FarmingService : IFarmingService
         var oldStage = crab.MoltingStage;
 
         if (req.WeightGram is decimal w) crab.WeightGram = w;
-        if (req.MoltedAt is not null) crab.MoltedAt = req.MoltedAt;
         if (req.MoltingStage is not null) crab.MoltingStage = req.MoltingStage;
         if (req.Notes is not null) crab.Notes = req.Notes.Trim();
         if (req.CrabType is not null) crab.CrabType = req.CrabType.Trim();
@@ -1389,7 +1387,6 @@ public class FarmingService : IFarmingService
             || oldGender != crab.Gender
             || !string.Equals(oldNotes, crab.Notes, StringComparison.Ordinal)
             || !string.Equals(oldStage, crab.MoltingStage, StringComparison.Ordinal)
-            || oldMoltedAt != crab.MoltedAt
             || oldWidth != crab.CarapaceWidthMm
             || oldLength != crab.CarapaceLengthMm;
         if (profileChanged)
@@ -1411,7 +1408,6 @@ public class FarmingService : IFarmingService
                     + $"|gender={oldGender}→{crab.Gender}"
                     + $"|widthMm={oldWidth}→{crab.CarapaceWidthMm}"
                     + $"|lengthMm={oldLength}→{crab.CarapaceLengthMm}"
-                    + $"|moltedAt={oldMoltedAt:O}→{crab.MoltedAt:O}"
             }, ct);
         }
 
