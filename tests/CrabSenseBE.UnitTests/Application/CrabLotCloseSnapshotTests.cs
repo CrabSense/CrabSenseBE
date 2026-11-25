@@ -186,6 +186,41 @@ public sealed class CrabLotCloseSnapshotTests
         report.HarvestedCrabs.Should().Be(0);
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Close_rejects_open_harvest_reservation(bool assignment)
+    {
+        var lot = Lot(DateTime.UtcNow.AddDays(-2), 1);
+        var crab = Crab(lot.Id, CrabStatus.Alive);
+        var fixture = Fixture(lot, [crab]);
+        var voucher = new HarvestVoucher { Id = Guid.NewGuid(), Status = HarvestStatus.InProgress };
+        if (assignment)
+        {
+            var repo = new Mock<IRepository<HarvestAssignmentLine>>();
+            repo.Setup(r => r.AnyAsync(It.IsAny<Expression<Func<HarvestAssignmentLine, bool>>>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync((Expression<Func<HarvestAssignmentLine, bool>> predicate, CancellationToken _) =>
+                    predicate.Compile()(new HarvestAssignmentLine { CrabId = crab.Id, Status = HarvestAssignmentLineStatus.InProgress }));
+            fixture.Uow.Setup(u => u.HarvestAssignmentLines).Returns(repo.Object);
+        }
+        else
+        {
+            var lines = new Mock<IRepository<HarvestLine>>();
+            lines.Setup(r => r.FindAsync(It.IsAny<Expression<Func<HarvestLine, bool>>>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync((Expression<Func<HarvestLine, bool>> predicate, CancellationToken _) =>
+                    new[] { new HarvestLine { CrabId = crab.Id, HarvestVoucherId = voucher.Id } }.Where(predicate.Compile()));
+            fixture.Uow.Setup(u => u.HarvestLines).Returns(lines.Object);
+            var vouchers = new Mock<IRepository<HarvestVoucher>>();
+            vouchers.Setup(r => r.AnyAsync(It.IsAny<Expression<Func<HarvestVoucher, bool>>>(), It.IsAny<CancellationToken>()))
+                .ReturnsAsync((Expression<Func<HarvestVoucher, bool>> predicate, CancellationToken _) => predicate.Compile()(voucher));
+            fixture.Uow.Setup(u => u.HarvestVouchers).Returns(vouchers.Object);
+        }
+        var action = () => fixture.Service.CloseLotAsync(lot.Id, new CloseCrabLotRequest("Tiếp tục theo dõi"));
+        (await action.Should().ThrowAsync<AppException>()).Which.StatusCode.Should().Be(409);
+        lot.ClosedAt.Should().BeNull();
+        fixture.SaveCount.Should().Be(0);
+    }
+
     private static CrabLot Lot(DateTime stockedAt, int quantity, int deadOnArrival = 0) =>
         new()
         {
@@ -231,6 +266,11 @@ public sealed class CrabLotCloseSnapshotTests
         uow.Setup(unit => unit.CrabLots).Returns(lots.Object);
         uow.Setup(unit => unit.CrabLotAreas).Returns(Repo<CrabLotArea>().Object);
         uow.Setup(unit => unit.Crabs).Returns(crabRepo.Object);
+        uow.Setup(unit => unit.HarvestAssignmentLines).Returns(Mock.Of<IRepository<HarvestAssignmentLine>>());
+        var harvestLines = new Mock<IRepository<HarvestLine>>();
+        harvestLines.Setup(r => r.FindAsync(It.IsAny<Expression<Func<HarvestLine, bool>>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Array.Empty<HarvestLine>());
+        uow.Setup(unit => unit.HarvestLines).Returns(harvestLines.Object);
         uow.Setup(unit => unit.MoltingRecords).Returns(Repo(moltingRecords.ToArray()).Object);
         var saves = 0;
         uow.Setup(unit => unit.SaveChangesAsync(It.IsAny<CancellationToken>()))

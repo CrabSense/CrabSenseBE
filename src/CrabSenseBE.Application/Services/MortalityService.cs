@@ -56,6 +56,9 @@ public class MortalityService : IMortalityService
         if (request.MortalityDate is DateTime at && at < crab.StockedAt)
             throw AppException.BadRequest("Thời điểm tử vong không được trước khi thả cua.");
 
+        if (await HarvestLifecycleGuard.HasPendingAssignmentEvidenceAsync(_uow, crab.Id, cancellationToken))
+            throw AppException.Conflict("Cua có bằng chứng thu hoạch/lột đang chờ xác nhận. Cần đối soát trước khi ghi nhận tử vong.");
+
         // 2. Tạo bản ghi mortality kèm snapshot lúc chết.
         //    Client không gửi thì lấy số đo hiện tại của cua.
         var mortalityRecord = new CrabMortalityRecord

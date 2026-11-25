@@ -68,6 +68,7 @@ public class BoxQrController : ControllerBase
     /// <summary>[UPDATE] Move crab to another box</summary>
     [HttpPost("api/box-qr/{code}/move-crab")]
     [Authorize(Roles = AppRoles.FarmStaff)]
+    [HarvestMutation]
     public async Task<IActionResult> MoveCrab(
         string code, [FromBody] MoveCrabByScanRequest req, CancellationToken ct)
         => Ok(await _service.MoveCrabAsync(code, req, ct));

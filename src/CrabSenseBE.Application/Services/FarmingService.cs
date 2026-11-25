@@ -1479,11 +1479,7 @@ public class FarmingService : IFarmingService
             throw AppException.Conflict("Phân bổ cua không nhất quán. Cần quản lý kiểm tra.");
         if (await _uow.CrabBoxAllocations.AnyAsync(a => a.BoxId == request.BoxId && a.CrabId != id && a.EndTime == null, ct))
             throw AppException.Conflict("Hộp có phân bổ khác đang mở. Cần quản lý kiểm tra.");
-        if (await _uow.HarvestAssignmentLines.AnyAsync(line => line.CrabId == id
-            && (line.Status == HarvestAssignmentLineStatus.Assigned
-                || line.Status == HarvestAssignmentLineStatus.Eligible
-                || line.Status == HarvestAssignmentLineStatus.InProgress)
-            && (line.Outcome == HarvestAssignmentOutcome.Harvested || line.PendingMoltConfirmed || line.PendingHarvestedAt.HasValue), ct))
+        if (await HarvestLifecycleGuard.HasPendingAssignmentEvidenceAsync(_uow, id, ct))
             throw AppException.Conflict("Cua có bằng chứng thu hoạch/lột đang chờ xác nhận. Cần đối soát trước.");
         var voucherIds = (await _uow.HarvestLines.FindAsync(line => line.CrabId == id, ct))
             .Select(line => line.HarvestVoucherId).Distinct().ToHashSet();

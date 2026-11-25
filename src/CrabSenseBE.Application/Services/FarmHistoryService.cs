@@ -100,6 +100,9 @@ public class FarmHistoryService : IFarmHistoryService
                 throw AppException.Conflict("Crab is not in the given sourceBoxId.");
         }
 
+        if (await HarvestLifecycleGuard.HasOpenReservationAsync(_uow, [crab.Id], ct))
+            throw AppException.Conflict("Cua đang có nhiệm vụ hoặc phiếu thu hoạch chưa kết thúc. Cần xử lý trước khi chuyển hộp.");
+
         await CrabRegistrationRules.EnsureAvailableAsync(_uow, box, ct);
 
         var open = await _uow.CrabBoxAllocations.FindAsync(

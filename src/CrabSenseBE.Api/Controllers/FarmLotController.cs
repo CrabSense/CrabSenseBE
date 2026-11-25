@@ -70,6 +70,7 @@ public class CrabLotsController : ControllerBase
     /// <summary>[ACTION] Kết thúc vòng đời lô. Còn cua chưa lột thì phải ghi phương án xử lý.</summary>
     [HttpPost("{id:guid}/close")]
     [Authorize(Roles = AppRoles.FarmManager)]
+    [HarvestMutation]
     public async Task<IActionResult> Close(Guid id, [FromBody] CloseCrabLotRequest? req, CancellationToken ct)
         => Ok(await _service.CloseLotAsync(id, req ?? new CloseCrabLotRequest(), ct));
 

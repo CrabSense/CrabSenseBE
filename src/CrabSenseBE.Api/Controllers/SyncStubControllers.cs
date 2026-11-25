@@ -81,6 +81,9 @@ public class SyncQueueStubController : ControllerBase
                 HttpContext.RequestAborted);
             try
             {
+                // Acquire before any inbox/domain reads, using the existing per-item transaction.
+                if (_db.Database.IsNpgsql())
+                    await _db.Database.ExecuteSqlRawAsync("SELECT pg_advisory_xact_lock(437190, 3)", HttpContext.RequestAborted);
                 var existing = await _db.SyncInboxItems
                     .FromSqlInterpolated($"""
                         SELECT * FROM be."SyncInboxItems"
