@@ -1,3 +1,4 @@
+using System.Text.Json;
 using CrabSenseBE.Application.Common;
 using CrabSenseBE.Application.DTOs.Harvest;
 using CrabSenseBE.Application.Interfaces;
@@ -378,10 +379,10 @@ public sealed class HarvestAssignmentService : IHarvestAssignmentService
 
         // Trả số lượng kết quả đã lưu trên toàn task, không chỉ request lần này.
         var harvestedCount = assignmentLines.Count(
-            line => line.Outcome == HarvestAssignmentOutcome.Harvested);
+            line => IsActiveLine(line) && line.Outcome == HarvestAssignmentOutcome.Harvested);
 
         var deferredCount = assignmentLines.Count(
-            line => line.Outcome == HarvestAssignmentOutcome.ContinueRaising);
+            line => IsActiveLine(line) && line.Outcome == HarvestAssignmentOutcome.ContinueRaising);
 
         return ApiResponse<HarvestAssignmentResultDto>.Ok(
             new HarvestAssignmentResultDto(
@@ -496,13 +497,14 @@ public sealed class HarvestAssignmentService : IHarvestAssignmentService
                 assignment.CompletedAt,
                 assignmentLines.Count,
                 assignmentLines.Count(
-                    x => x.Outcome == HarvestAssignmentOutcome.Harvested
+                    x => IsActiveLine(x) && x.Outcome == HarvestAssignmentOutcome.Harvested
                         || x.Status == HarvestAssignmentLineStatus.Harvested),
 
                 assignmentLines.Count(
-                    x => x.Outcome == HarvestAssignmentOutcome.ContinueRaising
+                    x => IsActiveLine(x) && x.Outcome == HarvestAssignmentOutcome.ContinueRaising
                         || x.Status == HarvestAssignmentLineStatus.Deferred),
-                vouchersByAssignment.GetValueOrDefault(assignment.Id));
+                vouchersByAssignment.GetValueOrDefault(assignment.Id),
+                assignmentLines.Count(x => x.Status == HarvestAssignmentLineStatus.Skipped));
         }).ToList();
 
         return ApiResponse<IEnumerable<HarvestAssignmentListItemDto>>.Ok(result);
@@ -635,7 +637,7 @@ public sealed class HarvestAssignmentService : IHarvestAssignmentService
             lineDtos,
             voucherDtos,
             assignment.SubmittedAt, assignment.SubmissionNotes, assignment.ReviewedAt,
-            assignment.ReviewedByUserId, assignment.ReviewNotes);
+            assignment.ReviewedByUserId, assignment.ReviewNotes, ReadAudit(assignment));
 
         return ApiResponse<HarvestAssignmentDetailDto>.Ok(response);
     }
@@ -670,7 +672,7 @@ public sealed class HarvestAssignmentService : IHarvestAssignmentService
             throw AppException.Conflict("Assignment không có cua được giao.");
 
         // Giữ tất cả cua trong task đang mở cho đến khi Staff nộp task.
-        foreach (var line in lines)
+        foreach (var line in lines.Where(IsActiveLine))
         {
             line.Status = HarvestAssignmentLineStatus.InProgress;
             _uow.HarvestAssignmentLines.Update(line);
@@ -709,6 +711,7 @@ public sealed class HarvestAssignmentService : IHarvestAssignmentService
         assignment.Status = HarvestAssignmentStatus.PendingReview;
         assignment.SubmittedAt = now;
         assignment.SubmissionNotes = NormalizeNullable(request.VoucherNotes);
+        AppendAudit(assignment, "submitted", assignment.SubmissionNotes);
         _uow.HarvestAssignments.Update(assignment);
         await _uow.SaveChangesAsync(ct);
         return ApiResponse<HarvestAssignmentResultDto>.Ok(
@@ -716,6 +719,141 @@ public sealed class HarvestAssignmentService : IHarvestAssignmentService
                 assignment.Status.ToString(), null, null, harvestedLines.Count, deferredLines.Count),
             "Đã gửi kết quả, chờ Farm Manager xác nhận.");
     }
+
+    private static bool IsActiveLine(HarvestAssignmentLine line)
+        => line.Status is HarvestAssignmentLineStatus.Assigned or HarvestAssignmentLineStatus.Eligible or HarvestAssignmentLineStatus.InProgress;
+
+    private static List<HarvestAssignmentAuditDto> ReadAudit(HarvestAssignment assignment)
+        => string.IsNullOrWhiteSpace(assignment.WorkflowAuditJson)
+            ? []
+            : JsonSerializer.Deserialize<List<HarvestAssignmentAuditDto>>(assignment.WorkflowAuditJson) ?? [];
+
+    private void AppendAudit(HarvestAssignment assignment, string action, string? reason = null,
+        Guid? lineId = null, Guid? previousStaffId = null, Guid? newStaffId = null)
+    {
+        var history = ReadAudit(assignment);
+        history.Add(new HarvestAssignmentAuditDto(DateTime.UtcNow, _currentUser.UserId, action, reason, lineId, previousStaffId, newStaffId));
+        assignment.WorkflowAuditJson = JsonSerializer.Serialize(history);
+    }
+
+    private static string RequireReason(string? value)
+    {
+        var reason = NormalizeNullable(value);
+        if (reason is null || reason.Length > 1000)
+            throw AppException.BadRequest("Cần lý do xử lý (tối đa 1000 ký tự).");
+        return reason;
+    }
+
+    private async Task<HarvestAssignment> GetOpenManagerAssignmentAsync(Guid id, CancellationToken ct)
+    {
+        var caller = await _areas.CurrentUserAsync(ct) ?? throw AppException.Unauthorized();
+        if (caller.Role != UserRole.FarmManager)
+            throw AppException.Forbidden("Chỉ Farm Manager được xử lý nhiệm vụ.");
+        var assignment = await _uow.HarvestAssignments.GetByIdAsync(id, ct)
+            ?? throw AppException.NotFound("HarvestAssignment");
+        await _areas.EnsureAsync(assignment.FarmingAreaId, manage: false, ct);
+        if (assignment.Status is not (HarvestAssignmentStatus.Assigned or HarvestAssignmentStatus.InProgress or HarvestAssignmentStatus.PendingReview))
+            throw AppException.Conflict("Nhiệm vụ đã kết thúc.");
+        return assignment;
+    }
+
+    private async Task<List<HarvestAssignmentLine>> GetUnworkedLinesAsync(HarvestAssignment assignment, CancellationToken ct)
+    {
+        if (assignment.Status == HarvestAssignmentStatus.PendingReview || assignment.SubmittedAt.HasValue)
+            throw AppException.Conflict("Nhiệm vụ đã gửi kết quả; không thể hủy hoặc giao lại.");
+        var lines = (await _uow.HarvestAssignmentLines.FindAsync(x => x.HarvestAssignmentId == assignment.Id, ct)).ToList();
+        if (lines.Count == 0 || lines.Any(x => x.Outcome.HasValue || x.CheckedAt.HasValue || x.PendingMoltConfirmed || x.PendingHarvestedAt.HasValue))
+            throw AppException.Conflict("Nhiệm vụ đã có kết quả; cần đối soát thay vì hủy hoặc giao lại.");
+        return lines.Where(IsActiveLine).ToList();
+    }
+
+    public async Task<ApiResponse<HarvestAssignmentResultDto>> CancelAssignmentAsync(
+        Guid assignmentId, ReviewHarvestAssignmentRequest request, CancellationToken ct = default)
+    {
+        var assignment = await GetOpenManagerAssignmentAsync(assignmentId, ct);
+        var reason = RequireReason(request.Notes);
+        var lines = await GetUnworkedLinesAsync(assignment, ct);
+        foreach (var line in lines)
+        {
+            line.Status = HarvestAssignmentLineStatus.Cancelled;
+            _uow.HarvestAssignmentLines.Update(line);
+        }
+        assignment.Status = HarvestAssignmentStatus.Cancelled;
+        assignment.CompletedAt = DateTime.UtcNow;
+        AppendAudit(assignment, "cancelled", reason);
+        _uow.HarvestAssignments.Update(assignment);
+        await _uow.SaveChangesAsync(ct);
+        return OperationResult(assignment, "Đã hủy nhiệm vụ, không thay đổi cua hoặc hộp.");
+    }
+
+    public async Task<ApiResponse<HarvestAssignmentResultDto>> ReassignAssignmentAsync(
+        Guid assignmentId, ReassignHarvestAssignmentRequest request, CancellationToken ct = default)
+    {
+        var assignment = await GetOpenManagerAssignmentAsync(assignmentId, ct);
+        var reason = RequireReason(request.Reason);
+        var lines = await GetUnworkedLinesAsync(assignment, ct);
+        if (lines.Count == 0)
+            throw AppException.Conflict("Không còn cua cần giao.");
+        var staff = await _uow.Users.GetByIdAsync(request.AssignedToUserId, ct);
+        if (staff is null || !staff.IsActive || staff.Role != UserRole.FarmStaff || staff.Id == assignment.AssignedToUserId)
+            throw AppException.BadRequest("Cần chọn Farm Staff khác đang hoạt động.");
+        var membership = await _uow.FarmStaffAssignments.FirstOrDefaultAsync(x =>
+            x.StaffUserId == staff.Id && x.ManagerUserId == _currentUser.UserId && x.FarmingAreaId == assignment.FarmingAreaId, ct);
+        if (membership is null)
+            throw AppException.Forbidden("Nhân viên không thuộc Manager và khu được chọn.");
+        var previous = assignment.AssignedToUserId;
+        foreach (var line in lines)
+        {
+            var crab = await _uow.Crabs.GetByIdAsync(line.CrabId, ct)
+                ?? throw AppException.NotFound("Crab");
+            EnsureAssignmentLocation(line, crab);
+        }
+        await _harvestRecorder.ValidateCrabsAsync(lines.Select(x => x.CrabId).ToList(), assignment.FarmingAreaId,
+            checkAlreadyHarvested: true, currentVoucherId: null, ct: ct, currentAssignmentId: assignment.Id);
+        foreach (var line in lines)
+        {
+            line.Status = HarvestAssignmentLineStatus.Assigned;
+            _uow.HarvestAssignmentLines.Update(line);
+        }
+        assignment.AssignedToUserId = staff.Id;
+        assignment.Status = HarvestAssignmentStatus.Assigned;
+        assignment.StartedAt = null;
+        AppendAudit(assignment, "reassigned", reason, previousStaffId: previous, newStaffId: staff.Id);
+        _uow.HarvestAssignments.Update(assignment);
+        await _uow.SaveChangesAsync(ct);
+        return OperationResult(assignment, "Đã giao lại nhiệm vụ.");
+    }
+
+    public async Task<ApiResponse<HarvestAssignmentResultDto>> SkipAssignmentLineAsync(
+        Guid assignmentId, Guid lineId, SkipHarvestAssignmentLineRequest request, CancellationToken ct = default)
+    {
+        var assignment = await GetOpenManagerAssignmentAsync(assignmentId, ct);
+        var reason = RequireReason(request.Reason);
+        var line = await _uow.HarvestAssignmentLines.GetByIdAsync(lineId, ct)
+            ?? throw AppException.NotFound("HarvestAssignmentLine");
+        if (line.HarvestAssignmentId != assignment.Id || !IsActiveLine(line))
+            throw AppException.Conflict("Dòng cua không thuộc nhiệm vụ đang mở.");
+        var crab = await _uow.Crabs.GetByIdAsync(line.CrabId, ct)
+            ?? throw AppException.NotFound("Crab");
+        var terminal = crab.Status is CrabStatus.Dead or CrabStatus.Missing;
+        var moved = crab.BoxId.HasValue && crab.BoxId != line.BoxId;
+        if (!terminal && !moved)
+            throw AppException.Conflict("Chỉ xử lý ngoại lệ cua đã chết, thất lạc hoặc đổi vị trí.");
+        if (!terminal && (line.Outcome == HarvestAssignmentOutcome.Harvested || line.PendingMoltConfirmed))
+            throw AppException.Conflict("Cua có bằng chứng thu hoạch/lột; cần đối soát trước.");
+        // Retain submitted evidence verbatim, but never count skipped results as harvest.
+        // No crab/box mutation here; mortality/missing/transfer owns those changes.
+        line.Status = HarvestAssignmentLineStatus.Skipped;
+        AppendAudit(assignment, "line-skipped", $"{crab.Status}; {reason}", line.Id);
+        _uow.HarvestAssignmentLines.Update(line);
+        _uow.HarvestAssignments.Update(assignment);
+        await _uow.SaveChangesAsync(ct);
+        return OperationResult(assignment, "Đã xử lý ngoại lệ, giữ nguyên hồ sơ cua và kết quả đã gửi.");
+    }
+
+    private static ApiResponse<HarvestAssignmentResultDto> OperationResult(HarvestAssignment assignment, string message)
+        => ApiResponse<HarvestAssignmentResultDto>.Ok(new HarvestAssignmentResultDto(
+            assignment.Id, assignment.AssignmentCode, assignment.Status.ToString(), null, null, 0, 0), message);
 
     private async Task<HarvestAssignment> GetReviewableAssignmentAsync(Guid id, CancellationToken ct)
     {
@@ -741,6 +879,7 @@ public sealed class HarvestAssignmentService : IHarvestAssignmentService
         assignment.ReviewedAt = DateTime.UtcNow;
         assignment.ReviewedByUserId = _currentUser.UserId;
         assignment.ReviewNotes = reason;
+        AppendAudit(assignment, "returned", reason);
         _uow.HarvestAssignments.Update(assignment);
         await _uow.SaveChangesAsync(ct);
         return ApiResponse<HarvestAssignmentResultDto>.Ok(
@@ -835,6 +974,7 @@ public sealed class HarvestAssignmentService : IHarvestAssignmentService
         assignment.ReviewedAt = now;
         assignment.ReviewedByUserId = _currentUser.UserId;
         assignment.ReviewNotes = NormalizeNullable(request.Notes);
+        AppendAudit(assignment, "confirmed", assignment.ReviewNotes);
 
         foreach (var line in lines)
         {
@@ -866,6 +1006,8 @@ public sealed class HarvestAssignmentService : IHarvestAssignmentService
         if (lines.Count == 0)
             throw AppException.Conflict("Assignment không có cua được giao.");
 
+        // Skipped lines retain their evidence, but are not candidates for voucher creation.
+        lines = lines.Where(IsActiveLine).ToList();
         if (lines.Any(x => x.Outcome is null))
             throw AppException.Conflict("Cần xử lý tất cả cua trước khi hoàn tất task.");
 

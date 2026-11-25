@@ -337,6 +337,24 @@ public class HarvestController : ControllerBase
     public async Task<IActionResult> ReturnAssignment(Guid id, [FromBody] ReviewHarvestAssignmentRequest request, CancellationToken ct)
         => Ok(await _assignmentService.ReturnAssignmentAsync(id, request, ct));
 
+    [HttpPost("~/api/harvest-assignments/{id:guid}/cancel")]
+    [Authorize(Roles = AppRoles.FarmManager)]
+    [HarvestMutation]
+    public async Task<IActionResult> CancelAssignment(Guid id, [FromBody] ReviewHarvestAssignmentRequest request, CancellationToken ct)
+        => Ok(await _assignmentService.CancelAssignmentAsync(id, request, ct));
+
+    [HttpPost("~/api/harvest-assignments/{id:guid}/reassign")]
+    [Authorize(Roles = AppRoles.FarmManager)]
+    [HarvestMutation]
+    public async Task<IActionResult> ReassignAssignment(Guid id, [FromBody] ReassignHarvestAssignmentRequest request, CancellationToken ct)
+        => Ok(await _assignmentService.ReassignAssignmentAsync(id, request, ct));
+
+    [HttpPost("~/api/harvest-assignments/{id:guid}/lines/{lineId:guid}/skip")]
+    [Authorize(Roles = AppRoles.FarmManager)]
+    [HarvestMutation]
+    public async Task<IActionResult> SkipAssignmentLine(Guid id, Guid lineId, [FromBody] SkipHarvestAssignmentLineRequest request, CancellationToken ct)
+        => Ok(await _assignmentService.SkipAssignmentLineAsync(id, lineId, request, ct));
+
     /// <summary>
     /// Manager lấy nhân viên thuộc khu được chọn.
     /// </summary>

@@ -18,6 +18,7 @@ public class HarvestAssignment : BaseEntity
     public DateTime? ReviewedAt { get; set; }
     public Guid? ReviewedByUserId { get; set; }
     public string? ReviewNotes { get; set; }
+    public string? WorkflowAuditJson { get; set; }
 
     public HarvestAssignmentStatus Status { get; set; }
         = HarvestAssignmentStatus.Assigned;
