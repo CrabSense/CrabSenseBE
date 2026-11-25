@@ -361,6 +361,11 @@ public class FarmingService : IFarmingService
             : (await _uow.Boxes.FindAsync(b => rowIds.Contains(b.FarmingRowId), ct)).ToList();
         var boxIds = boxes.Select(b => b.Id).ToList();
 
+        // Never cascade-delete production history, even for already released crabs.
+        if (boxIds.Count > 0 && (await _uow.CrabBoxAllocations.AnyAsync(a => boxIds.Contains(a.BoxId), ct)
+            || await _uow.Crabs.AnyAsync(c => c.BoxId.HasValue && boxIds.Contains(c.BoxId.Value), ct)))
+            throw AppException.Conflict("Khu đã có lịch sử nuôi cua. Hãy ngừng hoạt động thay vì xóa.");
+
         var crabs = boxIds.Count == 0
             ? new List<Crab>()
             : (await _uow.Crabs.FindAsync(
@@ -621,6 +626,8 @@ public class FarmingService : IFarmingService
         {
             var row = await RequireRowAsync(rowId, requireActive: false, ct);
             await EnsureAreaAsync(row.FarmingAreaId, manage: false, ct);
+            if (farmingAreaId is Guid requestedArea && requestedArea != Guid.Empty && row.FarmingAreaId != requestedArea)
+                throw AppException.BadRequest("Dãy không thuộc khu đã chọn.");
         }
 
         var snapshot = await BuildAvailabilityAsync(farmingAreaId, farmingRowId, ct);
@@ -918,6 +925,9 @@ public class FarmingService : IFarmingService
         var openAlloc = await _uow.CrabBoxAllocations.AnyAsync(a => a.BoxId == id && a.EndTime == null, ct);
         if (openAlloc)
             throw AppException.Conflict("Box still has an open allocation. Move the crab first.");
+        if (await _uow.CrabBoxAllocations.AnyAsync(a => a.BoxId == id, ct)
+            || await _uow.Crabs.AnyAsync(c => c.BoxId == id, ct))
+            throw AppException.Conflict("Hộp đã có lịch sử nuôi cua. Hãy chuyển sang bảo trì thay vì xóa.");
 
         var qrs = await _uow.QrCodes.FindAsync(q => q.BoxId == id, ct);
         foreach (var qr in qrs)
@@ -1126,14 +1136,7 @@ public class FarmingService : IFarmingService
         _ = await CrabLotRegistrationGuard.EnsureLotAllowsBoxAsync(
             _uow, req.CrabLotId, box.Id, ct);
 
-        var liveInBox = await _uow.Crabs.Query()
-            .Include(c => c.BoxAllocations)
-            .AnyAsync(c => c.BoxAllocations.Any(a => a.BoxId == box.Id && a.EndTime == null)
-                           && (c.Status == CrabStatus.Alive
-                               || c.Status == CrabStatus.Molting
-                               || c.Status == CrabStatus.Quarantined), ct);
-        if (liveInBox)
-            throw AppException.Conflict($"Hộp '{box.Code}' vừa được sử dụng.");
+        await CrabRegistrationRules.EnsureAvailableAsync(_uow, box, ct);
 
         CrabRegistrationRules.ValidateMeasurements(req.WeightGram, req.CarapaceWidthMm, req.CarapaceLengthMm);
 
@@ -1275,15 +1278,7 @@ public class FarmingService : IFarmingService
 
         foreach (var (_, box) in assigned)
         {
-            var liveInBox = await _uow.Crabs.Query()
-                .Include(c => c.BoxAllocations)
-                .AnyAsync(c => c.BoxAllocations.Any(al => al.BoxId == box.Id && al.EndTime == null)
-                               && (c.Status == CrabStatus.Alive
-                                   || c.Status == CrabStatus.Molting
-                                   || c.Status == CrabStatus.Quarantined), ct);
-            if (liveInBox)
-                throw AppException.Conflict(
-                    $"Hộp '{box.Code}' vừa được sử dụng. Vui lòng làm mới và chọn lại hộp.");
+            await CrabRegistrationRules.EnsureAvailableAsync(_uow, box, ct);
         }
 
         var created = new List<Crab>(assigned.Count);
@@ -2592,19 +2587,14 @@ public class FarmingService : IFarmingService
         Guid? farmingAreaId, Guid? farmingRowId, CancellationToken ct)
     {
         var ctx = await LoadBoxContextAsync(ct);
-        var aliveCrabs = await _uow.Crabs.Query()
-    .Include(c => c.BoxAllocations)
-    .Where(c => c.Status == CrabStatus.Alive
-             || c.Status == CrabStatus.Molting
-             || c.Status == CrabStatus.Quarantined)
-    .ToListAsync(ct);
+        var openAllocations = await _uow.CrabBoxAllocations.FindAsync(a => a.EndTime == null, ct);
+        var occupied = openAllocations.Select(a => a.BoxId).ToHashSet();
+        occupied.UnionWith(ctx.CrabsByBox.Keys);
 
-        var liveBoxIds = aliveCrabs
-            .Select(c => CurrentBoxId(c))
-            .Where(id => id != Guid.Empty)
-            .ToHashSet();
-
-        IEnumerable<Box> q = ctx.Boxes.Where(b => !liveBoxIds.Contains(b.Id));
+        IEnumerable<Box> q = ctx.Boxes.Where(b =>
+            CrabRegistrationRules.IsEmptyBox(b) && !occupied.Contains(b.Id)
+            && ctx.Rows.TryGetValue(b.FarmingRowId, out var row) && row.IsActive
+            && ctx.Areas.TryGetValue(row.FarmingAreaId, out var area) && area.IsActive);
         if (farmingRowId.HasValue && farmingRowId != Guid.Empty)
             q = q.Where(b => b.FarmingRowId == farmingRowId.Value);
         else if (farmingAreaId.HasValue && farmingAreaId != Guid.Empty)
@@ -3303,7 +3293,8 @@ public class FarmingService : IFarmingService
                          || c.Status == CrabStatus.Quarantined),
                 ct))
             .Any();
-        if (stillLive)
+        if (stillLive || await _uow.CrabBoxAllocations.AnyAsync(a =>
+                a.BoxId == boxId && a.CrabId != crab.Id && a.EndTime == null, ct))
             return;
 
         var box = await _uow.Boxes.GetByIdAsync(boxId, ct);

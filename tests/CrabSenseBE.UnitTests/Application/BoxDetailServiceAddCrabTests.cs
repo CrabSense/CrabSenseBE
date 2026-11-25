@@ -44,7 +44,9 @@ public class BoxDetailServiceAddCrabTests
         ICurrentUserService? currentUser = null,
         Guid? assignedAreaId = null,
         IReadOnlyCollection<CrabLot>? configuredLots = null,
-        IReadOnlyCollection<Guid>? lotIdsAllowedInArea = null)
+        IReadOnlyCollection<Guid>? lotIdsAllowedInArea = null,
+        bool existingAllocation = false,
+        string boxStatus = "empty")
     {
         var rowId = Guid.NewGuid();
         var areaId = boxAreaId ?? Guid.NewGuid();
@@ -53,7 +55,7 @@ public class BoxDetailServiceAddCrabTests
             Id = boxId,
             FarmingRowId = rowId,
             Code = "A01",
-            Status = "empty"
+            Status = boxStatus
         };
 
         var boxes = new Mock<IRepository<Box>>();
@@ -105,6 +107,7 @@ public class BoxDetailServiceAddCrabTests
                 CancellationToken _) => lotTable.Where(predicate.Compile()).ToList());
 
         var allocations = new Mock<IRepository<CrabBoxAllocation>>();
+        allocations.Setup(r => r.AnyAsync(It.IsAny<Expression<Func<CrabBoxAllocation, bool>>>(), It.IsAny<CancellationToken>())).ReturnsAsync(existingAllocation);
         allocations.Setup(r => r.AddAsync(
                 It.IsAny<CrabBoxAllocation>(), It.IsAny<CancellationToken>()))
             .Returns(Task.CompletedTask);
@@ -237,6 +240,21 @@ public class BoxDetailServiceAddCrabTests
         _statusHistory.Should().ContainSingle(h => h.CrabId == _saved!.Id);
         _weightHistory.Should().ContainSingle(h => h.CrabId == _saved!.Id && h.WeightGram == 200m);
         _saveCalls.Should().Be(1);
+    }
+
+    [Theory]
+    [InlineData(true, "empty")]
+    [InlineData(false, "maintenance")]
+    [InlineData(false, "active")]
+    public async Task AddCrab_RejectsUnavailableBox(bool existingAllocation, string boxStatus)
+    {
+        var boxId = Guid.NewGuid();
+        var service = Create(boxId, existingAllocation: existingAllocation, boxStatus: boxStatus);
+        var act = () => service.AddCrabAsync(boxId, new MobileAddCrabRequest(
+            CrabLotId: LotId, WeightGram: 200m, CarapaceWidthMm: 72m, CarapaceLengthMm: 95m));
+        await act.Should().ThrowAsync<CrabSenseBE.Application.Common.AppException>();
+        _saved.Should().BeNull();
+        _saveCalls.Should().Be(0);
     }
 
     [Fact]
