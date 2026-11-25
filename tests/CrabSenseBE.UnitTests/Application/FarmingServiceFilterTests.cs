@@ -231,6 +231,24 @@ public class FarmingServiceFilterTests
         _uow.Verify(x => x.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Never);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Profile_cannot_forge_or_overwrite_last_successful_molt(bool hasPrevious)
+    {
+        var previous = hasPrevious ? (DateTime?)DateTime.UtcNow.AddDays(-2) : null;
+        var crab = new Crab { Id = Guid.NewGuid(), StockedAt = DateTime.UtcNow.AddDays(-5),
+            Status = CrabSenseBE.Domain.Enums.CrabStatus.Alive, MoltedAt = previous };
+        var crabs = new Mock<IRepository<Crab>>();
+        crabs.Setup(r => r.GetByIdAsync(crab.Id, It.IsAny<CancellationToken>())).ReturnsAsync(crab);
+        _uow.Setup(x => x.Crabs).Returns(crabs.Object);
+        var error = await Assert.ThrowsAsync<AppException>(() => Create().UpdateCrabAsync(
+            crab.Id, new UpdateCrabRequest(null, null, MoltedAt: DateTime.UtcNow.AddHours(-1))));
+        error.StatusCode.Should().Be(400);
+        crab.MoltedAt.Should().Be(previous);
+        _uow.Verify(x => x.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Never);
+    }
+
     [Fact]
     public async Task Historical_weight_is_recorded_without_overwriting_latest_snapshot()
     {
