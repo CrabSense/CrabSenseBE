@@ -147,6 +147,7 @@ public class FarmHistoryService : IFarmHistoryService
             NewCondition = crab.Condition,
             OldStatus = crab.Status,
             NewStatus = crab.Status,
+            ChangedByUserId = _currentUser is null ? null : CurrentUserId(),
             Source = previousBoxId == Guid.Empty ? "assignment" : "transfer",
             Reason = previousBoxId == Guid.Empty
                 ? $"Gán cua vào hộp {box.Code}"
@@ -321,9 +322,10 @@ public class FarmHistoryService : IFarmHistoryService
         };
         await _uow.MoltingRecords.AddAsync(record, ct);
 
-        crab.MoltedAt = moltTime;
+        var actor = await _areas.CurrentUserAsync(ct);
         if (result == "success")
         {
+            crab.MoltedAt = req.CompletedAt ?? moltTime;
             crab.MoltingStage = "softshell";
             var oldCondition = crab.Condition;
             var oldStatus = crab.Status;
@@ -342,26 +344,45 @@ public class FarmHistoryService : IFarmHistoryService
                 Reason = "Molting success"
             }, ct);
         }
-        if (req.WeightAfterGram.HasValue)
+        // A non-success observation does not prove a completed molt or death.
+        if (result != "success")
         {
-            crab.WeightGram = req.WeightAfterGram;
-            if (req.ShellWidthAfterMm.HasValue) crab.CarapaceWidthMm = req.ShellWidthAfterMm;
-            if (req.ShellLengthAfterMm.HasValue) crab.CarapaceLengthMm = req.ShellLengthAfterMm;
+            var oldCondition = crab.Condition;
+            var oldStatus = crab.Status;
+            crab.Condition = CrabCondition.Problem;
+            crab.Status = CrabStatus.Alive;
+            crab.MoltingStage = "unknown";
+            await _uow.CrabStatusHistories.AddAsync(new CrabStatusHistory
+            {
+                CrabId = crab.Id, OldCondition = oldCondition, NewCondition = crab.Condition,
+                OldStatus = oldStatus, NewStatus = crab.Status, ChangedAt = moltTime,
+                Source = source, ChangedByUserId = actor?.Id,
+                Reason = "Molting " + result + "; cần kiểm tra lại"
+            }, ct);
+        }
+        if (req.WeightAfterGram.HasValue) crab.WeightGram = req.WeightAfterGram;
+        if (req.ShellWidthAfterMm.HasValue) crab.CarapaceWidthMm = req.ShellWidthAfterMm;
+        if (req.ShellLengthAfterMm.HasValue) crab.CarapaceLengthMm = req.ShellLengthAfterMm;
+        if (crab.WeightGram is decimal measuredWeight &&
+            (req.WeightAfterGram.HasValue || req.ShellWidthAfterMm.HasValue || req.ShellLengthAfterMm.HasValue))
+        {
             await _uow.CrabWeightHistories.AddAsync(new CrabWeightHistory
             {
                 CrabId = crab.Id,
-                WeightGram = req.WeightAfterGram.Value,
-                CarapaceWidthMm = req.ShellWidthAfterMm,
-                CarapaceLengthMm = req.ShellLengthAfterMm,
+                WeightGram = measuredWeight,
+                CarapaceWidthMm = crab.CarapaceWidthMm,
+                CarapaceLengthMm = crab.CarapaceLengthMm,
                 MeasuredAt = req.CompletedAt ?? moltTime,
+                RecordedByName = actor is null ? null : string.IsNullOrWhiteSpace(actor.FullName) ? actor.Username : actor.FullName,
                 Source = source,
-                Notes = req.Notes ?? "After molt"
+                Notes = req.Notes ?? "Molting observation"
             }, ct);
         }
         _uow.Crabs.Update(crab);
 
-        if (result == "success" && box is not null)
-            await ApplyBoxStatusAsync(box, BoxStatuses.Molting, true, "Molting success recorded", ct);
+        if (box is not null)
+            await ApplyBoxStatusAsync(box, result == "success" ? BoxStatuses.Molting : BoxStatuses.Watch,
+                true, "Molting " + result + " recorded", ct);
 
         await _uow.SaveChangesAsync(ct);
         return ApiResponse<MoltingRecordDto>.Ok(MapMolt(record), "Molting recorded.");
