@@ -440,11 +440,84 @@ public sealed class HarvestAssignmentServiceTests
         Assert.Empty(fixture.Vouchers);
     }
 
+    [Fact]
+    public async Task CancelAssignment_RequiresManagerAndPreservesCrab()
+    {
+        var fixture = new Fixture(HarvestAssignmentStatus.InProgress, 1);
+        await Assert.ThrowsAsync<AppException>(() => fixture.Service.CancelAssignmentAsync(fixture.Assignment.Id, new ReviewHarvestAssignmentRequest("Hủy")));
+        fixture.UseManager();
+        await fixture.Service.CancelAssignmentAsync(fixture.Assignment.Id, new ReviewHarvestAssignmentRequest("Không thực hiện"));
+        Assert.Equal(HarvestAssignmentStatus.Cancelled, fixture.Assignment.Status);
+        Assert.Equal(HarvestAssignmentLineStatus.Cancelled, fixture.Lines[0].Status);
+        Assert.Equal(CrabStatus.Alive, fixture.Crabs[0].Status);
+        Assert.NotNull(fixture.Crabs[0].BoxId);
+        Assert.Empty(fixture.Vouchers);
+        Assert.Contains("cancelled", fixture.Assignment.WorkflowAuditJson);
+    }
+
+    [Fact]
+    public async Task CancelAssignment_RejectsRecordedOutcome()
+    {
+        var fixture = new Fixture(HarvestAssignmentStatus.InProgress, 1);
+        fixture.Lines[0].Outcome = HarvestAssignmentOutcome.Harvested;
+        fixture.UseManager();
+        await Assert.ThrowsAsync<AppException>(() => fixture.Service.CancelAssignmentAsync(fixture.Assignment.Id, new ReviewHarvestAssignmentRequest("Hủy")));
+        Assert.Equal(HarvestAssignmentStatus.InProgress, fixture.Assignment.Status);
+        Assert.Equal(HarvestAssignmentLineStatus.InProgress, fixture.Lines[0].Status);
+    }
+
+    [Fact]
+    public async Task SkipTerminalLine_ExcludesPendingHarvestFromVoucherAndKeepsEvidence()
+    {
+        var fixture = new Fixture(HarvestAssignmentStatus.PendingReview, 1);
+        fixture.Lines[0].Outcome = HarvestAssignmentOutcome.Harvested;
+        fixture.Lines[0].HarvestWeightGram = 350;
+        fixture.Crabs[0].Status = CrabStatus.Dead;
+        fixture.Crabs[0].BoxId = null;
+        fixture.UseManager();
+        await fixture.Service.SkipAssignmentLineAsync(fixture.Assignment.Id, fixture.Lines[0].Id, new SkipHarvestAssignmentLineRequest("Đối soát tử vong"));
+        await fixture.Service.ConfirmAssignmentAsync(fixture.Assignment.Id, new ReviewHarvestAssignmentRequest());
+        Assert.Equal(HarvestAssignmentStatus.Completed, fixture.Assignment.Status);
+        Assert.Equal(HarvestAssignmentLineStatus.Skipped, fixture.Lines[0].Status);
+        Assert.Equal(HarvestAssignmentOutcome.Harvested, fixture.Lines[0].Outcome);
+        Assert.Equal(350, fixture.Lines[0].HarvestWeightGram);
+        Assert.Equal(CrabStatus.Dead, fixture.Crabs[0].Status);
+        Assert.Empty(fixture.Vouchers);
+        Assert.Contains("line-skipped", fixture.Assignment.WorkflowAuditJson);
+    }
+
+    [Fact]
+    public async Task SkipLine_RejectsLiveCrabAtOriginalLocation()
+    {
+        var fixture = new Fixture(HarvestAssignmentStatus.InProgress, 1);
+        fixture.UseManager();
+        await Assert.ThrowsAsync<AppException>(() => fixture.Service.SkipAssignmentLineAsync(fixture.Assignment.Id, fixture.Lines[0].Id, new SkipHarvestAssignmentLineRequest("Bỏ qua")));
+        Assert.Equal(HarvestAssignmentLineStatus.InProgress, fixture.Lines[0].Status);
+    }
+
+    [Fact]
+    public async Task Reassign_RequiresScopedStaffAndResetsAcceptance()
+    {
+        var fixture = new Fixture(HarvestAssignmentStatus.InProgress, 1);
+        var old = fixture.Assignment.AssignedToUserId;
+        var replacement = fixture.AddReplacementStaff();
+        fixture.UseManager();
+        await Assert.ThrowsAsync<AppException>(() => fixture.Service.ReassignAssignmentAsync(fixture.Assignment.Id, new ReassignHarvestAssignmentRequest(Guid.NewGuid(), "Đổi ca")));
+        await fixture.Service.ReassignAssignmentAsync(fixture.Assignment.Id, new ReassignHarvestAssignmentRequest(replacement, "Đổi ca"));
+        Assert.NotEqual(old, fixture.Assignment.AssignedToUserId);
+        Assert.Equal(replacement, fixture.Assignment.AssignedToUserId);
+        Assert.Equal(HarvestAssignmentStatus.Assigned, fixture.Assignment.Status);
+        Assert.Equal(HarvestAssignmentLineStatus.Assigned, fixture.Lines[0].Status);
+        Assert.Null(fixture.Assignment.StartedAt);
+    }
+
     private sealed class Fixture
     {
         private readonly Mock<ICurrentUserService> _currentUser = new();
         private readonly Guid _managerId = Guid.NewGuid();
         public void UseManager() => _currentUser.Setup(x => x.UserId).Returns(_managerId);
+        public Guid AddReplacementStaff() => _replacementId;
+        private readonly Guid _replacementId = Guid.NewGuid();
 
         public Mock<IUnitOfWork> UnitOfWork { get; } = new();
         public Mock<IRepository<HarvestVoucher>> VoucherRepository { get; }
@@ -547,7 +620,7 @@ public sealed class HarvestAssignmentServiceTests
             var boxStatusHistories = new List<BoxStatusHistory>();
 
             UnitOfWork.Setup(x => x.Users)
-                .Returns(CreateRepository([staff, new AppUser { Id = _managerId, Role = UserRole.FarmManager, IsActive = true, FullName = "Test Manager" }]).Object);
+                .Returns(CreateRepository([staff, new AppUser { Id = _managerId, Role = UserRole.FarmManager, IsActive = true, FullName = "Test Manager" }, new AppUser { Id = _replacementId, Role = UserRole.FarmStaff, IsActive = true, FullName = "Replacement" }]).Object);
             UnitOfWork.Setup(x => x.FarmManagerAssignments)
                 .Returns(CreateRepository([new FarmManagerAssignment { ManagerUserId = _managerId, FarmingAreaId = areaId, AssignedByUserId = _managerId }]).Object);
             UnitOfWork.Setup(x => x.FarmStaffAssignments)
@@ -558,7 +631,8 @@ public sealed class HarvestAssignmentServiceTests
                         Id = Guid.NewGuid(),
                         StaffUserId = staffId,
                         FarmingAreaId = areaId
-                    }
+                    },
+                    new FarmStaffAssignment { StaffUserId = _replacementId, ManagerUserId = _managerId, FarmingAreaId = areaId, AssignedByUserId = _managerId }
                 ]).Object);
             UnitOfWork.Setup(x => x.HarvestAssignments)
                 .Returns(CreateRepository([Assignment]).Object);

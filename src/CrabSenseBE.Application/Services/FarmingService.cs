@@ -1482,8 +1482,9 @@ public class FarmingService : IFarmingService
         if (await _uow.HarvestAssignmentLines.AnyAsync(line => line.CrabId == id
             && (line.Status == HarvestAssignmentLineStatus.Assigned
                 || line.Status == HarvestAssignmentLineStatus.Eligible
-                || line.Status == HarvestAssignmentLineStatus.InProgress), ct))
-            throw AppException.Conflict("Cua đang có nhiệm vụ thu hoạch. Cần xử lý nhiệm vụ trước.");
+                || line.Status == HarvestAssignmentLineStatus.InProgress)
+            && (line.Outcome == HarvestAssignmentOutcome.Harvested || line.PendingMoltConfirmed || line.PendingHarvestedAt.HasValue), ct))
+            throw AppException.Conflict("Cua có bằng chứng thu hoạch/lột đang chờ xác nhận. Cần đối soát trước.");
         var voucherIds = (await _uow.HarvestLines.FindAsync(line => line.CrabId == id, ct))
             .Select(line => line.HarvestVoucherId).Distinct().ToHashSet();
         if (voucherIds.Count > 0 && await _uow.HarvestVouchers.AnyAsync(v => voucherIds.Contains(v.Id)

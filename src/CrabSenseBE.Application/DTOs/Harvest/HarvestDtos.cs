@@ -302,7 +302,8 @@ DateTime? CompletedAt,
 int LineCount,
 int HarvestedCount,
 int DeferredCount,
-int VoucherCount);
+int VoucherCount,
+int SkippedCount = 0);
 
 public record HarvestAssignmentLineDetailDto(
     Guid Id,
@@ -356,7 +357,8 @@ public record HarvestAssignmentDetailDto(
     string? SubmissionNotes = null,
     DateTime? ReviewedAt = null,
     Guid? ReviewedByUserId = null,
-    string? ReviewNotes = null);
+    string? ReviewNotes = null,
+    IReadOnlyList<HarvestAssignmentAuditDto>? WorkflowAudit = null);
 
 public record HarvestAssignmentStaffDto(
     Guid Id,
@@ -365,3 +367,7 @@ public record HarvestAssignmentStaffDto(
 public record CompleteHarvestAssignmentRequest(string? VoucherNotes = null);
 
 public record ReviewHarvestAssignmentRequest(string? Notes = null);
+
+public record HarvestAssignmentAuditDto(DateTime At, Guid ActorId, string Action, string? Reason = null, Guid? LineId = null, Guid? PreviousStaffId = null, Guid? NewStaffId = null);
+public record ReassignHarvestAssignmentRequest(Guid AssignedToUserId, string? Reason = null);
+public record SkipHarvestAssignmentLineRequest(string? Reason = null);

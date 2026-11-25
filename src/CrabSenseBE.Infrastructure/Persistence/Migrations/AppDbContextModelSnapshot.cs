@@ -6300,6 +6300,9 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.Property<DateTime?>("UpdatedAt")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<string>("WorkflowAuditJson")
+                        .HasColumnType("text");
+
                     b.HasKey("Id");
 
                     b.HasIndex("AssignedByUserId");
