@@ -1449,6 +1449,57 @@ public class FarmingService : IFarmingService
         return ApiResponse<CrabDto>.Ok(MapCrab(crab, ctx));
     }
 
+    public async Task<ApiResponse> RecordMissingCrabAsync(Guid id, RecordMissingCrabRequest request, CancellationToken ct = default)
+    {
+        var reason = request.Reason?.Trim();
+        if (string.IsNullOrWhiteSpace(reason) || reason.Length > 1000 || request.BoxId == Guid.Empty)
+            throw AppException.BadRequest("Cần hộp hiện tại và lý do thất lạc (tối đa 1000 ký tự).");
+
+        var crab = await _uow.GetCrabWithDetailsAsync(id, ct) ?? throw AppException.NotFound("Crab");
+        await EnsureCrabAreaAsync(crab, ct);
+        var actor = await _areas.CurrentUserAsync(ct);
+        if (actor is not null && actor.Role != UserRole.FarmStaff)
+            throw AppException.Forbidden("Chỉ Farm Staff ghi nhận cua thất lạc.");
+        if (!IsCrabAlive(crab))
+            throw AppException.Conflict("Cua đã kết thúc vòng đời hoặc đã thất lạc.");
+        if (CurrentBoxId(crab) != request.BoxId)
+            throw AppException.Conflict("Vị trí cua đã thay đổi. Tải lại hộp trước khi xác nhận.");
+
+        // Validate the actual box and require exactly one matching active allocation.
+        await _areas.EnsureBoxAsync(request.BoxId, manage: false, ct);
+        var open = (await _uow.CrabBoxAllocations.FindAsync(a => a.CrabId == id && a.EndTime == null, ct)).ToList();
+        if (open.Count != 1 || open[0].BoxId != request.BoxId)
+            throw AppException.Conflict("Phân bổ cua không nhất quán. Cần quản lý kiểm tra.");
+        if (await _uow.CrabBoxAllocations.AnyAsync(a => a.BoxId == request.BoxId && a.CrabId != id && a.EndTime == null, ct))
+            throw AppException.Conflict("Hộp có phân bổ khác đang mở. Cần quản lý kiểm tra.");
+        if (await _uow.HarvestAssignmentLines.AnyAsync(line => line.CrabId == id
+            && (line.Status == HarvestAssignmentLineStatus.Assigned
+                || line.Status == HarvestAssignmentLineStatus.Eligible
+                || line.Status == HarvestAssignmentLineStatus.InProgress), ct))
+            throw AppException.Conflict("Cua đang có nhiệm vụ thu hoạch. Cần xử lý nhiệm vụ trước.");
+        var voucherIds = (await _uow.HarvestLines.FindAsync(line => line.CrabId == id, ct))
+            .Select(line => line.HarvestVoucherId).Distinct().ToHashSet();
+        if (voucherIds.Count > 0 && await _uow.HarvestVouchers.AnyAsync(v => voucherIds.Contains(v.Id)
+            && v.Status != HarvestStatus.Rejected && v.Status != HarvestStatus.Cancelled, ct))
+            throw AppException.Conflict("Cua đang có phiếu thu hoạch. Cần xử lý phiếu trước.");
+
+        var oldStatus = crab.Status;
+        var oldCondition = crab.Condition;
+        crab.Status = CrabStatus.Missing;
+        crab.Condition = CrabCondition.Problem;
+        crab.UpdatedAt = DateTime.UtcNow;
+        await _uow.CrabStatusHistories.AddAsync(new CrabStatusHistory
+        {
+            CrabId = id, OldStatus = oldStatus, NewStatus = CrabStatus.Missing,
+            OldCondition = oldCondition, NewCondition = CrabCondition.Problem,
+            ChangedAt = DateTime.UtcNow, ChangedByUserId = actor?.Id,
+            Source = "manual", Reason = reason
+        }, ct);
+        await ReleaseCrabFromBoxAsync(crab, "Crab missing", ct);
+        await _uow.SaveChangesAsync(ct);
+        return ApiResponse.Ok("Đã ghi nhận cua thất lạc; giữ hồ sơ và lịch sử phân hộp.");
+    }
+
     public async Task<ApiResponse> DeleteCrabAsync(Guid id, CancellationToken ct = default)
     {
         var crab = await _uow.Crabs.GetByIdAsync(id, ct) ?? throw AppException.NotFound("Crab");
@@ -1875,6 +1926,7 @@ public class FarmingService : IFarmingService
                 CrabStatus.Harvested => "HARVESTED",
                 CrabStatus.Sold => "HARVESTED",
                 CrabStatus.Dead => "DEAD",
+                CrabStatus.Missing => "MISSING",
                 _ when (h.Reason ?? "").StartsWith("CRAB_CREATED", StringComparison.OrdinalIgnoreCase)
                     => "CRAB_CREATED",
                 _ when (h.Reason ?? "").StartsWith("CRAB_PROFILE_UPDATED", StringComparison.OrdinalIgnoreCase)
@@ -1888,6 +1940,7 @@ public class FarmingService : IFarmingService
             {
                 "HARVESTED" => h.NewStatus == CrabStatus.Sold ? "Đã bán" : "Thu hoạch",
                 "DEAD" => "Ghi nhận chết",
+                "MISSING" => "Ghi nhận thất lạc",
                 "HARVEST_READY" => "Sẵn sàng thu hoạch",
                 "CRAB_CREATED" => "Tạo cá thể",
                 "CRAB_PROFILE_UPDATED" => "Cập nhật thông tin cua",
@@ -1907,7 +1960,9 @@ public class FarmingService : IFarmingService
                 $"HLT-{h.Id:N}",
                 crab.Id, crabCode, eventTypeName, h.ChangedAt,
                 title, line,
-                LocAt(h.ChangedAt), actor, MapSource(h.Source), null,
+                (h.NewStatus == CrabStatus.Missing
+                    ? Loc(allocsAll.LastOrDefault(a => a.StartTime <= h.ChangedAt)?.BoxId)
+                    : LocAt(h.ChangedAt)), actor, MapSource(h.Source), null,
                 Changes(("condition", beforeLabel, afterLabel), ("status", h.OldStatus?.ToString(), h.NewStatus.ToString())),
                 Meta(
                     ("conditionBefore", beforeLabel),
@@ -2221,6 +2276,7 @@ public class FarmingService : IFarmingService
         if (status == CrabStatus.Harvested) return "Thu hoạch";
         if (status == CrabStatus.Sold) return "Đã bán";
         if (status == CrabStatus.Dead) return "Đã chết";
+        if (status == CrabStatus.Missing) return "Thất lạc";
         return condition switch
         {
             null => null,
@@ -3177,7 +3233,8 @@ public class FarmingService : IFarmingService
                 OldIsOccupied = oldOccupied,
                 NewIsOccupied = false,
                 ChangedAt = DateTime.UtcNow,
-                Reason = reason
+                Reason = reason,
+                ChangedByUserId = (await _areas.CurrentUserAsync(ct))?.Id
             }, ct);
         }
     }
@@ -3446,6 +3503,7 @@ public class FarmingService : IFarmingService
         if (status == CrabStatus.Harvested) return "Thu hoạch";
         if (status == CrabStatus.Sold) return "Đã bán";
         if (status == CrabStatus.Dead) return "Đã chết";
+        if (status == CrabStatus.Missing) return "Thất lạc";
         return condition switch
         {
             CrabCondition.Normal => "Bình thường",

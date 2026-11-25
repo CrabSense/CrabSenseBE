@@ -32,6 +32,8 @@ public sealed class FarmStaffOperationPermissionTests : IAsyncLifetime
         farming.Setup(service => service.UpdateCrabAsync(
                 CrabId, It.IsAny<UpdateCrabRequest>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(ApiResponse<CrabDto>.Ok(null!));
+        farming.Setup(service => service.RecordMissingCrabAsync(CrabId, It.IsAny<RecordMissingCrabRequest>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(ApiResponse.Ok());
         farming.Setup(service => service.DeleteCrabAsync(CrabId, It.IsAny<CancellationToken>()))
             .ReturnsAsync(ApiResponse.Ok());
 
@@ -93,6 +95,15 @@ public sealed class FarmStaffOperationPermissionTests : IAsyncLifetime
             HttpMethod.Post, "/api/crabs", createCrab);
         await Expect(failures, "FS sửa thông tin thực tế", 200, AppRoles.FarmStaff, StaffId,
             HttpMethod.Put, $"/api/crabs/{CrabId}", updateCrab);
+        var missing = $"{{\"boxId\":\"{BoxId}\",\"reason\":\"Không tìm thấy cua sau kiểm tra\"}}";
+        // The production action uses the same advisory lock as harvest.
+        // This HTTP fixture has no database; verify forbidden roles here.
+        await Expect(failures, "FM ghi thất lạc thay Staff", 403, AppRoles.FarmManager, ManagerId,
+            HttpMethod.Post, $"/api/crabs/{CrabId}/missing", missing);
+        await Expect(failures, "FA ghi thất lạc", 403, AppRoles.FarmAdministrator, AdminId,
+            HttpMethod.Post, $"/api/crabs/{CrabId}/missing", missing);
+        await Expect(failures, "SA ghi thất lạc", 403, AppRoles.SystemAdministrator, SystemId,
+            HttpMethod.Post, $"/api/crabs/{CrabId}/missing", missing);
         await Expect(failures, "FS xóa cua", 403, AppRoles.FarmStaff, StaffId,
             HttpMethod.Delete, $"/api/crabs/{CrabId}", null);
         await Expect(failures, "FM xử lý bản ghi cua cuối vòng đời", 200, AppRoles.FarmManager, ManagerId,
