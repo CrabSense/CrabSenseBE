@@ -514,6 +514,8 @@ public record CreateCrabsBulkDto(
     IReadOnlyList<CrabDto> Crabs,
     int CreatedCount);
 
+public record RecordMissingCrabRequest(Guid BoxId, string? Reason = null);
+
 public record UpdateCrabRequest(
     string? MoltingStage,
     decimal? WeightGram,

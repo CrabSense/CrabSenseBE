@@ -450,6 +450,13 @@ public class CrabsController : ControllerBase
         CancellationToken ct = default)
         => Ok(await _images.UploadAsync(ToImageFiles(files, file), id, harvestVoucherId: null, TryGetUserId(), ct));
 
+    /// <summary>[CREATE] Staff xác nhận cua thất lạc tại hộp hiện tại, giữ lịch sử và giải phóng hộp.</summary>
+    [HttpPost("{id:guid}/missing")]
+    [Authorize(Roles = AppRoles.FarmStaff)]
+    [HarvestMutation]
+    public async Task<IActionResult> RecordMissing(Guid id, [FromBody] RecordMissingCrabRequest req, CancellationToken ct)
+        => Ok(await _service.RecordMissingCrabAsync(id, req, ct));
+
     /// <summary>[DELETE] Soft-delete crab (IsAlive=false, free box, keep history)</summary>
     [HttpDelete("{id:guid}")]
     [Authorize(Roles = AppRoles.FarmManager)]
