@@ -37,6 +37,13 @@ public sealed class WaterBatchScheduleWorker(IServiceScopeFactory scopes,ILogger
         if(scope.ServiceProvider.GetRequiredService<IDatabaseBackupService>().IsMaintenanceMode)return;
         var db=scope.ServiceProvider.GetRequiredService<AppDbContext>();
         await using var tx=await db.Database.BeginTransactionAsync(ct);
+        await WaterBenchConfiguration.LockArea(db,item.FarmingAreaId,ct);
+        if(await WaterBenchConfiguration.Active(db,item.FarmingAreaId).AnyAsync(ct))
+        {
+            await db.WaterAnalysisSchedules.Where(x=>x.Id==item.Id&&x.Enabled)
+                .ExecuteUpdateAsync(u=>u.SetProperty(x=>x.Enabled,false).SetProperty(x=>x.LastOutcome,"blocked_water_bench_owner"),ct);
+            await tx.CommitAsync(ct);return;
+        }
         var next=WaterBatchPlanning.Next(item.NextRunAt,now,item.IntervalMinutes);
         var claimed=await db.WaterAnalysisSchedules.Where(x=>x.Id==item.Id&&x.Enabled&&x.NextRunAt==item.NextRunAt)
             .ExecuteUpdateAsync(u=>u.SetProperty(x=>x.NextRunAt,next).SetProperty(x=>x.LastAttemptAt,now),ct);
