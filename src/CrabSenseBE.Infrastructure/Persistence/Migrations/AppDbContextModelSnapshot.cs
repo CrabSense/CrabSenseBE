@@ -6558,6 +6558,43 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                 {
                     b.HasOne("CrabSenseBE.Domain.Entities.WaterBenchStation", null).WithMany().HasForeignKey("StationId").OnDelete(DeleteBehavior.Restrict).IsRequired();
                 });
+
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.WaterBenchResultAssessment", b =>
+                {
+                    b.Property<Guid>("Id").ValueGeneratedOnAdd().HasColumnType("uuid");
+                    b.Property<DateTime>("CreatedAt").HasColumnType("timestamp with time zone");
+                    b.Property<DateTime?>("UpdatedAt").HasColumnType("timestamp with time zone");
+                    b.Property<Guid>("SessionEvidenceId").HasColumnType("uuid");
+                    b.Property<Guid>("RequestId").HasColumnType("uuid");
+                    b.Property<Guid>("AssessedBy").HasColumnType("uuid");
+                    b.Property<string>("Status").IsRequired().HasMaxLength(32).HasColumnType("character varying(32)");
+                    b.Property<string>("RequestHash").IsRequired().HasMaxLength(64).HasColumnType("character varying(64)");
+                    b.Property<string>("Reason").IsRequired().HasMaxLength(500).HasColumnType("character varying(500)");
+                    b.Property<Guid?>("ImageEvidenceId").HasColumnType("uuid");
+                    b.Property<Guid?>("MediaId").HasColumnType("uuid");
+                    b.Property<Guid?>("CalibrationId").HasColumnType("uuid");
+                    b.Property<decimal?>("CandidateValue").HasColumnType("numeric");
+                    b.Property<string>("Unit").HasMaxLength(32).HasColumnType("character varying(32)");
+                    b.Property<decimal?>("HoldoutError").HasColumnType("numeric");
+                    b.Property<string>("EvidenceJson").IsRequired().HasColumnType("text");
+                    b.HasKey("Id");
+                    b.HasIndex("SessionEvidenceId").IsUnique();
+                    b.HasIndex("ImageEvidenceId").IsUnique();
+                    b.HasIndex("MediaId").IsUnique();
+                    b.HasIndex("CalibrationId");
+                    b.ToTable("WaterBenchResultAssessments", "be",t =>
+                    {
+                t.HasCheckConstraint("CK_WaterBenchAssessment_Status","(\"Status\" = 'needs_retest' AND \"CandidateValue\" IS NULL AND \"Unit\" IS NULL AND \"HoldoutError\" IS NULL AND \"MediaId\" IS NULL AND \"CalibrationId\" IS NULL AND \"ImageEvidenceId\" IS NULL) OR (\"Status\" = 'estimate_review_required' AND \"CandidateValue\" BETWEEN 0 AND 10000 AND \"CandidateValue\" IS NOT NULL AND \"Unit\" IS NOT NULL AND \"HoldoutError\" BETWEEN 0 AND 1000 AND \"HoldoutError\" IS NOT NULL AND \"MediaId\" IS NOT NULL AND \"CalibrationId\" IS NOT NULL AND \"ImageEvidenceId\" IS NOT NULL)");
+                t.HasCheckConstraint("CK_WaterBenchAssessment_Hash","\"RequestHash\" ~ '^[0-9a-f]{64}$' AND octet_length(\"EvidenceJson\") BETWEEN 2 AND 65536 AND jsonb_typeof(\"EvidenceJson\"::jsonb) = 'object'");
+                    });
+                });
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.WaterBenchResultAssessment", b =>
+                {
+                    b.HasOne("CrabSenseBE.Domain.Entities.WaterBenchEvidence",null).WithMany().HasForeignKey("SessionEvidenceId").OnDelete(DeleteBehavior.Restrict).IsRequired();
+                    b.HasOne("CrabSenseBE.Domain.Entities.WaterBenchEvidence",null).WithMany().HasForeignKey("ImageEvidenceId").OnDelete(DeleteBehavior.Restrict);
+                    b.HasOne("CrabSenseBE.Domain.Entities.MediaAsset",null).WithMany().HasForeignKey("MediaId").OnDelete(DeleteBehavior.Restrict);
+                    b.HasOne("CrabSenseBE.Domain.Entities.WaterColorCalibration",null).WithMany().HasForeignKey("CalibrationId").OnDelete(DeleteBehavior.Restrict);
+                });
         }
     }
 }
