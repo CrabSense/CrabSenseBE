@@ -392,6 +392,8 @@ public sealed class WaterColorAnalysisController(AppDbContext db, IUnitOfWork uo
     private async Task<(byte[] bytes,MediaAsset asset)> ReadBytes(Guid cameraId,Guid mediaId,CancellationToken ct)
     {
         var asset=await db.MediaAssets.AsNoTracking().FirstOrDefaultAsync(x=>x.Id==mediaId,ct)??throw AppException.NotFound("Media");
+        if(asset.Notes?.StartsWith("water-bench:",StringComparison.OrdinalIgnoreCase)==true)
+            throw AppException.Conflict("Ảnh WaterBench chỉ dùng trong quy trình đánh giá phiên phần cứng.");
         if(asset.DeviceId!=cameraId||asset.Category!="image"||asset.BoxId!=null||asset.CrabId!=null||asset.SizeBytes<=0||asset.SizeBytes>5*1024*1024||
            asset.RelatedEntityType!="device"||asset.RelatedEntityId!=cameraId||asset.IsShared)
             throw AppException.BadRequest("Cần ảnh riêng của camera buồng đo (không gắn hộp/cua), tối đa 5 MB.");

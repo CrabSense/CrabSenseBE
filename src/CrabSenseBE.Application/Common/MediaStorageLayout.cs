@@ -55,6 +55,9 @@ public static class MediaStorageLayout
         return $"{Water}/{Segment(area)}/{DatePath(startedAtUtc)}/{(batchId ?? runId):D}/{chemical}/Raw";
     }
 
+    public static string WaterBench(string? area,Guid stationId,string bootId,string batchId,string analyte,string sessionId,DateTime receivedUtc) =>
+        $"{Water}/{Segment(area)}/{DatePath(receivedUtc)}/WaterBench/{stationId:N}/{Segment(bootId)}/{Segment(batchId)}/{Segment(analyte)}/{Segment(sessionId)}/Raw";
+
     /// <summary>Translate legacy folder contracts without changing client APIs.</summary>
     public static string Canonicalize(string? folder)
     {
