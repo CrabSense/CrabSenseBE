@@ -14,7 +14,9 @@ public record FrozenLotDto(
     string? StorageLocation,
     DateTime CreatedAt,
     DateTime? UpdatedAt,
-    Guid? FarmingAreaId = null
+    Guid? FarmingAreaId = null,
+    bool IsOpenForInbound = false // Cho biết lot còn nhận cua từ các phiếu thu hoạch mới hay không
+
 );
 
 /// <summary>Yêu cầu tạo lô cua cấp đông.</summary>
@@ -27,7 +29,8 @@ public record CreateFrozenLotRequest(
     string? Grade,
     int Quantity,
     string? StorageLocation,
-    Guid? FarmingAreaId = null
+    Guid? FarmingAreaId = null,
+    bool IsOpenForInbound = false // Cho biết lot còn nhận cua từ các phiếu thu hoạch mới hay không
 );
 
 /// <summary>Yêu cầu cập nhật lô cua cấp đông.</summary>
@@ -38,7 +41,8 @@ public record UpdateFrozenLotRequest(
     string? Grade,
     int Quantity,
     string Status,
-    string? StorageLocation
+    string? StorageLocation,
+    bool? IsOpenForInbound = null // Cho biết lot còn nhận cua từ các phiếu thu hoạch mới hay không
 );
 
 /// <summary>Tổng hợp tồn kho cấp đông.</summary>
