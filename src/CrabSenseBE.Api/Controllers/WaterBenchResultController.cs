@@ -98,11 +98,13 @@ public sealed class WaterBenchResultController(AppDbContext db,IUnitOfWork uow,I
                 x.Analyte==analyte&&x.CaptureId==c.CaptureId).Take(2).ToListAsync(ct);
             if(receiptRows.Count!=1)throw AppException.Conflict("Chưa có đúng một biên nhận ảnh của lần chụp.");
             var receiptRow=receiptRows[0];var receipt=WaterBenchResultPolicy.Receipt(receiptRow.PayloadJson);
+            if(receipt.CalibrationId!=calibration||receipt.CameraId is null||receipt.ConfigurationVersion is not >0)
+                throw AppException.Conflict("Hiệu chuẩn không khớp biên nhận ảnh.");
             var profile=await db.WaterColorCalibrations.AsNoTracking().SingleOrDefaultAsync(x=>x.Id==calibration&&x.FarmingAreaId==areaId,ct)
                 ??throw AppException.NotFound("Water color calibration");
             var observed=session.KioskReceivedAt??throw AppException.Conflict("Thiếu thời gian quan sát.");
             WaterBenchResultPolicy.Conditions(profile,analyte,observed,DateTime.UtcNow,request.ReagentLot,seconds,salinity);
-            if(!await db.Devices.AnyAsync(x=>x.Id==profile.CameraDeviceId&&x.FarmingAreaId==areaId,ct))
+            if(receipt.CameraId!=profile.CameraDeviceId||!await db.Devices.AnyAsync(x=>x.Id==profile.CameraDeviceId&&x.FarmingAreaId==areaId,ct))
                 throw AppException.Conflict("Camera ngoài khu.");
             var asset=await db.MediaAssets.AsNoTracking().SingleOrDefaultAsync(x=>x.Id==receipt.MediaId,ct)
                 ??throw AppException.NotFound("Media");

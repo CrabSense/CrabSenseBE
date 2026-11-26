@@ -39,7 +39,7 @@ public static class WaterBenchResultPolicy
     }
     // P2.2.5 writes this receipt only after validating bytes and binding to the same capture.
     // No public API may accept arbitrary jpeg evidence or user-supplied media IDs as trusted linkage.
-    public record CaptureReceipt(Guid MediaId,string Sha256,string Contract);
+    public record CaptureReceipt(Guid MediaId,string Sha256,string Contract,Guid? CalibrationId=null,Guid? CameraId=null,int? ConfigurationVersion=null);
     public static CaptureReceipt Receipt(string payload)
     {
         var r=JsonSerializer.Deserialize<CaptureReceipt>(payload,WaterBatchPlanning.Json);

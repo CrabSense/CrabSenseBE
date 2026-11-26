@@ -79,7 +79,8 @@ public class MediaService : IMediaService
              !meta.ServerFolder.StartsWith(MediaStorageLayout.Water + "/", StringComparison.Ordinal)))
             throw AppException.BadRequest("Invalid private water sample storage context.");
         if (meta.ServerFolder is null &&
-            meta.Notes?.StartsWith("water-batch:", StringComparison.OrdinalIgnoreCase) == true)
+            (meta.Notes?.StartsWith("water-batch:", StringComparison.OrdinalIgnoreCase) == true ||
+             meta.Notes?.StartsWith("water-bench:", StringComparison.OrdinalIgnoreCase) == true))
             throw AppException.BadRequest("Reserved media notes.");
         var folder = meta.ServerFolder ??
             await MediaFolderCodeResolver.ResolvePathAsync(_uow, entityType, entityId, ct);
@@ -185,7 +186,8 @@ public class MediaService : IMediaService
             ?? throw AppException.NotFound("MediaAsset");
         await _areaGuard.EnsureAsync(asset, ct);
 
-        if (asset.Notes?.StartsWith("water-batch:", StringComparison.OrdinalIgnoreCase) == true)
+        if (asset.Notes?.StartsWith("water-batch:", StringComparison.OrdinalIgnoreCase) == true ||
+            asset.Notes?.StartsWith("water-bench:", StringComparison.OrdinalIgnoreCase) == true)
             throw AppException.Forbidden("Water batch evidence must remain private.");
         var link = await _storage.EnsureShareLinkAsync(asset.StorageKey, ct);
         asset.ShareLink = link;
@@ -223,6 +225,8 @@ public class MediaService : IMediaService
             ?? throw AppException.NotFound("MediaAsset");
         await _areaGuard.EnsureAsync(asset, ct);
 
+        if (asset.Notes?.StartsWith("water-bench:", StringComparison.OrdinalIgnoreCase) == true)
+            throw AppException.Forbidden("WaterBench evidence is retained; deletion requires a reviewed retention workflow.");
         await _storage.DeleteAsync(asset.StorageKey, ct);
         _uow.MediaAssets.Remove(asset);
         await _uow.SaveChangesAsync(ct);
