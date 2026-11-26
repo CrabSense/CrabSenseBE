@@ -50,6 +50,8 @@ public class AppDbContext : DbContext
     public DbSet<ControllerPort> ControllerPorts => Set<ControllerPort>();
     public DbSet<ControllerEvent> ControllerEvents => Set<ControllerEvent>();
     public DbSet<WaterMeasurement> WaterMeasurements => Set<WaterMeasurement>();
+    public DbSet<WaterBenchStation> WaterBenchStations => Set<WaterBenchStation>();
+    public DbSet<WaterBenchEvidence> WaterBenchEvidence => Set<WaterBenchEvidence>();
     public DbSet<WaterAssayChannel> WaterAssayChannels => Set<WaterAssayChannel>();
     public DbSet<WaterAnalysisBatch> WaterAnalysisBatches => Set<WaterAnalysisBatch>();
     public DbSet<WaterAnalysisSchedule> WaterAnalysisSchedules => Set<WaterAnalysisSchedule>();
@@ -133,6 +135,7 @@ public class AppDbContext : DbContext
 
         // Schema riêng — không đụng bảng Cap_Ras snake_case trong public
         modelBuilder.HasDefaultSchema("be");
+        WaterBenchModel.Configure(modelBuilder);
         modelBuilder.Entity<WaterTrainingSample>().HasOne<WaterColorCalibration>().WithMany().HasForeignKey(x=>x.CalibrationId).OnDelete(DeleteBehavior.Restrict);
         modelBuilder.Entity<WaterTrainingSample>().HasOne<MediaAsset>().WithMany().HasForeignKey(x=>x.MediaId).OnDelete(DeleteBehavior.Restrict);
         modelBuilder.Entity<WaterTrainingSample>().HasOne<FarmingArea>().WithMany().HasForeignKey(x=>x.FarmingAreaId).OnDelete(DeleteBehavior.Restrict);
