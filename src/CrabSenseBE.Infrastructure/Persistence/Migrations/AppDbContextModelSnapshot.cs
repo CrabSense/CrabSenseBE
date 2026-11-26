@@ -6485,6 +6485,79 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
 
                     b.Navigation("Assignment");
                 });
+
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.WaterBenchStation", b =>
+                {
+                    b.Property<Guid>("Id").ValueGeneratedOnAdd().HasColumnType("uuid");
+                    b.Property<DateTime>("CreatedAt").HasColumnType("timestamp with time zone");
+                    b.Property<DateTime?>("UpdatedAt").HasColumnType("timestamp with time zone");
+                    b.Property<Guid>("KioskId").HasColumnType("uuid");
+                    b.Property<string>("MasterHardwareId").IsRequired().HasMaxLength(12).HasColumnType("character varying(12)");
+                    b.Property<string>("SlaveHardwareId").IsRequired().HasMaxLength(12).HasColumnType("character varying(12)");
+                    b.Property<DateTime?>("RevokedAt").HasColumnType("timestamp with time zone");
+                    b.Property<int>("ConfigurationVersion").IsConcurrencyToken().HasColumnType("integer");
+                    b.Property<bool>("ScheduleEnabled").HasColumnType("boolean");
+                    b.Property<string>("DailyTimesJson").IsRequired().HasColumnType("text");
+                    b.Property<int>("GraceMinutes").HasColumnType("integer");
+                    b.Property<string>("TargetsJson").IsRequired().HasColumnType("text");
+                    b.Property<string>("SampleSource").IsRequired().HasMaxLength(32).HasColumnType("character varying(32)");
+                    b.HasKey("Id");
+                    b.HasIndex("KioskId").IsUnique().HasFilter("\"RevokedAt\" IS NULL");
+                    b.HasIndex("MasterHardwareId").IsUnique().HasFilter("\"RevokedAt\" IS NULL");
+                    b.HasIndex("SlaveHardwareId").IsUnique().HasFilter("\"RevokedAt\" IS NULL");
+                    b.ToTable("WaterBenchStations", "be", t =>
+                    {
+                t.HasCheckConstraint("CK_WaterBenchStation_Config",
+                    "\"ConfigurationVersion\" >= 0 AND \"GraceMinutes\" BETWEEN 1 AND 15 AND jsonb_typeof(\"DailyTimesJson\"::jsonb) = 'array' AND jsonb_typeof(\"TargetsJson\"::jsonb) = 'array'");
+                t.HasCheckConstraint("CK_WaterBenchStation_Hardware",
+                    "\"MasterHardwareId\" ~ '^[0-9a-f]{12}$' AND \"SlaveHardwareId\" ~ '^[0-9a-f]{12}$' AND \"MasterHardwareId\" <> \"SlaveHardwareId\"");
+
+                    });
+                });
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.WaterBenchEvidence", b =>
+                {
+                    b.Property<Guid>("Id").ValueGeneratedOnAdd().HasColumnType("uuid");
+                    b.Property<DateTime>("CreatedAt").HasColumnType("timestamp with time zone");
+                    b.Property<DateTime?>("UpdatedAt").HasColumnType("timestamp with time zone");
+                    b.Property<Guid>("StationId").HasColumnType("uuid");
+                    b.Property<Guid>("EventId").HasColumnType("uuid");
+                    b.Property<Guid>("ConnectionId").HasColumnType("uuid");
+                    b.Property<string>("Kind").IsRequired().HasMaxLength(32).HasColumnType("character varying(32)");
+                    b.Property<string>("BootId").HasMaxLength(16).HasColumnType("character varying(16)");
+                    b.Property<string>("FirmwareBatchId").HasMaxLength(16).HasColumnType("character varying(16)");
+                    b.Property<string>("FirmwareSessionId").HasMaxLength(18).HasColumnType("character varying(18)");
+                    b.Property<Guid?>("RequestId").HasColumnType("uuid");
+                    b.Property<int?>("CaptureId").HasColumnType("integer");
+                    b.Property<string>("Analyte").HasMaxLength(3).HasColumnType("character varying(3)");
+                    b.Property<DateTime?>("KioskReceivedAt").HasColumnType("timestamp with time zone");
+                    b.Property<string>("PayloadSha256").IsRequired().HasMaxLength(64).HasColumnType("character varying(64)");
+                    b.Property<string>("PayloadJson").IsRequired().HasColumnType("text");
+                    b.HasKey("Id");
+                    b.HasIndex("StationId","EventId").IsUnique();
+                    b.HasIndex("StationId","CreatedAt");
+                    b.HasIndex("StationId","ConnectionId","BootId","FirmwareBatchId").HasDatabaseName("IX_WaterBenchEvidence_Batch");
+                    b.HasIndex("StationId","RequestId");
+                    b.ToTable("WaterBenchEvidence", "be", t =>
+                    {
+                t.HasCheckConstraint("CK_WaterBenchEvidence_Identity",
+                    "\"EventId\" <> '00000000-0000-0000-0000-000000000000' AND \"ConnectionId\" <> '00000000-0000-0000-0000-000000000000'");
+                t.HasCheckConstraint("CK_WaterBenchEvidence_Correlation",
+                    "(\"BootId\" IS NULL OR \"BootId\" ~ '^[0-9a-f]{16}$') AND (\"FirmwareBatchId\" IS NULL OR \"FirmwareBatchId\" ~ '^[0-9a-f]{16}$') AND (\"FirmwareSessionId\" IS NULL OR \"FirmwareSessionId\" ~ '^[0-9a-f]{16}(-[12])?$') AND (\"CaptureId\" IS NULL OR \"CaptureId\" BETWEEN 1 AND 65536) AND (\"Analyte\" IS NULL OR \"Analyte\" IN ('NO2','NO3','NH3'))");
+                t.HasCheckConstraint("CK_WaterBenchEvidence_Payload",
+                    "\"PayloadSha256\" ~ '^[0-9a-f]{64}$' AND octet_length(\"PayloadJson\") BETWEEN 2 AND 65536 AND jsonb_typeof(\"PayloadJson\"::jsonb) = 'object'");
+                t.HasCheckConstraint("CK_WaterBenchEvidence_Kind",
+                    "\"Kind\" IN ('inventory','connection_open','connection_closed','telemetry_observation','batch_start','batch_status','session','image_request','jpeg','sample_evidence','unassociated_sample_evidence','nh3_image_link','clean_status','operator_event','camera_error','clock_observation','command','command_outcome','schedule_slot')");
+
+                    });
+                });
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.WaterBenchStation", b =>
+                {
+                    b.HasOne("CrabSenseBE.Domain.Entities.FarmKiosk", null).WithMany().HasForeignKey("KioskId").OnDelete(DeleteBehavior.Restrict).IsRequired();
+                });
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.WaterBenchEvidence", b =>
+                {
+                    b.HasOne("CrabSenseBE.Domain.Entities.WaterBenchStation", null).WithMany().HasForeignKey("StationId").OnDelete(DeleteBehavior.Restrict).IsRequired();
+                });
         }
     }
 }

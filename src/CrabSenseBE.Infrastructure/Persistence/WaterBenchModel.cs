@@ -11,9 +11,15 @@ internal static class WaterBenchModel
         {
             b.ToTable("WaterBenchStations",t =>
             {
+                t.HasCheckConstraint("CK_WaterBenchStation_Config",
+                    "\"ConfigurationVersion\" >= 0 AND \"GraceMinutes\" BETWEEN 1 AND 15 AND jsonb_typeof(\"DailyTimesJson\"::jsonb) = 'array' AND jsonb_typeof(\"TargetsJson\"::jsonb) = 'array'");
                 t.HasCheckConstraint("CK_WaterBenchStation_Hardware",
                     "\"MasterHardwareId\" ~ '^[0-9a-f]{12}$' AND \"SlaveHardwareId\" ~ '^[0-9a-f]{12}$' AND \"MasterHardwareId\" <> \"SlaveHardwareId\"");
             });
+            b.Property(x=>x.ConfigurationVersion).IsConcurrencyToken();
+            b.Property(x=>x.DailyTimesJson).HasColumnType("text");
+            b.Property(x=>x.TargetsJson).HasColumnType("text");
+            b.Property(x=>x.SampleSource).HasMaxLength(32);
             b.Property(x=>x.MasterHardwareId).HasMaxLength(12);
             b.Property(x=>x.SlaveHardwareId).HasMaxLength(12);
             b.HasOne<FarmKiosk>().WithMany().HasForeignKey(x=>x.KioskId).OnDelete(DeleteBehavior.Restrict);

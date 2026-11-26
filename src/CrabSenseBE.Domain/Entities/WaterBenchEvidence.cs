@@ -9,6 +9,12 @@ public sealed class WaterBenchStation : BaseEntity
     public string MasterHardwareId { get; set; } = "";
     public string SlaveHardwareId { get; set; } = "";
     public DateTime? RevokedAt { get; set; }
+    public int ConfigurationVersion { get; set; }
+    public bool ScheduleEnabled { get; set; }
+    public string DailyTimesJson { get; set; } = "[]";
+    public int GraceMinutes { get; set; } = 5;
+    public string TargetsJson { get; set; } = "[]";
+    public string SampleSource { get; set; } = "";
 }
 
 /// <summary>Immutable received evidence, not a concentration, hardware command or verified physical result.</summary>

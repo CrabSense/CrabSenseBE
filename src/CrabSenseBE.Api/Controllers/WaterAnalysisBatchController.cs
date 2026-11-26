@@ -192,11 +192,15 @@ public sealed class WaterAnalysisBatchController(AppDbContext db,IUnitOfWork uow
             throw AppException.BadRequest("Chọn thời điểm tương lai (tối đa 30 ngày) và chu kỳ 15–10080 phút.");
         if(request.Enabled&&!await WaterBatchPlanning.ProfilesReady(db,areaId,targets,now,ct))
             throw AppException.Conflict("Cần đủ 3 hiệu chuẩn đúng kit trước khi bật lịch.");
+        await using var tx=await db.Database.BeginTransactionAsync(ct);
+        await WaterBenchConfiguration.LockArea(db,areaId,ct);
+        if(request.Enabled&&await WaterBenchConfiguration.Active(db,areaId).AnyAsync(ct))
+            throw AppException.Conflict("Khu dùng lịch WaterBench; không bật scheduler cũ.");
         var row=await db.WaterAnalysisSchedules.FirstOrDefaultAsync(x=>x.FarmingAreaId==areaId,ct);
         if(row is null){row=new WaterAnalysisSchedule{FarmingAreaId=areaId};db.WaterAnalysisSchedules.Add(row);}
         row.TargetsJson=JsonSerializer.Serialize(targets,WaterBatchPlanning.Json);
         row.SampleSource=source;row.IntervalMinutes=request.IntervalMinutes;row.NextRunAt=request.NextRunAt.UtcDateTime;row.Enabled=request.Enabled;
-        try{await db.SaveChangesAsync(ct);}catch(DbUpdateException){throw AppException.Conflict("Cấu hình lịch vừa thay đổi; tải lại.");}
+        try{await db.SaveChangesAsync(ct);await tx.CommitAsync(ct);}catch(DbUpdateException){throw AppException.Conflict("Cấu hình lịch vừa thay đổi; tải lại.");}
         return Ok(ApiResponse<WaterAnalysisSchedule>.Ok(row));
     }
 }

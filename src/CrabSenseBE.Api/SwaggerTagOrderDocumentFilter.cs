@@ -82,7 +82,8 @@ public sealed class SwaggerTagOrderDocumentFilter : IDocumentFilter
 
         // Nested routes must be classified before their broad /areas, /boxes,
         // /harvest-vouchers or /frozen-lots prefixes.
-        if (Is("api/areas") && Contains("/water-analysis")) return "24. Water - Chemical Analysis";
+        if ((Is("api/areas") && (Contains("/water-analysis") || Contains("/water-bench"))) || Is("api/edge/water-bench"))
+            return "24. Water - Chemical Analysis";
         if (Is("api/areas") && Contains("/ras-flow")) return "23. IoT - RAS & Water Systems";
         if (Is("api/box-qr") || Is("api/traceability") || Is("api/traceability-qrs")
             || (Is("api/boxes") && Contains("/qr"))
