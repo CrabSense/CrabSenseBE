@@ -43,4 +43,26 @@ public sealed class WaterBenchModelTests
         Assert.Contains("DROP TABLE be.\"WaterBenchEvidence\"",down);
         Assert.DoesNotContain("DROP TABLE be.\"WaterAnalysisRuns\"",down);
     }
+
+    [Fact]
+    public void DeviceAreaRepairIsDiscoveredAndAdditive()
+    {
+        using var db=new AppDbContext(new DbContextOptionsBuilder<AppDbContext>()
+            .UseNpgsql("Host=localhost;Database=unused;Username=unused").Options);
+        const string prior="20261126110000_WaterBenchResultAssessments";
+        const string repair="20261126120000_RepairDeviceAreaSchema";
+        Assert.Contains(repair,db.Database.GetMigrations());
+        var migrator=db.GetService<IMigrator>();
+        var sql=migrator.GenerateScript(prior,repair);
+        Assert.Contains("ADD COLUMN IF NOT EXISTS \"FarmingAreaId\" uuid NULL",sql);
+        Assert.Contains("ADD COLUMN IF NOT EXISTS \"MacAddress\"",sql);
+        Assert.Contains("ADD COLUMN IF NOT EXISTS \"IpAddress\"",sql);
+        Assert.Contains("ADD COLUMN IF NOT EXISTS \"Name\"",sql);
+        Assert.Contains("ON DELETE SET NULL",sql);
+        Assert.DoesNotContain("DROP TABLE",sql);
+        Assert.DoesNotContain("DROP COLUMN",sql);
+        var down=migrator.GenerateScript(repair,prior);
+        Assert.DoesNotContain("DROP COLUMN",down);
+        Assert.DoesNotContain("DROP CONSTRAINT",down);
+    }
 }

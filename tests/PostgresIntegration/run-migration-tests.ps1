@@ -153,6 +153,21 @@ VALUES
 INSERT INTO be."EdgeCommands" ("Id","DeviceCode","Command","Channel","Status","CreatedAt","ExpiresAt","AttemptCount","ConcurrencyVersion","RequestSource")
 VALUES ('60000000-0000-0000-0000-000000000003','legacy-esp','on','1','pending',now(),now()+interval '5 minutes',0,0,'manual');
 '@ | Out-Null
+    # Simulate a deployed schema where the original undiscovered migration SQL was applied manually.
+    # Existing area assignment and metadata must survive the new additive repair.
+    Invoke-Psql "legacy_migration" @'
+ALTER TABLE be."Devices"
+    ADD COLUMN IF NOT EXISTS "Name" text NULL,
+    ADD COLUMN IF NOT EXISTS "MacAddress" varchar(64) NULL,
+    ADD COLUMN IF NOT EXISTS "IpAddress" varchar(64) NULL,
+    ADD COLUMN IF NOT EXISTS "FarmingAreaId" uuid NULL;
+INSERT INTO be."FarmingAreas" ("Id","Code","Name","Address","IsActive","Status","CreatedAt")
+VALUES ('60000000-0000-0000-0000-000000000090','DEVICE-LEGACY-AREA','Legacy camera area','test',true,'Active',now());
+INSERT INTO be."Devices" ("Id","DeviceCode","DeviceType","Status","EdgeState","CreatedAt","Name","MacAddress","IpAddress","FarmingAreaId")
+VALUES ('60000000-0000-0000-0000-000000000091','legacy-camera','camera','Offline','Approved',now(),
+        'Legacy camera','00:11:22:33:44:55','192.0.2.10','60000000-0000-0000-0000-000000000090');
+'@ | Out-Null
+
     # Simulate the historical DevDbBootstrap column drift on a disposable DB.
     Update-Database "legacy_migration" "20261113120000_DiscoverControllerPorts"
     Invoke-Psql "legacy_migration" @'
@@ -184,6 +199,43 @@ WHERE "Id" = '60000000-0000-0000-0000-000000000004';
     $cleanHistory = Invoke-Psql "clean_migration" 'SELECT "MigrationId" FROM be."__EFMigrationsHistory" ORDER BY "MigrationId";'
     $legacyHistory = Invoke-Psql "legacy_migration" 'SELECT "MigrationId" FROM be."__EFMigrationsHistory" ORDER BY "MigrationId";'
     if ($cleanHistory -ne $legacyHistory) { throw "Clean and upgraded migration history differ." }
+    foreach ($dbName in @("clean_migration","legacy_migration")) {
+        Invoke-Psql $dbName @'
+DO $device_repair$
+DECLARE
+    a uuid := gen_random_uuid();
+    d uuid := gen_random_uuid();
+BEGIN
+    IF (SELECT count(*) FROM information_schema.columns WHERE table_schema='be' AND table_name='Devices'
+        AND ((column_name='Name' AND data_type='text') OR
+             (column_name IN ('MacAddress','IpAddress') AND data_type='character varying' AND character_maximum_length=64) OR
+             (column_name='FarmingAreaId' AND data_type='uuid')) AND is_nullable='YES') <> 4
+        THEN RAISE EXCEPTION 'Device metadata schema incomplete'; END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname='be' AND tablename='Devices' AND indexname='IX_Devices_FarmingAreaId')
+        THEN RAISE EXCEPTION 'Device area index missing'; END IF;
+    INSERT INTO be."FarmingAreas" ("Id","Code","Name","Address","IsActive","Status","CreatedAt")
+        VALUES (a,'DEVICE-REPAIR-CI','Test device area','test',true,'Active',now());
+    INSERT INTO be."Devices" ("Id","DeviceCode","DeviceType","Status","EdgeState","CreatedAt","Name","MacAddress","IpAddress","FarmingAreaId")
+        VALUES (d,'device-repair-ci','camera','Offline','Approved',now(),'CI camera','00:11:22:33:44:66','192.0.2.11',a);
+    BEGIN
+        UPDATE be."Devices" SET "FarmingAreaId"=gen_random_uuid() WHERE "Id"=d;
+        RAISE EXCEPTION 'Invalid device area accepted';
+    EXCEPTION WHEN foreign_key_violation THEN NULL;
+    END;
+    DELETE FROM be."FarmingAreas" WHERE "Id"=a;
+    IF NOT EXISTS (SELECT 1 FROM be."Devices" WHERE "Id"=d AND "FarmingAreaId" IS NULL AND "Name"='CI camera')
+        THEN RAISE EXCEPTION 'Device did not survive area deletion with null assignment'; END IF;
+END $device_repair$;
+'@ | Out-Null
+    }
+    $devicePreserved = Invoke-Psql "legacy_migration" @'
+SELECT "Name" || '|' || "MacAddress" || '|' || "IpAddress" || '|' || "FarmingAreaId"::text
+FROM be."Devices" WHERE "Id"='60000000-0000-0000-0000-000000000091';
+'@
+    if ($devicePreserved -ne "Legacy camera|00:11:22:33:44:55|192.0.2.10|60000000-0000-0000-0000-000000000090") {
+        throw "Existing device metadata or area assignment changed: $devicePreserved"
+    }
+    Write-Output "DEVICE_AREA_SCHEMA_REPAIR_PASSED=1"
     # Test the actual migrated EF schema (not a handcrafted fixture schema).
     Invoke-Psql "clean_migration" @'
 DO $$
