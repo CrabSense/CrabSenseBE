@@ -161,6 +161,21 @@ jobs:
           test -s /tmp/crabsense-publish/efbundle
           /tmp/crabsense-publish/efbundle --help
 
+      - name: Validate deployment migration guard
+        env:
+          ASPNETCORE_ENVIRONMENT: Production
+          DOTNET_ENVIRONMENT: Production
+          Jwt__Secret: ci-design-time-only-not-a-runtime-secret-2026
+          ConnectionStrings__DefaultConnection: Host=localhost;Database=design_only;Username=postgres
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s tests -p test_deploy_migration_guard.py
+          dotnet ef migrations script 20261126090000_WaterBenchEvidence 20261126100000_WaterBenchConfiguration --idempotent \
+            --project src/CrabSenseBE.Infrastructure/CrabSenseBE.Infrastructure.csproj \
+            --startup-project src/CrabSenseBE.Api/CrabSenseBE.Api.csproj \
+            --configuration Release --output /tmp/water-bench-migration.sql
+          python3 scripts/check-deploy-migration.py 20261126100000_WaterBenchConfiguration /tmp/water-bench-migration.sql
+
       - name: Full clean and legacy EF migration tests (including production bundle)
         shell: pwsh
         run: ./tests/PostgresIntegration/run-migration-tests.ps1 -MigrationBundle /tmp/crabsense-publish/efbundle -UseExistingBuild
