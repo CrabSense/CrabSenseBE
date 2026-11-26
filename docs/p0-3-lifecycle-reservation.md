@@ -1,0 +1,5 @@
+# P0.3 lifecycle reservation guards
+
+Transfers (including QR and offline sync) and lot close reject an open assignment or voucher before mutation. Skipped/cancelled assignment lines and rejected/cancelled/completed vouchers do not reserve. Mortality and missing share the pending assignment evidence predicate; report death without evidence normally, then Manager resolves the open line. Evidence conflicts return 409; no automatic data deletion or correction. Lot close keeps the existing disposition and frozen snapshot rules; no change to the 45-day policy. QR move and lot close use the existing harvest transaction filter; sync uses the same PostgreSQL advisory lock inside its existing per-item transaction. No migration.
+
+Acceptance: race transfer or lot close against assignment/voucher creation; verify no inconsistent location or close snapshot at the time of closing. Exercise QR and mobile sync conflict/retry, pending evidence death/missing, resolved line transfer, and direct voucher exceptions. Historical corrections and direct voucher reconciliation are follow-up; this is not production UAT.

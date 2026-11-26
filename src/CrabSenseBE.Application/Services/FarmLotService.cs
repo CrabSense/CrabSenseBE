@@ -229,6 +229,8 @@ public class FarmLotService : IFarmLotService
 
         var crabs = (await _uow.Crabs.FindAsync(crab => crab.CrabLotId == id, ct)).ToList();
         var crabIds = crabs.Select(crab => crab.Id).ToHashSet();
+        if (await HarvestLifecycleGuard.HasOpenReservationAsync(_uow, crabIds, ct))
+            throw AppException.Conflict("Lô còn cua có nhiệm vụ hoặc phiếu thu hoạch chưa kết thúc. Cần xử lý trước khi đóng lô.");
         var successfullyMoltedIds = (await _uow.MoltingRecords.GetAllAsync(ct))
             .Where(record => crabIds.Contains(record.CrabId)
                 && !record.IsVoided

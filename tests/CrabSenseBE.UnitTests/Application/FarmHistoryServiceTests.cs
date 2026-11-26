@@ -17,8 +17,10 @@ public class FarmHistoryServiceTests
     private FarmHistoryService Create() => new(
         _uow.Object, Mock.Of<IPublicImageStorage>(), currentUser: null);
 
-    [Fact]
-    public async Task AllocateCrab_MovesCrabAndOpensAllocation()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AllocateCrab_MovesCrabAndOpensAllocation(bool reserved)
     {
         var crabId = Guid.NewGuid();
         var oldBox = Guid.NewGuid();
@@ -90,6 +92,25 @@ public class FarmHistoryServiceTests
         _uow.Setup(u => u.OperationLogs).Returns(logRepo.Object);
         _uow.Setup(u => u.CrabLotAreas).Returns(lotAreas.Object);
         _uow.Setup(u => u.SaveChangesAsync(It.IsAny<CancellationToken>())).ReturnsAsync(1);
+
+        var assignments = new Mock<IRepository<HarvestAssignmentLine>>();
+        assignments.Setup(r => r.AnyAsync(It.IsAny<System.Linq.Expressions.Expression<Func<HarvestAssignmentLine, bool>>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((System.Linq.Expressions.Expression<Func<HarvestAssignmentLine, bool>> predicate, CancellationToken _) =>
+                reserved && predicate.Compile()(new HarvestAssignmentLine { CrabId = crabId, Status = HarvestAssignmentLineStatus.InProgress }));
+        _uow.Setup(u => u.HarvestAssignmentLines).Returns(assignments.Object);
+        var lines = new Mock<IRepository<HarvestLine>>();
+        lines.Setup(r => r.FindAsync(It.IsAny<System.Linq.Expressions.Expression<Func<HarvestLine, bool>>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Array.Empty<HarvestLine>());
+        _uow.Setup(u => u.HarvestLines).Returns(lines.Object);
+
+        if (reserved)
+        {
+            var action = () => Create().AllocateCrabAsync(new AllocateCrabRequest(crabId, newBox, areaId, rowId, "stock"));
+            (await action.Should().ThrowAsync<AppException>()).Which.StatusCode.Should().Be(409);
+            box.IsOccupied.Should().BeFalse();
+            _uow.Verify(u => u.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Never);
+            return;
+        }
 
         var result = await Create().AllocateCrabAsync(new AllocateCrabRequest(crabId, newBox, areaId, rowId, "stock"));
 

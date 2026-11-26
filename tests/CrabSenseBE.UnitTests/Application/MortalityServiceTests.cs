@@ -44,6 +44,7 @@ public class MortalityServiceTests
             .ReturnsAsync((Guid _, CancellationToken _) => null);
         _areas.Setup(r => r.GetByIdAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((Guid _, CancellationToken _) => null);
+        _uow.Setup(u => u.HarvestAssignmentLines).Returns(Mock.Of<IRepository<HarvestAssignmentLine>>());
         _uow.Setup(u => u.Crabs).Returns(_crabs.Object);
         _uow.Setup(u => u.CrabMortalityRecords).Returns(_records.Object);
         _uow.Setup(u => u.CrabBoxAllocations).Returns(_allocs.Object);
@@ -161,6 +162,37 @@ public class MortalityServiceTests
         (await act.Should().ThrowAsync<CrabSenseBE.Application.Common.AppException>()).Which.StatusCode.Should().Be(400);
         crab.Status.Should().Be(CrabStatus.Alive);
         _uow.Verify(x => x.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Mortality_preserves_pending_harvest_evidence(bool evidence)
+    {
+        var crab = GivenCrab();
+        var repo = new Mock<IRepository<HarvestAssignmentLine>>();
+        repo.Setup(r => r.AnyAsync(It.IsAny<System.Linq.Expressions.Expression<Func<HarvestAssignmentLine, bool>>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((System.Linq.Expressions.Expression<Func<HarvestAssignmentLine, bool>> predicate, CancellationToken _) =>
+                predicate.Compile()(new HarvestAssignmentLine
+                {
+                    CrabId = crab.Id, Status = HarvestAssignmentLineStatus.InProgress, PendingMoltConfirmed = evidence
+                }));
+        _uow.Setup(u => u.HarvestAssignmentLines).Returns(repo.Object);
+        var request = new RecordMortalityRequest(crab.Id, null, MortalityCause.Unknown, null);
+        if (evidence)
+        {
+            var action = () => Create().RecordMortalityAsync(Guid.NewGuid(), request);
+            (await action.Should().ThrowAsync<CrabSenseBE.Application.Common.AppException>()).Which.StatusCode.Should().Be(409);
+            crab.Status.Should().Be(CrabStatus.Alive);
+            crab.BoxId.Should().NotBeNull();
+            _saved.Should().BeNull();
+            _uow.Verify(u => u.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Never);
+        }
+        else
+        {
+            await Create().RecordMortalityAsync(Guid.NewGuid(), request);
+            crab.Status.Should().Be(CrabStatus.Dead);
+        }
     }
 
     [Fact]
