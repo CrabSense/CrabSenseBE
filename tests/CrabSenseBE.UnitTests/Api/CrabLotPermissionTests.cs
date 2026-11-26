@@ -4,6 +4,8 @@ using CrabSenseBE.Application.Services;
 using CrabSenseBE.Domain.Entities;
 using CrabSenseBE.Domain.Enums;
 using CrabSenseBE.Domain.Interfaces;
+using CrabSenseBE.Infrastructure.Persistence;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Moq;
 
@@ -27,6 +29,9 @@ public sealed class CrabLotPermissionTests : IAsyncLifetime
     private readonly List<CrabLot> _lots = new();
     private readonly List<CrabLotArea> _links = new();
     private readonly List<Crab> _crabs = new();
+    private readonly List<HarvestAssignmentLine> _assignmentLines = new();
+    private readonly List<HarvestLine> _harvestLines = new();
+    private readonly List<HarvestVoucher> _vouchers = new();
     private int _saves;
     private CrabLot _lotB = null!;
     private CrabLot _closedEmptyLot = null!;
@@ -130,6 +135,27 @@ public sealed class CrabLotPermissionTests : IAsyncLifetime
         uow.Setup(u => u.CrabLots).Returns(lotRepo.Object);
         uow.Setup(u => u.CrabLotAreas).Returns(linkRepo.Object);
         uow.Setup(u => u.Crabs).Returns(crabRepo.Object);
+        var assignmentLines = new Mock<IRepository<HarvestAssignmentLine>>();
+        assignmentLines.Setup(r => r.AnyAsync(
+                It.IsAny<System.Linq.Expressions.Expression<Func<HarvestAssignmentLine, bool>>>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync((System.Linq.Expressions.Expression<Func<HarvestAssignmentLine, bool>> predicate, CancellationToken _) =>
+                _assignmentLines.Any(predicate.Compile()));
+        var harvestLines = new Mock<IRepository<HarvestLine>>();
+        harvestLines.Setup(r => r.FindAsync(
+                It.IsAny<System.Linq.Expressions.Expression<Func<HarvestLine, bool>>>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync((System.Linq.Expressions.Expression<Func<HarvestLine, bool>> predicate, CancellationToken _) =>
+                _harvestLines.Where(predicate.Compile()).ToList());
+        var vouchers = new Mock<IRepository<HarvestVoucher>>();
+        vouchers.Setup(r => r.AnyAsync(
+                It.IsAny<System.Linq.Expressions.Expression<Func<HarvestVoucher, bool>>>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync((System.Linq.Expressions.Expression<Func<HarvestVoucher, bool>> predicate, CancellationToken _) =>
+                _vouchers.Any(predicate.Compile()));
+        uow.Setup(u => u.HarvestAssignmentLines).Returns(assignmentLines.Object);
+        uow.Setup(u => u.HarvestLines).Returns(harvestLines.Object);
+        uow.Setup(u => u.HarvestVouchers).Returns(vouchers.Object);
         uow.Setup(u => u.MoltingRecords).Returns(
             Repo(new List<MoltingRecord>(), record => record.Id).Object);
         uow.Setup(u => u.FarmingRows).Returns(Repo(new List<FarmingRow>(), row => row.Id).Object);
@@ -140,6 +166,10 @@ public sealed class CrabLotPermissionTests : IAsyncLifetime
 
         _api = PermissionApiFactory.Create(services =>
         {
+            // The production action filter requires a registered DbContext.
+            // Its existing non-PostgreSQL path is appropriate for this mock-backed HTTP fixture.
+            services.AddDbContext<AppDbContext>(options =>
+                options.UseInMemoryDatabase($"lot-permissions-{Guid.NewGuid():N}"));
             services.AddSingleton(uow.Object);
             services.AddSingleton(new Mock<IPublicImageStorage>().Object);
             services.AddScoped<IFarmLotService, FarmLotService>();
@@ -280,6 +310,51 @@ public sealed class CrabLotPermissionTests : IAsyncLifetime
         }
 
         Assert.True(failures.Count == 0, string.Join(Environment.NewLine, failures));
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Manager_close_conflicts_until_harvest_reservation_is_resolved(bool assignment)
+    {
+        var lot = new CrabLot
+        {
+            Id = Guid.NewGuid(), LotCode = "LOT-RESERVED", Name = "Lô chờ thu hoạch",
+            Quantity = 1, StockedAt = DateTime.UtcNow.AddDays(-2)
+        };
+        _lots.Add(lot);
+        _links.Add(new CrabLotArea { CrabLotId = lot.Id, FarmingAreaId = AreaA });
+        var crab = new Crab { Id = Guid.NewGuid(), CrabLotId = lot.Id, Code = "CUA-RESERVED", Status = CrabStatus.Alive };
+        _crabs.Add(crab);
+        var assignmentLine = new HarvestAssignmentLine
+        {
+            CrabId = crab.Id, Status = HarvestAssignmentLineStatus.InProgress
+        };
+        var voucher = new HarvestVoucher { Id = Guid.NewGuid(), Status = HarvestStatus.Approved };
+        if (assignment)
+            _assignmentLines.Add(assignmentLine);
+        else
+        {
+            _vouchers.Add(voucher);
+            _harvestLines.Add(new HarvestLine { CrabId = crab.Id, HarvestVoucherId = voucher.Id });
+        }
+
+        var path = $"/api/crab-lots/{lot.Id}/close";
+        const string body = "{\"disposition\":\"Tiếp tục theo dõi\"}";
+        var before = _saves;
+        using (var forbidden = await Send(AppRoles.FarmStaff, StaffA, HttpMethod.Post, path, body))
+            Assert.Equal(403, (int)forbidden.StatusCode);
+        using (var blocked = await Send(AppRoles.FarmManager, ManagerA, HttpMethod.Post, path, body))
+            Assert.Equal(409, (int)blocked.StatusCode);
+        Assert.Null(lot.ClosedAt);
+        Assert.Equal(before, _saves);
+
+        assignmentLine.Status = HarvestAssignmentLineStatus.Skipped;
+        voucher.Status = HarvestStatus.Cancelled;
+        using var closed = await Send(AppRoles.FarmManager, ManagerA, HttpMethod.Post, path, body);
+        Assert.Equal(200, (int)closed.StatusCode);
+        Assert.NotNull(lot.ClosedAt);
+        Assert.Equal(before + 1, _saves);
     }
 
     private static Mock<IRepository<T>> Repo<T>(IList<T> items, Func<T, Guid> id) where T : class
