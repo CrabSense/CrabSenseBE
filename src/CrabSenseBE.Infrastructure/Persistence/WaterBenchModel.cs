@@ -53,5 +53,25 @@ internal static class WaterBenchModel
             b.HasIndex(x=>new{x.StationId,x.ConnectionId,x.BootId,x.FirmwareBatchId}).HasDatabaseName("IX_WaterBenchEvidence_Batch");
             b.HasIndex(x=>new{x.StationId,x.RequestId});
         });
+
+        model.Entity<WaterBenchResultAssessment>(b =>
+        {
+            b.ToTable("WaterBenchResultAssessments",t =>
+            {
+                t.HasCheckConstraint("CK_WaterBenchAssessment_Status","(\"Status\" = 'needs_retest' AND \"CandidateValue\" IS NULL AND \"Unit\" IS NULL AND \"HoldoutError\" IS NULL AND \"MediaId\" IS NULL AND \"CalibrationId\" IS NULL AND \"ImageEvidenceId\" IS NULL) OR (\"Status\" = 'estimate_review_required' AND \"CandidateValue\" BETWEEN 0 AND 10000 AND \"CandidateValue\" IS NOT NULL AND \"Unit\" IS NOT NULL AND \"HoldoutError\" BETWEEN 0 AND 1000 AND \"HoldoutError\" IS NOT NULL AND \"MediaId\" IS NOT NULL AND \"CalibrationId\" IS NOT NULL AND \"ImageEvidenceId\" IS NOT NULL)");
+                t.HasCheckConstraint("CK_WaterBenchAssessment_Hash","\"RequestHash\" ~ '^[0-9a-f]{64}$' AND octet_length(\"EvidenceJson\") BETWEEN 2 AND 65536 AND jsonb_typeof(\"EvidenceJson\"::jsonb) = 'object'");
+            });
+            b.HasOne<WaterBenchEvidence>().WithMany().HasForeignKey(x=>x.SessionEvidenceId).OnDelete(DeleteBehavior.Restrict);
+            b.HasOne<WaterBenchEvidence>().WithMany().HasForeignKey(x=>x.ImageEvidenceId).OnDelete(DeleteBehavior.Restrict);
+            b.HasOne<MediaAsset>().WithMany().HasForeignKey(x=>x.MediaId).OnDelete(DeleteBehavior.Restrict);
+            b.HasOne<WaterColorCalibration>().WithMany().HasForeignKey(x=>x.CalibrationId).OnDelete(DeleteBehavior.Restrict);
+            b.HasIndex(x=>x.SessionEvidenceId).IsUnique();
+            b.HasIndex(x=>x.ImageEvidenceId).IsUnique();
+            b.HasIndex(x=>x.MediaId).IsUnique();
+            b.Property(x=>x.Status).HasMaxLength(32);
+            b.Property(x=>x.RequestHash).HasMaxLength(64);
+            b.Property(x=>x.Reason).HasMaxLength(500);
+            b.Property(x=>x.Unit).HasMaxLength(32);
+        });
     }
 }

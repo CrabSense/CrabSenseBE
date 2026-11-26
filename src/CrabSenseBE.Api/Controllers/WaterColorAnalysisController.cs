@@ -283,6 +283,8 @@ public sealed class WaterColorAnalysisController(AppDbContext db, IUnitOfWork uo
         CheckConditions(protocol,request.ReactionSeconds,request.SalinityPpt);
         var camera=await Camera(areaId,profile.CameraDeviceId,ct);
         var (bytes,asset)=await ReadBytes(profile.CameraDeviceId,request.MediaId,ct);
+        if(asset.Notes?.StartsWith("water-bench:",StringComparison.OrdinalIgnoreCase)==true)
+            throw AppException.Conflict("Ảnh WaterBench phải qua quy trình đánh giá phiên phần cứng.");
         if(asset.Notes?.StartsWith("water-batch:",StringComparison.OrdinalIgnoreCase)==true&&
             (request.BatchId is not Guid sampleBatch||asset.Notes!=$"water-batch:{sampleBatch:D}:{profile.Analyte}"))
             throw AppException.Conflict("Ảnh mẫu thuộc phiên hoặc chỉ tiêu khác.");
