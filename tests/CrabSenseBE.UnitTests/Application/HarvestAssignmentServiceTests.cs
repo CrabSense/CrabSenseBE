@@ -284,16 +284,12 @@ public sealed class HarvestAssignmentServiceTests
         line.EligibilityReason = "Chưa đủ kích thước";
         line.PendingMoltConfirmed = false;
 
-        await fixture.Service.CompleteAssignmentAsync(
+        var result = await fixture.Service.CompleteAssignmentAsync(
             fixture.Assignment.Id,
             new CompleteHarvestAssignmentRequest());
-        Assert.Equal(HarvestAssignmentStatus.PendingReview, fixture.Assignment.Status);
+        Assert.Equal(HarvestAssignmentStatus.Completed, fixture.Assignment.Status);
         Assert.Empty(fixture.Vouchers);
-        Assert.All(fixture.Crabs, c => Assert.Equal(CrabStatus.Alive, c.Status));
-        fixture.UseManager();
-        await fixture.Service.ConfirmAssignmentAsync(fixture.Assignment.Id, new ReviewHarvestAssignmentRequest());
-
-
+        Assert.Equal("Completed", result.Data!.AssignmentStatus);
         Assert.Equal(CrabStatus.Alive, crab.Status);
         Assert.Null(crab.MoltedAt);
         Assert.Empty(fixture.MoltingRecords);
@@ -313,16 +309,10 @@ public sealed class HarvestAssignmentServiceTests
         line.PendingMoltConfirmed = true;
         line.CheckedAt = DateTime.UtcNow;
 
-        await fixture.Service.CompleteAssignmentAsync(
+        var result = await fixture.Service.CompleteAssignmentAsync(
             fixture.Assignment.Id,
             new CompleteHarvestAssignmentRequest());
-        Assert.Equal(HarvestAssignmentStatus.PendingReview, fixture.Assignment.Status);
-        Assert.Empty(fixture.Vouchers);
-        Assert.All(fixture.Crabs, c => Assert.Equal(CrabStatus.Alive, c.Status));
-        fixture.UseManager();
-        await fixture.Service.ConfirmAssignmentAsync(fixture.Assignment.Id, new ReviewHarvestAssignmentRequest());
-
-
+        Assert.Equal(HarvestAssignmentStatus.Completed, fixture.Assignment.Status);
         Assert.Equal(CrabStatus.Alive, crab.Status);
         Assert.Equal(CrabCondition.Softshell, crab.Condition);
         Assert.NotNull(crab.MoltedAt);
@@ -335,6 +325,7 @@ public sealed class HarvestAssignmentServiceTests
         Assert.Equal(HarvestAssignmentLineStatus.Deferred, line.Status);
         Assert.Equal(HarvestAssignmentStatus.Completed, fixture.Assignment.Status);
         Assert.Empty(fixture.Vouchers);
+        Assert.Equal("Completed", result.Data!.AssignmentStatus);
     }
 
     [Fact]
@@ -354,18 +345,11 @@ public sealed class HarvestAssignmentServiceTests
         line.HarvestCarapaceWidthMm = 85;
         line.PendingHarvestedAt = DateTime.UtcNow;
 
-        await fixture.Service.CompleteAssignmentAsync(
+        var result = await fixture.Service.CompleteAssignmentAsync(
             fixture.Assignment.Id,
             new CompleteHarvestAssignmentRequest("Thu hoạch sau khi lột"));
-        Assert.Equal(HarvestAssignmentStatus.PendingReview, fixture.Assignment.Status);
-        Assert.Empty(fixture.Vouchers);
-        Assert.All(fixture.Crabs, c => Assert.Equal(CrabStatus.Alive, c.Status));
-        fixture.UseManager();
-        await fixture.Service.ConfirmAssignmentAsync(fixture.Assignment.Id, new ReviewHarvestAssignmentRequest());
-
-
-        Assert.Equal(CrabStatus.Harvested, crab.Status);
         Assert.Equal(HarvestAssignmentStatus.Completed, fixture.Assignment.Status);
+        Assert.Equal(CrabStatus.Harvested, crab.Status);
 
         var moltRecord = Assert.Single(fixture.MoltingRecords);
         Assert.Equal(crab.Id, moltRecord.CrabId);
@@ -375,6 +359,28 @@ public sealed class HarvestAssignmentServiceTests
         Assert.Equal(1, voucher.TotalQuantity);
         Assert.Equal(HarvestStatus.Completed, voucher.Status);
         Assert.Single(voucher.Lines);
+        Assert.Equal(voucher.Id, result.Data!.VoucherId);
+    }
+
+    [Fact]
+    public async Task CompleteAssignment_FinalizesLegacyPendingReviewAssignmentWithoutManagerApproval()
+    {
+        var fixture = new Fixture(HarvestAssignmentStatus.PendingReview, lineCount: 1);
+        var line = fixture.Lines[0];
+        line.Outcome = HarvestAssignmentOutcome.Harvested;
+        line.HarvestWeightGram = 350;
+        line.HarvestCarapaceLengthMm = 72;
+        line.HarvestCarapaceWidthMm = 85;
+        line.PendingHarvestedAt = DateTime.UtcNow;
+
+        var result = await fixture.Service.CompleteAssignmentAsync(
+            fixture.Assignment.Id,
+            new CompleteHarvestAssignmentRequest());
+
+        Assert.Equal(HarvestAssignmentStatus.Completed, fixture.Assignment.Status);
+        Assert.Equal(CrabStatus.Harvested, fixture.Crabs[0].Status);
+        Assert.Single(fixture.Vouchers);
+        Assert.NotNull(result.Data!.VoucherId);
     }
 
     [Fact]
@@ -395,16 +401,9 @@ public sealed class HarvestAssignmentServiceTests
         fixture.Lines[1].Outcome = HarvestAssignmentOutcome.ContinueRaising;
         fixture.Lines[1].EligibilityReason = "Chưa đủ kích thước";
 
-        await fixture.Service.CompleteAssignmentAsync(
+        var result = await fixture.Service.CompleteAssignmentAsync(
             fixture.Assignment.Id,
             new CompleteHarvestAssignmentRequest("Thu hoạch theo task"));
-        Assert.Equal(HarvestAssignmentStatus.PendingReview, fixture.Assignment.Status);
-        Assert.Empty(fixture.Vouchers);
-        Assert.All(fixture.Crabs, c => Assert.Equal(CrabStatus.Alive, c.Status));
-        fixture.UseManager();
-        await fixture.Service.ConfirmAssignmentAsync(fixture.Assignment.Id, new ReviewHarvestAssignmentRequest());
-
-
         Assert.Equal(HarvestAssignmentStatus.Completed, fixture.Assignment.Status);
         Assert.NotNull(fixture.Assignment.CompletedAt);
 
@@ -422,22 +421,7 @@ public sealed class HarvestAssignmentServiceTests
         Assert.Equal(CrabStatus.Alive, deferredCrab.Status);
         Assert.Equal(HarvestAssignmentLineStatus.Deferred, fixture.Lines[1].Status);
         Assert.Empty(fixture.MoltingRecords);
-    }
-
-    [Fact]
-    public async Task Staff_cannot_confirm_and_manager_can_return_for_correction()
-    {
-        var fixture = new Fixture(HarvestAssignmentStatus.InProgress, 1);
-        fixture.Lines[0].Outcome = HarvestAssignmentOutcome.ContinueRaising;
-        fixture.Lines[0].EligibilityReason = "Chưa lột";
-        await fixture.Service.CompleteAssignmentAsync(fixture.Assignment.Id, new CompleteHarvestAssignmentRequest());
-        await Assert.ThrowsAsync<AppException>(() => fixture.Service.ConfirmAssignmentAsync(fixture.Assignment.Id, new ReviewHarvestAssignmentRequest()));
-        fixture.UseManager();
-        await fixture.Service.ReturnAssignmentAsync(fixture.Assignment.Id, new ReviewHarvestAssignmentRequest("Kiểm tra lại"));
-        Assert.Equal(HarvestAssignmentStatus.InProgress, fixture.Assignment.Status);
-        Assert.Equal("Kiểm tra lại", fixture.Assignment.ReviewNotes);
-        Assert.Equal(HarvestAssignmentLineStatus.InProgress, fixture.Lines[0].Status);
-        Assert.Empty(fixture.Vouchers);
+        Assert.Equal("Completed", result.Data!.AssignmentStatus);
     }
 
     [Fact]
@@ -469,15 +453,14 @@ public sealed class HarvestAssignmentServiceTests
     [Fact]
     public async Task SkipTerminalLine_ExcludesPendingHarvestFromVoucherAndKeepsEvidence()
     {
-        var fixture = new Fixture(HarvestAssignmentStatus.PendingReview, 1);
+        var fixture = new Fixture(HarvestAssignmentStatus.InProgress, 1);
         fixture.Lines[0].Outcome = HarvestAssignmentOutcome.Harvested;
         fixture.Lines[0].HarvestWeightGram = 350;
         fixture.Crabs[0].Status = CrabStatus.Dead;
         fixture.Crabs[0].BoxId = null;
         fixture.UseManager();
         await fixture.Service.SkipAssignmentLineAsync(fixture.Assignment.Id, fixture.Lines[0].Id, new SkipHarvestAssignmentLineRequest("Đối soát tử vong"));
-        await fixture.Service.ConfirmAssignmentAsync(fixture.Assignment.Id, new ReviewHarvestAssignmentRequest());
-        Assert.Equal(HarvestAssignmentStatus.Completed, fixture.Assignment.Status);
+        Assert.Equal(HarvestAssignmentStatus.InProgress, fixture.Assignment.Status);
         Assert.Equal(HarvestAssignmentLineStatus.Skipped, fixture.Lines[0].Status);
         Assert.Equal(HarvestAssignmentOutcome.Harvested, fixture.Lines[0].Outcome);
         Assert.Equal(350, fixture.Lines[0].HarvestWeightGram);

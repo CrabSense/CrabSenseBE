@@ -696,7 +696,9 @@ public sealed class HarvestAssignmentService : IHarvestAssignmentService
     // Staff hoàn tất task được giao
     //--------------------------------
     public async Task<ApiResponse<HarvestAssignmentResultDto>> CompleteAssignmentAsync(
-        Guid assignmentId, CompleteHarvestAssignmentRequest request, CancellationToken ct = default)
+        Guid assignmentId,
+        CompleteHarvestAssignmentRequest request,
+        CancellationToken ct = default)
     {
         var assignment = await _uow.HarvestAssignments.GetByIdAsync(assignmentId, ct)
             ?? throw AppException.NotFound("HarvestAssignment");
@@ -704,20 +706,105 @@ public sealed class HarvestAssignmentService : IHarvestAssignmentService
         if (caller.Role != UserRole.FarmStaff || assignment.AssignedToUserId != caller.Id)
             throw AppException.Forbidden("Bạn không được giao nhiệm vụ này.");
         await _areas.EnsureAsync(assignment.FarmingAreaId, manage: false, ct);
-        if (assignment.Status != HarvestAssignmentStatus.InProgress)
-            throw AppException.Conflict("Chỉ có thể gửi nhiệm vụ đang xử lý.");
+       
+        if (assignment.Status is not (HarvestAssignmentStatus.InProgress or HarvestAssignmentStatus.PendingReview))
+            throw AppException.Conflict("Chỉ có thể hoàn tất nhiệm vụ đang xử lý.");
+
         var now = DateTime.UtcNow;
-        var (_, harvestedLines, deferredLines) = await ValidateCompletionAsync(assignment, now, ct);
-        assignment.Status = HarvestAssignmentStatus.PendingReview;
-        assignment.SubmittedAt = now;
+        var (lines, harvestedLines, deferredLines) =
+            await ValidateCompletionAsync(assignment, now, ct);
+
+        assignment.SubmittedAt ??= now;
         assignment.SubmissionNotes = NormalizeNullable(request.VoucherNotes);
-        AppendAudit(assignment, "submitted", assignment.SubmissionNotes);
+        AppendAudit(assignment, "completed", assignment.SubmissionNotes);
+
+        HarvestVoucher? voucher = null;
+        var createdHarvestLines = new List<HarvestLine>();
+        if (harvestedLines.Count > 0)
+        {
+            var staff = await _uow.Users.GetByIdAsync(assignment.AssignedToUserId, ct);
+            voucher = new HarvestVoucher
+            {
+                VoucherCode = await _harvestRecorder.GenerateVoucherCodeAsync(ct),
+                HarvestAssignmentId = assignment.Id,
+                HarvestDate = harvestedLines.Max(line => line.PendingHarvestedAt!.Value),
+                Status = HarvestStatus.Completed,
+                CreatedBy = assignment.AssignedToUserId,
+                PerformedByUserId = assignment.AssignedToUserId,
+                PerformedByName = staff?.FullName,
+                FarmingAreaId = assignment.FarmingAreaId,
+                ExecutionCompletedAt = now,
+                Notes = assignment.SubmissionNotes
+            };
+
+            foreach (var line in harvestedLines)
+            {
+                var lineRequest = new HarvestLineRequest(
+                    CrabId: line.CrabId,
+                    WeightGram: line.HarvestWeightGram!.Value,
+                    Grade: line.HarvestGrade,
+                    IsSoftshell: line.HarvestIsSoftshell ?? true,
+                    Notes: line.HarvestNotes,
+                    ConditionLabel: line.HarvestConditionLabel,
+                    PhotoUrls: JsonStringList.Parse(line.HarvestPhotoUrlsJson),
+                    Result: "passed");
+
+                var harvestLine = await _harvestRecorder.BuildLineAsync(
+                    voucher.Id,
+                    lineRequest,
+                    ct);
+
+                harvestLine.HarvestAssignmentLineId = line.Id;
+                harvestLine.AssignmentLine = line;
+                line.HarvestLine = harvestLine;
+                harvestLine.CarapaceLengthMm = line.HarvestCarapaceLengthMm;
+                harvestLine.CarapaceWidthMm = line.HarvestCarapaceWidthMm;
+                harvestLine.HarvestedAt = line.PendingHarvestedAt;
+
+                line.Status = HarvestAssignmentLineStatus.Harvested;
+                line.HarvestedAt = line.PendingHarvestedAt;
+                line.EligibilityReason = null;
+                voucher.Lines.Add(harvestLine);
+                createdHarvestLines.Add(harvestLine);
+            }
+
+            voucher.TotalQuantity = createdHarvestLines.Count;
+            voucher.TotalWeightKg = CalculateTotalWeightKg(createdHarvestLines);
+            await _uow.HarvestVouchers.AddAsync(voucher, ct);
+
+            foreach (var line in harvestedLines)
+                await ApplyMoltConfirmationAsync(assignment, line, now, ct);
+
+            await _harvestRecorder.ApplyHarvestAsync(
+                voucher,
+                createdHarvestLines,
+                ct);
+        }
+
+        foreach (var line in deferredLines)
+        {
+            await ApplyMoltConfirmationAsync(assignment, line, now, ct);
+            line.Status = HarvestAssignmentLineStatus.Deferred;
+        }
+
+        assignment.Status = HarvestAssignmentStatus.Completed;
+        assignment.CompletedAt = now;
+        foreach (var line in lines)
+            _uow.HarvestAssignmentLines.Update(line);
+
         _uow.HarvestAssignments.Update(assignment);
         await _uow.SaveChangesAsync(ct);
+
         return ApiResponse<HarvestAssignmentResultDto>.Ok(
-            new HarvestAssignmentResultDto(assignment.Id, assignment.AssignmentCode,
-                assignment.Status.ToString(), null, null, harvestedLines.Count, deferredLines.Count),
-            "Đã gửi kết quả, chờ Farm Manager xác nhận.");
+            new HarvestAssignmentResultDto(
+                assignment.Id,
+                assignment.AssignmentCode,
+                assignment.Status.ToString(),
+                voucher?.Id,
+                voucher?.VoucherCode,
+                harvestedLines.Count,
+                deferredLines.Count),
+            "Đã hoàn tất nhiệm vụ thu hoạch.");
     }
 
     private static bool IsActiveLine(HarvestAssignmentLine line)
@@ -854,147 +941,6 @@ public sealed class HarvestAssignmentService : IHarvestAssignmentService
     private static ApiResponse<HarvestAssignmentResultDto> OperationResult(HarvestAssignment assignment, string message)
         => ApiResponse<HarvestAssignmentResultDto>.Ok(new HarvestAssignmentResultDto(
             assignment.Id, assignment.AssignmentCode, assignment.Status.ToString(), null, null, 0, 0), message);
-
-    private async Task<HarvestAssignment> GetReviewableAssignmentAsync(Guid id, CancellationToken ct)
-    {
-        var caller = await _areas.CurrentUserAsync(ct) ?? throw AppException.Unauthorized();
-        if (caller.Role != UserRole.FarmManager)
-            throw AppException.Forbidden("Chỉ Farm Manager được duyệt nhiệm vụ.");
-        var assignment = await _uow.HarvestAssignments.GetByIdAsync(id, ct)
-            ?? throw AppException.NotFound("HarvestAssignment");
-        await _areas.EnsureAsync(assignment.FarmingAreaId, manage: false, ct);
-        if (assignment.Status != HarvestAssignmentStatus.PendingReview)
-            throw AppException.Conflict("Nhiệm vụ không ở trạng thái chờ xác nhận.");
-        return assignment;
-    }
-
-    public async Task<ApiResponse<HarvestAssignmentResultDto>> ReturnAssignmentAsync(
-        Guid assignmentId, ReviewHarvestAssignmentRequest request, CancellationToken ct = default)
-    {
-        var assignment = await GetReviewableAssignmentAsync(assignmentId, ct);
-        var reason = NormalizeNullable(request.Notes);
-        if (reason is null || reason.Length > 1000)
-            throw AppException.BadRequest("Cần lý do yêu cầu bổ sung (tối đa 1000 ký tự).");
-        assignment.Status = HarvestAssignmentStatus.InProgress;
-        assignment.ReviewedAt = DateTime.UtcNow;
-        assignment.ReviewedByUserId = _currentUser.UserId;
-        assignment.ReviewNotes = reason;
-        AppendAudit(assignment, "returned", reason);
-        _uow.HarvestAssignments.Update(assignment);
-        await _uow.SaveChangesAsync(ct);
-        return ApiResponse<HarvestAssignmentResultDto>.Ok(
-            new HarvestAssignmentResultDto(assignment.Id, assignment.AssignmentCode,
-                assignment.Status.ToString(), null, null, 0, 0),
-            "Đã yêu cầu Staff bổ sung kết quả.");
-    }
-
-    public async Task<ApiResponse<HarvestAssignmentResultDto>> ConfirmAssignmentAsync(
-        Guid assignmentId, ReviewHarvestAssignmentRequest request, CancellationToken ct = default)
-    {
-        var assignment = await GetReviewableAssignmentAsync(assignmentId, ct);
-        var now = DateTime.UtcNow;
-        var (lines, harvestedLines, deferredLines) = await ValidateCompletionAsync(assignment, now, ct);
-        HarvestVoucher? voucher = null;
-        var createdHarvestLines = new List<HarvestLine>();
-        if (harvestedLines.Count > 0)
-        {
-            voucher = new HarvestVoucher
-            {
-                VoucherCode = await _harvestRecorder.GenerateVoucherCodeAsync(ct),
-                HarvestAssignmentId = assignment.Id,
-                HarvestDate = harvestedLines.Max(line => line.PendingHarvestedAt!.Value),
-                Status = HarvestStatus.Completed,
-                CreatedBy = assignment.AssignedToUserId,
-                PerformedByUserId = assignment.AssignedToUserId,
-                PerformedByName = (await _uow.Users.GetByIdAsync(assignment.AssignedToUserId, ct))?.FullName,
-                ConfirmedByUserId = _currentUser.UserId,
-                ConfirmedAt = now,
-                FarmingAreaId = assignment.FarmingAreaId,
-                ExecutionCompletedAt = assignment.SubmittedAt ?? now,
-                Notes = assignment.SubmissionNotes
-            };
-
-            foreach (var line in harvestedLines)
-            {
-                var lineRequest = new HarvestLineRequest(
-                    CrabId: line.CrabId,
-                    WeightGram: line.HarvestWeightGram!.Value,
-                    Grade: line.HarvestGrade,
-                    IsSoftshell: line.HarvestIsSoftshell ?? true,
-                    Notes: line.HarvestNotes,
-                    ConditionLabel: line.HarvestConditionLabel,
-                    PhotoUrls: JsonStringList.Parse(line.HarvestPhotoUrlsJson),
-                    Result: "passed");
-
-                var harvestLine = await _harvestRecorder.BuildLineAsync(
-                    voucher.Id,
-                    lineRequest,
-                    ct);
-
-                harvestLine.HarvestAssignmentLineId = line.Id;
-                harvestLine.AssignmentLine = line;
-                line.HarvestLine = harvestLine;
-
-                harvestLine.CarapaceLengthMm = line.HarvestCarapaceLengthMm;
-                harvestLine.CarapaceWidthMm = line.HarvestCarapaceWidthMm;
-                harvestLine.HarvestedAt = line.PendingHarvestedAt;
-
-                line.Status = HarvestAssignmentLineStatus.Harvested;
-                line.HarvestedAt = line.PendingHarvestedAt;
-                line.EligibilityReason = null;
-
-                voucher.Lines.Add(harvestLine);
-                createdHarvestLines.Add(harvestLine);
-            }
-
-            voucher.TotalQuantity = createdHarvestLines.Count;
-            voucher.TotalWeightKg = CalculateTotalWeightKg(createdHarvestLines);
-
-            await _uow.HarvestVouchers.AddAsync(voucher, ct);
-
-            foreach (var line in harvestedLines)
-            {
-                await ApplyMoltConfirmationAsync(assignment, line, now, ct);
-            }
-
-            await _harvestRecorder.ApplyHarvestAsync(
-                voucher,
-                createdHarvestLines,
-                ct);
-        }
-
-        foreach (var line in deferredLines)
-        {
-            await ApplyMoltConfirmationAsync(assignment, line, now, ct);
-            line.Status = HarvestAssignmentLineStatus.Deferred;
-        }
-
-        assignment.Status = HarvestAssignmentStatus.Completed;
-        assignment.CompletedAt = now;
-        assignment.ReviewedAt = now;
-        assignment.ReviewedByUserId = _currentUser.UserId;
-        assignment.ReviewNotes = NormalizeNullable(request.Notes);
-        AppendAudit(assignment, "confirmed", assignment.ReviewNotes);
-
-        foreach (var line in lines)
-        {
-            _uow.HarvestAssignmentLines.Update(line);
-        }
-
-        _uow.HarvestAssignments.Update(assignment);
-        await _uow.SaveChangesAsync(ct);
-
-        return ApiResponse<HarvestAssignmentResultDto>.Ok(
-            new HarvestAssignmentResultDto(
-                assignment.Id,
-                assignment.AssignmentCode,
-                assignment.Status.ToString(),
-                voucher?.Id,
-                voucher?.VoucherCode,
-                harvestedLines.Count,
-                deferredLines.Count),
-            "Đã hoàn tất nhiệm vụ thu hoạch.");
-    }
 
     private async Task<(List<HarvestAssignmentLine> Lines, List<HarvestAssignmentLine> Harvested, List<HarvestAssignmentLine> Deferred)>
         ValidateCompletionAsync(HarvestAssignment assignment, DateTime now, CancellationToken ct)

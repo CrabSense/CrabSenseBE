@@ -314,7 +314,6 @@ public class HarvestController : ControllerBase
     public async Task<IActionResult> AcceptAssignment(Guid id, CancellationToken ct)
     => Ok(await _assignmentService.AcceptAssignmentAsync(id, ct));
 
-    //Staff hoàn tất task được giao
     // Staff hoàn tất task; backend tạo Voucher từ các cua đã chọn thu hoạch.
     [HttpPost("~/api/harvest-assignments/{id:guid}/complete")]
     [Authorize(Roles = AppRoles.FarmStaff)]
@@ -324,18 +323,6 @@ public class HarvestController : ControllerBase
         [FromBody] CompleteHarvestAssignmentRequest request,
         CancellationToken ct)
         => Ok(await _assignmentService.CompleteAssignmentAsync(id, request, ct));
-
-    [HttpPost("~/api/harvest-assignments/{id:guid}/confirm")]
-    [Authorize(Roles = AppRoles.FarmManager)]
-    [HarvestMutation]
-    public async Task<IActionResult> ConfirmAssignment(Guid id, [FromBody] ReviewHarvestAssignmentRequest request, CancellationToken ct)
-        => Ok(await _assignmentService.ConfirmAssignmentAsync(id, request, ct));
-
-    [HttpPost("~/api/harvest-assignments/{id:guid}/return")]
-    [Authorize(Roles = AppRoles.FarmManager)]
-    [HarvestMutation]
-    public async Task<IActionResult> ReturnAssignment(Guid id, [FromBody] ReviewHarvestAssignmentRequest request, CancellationToken ct)
-        => Ok(await _assignmentService.ReturnAssignmentAsync(id, request, ct));
 
     [HttpPost("~/api/harvest-assignments/{id:guid}/cancel")]
     [Authorize(Roles = AppRoles.FarmManager)]
