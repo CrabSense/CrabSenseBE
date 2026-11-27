@@ -26,6 +26,16 @@ public sealed class WaterBenchResultPolicyTests
         Assert.Throws<AppException>(()=>WaterBenchResultPolicy.Receipt(JsonSerializer.Serialize(new{mediaId=id,sha256=hash})));
     }
     [Fact]
+    public void ReceiptMustBindVersionCalibrationAndCamera()
+    {
+        var cal=Guid.NewGuid();var camera=Guid.NewGuid();
+        var r=new WaterBenchResultPolicy.CaptureReceipt(Guid.NewGuid(),new string('a',64),"water-bench-media-v1",cal,camera,1);
+        Assert.True(WaterBenchResultPolicy.ReceiptMatches(r,cal,camera));
+        Assert.False(WaterBenchResultPolicy.ReceiptMatches(r with{ConfigurationVersion=0},cal,camera));
+        Assert.False(WaterBenchResultPolicy.ReceiptMatches(r,Guid.NewGuid(),camera));
+        Assert.False(WaterBenchResultPolicy.ReceiptMatches(r,cal,Guid.NewGuid()));
+    }
+    [Fact]
     public void RequireTerminalAndSessionEvidence()
     {
         var t=new WaterBenchBatchTimeline();
