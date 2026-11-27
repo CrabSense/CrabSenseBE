@@ -5722,6 +5722,24 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                         });
                 });
 
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.WaterBenchAiAttempt", b =>
+                {
+                    b.Property<Guid>("Id").ValueGeneratedOnAdd().HasColumnType("uuid");
+                    b.Property<DateTime>("CreatedAt").HasColumnType("timestamp with time zone");
+                    b.Property<DateTime>("LeaseUntil").HasColumnType("timestamp with time zone");
+                    b.Property<int>("Number").HasColumnType("integer");
+                    b.Property<string>("RequestHash").IsRequired().HasMaxLength(64).HasColumnType("character varying(64)");
+                    b.Property<Guid>("RequestId").HasColumnType("uuid");
+                    b.Property<DateTime?>("RetryAfter").HasColumnType("timestamp with time zone");
+                    b.Property<Guid>("SessionEvidenceId").HasColumnType("uuid");
+                    b.Property<string>("State").IsRequired().HasMaxLength(32).HasColumnType("character varying(32)");
+                    b.Property<DateTime?>("UpdatedAt").HasColumnType("timestamp with time zone");
+                    b.HasKey("Id");
+                    b.HasIndex("SessionEvidenceId", "Number").IsUnique();
+                    b.ToTable("WaterBenchAiAttempts", "be", t =>
+                        t.HasCheckConstraint("CK_WaterBenchAiAttempt_State", "\"Number\" BETWEEN 1 AND 3 AND \"RequestHash\" ~ '^[0-9a-f]{64}$' AND \"State\" IN ('running','retryable','retest_required','contract_blocked','succeeded')"));
+                });
+
             modelBuilder.Entity("CrabSenseBE.Domain.Entities.WaterBenchResultAssessment", b =>
                 {
                     b.Property<Guid>("Id")
@@ -7396,6 +7414,12 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                         .HasForeignKey("StationId")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
+                });
+
+            modelBuilder.Entity("CrabSenseBE.Domain.Entities.WaterBenchAiAttempt", b =>
+                {
+                    b.HasOne("CrabSenseBE.Domain.Entities.WaterBenchEvidence", null)
+                        .WithMany().HasForeignKey("SessionEvidenceId").OnDelete(DeleteBehavior.Restrict).IsRequired();
                 });
 
             modelBuilder.Entity("CrabSenseBE.Domain.Entities.WaterBenchResultAssessment", b =>
