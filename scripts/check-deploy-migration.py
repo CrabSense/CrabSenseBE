@@ -6,6 +6,10 @@ from pathlib import Path
 
 INCIDENT_MIGRATION = "20261113123000_RepairAlertIncidentIdText"
 BENCH_MIGRATION = "20261126100000_WaterBenchConfiguration"
+FROZEN_MIGRATION = "20261126151539_AddFrozenLotInboundWorkflow"
+# Reviewed UP only: widening varchar(1) to varchar(3) preserves stored values.
+# The deployment script still refuses app rollback across different schema markers.
+FROZEN_WIDEN = 'ALTER TABLE be."FrozenCrabItems" ALTER COLUMN "Grade" TYPE character varying(3);'
 INCIDENT_STATEMENT = 'ALTER TABLE be."Alerts" ALTER COLUMN "IncidentId" TYPE text;'
 BENCH_DELETE = 'DELETE FROM be."WaterBenchHardwareClaims" WHERE "StationId"=NEW."Id";'
 # Reviewed trigger definition from the immutable migration. Ignore indentation only.
@@ -41,6 +45,10 @@ def check(migration: str, sql: str) -> None:
     excluded = set()
     if migration == INCIDENT_MIGRATION:
         matches = [i for i, line in enumerate(normalized) if line == INCIDENT_STATEMENT]
+        if len(matches) == 1:
+            excluded.add(matches[0])
+    if migration == FROZEN_MIGRATION:
+        matches = [i for i, line in enumerate(normalized) if line == FROZEN_WIDEN]
         if len(matches) == 1:
             excluded.add(matches[0])
     if migration == BENCH_MIGRATION:

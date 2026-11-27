@@ -51,6 +51,24 @@ public sealed class WaterBenchResultPolicyTests
         Assert.False(t.ChemicalResultValidated);
     }
     [Fact]
+    public void BatchSelectionRejectsDuplicatesAndUnselectedAnalytesBeforeInference()
+    {
+        var t=new WaterBenchBatchTimeline();
+        var e=new BenchBatchEvent(Guid.NewGuid(),Guid.NewGuid(),Guid.NewGuid(),"0123456789abcdef","abcdef0123456789",1,"start",
+            DateTimeOffset.UtcNow,Mode:"manual",Mask:1);
+        t.Apply(e);
+        var s=e with{EventId=Guid.NewGuid(),Sequence=2,Type="session",Analyte="NO2",SessionId=e.BatchId+"-1"};
+        t.Apply(s);t.Apply(s with{EventId=Guid.NewGuid(),Sequence=3,Type="reaction",ReactionStartMs=0,ReactionDurationMs=300000});
+        t.Apply(s with{EventId=Guid.NewGuid(),Sequence=4,Type="image",CaptureId=1});
+        var id=Guid.NewGuid();
+        Assert.Throws<AppException>(()=>WaterBenchResultPolicy.ValidateBatchSelection(t,["NO2"],[id]));
+        t.Apply(e with{EventId=Guid.NewGuid(),Sequence=5,Type="status",State=2,Started=1,Reacting=0,Imaged=1,Drained=1});
+        WaterBenchResultPolicy.ValidateBatchSelection(t,["NO2"],[id]);
+        Assert.Throws<AppException>(()=>WaterBenchResultPolicy.ValidateBatchSelection(t,["NO3"],[id]));
+        Assert.Throws<AppException>(()=>WaterBenchResultPolicy.ValidateBatchSelection(t,["NO2","NO2"],[id,Guid.NewGuid()]));
+        Assert.Throws<AppException>(()=>WaterBenchResultPolicy.ValidateBatchSelection(t,["NO2"],[Guid.Empty]));
+    }
+    [Fact]
     public void MigrationAddsOnlyAssessmentTable()
     {
         using var db=new AppDbContext(new DbContextOptionsBuilder<AppDbContext>().UseNpgsql("Host=localhost;Database=unused;Username=unused").Options);

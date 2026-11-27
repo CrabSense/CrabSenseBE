@@ -50,6 +50,23 @@ class MigrationGuardTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             guard.check(guard.BENCH_MIGRATION, self.up + "\n" + "\n".join(guard.BENCH_FUNCTION))
 
+    def test_frozen_widen_is_exact_and_only_for_reviewed_migration(self):
+        path = ROOT / "src/CrabSenseBE.Infrastructure/Persistence/Migrations/20261126151539_AddFrozenLotInboundWorkflow.cs"
+        up = path.read_text(encoding="utf-8-sig").split("protected override void Up", 1)[1].split("protected override void Down", 1)[0]
+        self.assertIn('oldType: "character varying(1)"', up)
+        self.assertIn('type: "character varying(3)"', up)
+        guard.check(guard.FROZEN_MIGRATION, guard.FROZEN_WIDEN)
+        for migration, sql in [
+            ("Other", guard.FROZEN_WIDEN),
+            (guard.FROZEN_MIGRATION, guard.FROZEN_WIDEN.replace("(3)", "(1)")),
+            (guard.FROZEN_MIGRATION, guard.FROZEN_WIDEN.replace('"Grade"', '"Other"')),
+            (guard.FROZEN_MIGRATION, guard.FROZEN_WIDEN + "\n" + guard.FROZEN_WIDEN),
+            (guard.FROZEN_MIGRATION, guard.FROZEN_WIDEN + '\nDROP TABLE be."FrozenLots";'),
+            (guard.FROZEN_MIGRATION, guard.FROZEN_WIDEN + '\nDELETE FROM be."FrozenCrabItems";'),
+        ]:
+            with self.subTest(migration=migration, sql=sql), self.assertRaises(ValueError):
+                guard.check(migration, sql)
+
     def test_additive_sql_still_allowed(self):
         guard.check("Other", 'ALTER TABLE be."WaterBenchStations" ADD COLUMN "NewField" text;')
 

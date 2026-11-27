@@ -17,6 +17,18 @@ public static class WaterBenchResultPolicy
     };
     public static string Marker(Guid station,string boot,string batch,string analyte,int capture)=>
         $"water-bench:{station:N}:{boot}:{batch}:{analyte}:{capture}";
+    public static void ValidateBatchSelection(WaterBenchBatchTimeline timeline,IReadOnlyList<string> analytes,IReadOnlyList<Guid> requestIds)
+    {
+        if(analytes.Count is <1 or >3||analytes.Count!=requestIds.Count||
+            analytes.Distinct(StringComparer.Ordinal).Count()!=analytes.Count||
+            requestIds.Any(id=>id==Guid.Empty)||requestIds.Distinct().Count()!=requestIds.Count||
+            analytes.Any(a=>!timeline.Channels.Any(c=>c.Analyte==a)))
+            throw AppException.BadRequest("Chọn 1–3 chất thuộc batch, không trùng chất hoặc request ID.");
+        if(timeline.Status!="firmware_complete_reported")
+            throw AppException.Conflict("Batch chưa có bằng chứng hoàn tất.");
+        if(timeline.Mode=="scheduled"&&(analytes.Count!=3||timeline.Channels.Count!=3))
+            throw AppException.BadRequest("Batch định kỳ yêu cầu đủ NO2, NO3, NH3.");
+    }
     public static bool ReadyForEstimate(WaterBenchBatchTimeline timeline,BenchObservedChannel channel)=>
         timeline.Status=="firmware_complete_reported"&&channel.Status=="drained_reported"&&
         channel.SessionId is not null&&channel.CaptureId.HasValue&&channel.ReactionStartMs.HasValue&&
