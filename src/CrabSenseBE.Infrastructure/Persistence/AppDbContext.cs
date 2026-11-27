@@ -1070,6 +1070,8 @@ public class AppDbContext : DbContext
 
         modelBuilder.Entity<WaterMeasurement>()
             .HasIndex(x => new { x.SensorId, x.MeasuredAt });
+        modelBuilder.Entity<WaterMeasurement>().HasIndex(x => new { x.ObservedAreaId, x.SensorId, x.MeasuredAt })
+            .HasFilter("\"ObservedAreaId\" IS NOT NULL");
         modelBuilder.Entity<WaterMeasurement>().Property(x => x.EdgeEventKey).HasMaxLength(64);
         modelBuilder.Entity<WaterMeasurement>().HasIndex(x => new { x.SensorId, x.EdgeEventKey }).IsUnique()
             .HasFilter("\"EdgeEventKey\" IS NOT NULL");

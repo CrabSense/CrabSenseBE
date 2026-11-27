@@ -396,6 +396,24 @@ BEGIN
         THEN RAISE EXCEPTION 'Crab version trigger missing'; END IF;
 END $$;
 '@ | Out-Null
+    # Fresh migrated DB for real HTTP ingest/history test; no production connection.
+    & $createdb -h 127.0.0.1 -p $Port -U postgres scoped_history_test
+    Assert-Exit "Could not create isolated history database"
+    Update-Database "scoped_history_test"
+    $oldHistoryDb = $env:CRABSENSE_SCOPED_HISTORY_TEST_DB
+    $historyResults = Join-Path $data "history-test-results"
+    try {
+        $env:CRABSENSE_SCOPED_HISTORY_TEST_DB = "Host=127.0.0.1;Port=$Port;Database=scoped_history_test;Username=postgres"
+        & dotnet test tests/CrabSenseBE.UnitTests/CrabSenseBE.UnitTests.csproj -c Release --filter "FullyQualifiedName~ScopedSensorHistoryPostgresTests" --logger "trx;LogFileName=scoped-history.trx" --results-directory $historyResults
+        Assert-Exit "Scoped sensor history HTTP/PostgreSQL test failed"
+        [xml]$report = Get-Content (Join-Path $historyResults "scoped-history.trx") -Raw
+        $results = @($report.TestRun.Results.UnitTestResult)
+        if ($results.Count -ne 1 -or $results[0].outcome -ne "Passed") { throw "Expected one executed and passed scoped history test, not a skip." }
+        Write-Output "SCOPED_SENSOR_HISTORY_HTTP_POSTGRES_PASSED=1"
+    }
+    finally {
+        $env:CRABSENSE_SCOPED_HISTORY_TEST_DB = $oldHistoryDb
+    }
     Write-Output "FARM_STATE_VERSION_TESTS_PASSED=1"
     Write-Output "NON_SALES_SCHEMA_TESTS_PASSED=1"
     Write-Output "CUSTOMER_AREA_SCHEMA_TESTS_PASSED=1"

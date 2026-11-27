@@ -75,6 +75,12 @@ public class IotService : IIotService
         if (!string.IsNullOrWhiteSpace(req.IpAddress))
             device.IpAddress = req.IpAddress.Trim();
 
+        // Only freshly timestamped, explicitly unit-labelled measurements may enter the
+        // scoped history contract. Never assign old/backfilled readings a current location.
+        var observation = fresh && req.MeasuredAt.Kind != DateTimeKind.Unspecified &&
+            !string.IsNullOrWhiteSpace(req.Unit) && !string.IsNullOrWhiteSpace(sensor.Unit) &&
+            string.Equals(req.Unit.Trim(),sensor.Unit,StringComparison.Ordinal) && sensor.IsActive
+            ? await SensorHistoryScope.ResolveAsync(_uow,sensor,device,ct) : null;
         var measurement = new WaterMeasurement
         {
             SensorId = sensor.Id,
@@ -85,7 +91,10 @@ public class IotService : IIotService
             ReceivedAt = now,
             DataQuality = fresh ? "Realtime" : req.MeasuredAt == default ? "Unknown" : "Backfill",
             Source = eventKey ?? "realtime",
-            EdgeEventKey = edgeEventKey
+            EdgeEventKey = edgeEventKey,
+            ObservedAreaId = observation?.AreaId,
+            ObservedRowId = observation?.RowId,
+            ObservedSensorType = observation is null ? null : sensor.SensorType
         };
         await _uow.WaterMeasurements.AddAsync(measurement, ct);
 
