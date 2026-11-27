@@ -136,36 +136,88 @@ public sealed class WaterBenchResultController(AppDbContext db,IUnitOfWork uow,I
             request.Samples.Select(s=>s.Assessment.RequestId).ToArray());
         // Validate source syntax for the whole request before doing any external IO.
         foreach(var item in request.Samples)_=WaterBatchPlanning.Source(item.Assessment.SampleSource);
-        var outcomes=new List<object>();int succeeded=0;
+        var outcomes=new Dictionary<string,object>(StringComparer.Ordinal);
+        var prepared=new List<(BatchAssessItem Item,PreparedAssessment Prepared)>();
+        int succeeded=0;
+        void Reject(BatchAssessItem item,int status,string message)=>outcomes[item.Analyte]=new
+        {
+            item.Analyte,requestId=item.Assessment.RequestId,status="assessment_rejected",httpStatus=status,
+            retryable=status is 502 or 503,message
+        };
+        void Accept(BatchAssessItem item,WaterBenchResultAssessment row)
+        {
+            succeeded++;
+            outcomes[item.Analyte]=new{item.Analyte,requestId=item.Assessment.RequestId,status=row.Status,
+                assessment=ApiResponse<object>.Ok(View(row))};
+        }
+        // Database and private-storage reads are sequential on this request's scoped EF context.
         foreach(var item in request.Samples)
         {
             ct.ThrowIfCancellationRequested();
             try
             {
-                var result=await Assess(areaId,stationId,bootId,batchId,item.Analyte,item.Assessment,ct);
-                if(result is not OkObjectResult ok)throw new InvalidOperationException("Unexpected assessment response.");
-                succeeded++;
-                outcomes.Add(new{item.Analyte,requestId=item.Assessment.RequestId,status="estimate_review_required",assessment=ok.Value});
+                var p=await PrepareAssessment(areaId,stationId,bootId,batchId,item.Analyte,item.Assessment,ct);
+                if(p.Existing)Accept(item,p.Row);
+                else prepared.Add((item,p));
             }
             catch(AppException ex) when(ex.StatusCode is 400 or 404 or 409 or 502 or 503)
+            {Reject(item,ex.StatusCode,ex.Message);}
+            finally{db.ChangeTracker.Clear();}
+        }
+        if(prepared.Count>0)
+        {
+            IReadOnlyList<WaterAiClient.BatchOutcome> estimates=[];
+            try
             {
-                outcomes.Add(new{item.Analyte,requestId=item.Assessment.RequestId,status="assessment_rejected",
-                    httpStatus=ex.StatusCode,retryable=ex.StatusCode is 502 or 503,message=ex.Message});
+                // On partial retries use a manual transport subset; the persisted firmware mode is unchanged.
+                string transportMode=timeline.Mode=="scheduled"&&prepared.Count==3?"scheduled":"manual";
+                estimates=await ai.AnalyzeBatch(areaId,$"{stationId:N}:{bootId}:{batchId}",transportMode,
+                    prepared.Select(p=>p.Prepared.Sample!).ToArray(),ct);
             }
-            finally
+            catch(AppException ex) when(ex.StatusCode is 400 or 502 or 503)
+            {foreach(var p in prepared)Reject(p.Item,ex.StatusCode,ex.Message);}
+            foreach(var p in prepared)
             {
-                // A failed SaveChanges can leave added entries tracked. Never carry them into another sample.
-                db.ChangeTracker.Clear();
+                if(outcomes.ContainsKey(p.Item.Analyte))continue;
+                ct.ThrowIfCancellationRequested();
+                var outcome=estimates.Single(x=>x.Analyte==p.Item.Analyte);
+                if(outcome.Estimate is not { } estimate)
+                {
+                    Reject(p.Item,outcome.ErrorStatus??502,"AI chưa thể đánh giá mẫu này.");continue;
+                }
+                try
+                {
+                    CompleteEstimate(p.Prepared,estimate);
+                    var saved=await PersistAssessment(areaId,p.Prepared.Row,ct);
+                    Accept(p.Item,saved);
+                }
+                catch(AppException ex) when(ex.StatusCode is 400 or 404 or 409 or 502 or 503)
+                {Reject(p.Item,ex.StatusCode,ex.Message);}
+                finally{db.ChangeTracker.Clear();}
             }
         }
         return Ok(ApiResponse<object>.Ok(new{batchId,mode=timeline.Mode,
             status=succeeded==outcomes.Count?"completed":succeeded>0?"partial":"failed",
-            results=outcomes,productionPublished=false,chemicalResultValidated=false}));
+            results=request.Samples.Select(s=>outcomes[s.Analyte]).ToArray(),productionPublished=false,chemicalResultValidated=false}));
     }
     [HttpPost("{analyte}/assessment")]
     [Authorize(Roles=AppRoles.FarmManage)]
     [RequestSizeLimit(8192)]
     public async Task<IActionResult> Assess(Guid areaId,Guid stationId,string bootId,string batchId,string analyte,AssessRequest request,CancellationToken ct)
+    {
+        var prepared=await PrepareAssessment(areaId,stationId,bootId,batchId,analyte,request,ct);
+        if(prepared.Existing)return Ok(ApiResponse<object>.Ok(View(prepared.Row)));
+        if(prepared.Sample is { } s)
+        {
+            var estimate=await ai.Analyze(areaId,s.CameraId,s.Analyte,s.Unit,s.Lot,s.Token,s.CalibrationId,s.Photo,ct,s.Algorithm);
+            CompleteEstimate(prepared,estimate);
+        }
+        return Ok(ApiResponse<object>.Ok(View(await PersistAssessment(areaId,prepared.Row,ct))));
+    }
+    private sealed record PreparedAssessment(WaterBenchResultAssessment Row,bool Existing=false,WaterAiClient.BatchSample? Sample=null,
+        string? KitRevision=null,string? ImageSha256=null,string? Source=null,uint? ReactionStartMs=null,int? ReactionDurationMs=null);
+    private async Task<PreparedAssessment> PrepareAssessment(Guid areaId,Guid stationId,string bootId,string batchId,string analyte,
+        AssessRequest request,CancellationToken ct)
     {
         await scope.EnsureAsync(areaId,true,ct);
         if(request.RequestId==Guid.Empty||request.Action is not ("estimate" or "needs_retest")||
@@ -181,7 +233,7 @@ public sealed class WaterBenchResultController(AppDbContext db,IUnitOfWork uow,I
             ??throw AppException.Conflict("Thiếu bằng chứng session.");
         string hash=Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(request,WaterBatchPlanning.Json)))).ToLowerInvariant();
         var prior=await db.WaterBenchResultAssessments.AsNoTracking().SingleOrDefaultAsync(x=>x.SessionEvidenceId==session.Id,ct);
-        if(prior!=null)return Existing(prior,request.RequestId,hash);
+        if(prior!=null)return new(Existing(prior,request.RequestId,hash),true);
         var row=new WaterBenchResultAssessment{SessionEvidenceId=session.Id,RequestId=request.RequestId,AssessedBy=user.UserId,
             RequestHash=hash,Reason=request.Reason.Trim(),Status="needs_retest"};
         if(request.Action=="estimate")
@@ -216,24 +268,36 @@ public sealed class WaterBenchResultController(AppDbContext db,IUnitOfWork uow,I
             var bytes=buffer.ToArray();
             if(bytes.LongLength!=asset.SizeBytes||!string.Equals(Convert.ToHexString(SHA256.HashData(bytes)),receipt.Sha256,StringComparison.OrdinalIgnoreCase))
                 throw AppException.Conflict("Hash hoặc kích thước ảnh không khớp biên nhận.");
-            var estimate=await ai.Analyze(areaId,profile.CameraDeviceId,analyte,profile.Unit,profile.ReagentLot,
-                profile.AiCalibrationToken!,profile.AiCalibrationId!,new(receipt.MediaId,bytes,seconds,salinity),ct,profile.AiAlgorithm!);
-            row.Status="estimate_review_required";row.ImageEvidenceId=receiptRow.Id;row.MediaId=receipt.MediaId;row.CalibrationId=profile.Id;
-            row.CandidateValue=estimate.Value;row.Unit=profile.Unit;row.HoldoutError=estimate.HoldoutError;
-            row.EvidenceJson=JsonSerializer.Serialize(new{algorithm=profile.AiAlgorithm,profile.AiCalibrationId,profile.KitRevision,
-                imageSha256=receipt.Sha256,reading=estimate.Evidence,source,reagentLot=profile.ReagentLot,seconds,salinity,
-                conditionsSource="operator_attested",reactionClock="firmware_boot_uptime",c.ReactionStartMs,c.ReactionDurationMs,
-                physicalExposureVerified=false,chemicalResultValidated=false,ph=(decimal?)null,temperatureC=(decimal?)null,
-                ammoniaConversionApplied=false},WaterBatchPlanning.Json);
-            if(Encoding.UTF8.GetByteCount(row.EvidenceJson)>65536)throw AppException.Conflict("Bằng chứng AI quá lớn.");
+            row.ImageEvidenceId=receiptRow.Id;row.MediaId=receipt.MediaId;row.CalibrationId=profile.Id;
+            return new(row,false,new(profile.CameraDeviceId,analyte,profile.Unit,profile.ReagentLot,
+                profile.AiCalibrationToken!,profile.AiCalibrationId!,new(receipt.MediaId,bytes,seconds,salinity),profile.AiAlgorithm!),
+                profile.KitRevision,receipt.Sha256,source,c.ReactionStartMs,c.ReactionDurationMs);
         }
         else if(request.CalibrationId!=null||request.ReagentLot!=null||request.ReactionSeconds!=null||request.SalinityPpt!=null||
             request.SampleSource!=null||request.OperatorConditionsConfirmed)
             throw AppException.BadRequest("Yêu cầu đo lại chỉ nhận lý do.");
+        return new(row);
+    }
+    private static void CompleteEstimate(PreparedAssessment p,WaterAiClient.Estimate estimate)
+    {
+        var s=p.Sample??throw new InvalidOperationException("Missing prepared sample.");
+        var row=p.Row;
+        row.Status="estimate_review_required";row.CandidateValue=estimate.Value;row.Unit=s.Unit;row.HoldoutError=estimate.HoldoutError;
+        row.EvidenceJson=JsonSerializer.Serialize(new{algorithm=s.Algorithm,AiCalibrationId=s.CalibrationId,p.KitRevision,
+            imageSha256=p.ImageSha256,reading=estimate.Evidence,source=p.Source,reagentLot=s.Lot,
+            seconds=s.Photo.ReactionSeconds,salinity=s.Photo.SalinityPpt,
+            conditionsSource="operator_attested",reactionClock="firmware_boot_uptime",p.ReactionStartMs,p.ReactionDurationMs,
+            physicalExposureVerified=false,chemicalResultValidated=false,ph=(decimal?)null,temperatureC=(decimal?)null,
+            ammoniaConversionApplied=false},WaterBatchPlanning.Json);
+        if(Encoding.UTF8.GetByteCount(row.EvidenceJson)>65536)throw AppException.Conflict("Bằng chứng AI quá lớn.");
+    }
+    private async Task<WaterBenchResultAssessment> PersistAssessment(Guid areaId,WaterBenchResultAssessment row,CancellationToken ct)
+    {
+        await scope.EnsureAsync(areaId,true,ct);
         await using var tx=await db.Database.BeginTransactionAsync(ct);
-        await db.Database.ExecuteSqlInterpolatedAsync($"SELECT 1 FROM be.\"WaterBenchEvidence\" WHERE \"Id\"={session.Id} FOR UPDATE",ct);
-        prior=await db.WaterBenchResultAssessments.AsNoTracking().SingleOrDefaultAsync(x=>x.SessionEvidenceId==session.Id,ct);
-        if(prior!=null)return Existing(prior,request.RequestId,hash);
+        await db.Database.ExecuteSqlInterpolatedAsync($"SELECT 1 FROM be.\"WaterBenchEvidence\" WHERE \"Id\"={row.SessionEvidenceId} FOR UPDATE",ct);
+        var prior=await db.WaterBenchResultAssessments.AsNoTracking().SingleOrDefaultAsync(x=>x.SessionEvidenceId==row.SessionEvidenceId,ct);
+        if(prior!=null)return Existing(prior,row.RequestId,row.RequestHash);
         if(row.CalibrationId is Guid cal)
         {
             var now=DateTime.UtcNow;
@@ -250,12 +314,12 @@ public sealed class WaterBenchResultController(AppDbContext db,IUnitOfWork uow,I
             EntityId=row.Id,Details=row.Status,IpAddress=HttpContext.Connection.RemoteIpAddress?.ToString()});
         try{await db.SaveChangesAsync(ct);await tx.CommitAsync(ct);}
         catch(DbUpdateException){throw AppException.Conflict("Session hoặc ảnh đã được đánh giá.");}
-        return Ok(ApiResponse<object>.Ok(View(row)));
+        return row;
     }
-    private IActionResult Existing(WaterBenchResultAssessment row,Guid request,string hash)
+    private static WaterBenchResultAssessment Existing(WaterBenchResultAssessment row,Guid request,string hash)
     {
         if(row.RequestId!=request||row.RequestHash!=hash)throw AppException.Conflict("Session đã được đánh giá; dùng phiên mới nếu cần đo lại.");
-        return Ok(ApiResponse<object>.Ok(View(row)));
+        return row;
     }
     private async Task<bool> Used(Guid area,Guid mediaId,string hash,CancellationToken ct)=>
         await db.WaterAnalysisRuns.AnyAsync(x=>x.SampleMediaId==mediaId||x.FarmingAreaId==area&&x.SampleSha256==hash,ct)||
