@@ -184,19 +184,29 @@ public sealed class WaterAiClient(HttpClient http, IConfiguration config)
         }
         catch(Exception ex) when(ex is KeyNotFoundException or InvalidOperationException or FormatException){throw Invalid();}
     }
+    private static DateTimeOffset AiWireTime(DateTimeOffset time)
+    {
+        var utc=time.ToUniversalTime();
+        return utc.AddTicks(-(utc.Ticks%10));
+    }
     public async Task<JsonElement> AmmoniaReference(string method,Guid assessmentId,Guid mediaId,decimal value,string unit,
         Nh3Environment env,CancellationToken ct)
     {
         WaterBenchAmmoniaPolicy.Method(method,unit,env);
+        // Python datetime has microsecond resolution; .NET ticks have 100 ns resolution.
+        // Canonicalize only the wire representation, never the original evidence.
+        var wire=env with {
+            SampleAt=AiWireTime(env.SampleAt),PhAt=AiWireTime(env.PhAt),
+            TemperatureAt=AiWireTime(env.TemperatureAt),SalinityAt=AiWireTime(env.SalinityAt)};
         bool printed=method=="printed_table";
         object payload=printed?(object)new{sample_id=assessmentId.ToString("D"),media_id=mediaId.ToString("D"),value,input_basis="chart",
-            ph=env.Ph,sample_at=env.SampleAt,ph_at=env.PhAt,temperature_c=env.TemperatureC,temperature_at=env.TemperatureAt,max_age_seconds=env.MaxAgeSeconds}:
-            new{value,unit,ph=env.Ph,temperature_c=env.TemperatureC,salinity_ppt=env.SalinityPpt,sample_at=env.SampleAt,
-                ph_at=env.PhAt,temperature_at=env.TemperatureAt,salinity_at=env.SalinityAt,max_age_seconds=env.MaxAgeSeconds};
+            ph=env.Ph,sample_at=wire.SampleAt,ph_at=wire.PhAt,temperature_c=env.TemperatureC,temperature_at=wire.TemperatureAt,max_age_seconds=env.MaxAgeSeconds}:
+            new{value,unit,ph=env.Ph,temperature_c=env.TemperatureC,salinity_ppt=env.SalinityPpt,sample_at=wire.SampleAt,
+                ph_at=wire.PhAt,temperature_at=wire.TemperatureAt,salinity_at=wire.SalinityAt,max_age_seconds=env.MaxAgeSeconds};
         var data=await Post(printed?"v1/ammonia/thuy-phuoc/lookup":"v1/ammonia/convert",payload,ct);
         try
         {
-            if(data.GetProperty("sample_at").GetDateTimeOffset()!=env.SampleAt)throw Invalid();
+            if(data.GetProperty("sample_at").GetDateTimeOffset()!=wire.SampleAt)throw Invalid();
             var status=data.GetProperty("status").GetString();
             if(printed)
             {
@@ -206,9 +216,9 @@ public sealed class WaterAiClient(HttpClient http, IConfiguration config)
                     data.GetProperty("sample_id").GetString()!=assessmentId.ToString("D")||
                     data.GetProperty("media_id").GetString()!=mediaId.ToString("D")||
                     data.GetProperty("input").GetDecimal()!=value||data.GetProperty("input_basis").GetString()!="chart"||
-                    data.GetProperty("ph").GetDecimal()!=env.Ph||data.GetProperty("ph_at").GetDateTimeOffset()!=env.PhAt||
+                    data.GetProperty("ph").GetDecimal()!=env.Ph||data.GetProperty("ph_at").GetDateTimeOffset()!=wire.PhAt||
                     data.GetProperty("temperature_c").GetDecimal()!=env.TemperatureC||
-                    data.GetProperty("temperature_at").GetDateTimeOffset()!=env.TemperatureAt||
+                    data.GetProperty("temperature_at").GetDateTimeOffset()!=wire.TemperatureAt||
                     data.GetProperty("chemical_accuracy_validated").GetBoolean()||data.GetProperty("crab_toxicity_threshold_validated").GetBoolean()||
                     data.GetProperty("temperature_salinity_corrected").GetBoolean())throw Invalid();
                 var result=data.GetProperty("nh3_mg_l_printed");
