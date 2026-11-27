@@ -205,6 +205,10 @@ public class WaterMeasurement : BaseEntity
     public string? EdgeEventKey { get; set; } // SHA-256 of edge event ID, scoped to SensorId
     public DateTime? ReceivedAt { get; set; }
     public string? DataQuality { get; set; }
+    // Ingestion-time scope; null for legacy, backfill or ambiguous location.
+    public Guid? ObservedAreaId { get; set; }
+    public Guid? ObservedRowId { get; set; }
+    public string? ObservedSensorType { get; set; }
 
     // Navigation
     public Sensor? Sensor { get; set; }

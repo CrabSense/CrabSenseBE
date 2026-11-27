@@ -6099,6 +6099,15 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.Property<DateTime>("MeasuredAt")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<Guid?>("ObservedAreaId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid?>("ObservedRowId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("ObservedSensorType")
+                        .HasColumnType("text");
+
                     b.Property<DateTime?>("ReceivedAt")
                         .HasColumnType("timestamp with time zone");
 
@@ -6127,6 +6136,9 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.HasIndex("SensorId", "EdgeEventKey")
                         .IsUnique()
                         .HasFilter("\"EdgeEventKey\" IS NOT NULL");
+
+                    b.HasIndex("ObservedAreaId", "SensorId", "MeasuredAt")
+                        .HasFilter("\"ObservedAreaId\" IS NOT NULL");
 
                     b.HasIndex("SensorId", "MeasuredAt");
 
