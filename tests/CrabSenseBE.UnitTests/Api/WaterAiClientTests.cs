@@ -152,4 +152,51 @@ public sealed class WaterAiClientTests
         if(aligned)Assert.Equal(1.5m,(await Call()).Value);
         else Assert.Equal(502,(await Assert.ThrowsAsync<AppException>(Call)).StatusCode);
     }
+
+    [Theory]
+    [InlineData("equilibrium","mg/L TAN-N",0)]
+    [InlineData("equilibrium","mg/L TAN-N",1)]
+    [InlineData("equilibrium","mg/L NH4",0)]
+    [InlineData("equilibrium","mg/L NH4",1)]
+    [InlineData("printed_table","mg/L NH4",0)]
+    [InlineData("printed_table","mg/L NH4",1)]
+    [InlineData("printed_table","mg/L NH4",2)]
+    [InlineData("printed_table","mg/L NH4",3)]
+    public async Task AmmoniaUsesExactMicrosecondWireTimesAndRejectsChangedEcho(string method,string unit,int tamper)
+    {
+        var sample=new DateTimeOffset(2026,11,27,1,0,0,TimeSpan.FromHours(7)).AddTicks(1234567);
+        var env=new Nh3Environment(8m,28m,15m,sample,sample.AddMilliseconds(100).AddTicks(1),
+            sample.AddMilliseconds(200).AddTicks(2),sample.AddMilliseconds(300).AddTicks(3),10);
+        var assessmentId=Guid.NewGuid();var mediaId=Guid.NewGuid();
+        var expected=sample.ToUniversalTime().AddTicks(-7);
+        using var http=new HttpClient(new Handler(async request=>{
+            bool printed=method=="printed_table";
+            Assert.Equal(printed?"/v1/ammonia/thuy-phuoc/lookup":"/v1/ammonia/convert",request.RequestUri!.AbsolutePath);
+            using var doc=JsonDocument.Parse(await request.Content!.ReadAsStringAsync());
+            var d=doc.RootElement;
+            Assert.Equal(expected,d.GetProperty("sample_at").GetDateTimeOffset());
+            Assert.Equal(expected.AddMilliseconds(100),d.GetProperty("ph_at").GetDateTimeOffset());
+            Assert.Equal(expected.AddMilliseconds(200),d.GetProperty("temperature_at").GetDateTimeOffset());
+            string Echo(DateTimeOffset time)=>time.ToString("yyyy-MM-ddTHH:mm:ss.ffffffzzz",System.Globalization.CultureInfo.InvariantCulture);
+            var returnedSample=Echo(expected.AddTicks(tamper==1?10:0));
+            if(printed)
+                return Response(new{status="reference_only",revision="thuy-phuoc-photo-card-v1",method="printed_table_exact",
+                    sample_id=assessmentId.ToString("D"),media_id=mediaId.ToString("D"),input=1m,input_basis="chart",
+                    ph=8m,sample_at=returnedSample,ph_at=Echo(expected.AddMilliseconds(100).AddTicks(tamper==2?10:0)),
+                    temperature_c=28m,temperature_at=Echo(expected.AddMilliseconds(200).AddTicks(tamper==3?10:0)),
+                    chemical_accuracy_validated=false,crab_toxicity_threshold_validated=false,temperature_salinity_corrected=false,nh3_mg_l_printed=.05m});
+            Assert.Equal(expected.AddMilliseconds(300).AddTicks(10),d.GetProperty("salinity_at").GetDateTimeOffset());
+            Assert.Equal(unit,d.GetProperty("unit").GetString());
+            const decimal fraction=.05m,n=14.00674m,h=1.00794m;
+            decimal tan=unit=="mg/L TAN-N"?1m:n/(n+4*h)/(1-fraction);
+            return Response(new{status="estimated",method="epa-1989-saltwater-whitfield-regression",sample_at=returnedSample,
+                free_nh3_mg_l=tan*fraction*(n+3*h)/n,free_nh3_n_mg_l=tan*fraction,tan_n_mg_l=tan,unionized_fraction=fraction});
+        }));
+        var ai=new WaterAiClient(http,Config());
+        Task<JsonElement> Call()=>ai.AmmoniaReference(method,assessmentId,mediaId,1m,unit,env,default);
+        if(tamper!=0)Assert.Equal(502,(await Assert.ThrowsAsync<AppException>(Call)).StatusCode);
+        else Assert.Equal(method=="printed_table"?"reference_only":"estimated",(await Call()).GetProperty("status").GetString());
+        Assert.Equal(sample,env.SampleAt);
+        Assert.Equal(7,env.SampleAt.Ticks%10);
+    }
 }
