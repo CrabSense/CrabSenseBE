@@ -109,6 +109,107 @@ public sealed class WaterBenchResultController(AppDbContext db,IUnitOfWork uow,I
                     (profile.QualityCheckDueAt==null||profile.QualityCheckDueAt>DateTime.UtcNow)},
             mediaContentRechecked=false,chemicalResultValidated=false,productionPublished=false}));
     }
+    public sealed record AmmoniaRequest(Guid RequestId,string Method,Guid SalinityMeasurementId,
+        bool SameSampleSourceConfirmed,bool MeasurandConfirmed,string Reason);
+    [HttpGet("NH3/ammonia-reference")]
+    public async Task<IActionResult> GetAmmoniaReference(Guid areaId,Guid stationId,string bootId,string batchId,CancellationToken ct)
+    {
+        await scope.EnsureAsync(areaId,false,ct);
+        Response.Headers["Cache-Control"]="no-store";
+        var q=Scoped(areaId,stationId,bootId,batchId);
+        var row=await (from r in db.WaterBenchResultAssessments.AsNoTracking()
+            join e in q on r.SessionEvidenceId equals e.Id where e.Kind=="session"&&e.Analyte=="NH3" select r).SingleOrDefaultAsync(ct)
+            ??throw AppException.NotFound("NH3 assessment");
+        using var doc=JsonDocument.Parse(row.EvidenceJson);
+        if(!doc.RootElement.TryGetProperty("ammoniaReference",out var reference))
+            return Ok(ApiResponse<object>.Ok(new{status="not_assessed",chemicalResultValidated=false,productionPublished=false}));
+        if(doc.RootElement.GetProperty("ammoniaReferenceSha256").GetString()!=WaterBenchAiEvidence.Hash(reference.GetRawText()))
+            throw AppException.Conflict("Ammonia reference digest mismatch.");
+        return Ok(ApiResponse<object>.Ok(reference.Clone()));
+    }
+    [HttpPost("NH3/ammonia-reference")]
+    [Authorize(Roles=AppRoles.FarmManage)]
+    [RequestSizeLimit(8192)]
+    public async Task<IActionResult> AssessAmmoniaReference(Guid areaId,Guid stationId,string bootId,string batchId,AmmoniaRequest request,CancellationToken ct)
+    {
+        await scope.EnsureAsync(areaId,true,ct);
+        if(request.RequestId==Guid.Empty||request.SalinityMeasurementId==Guid.Empty||!request.SameSampleSourceConfirmed||
+            !request.MeasurandConfirmed||string.IsNullOrWhiteSpace(request.Reason)||request.Reason.Length>500||
+            request.Method is not ("printed_table" or "equilibrium"))
+            throw AppException.BadRequest("Explicit source and measurand confirmation required.");
+        var q=Scoped(areaId,stationId,bootId,batchId);
+        var timeline=await Timeline(q,bootId,batchId,ct);
+        var channel=timeline.Channels.SingleOrDefault(x=>x.Analyte=="NH3")??throw AppException.NotFound("NH3");
+        if(!WaterBenchResultPolicy.ReadyForEstimate(timeline,channel))throw AppException.Conflict("Incomplete NH3 timeline.");
+        var session=await q.SingleAsync(x=>x.Kind=="session"&&x.Analyte=="NH3"&&x.ConnectionId==timeline.ConnectionId&&
+            x.FirmwareSessionId==channel.SessionId,ct);
+        var row=await db.WaterBenchResultAssessments.AsNoTracking().SingleOrDefaultAsync(x=>x.SessionEvidenceId==session.Id,ct)
+            ??throw AppException.NotFound("NH3 assessment");
+        var requestHash=WaterBenchAiEvidence.Hash(JsonSerializer.Serialize(request,WaterBatchPlanning.Json));
+        JsonElement? ExistingReference(WaterBenchResultAssessment r)
+        {
+            using var d=JsonDocument.Parse(r.EvidenceJson);
+            if(!d.RootElement.TryGetProperty("ammoniaReference",out var existing))return null;
+            if(d.RootElement.GetProperty("ammoniaReferenceSha256").GetString()!=WaterBenchAiEvidence.Hash(existing.GetRawText())||
+                existing.GetProperty("requestId").GetGuid()!=request.RequestId||existing.GetProperty("requestSha256").GetString()!=requestHash)
+                throw AppException.Conflict("Reference already recorded or digest mismatch.");
+            return existing.Clone();
+        }
+        if(ExistingReference(row) is {} existing)return Ok(ApiResponse<object>.Ok(existing));
+        var image=await q.SingleOrDefaultAsync(x=>x.Id==row.ImageEvidenceId&&x.Kind=="jpeg"&&x.CaptureId==channel.CaptureId,ct)
+            ??throw AppException.Conflict("Missing NH3 capture receipt.");
+        var provenance=WaterBenchAiEvidence.Verify(row,session,image)??throw AppException.Conflict("AI provenance snapshot required.");
+        var sampleRows=await q.Where(x=>x.Kind=="sample_evidence"&&x.Analyte=="NH3"&&x.ConnectionId==timeline.ConnectionId&&
+            x.FirmwareSessionId==channel.SessionId).Take(2).ToListAsync(ct);
+        var linkRows=await q.Where(x=>x.Kind=="nh3_image_link"&&x.Analyte=="NH3"&&x.ConnectionId==timeline.ConnectionId&&
+            x.FirmwareSessionId==channel.SessionId&&x.CaptureId==channel.CaptureId).Take(2).ToListAsync(ct);
+        if(sampleRows.Count!=1||linkRows.Count!=1)throw AppException.Conflict("Missing or ambiguous NH3 observations.");
+        var sample=sampleRows[0];var link=linkRows[0];
+        _=WaterBenchReceiptPolicy.Read(sample);_=WaterBenchReceiptPolicy.Read(link);
+        var observation=JsonSerializer.Deserialize<Nh3EvidenceEvent>(sample.PayloadJson,WaterBatchPlanning.Json)!;
+        var salinity=await (from m in db.WaterMeasurements.AsNoTracking()
+            join sensor in db.Sensors.AsNoTracking() on m.SensorId equals sensor.Id
+            join d in db.Devices.AsNoTracking() on sensor.DeviceId equals (Guid?)d.Id
+            where m.Id==request.SalinityMeasurementId&&sensor.IsActive&&sensor.SensorType=="Salinity"&&sensor.Unit=="ppt"&&
+                sensor.FarmingAreaId==areaId&&d.FarmingAreaId==areaId&&d.EdgeState!="Revoked"
+            select m).SingleOrDefaultAsync(ct)??throw AppException.Conflict("Salinity measurement outside permitted area or sensor mapping.");
+        var calibration=await db.SensorCalibrations.AsNoTracking().Where(x=>x.SensorId==salinity.SensorId&&x.PerformedAt<=salinity.MeasuredAt)
+            .OrderByDescending(x=>x.PerformedAt).ThenByDescending(x=>x.Id).FirstOrDefaultAsync(ct);
+        if(calibration==null||calibration.Result!="Passed"||calibration.Unit!="ppt"||
+            calibration.PerformedAt<salinity.MeasuredAt.AddDays(-30))
+            throw AppException.Conflict("Recent successful salinity calibration required.");
+        var env=WaterBenchAmmoniaPolicy.Environment(observation,salinity,DateTimeOffset.UtcNow);
+        WaterBenchAmmoniaPolicy.Method(request.Method,row.Unit!,env);
+        var profile=await db.WaterColorCalibrations.AsNoTracking().SingleOrDefaultAsync(x=>x.Id==row.CalibrationId&&x.FarmingAreaId==areaId,ct)
+            ??throw AppException.Conflict("Calibration unavailable.");
+        if(profile.RevokedAt!=null||profile.KitName!="Thủy Phước"||profile.Unit!=row.Unit||profile.AiCalibrationId!=provenance.AiCalibrationId)
+            throw AppException.Conflict("NH3 calibration or measurand mismatch.");
+        var result=await ai.AmmoniaReference(request.Method,row.Id,provenance.MediaId,row.CandidateValue!.Value,row.Unit!,env,ct);
+        var evidence=JsonSerializer.SerializeToElement(new{contract="water-bench-ammonia-reference-v1",request.RequestId,requestSha256=requestHash,
+            assessmentId=row.Id,provenanceSha256=WaterBenchAiEvidence.Digest(provenance),inputValue=row.CandidateValue,inputUnit=row.Unit,
+            sampleReceiptId=sample.Id,samplePayloadSha256=sample.PayloadSha256,imageLinkReceiptId=link.Id,imageLinkPayloadSha256=link.PayloadSha256,
+            salinityMeasurementId=salinity.Id,salinity.SensorId,salinity.EdgeEventKey,salinityCalibrationId=calibration.Id,
+            environment=env,result,confirmedBy=user.UserId,reason=request.Reason.Trim(),recordedAt=DateTimeOffset.UtcNow,
+            sameSampleSourceOperatorAttested=true,measurandOperatorAttested=true,clockDriftValidated=false,sensorVialAlignmentVerified=false,
+            chemicalResultValidated=false,crabToxicityThresholdValidated=false,productionPublished=false},WaterBatchPlanning.Json);
+        await using var tx=await db.Database.BeginTransactionAsync(ct);
+        await db.Database.ExecuteSqlInterpolatedAsync($"SELECT 1 FROM be.\"WaterBenchResultAssessments\" WHERE \"Id\"={row.Id} FOR UPDATE",ct);
+        var current=await db.WaterBenchResultAssessments.SingleAsync(x=>x.Id==row.Id,ct);
+        if(ExistingReference(current) is {} concurrent)return Ok(ApiResponse<object>.Ok(concurrent));
+        if(current.EvidenceJson!=row.EvidenceJson||current.CandidateValue!=row.CandidateValue||current.Unit!=row.Unit)
+            throw AppException.Conflict("Assessment changed.");
+        // Append only; retain the exact existing optical evidence bytes and checksum.
+        string original=current.EvidenceJson.TrimEnd();
+        if(!original.EndsWith("}",StringComparison.Ordinal))throw AppException.Conflict("Invalid stored evidence.");
+        string referenceText=evidence.GetRawText();
+        current.EvidenceJson=original[..^1]+",\"ammoniaReference\":"+referenceText+
+            ",\"ammoniaReferenceSha256\":\""+WaterBenchAiEvidence.Hash(referenceText)+"\"}";
+        if(Encoding.UTF8.GetByteCount(current.EvidenceJson)>65536)throw AppException.Conflict("Evidence capacity exceeded.");
+        db.OperationLogs.Add(new OperationLog{UserId=user.UserId,Action="RecordWaterBenchAmmoniaReference",EntityType="WaterBenchResultAssessment",
+            EntityId=row.Id,Details=request.Method,IpAddress=HttpContext.Connection.RemoteIpAddress?.ToString()});
+        await db.SaveChangesAsync(ct);await tx.CommitAsync(ct);
+        return Ok(ApiResponse<object>.Ok(evidence));
+    }
     // Metadata-only preflight. Does not read image bytes, call AI, or create a result.
     [HttpGet("ai-readiness")]
     public async Task<IActionResult> AiReadiness(Guid areaId,Guid stationId,string bootId,string batchId,CancellationToken ct)

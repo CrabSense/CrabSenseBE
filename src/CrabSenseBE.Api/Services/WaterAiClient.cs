@@ -184,6 +184,55 @@ public sealed class WaterAiClient(HttpClient http, IConfiguration config)
         }
         catch(Exception ex) when(ex is KeyNotFoundException or InvalidOperationException or FormatException){throw Invalid();}
     }
+    public async Task<JsonElement> AmmoniaReference(string method,Guid assessmentId,Guid mediaId,decimal value,string unit,
+        Nh3Environment env,CancellationToken ct)
+    {
+        WaterBenchAmmoniaPolicy.Method(method,unit,env);
+        bool printed=method=="printed_table";
+        object payload=printed?(object)new{sample_id=assessmentId.ToString("D"),media_id=mediaId.ToString("D"),value,input_basis="chart",
+            ph=env.Ph,sample_at=env.SampleAt,ph_at=env.PhAt,temperature_c=env.TemperatureC,temperature_at=env.TemperatureAt,max_age_seconds=env.MaxAgeSeconds}:
+            new{value,unit,ph=env.Ph,temperature_c=env.TemperatureC,salinity_ppt=env.SalinityPpt,sample_at=env.SampleAt,
+                ph_at=env.PhAt,temperature_at=env.TemperatureAt,salinity_at=env.SalinityAt,max_age_seconds=env.MaxAgeSeconds};
+        var data=await Post(printed?"v1/ammonia/thuy-phuoc/lookup":"v1/ammonia/convert",payload,ct);
+        try
+        {
+            if(data.GetProperty("sample_at").GetDateTimeOffset()!=env.SampleAt)throw Invalid();
+            var status=data.GetProperty("status").GetString();
+            if(printed)
+            {
+                if(status is not ("reference_only" or "unavailable")||
+                    data.GetProperty("revision").GetString()!="thuy-phuoc-photo-card-v1"||
+                    data.GetProperty("method").GetString()!="printed_table_exact"||
+                    data.GetProperty("sample_id").GetString()!=assessmentId.ToString("D")||
+                    data.GetProperty("media_id").GetString()!=mediaId.ToString("D")||
+                    data.GetProperty("input").GetDecimal()!=value||data.GetProperty("input_basis").GetString()!="chart"||
+                    data.GetProperty("ph").GetDecimal()!=env.Ph||data.GetProperty("ph_at").GetDateTimeOffset()!=env.PhAt||
+                    data.GetProperty("temperature_c").GetDecimal()!=env.TemperatureC||
+                    data.GetProperty("temperature_at").GetDateTimeOffset()!=env.TemperatureAt||
+                    data.GetProperty("chemical_accuracy_validated").GetBoolean()||data.GetProperty("crab_toxicity_threshold_validated").GetBoolean()||
+                    data.GetProperty("temperature_salinity_corrected").GetBoolean())throw Invalid();
+                var result=data.GetProperty("nh3_mg_l_printed");
+                if(status=="reference_only"?(result.ValueKind!=JsonValueKind.Number||result.GetDecimal() is <0 or >5):
+                    result.ValueKind!=JsonValueKind.Null)throw Invalid();
+                return JsonSerializer.SerializeToElement(new{status,revision="thuy-phuoc-photo-card-v1",method="printed_table_exact",
+                    nh3MgLPrinted=status=="reference_only"?result.GetDecimal():(decimal?)null,
+                    reason=status=="unavailable"?data.GetProperty("reason").GetString():null,
+                    temperatureSalinityCorrected=false},Json);
+            }
+            if(status!="estimated"||data.GetProperty("method").GetString()!="epa-1989-saltwater-whitfield-regression")throw Invalid();
+            var free=data.GetProperty("free_nh3_mg_l").GetDecimal();
+            var nitrogen=data.GetProperty("free_nh3_n_mg_l").GetDecimal();
+            var tan=data.GetProperty("tan_n_mg_l").GetDecimal();
+            var fraction=data.GetProperty("unionized_fraction").GetDecimal();
+            if(free<0||nitrogen<0||tan<0||fraction is <=0 or >=1||Math.Abs(nitrogen-tan*fraction)>0.00001m||
+                Math.Abs(free-nitrogen*(14.00674m+3*1.00794m)/14.00674m)>0.00001m||
+                (unit=="mg/L TAN-N"?Math.Abs(tan-value):Math.Abs(tan*(1-fraction)*(14.00674m+4*1.00794m)/14.00674m-value))>0.00001m)
+                throw Invalid();
+            return JsonSerializer.SerializeToElement(new{status,method="epa-1989-saltwater-whitfield-regression",
+                freeNh3MgL=free,freeNh3NMgL=nitrogen,tanNMgL=tan,unionizedFraction=fraction},Json);
+        }
+        catch(Exception ex) when(ex is KeyNotFoundException or InvalidOperationException or FormatException or OverflowException){throw Invalid();}
+    }
     private static bool Hash(string? value)=>value is {Length:64}&&value.All(Uri.IsHexDigit);
     private static AppException Invalid()=>new("Dịch vụ AI nước trả dữ liệu không hợp lệ.",502);
     private async Task<JsonElement> Post(string path,object payload,CancellationToken ct)
