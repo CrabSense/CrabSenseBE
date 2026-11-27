@@ -39,7 +39,15 @@ public sealed class ScopedSensorHistoryPostgresTests
         Assert.Equal("127.0.0.1",cfg.Host);
         Assert.Equal("scoped_history_test",cfg.Database);
         Assert.Equal("postgres",cfg.Username);
-        var options=new DbContextOptionsBuilder<AppDbContext>().UseNpgsql(cs).Options;
+        // Match production migration discovery and history schema for every test context.
+        void ConfigurePostgres(DbContextOptionsBuilder builder)=>builder.UseNpgsql(cs,npgsql=>{
+            npgsql.MigrationsAssembly(typeof(AppDbContext).Assembly.FullName);
+            npgsql.MigrationsHistoryTable("__EFMigrationsHistory","be");
+            npgsql.CommandTimeout(120);
+        });
+        var optionsBuilder=new DbContextOptionsBuilder<AppDbContext>();
+        ConfigurePostgres(optionsBuilder);
+        var options=optionsBuilder.Options;
         await using var seed=new AppDbContext(options);
         Assert.Empty(await seed.Database.GetPendingMigrationsAsync());
         Assert.Contains("20261127100000_ScopedSensorHistory",await seed.Database.GetAppliedMigrationsAsync());
@@ -73,7 +81,7 @@ public sealed class ScopedSensorHistoryPostgresTests
         // Real MVC routes, authorization and DB repositories. Test-only user auth
         // and mocked alert/relay side effects avoid executing hardware commands.
         await using var api=PermissionApiFactory.Create(services=>{
-            services.AddDbContext<AppDbContext>(o=>o.UseNpgsql(cs));
+            services.AddDbContext<AppDbContext>(ConfigurePostgres);
             services.AddScoped<IUnitOfWork,UnitOfWork>();
             services.AddScoped<IIotService,IotService>();
             services.AddSingleton(Mock.Of<IStorageService>());
