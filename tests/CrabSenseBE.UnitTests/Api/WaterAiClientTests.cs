@@ -67,6 +67,44 @@ public sealed class WaterAiClientTests
         if(tamper)Assert.Equal(502,(await Assert.ThrowsAsync<AppException>(Call)).StatusCode);
         else Assert.Equal(1.5m,(await Call()).Value);
     }
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task BatchUsesOneRequestAndIsolatesRejectedOrTamperedSamples(bool tamperIdentity)
+    {
+        var area=Guid.NewGuid();var camera=Guid.NewGuid();
+        var samples=new[]{"NO2","NO3","NH3"}.Select(a=>new WaterAiClient.BatchSample(camera,a,"mg/L "+a,"lot",
+            "signed-test",ExternalId,new(Guid.NewGuid(),[1,2,3],300,15),WaterAiClient.Algorithm)).ToArray();
+        int calls=0;
+        using var http=new HttpClient(new Handler(async request=>{
+            calls++;
+            Assert.Equal("/v1/batches/analyze",request.RequestUri!.AbsolutePath);
+            Assert.Equal(Key,request.Headers.GetValues("X-AI-Key").Single());
+            using var body=JsonDocument.Parse(await request.Content!.ReadAsStringAsync());
+            Assert.Equal("scheduled",body.RootElement.GetProperty("mode").GetString());
+            Assert.Equal(3,body.RootElement.GetProperty("samples").GetArrayLength());
+            object Estimate(WaterAiClient.BatchSample s,bool badHash)=>new {status="estimated",analyte=s.Analyte,
+                unit=s.Unit,algorithm=s.Algorithm,calibration_id=s.CalibrationId,
+                media_id=tamperIdentity&&s.Analyte=="NH3"?samples[0].Photo.MediaId.ToString("D"):s.Photo.MediaId.ToString("D"),
+                value=1m,holdout_max_error=0.1m,confidence=(decimal?)null,
+                evidence=new{media_id=s.Photo.MediaId.ToString("D"),sha256=badHash?new string('0',64):
+                    Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(s.Photo.Bytes)).ToLowerInvariant()}};
+            return Response(new{batch_id="batch-test",status="partial",results=new object[]{
+                Estimate(samples[2],true),new{status="rejected",analyte="NO3",media_id=samples[1].Photo.MediaId.ToString("D"),error="bad_image"},
+                Estimate(samples[0],false)}});
+        }));
+        var ai=new WaterAiClient(http,Config());
+        if(tamperIdentity)
+            Assert.Equal(502,(await Assert.ThrowsAsync<AppException>(()=>ai.AnalyzeBatch(area,"batch-test","scheduled",samples,default))).StatusCode);
+        else
+        {
+            var rows=await ai.AnalyzeBatch(area,"batch-test","scheduled",samples,default);
+            Assert.Equal(1m,rows[0].Estimate!.Value);
+            Assert.Equal(400,rows[1].ErrorStatus);
+            Assert.Equal(502,rows[2].ErrorStatus);
+        }
+        Assert.Equal(1,calls);
+    }
     [Fact]
     public async Task UnavailableDoesNotFallbackAndTokenIsNotPublic()
     {

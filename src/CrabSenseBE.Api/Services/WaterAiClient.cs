@@ -52,10 +52,19 @@ public sealed class WaterAiClient(HttpClient http, IConfiguration config)
     }
     public async Task<Estimate> Analyze(Guid area, Guid camera, string analyte,string unit,string lot,string token,string calibrationId,Photo photo,CancellationToken ct,string algorithm=Algorithm)
     {
+        var sample=new BatchSample(camera,analyte,unit,lot,token,calibrationId,photo,algorithm);
         if(!Supported(algorithm))throw Invalid();
-        var data=await Post("v1/analyze",new { area_id=area.ToString("D"),camera_id=camera.ToString("D"),analyte,reagent_lot=lot,
-            calibration_token=token,image_b64=Convert.ToBase64String(photo.Bytes),media_id=photo.MediaId.ToString("D"),
-            reaction_seconds=photo.ReactionSeconds,salinity_ppt=photo.SalinityPpt },ct);
+        var data=await Post("v1/analyze",AnalyzePayload(area,sample),ct);
+        return ReadEstimate(data,sample);
+    }
+    public sealed record BatchSample(Guid CameraId,string Analyte,string Unit,string Lot,string Token,string CalibrationId,Photo Photo,string Algorithm);
+    public sealed record BatchOutcome(string Analyte,Estimate? Estimate,int? ErrorStatus=null);
+    private static object AnalyzePayload(Guid area,BatchSample s)=>new {area_id=area.ToString("D"),camera_id=s.CameraId.ToString("D"),
+        analyte=s.Analyte,reagent_lot=s.Lot,calibration_token=s.Token,image_b64=Convert.ToBase64String(s.Photo.Bytes),
+        media_id=s.Photo.MediaId.ToString("D"),reaction_seconds=s.Photo.ReactionSeconds,salinity_ppt=s.Photo.SalinityPpt};
+    private static Estimate ReadEstimate(JsonElement data,BatchSample sample)
+    {
+        var (analyte,unit,calibrationId,photo,algorithm)=(sample.Analyte,sample.Unit,sample.CalibrationId,sample.Photo,sample.Algorithm);
         try
         {
             var value=data.GetProperty("value").GetDecimal();var error=data.GetProperty("holdout_max_error").GetDecimal();
@@ -68,6 +77,52 @@ public sealed class WaterAiClient(HttpClient http, IConfiguration config)
                 evidence.GetProperty("media_id").GetString()!=photo.MediaId.ToString("D")||!GeometryEvidence(evidence,algorithm)||
                 !string.Equals(evidence.GetProperty("sha256").GetString(),hash,StringComparison.OrdinalIgnoreCase))throw Invalid();
             return new(value,evidence.Clone(),error);
+        }
+        catch(Exception ex) when(ex is KeyNotFoundException or InvalidOperationException or FormatException or OverflowException){throw Invalid();}
+    }
+    // Python dispatches the samples concurrently inside one admitted service request.
+    public async Task<IReadOnlyList<BatchOutcome>> AnalyzeBatch(Guid area,string batchId,string mode,IReadOnlyList<BatchSample> samples,CancellationToken ct)
+    {
+        if(area==Guid.Empty||string.IsNullOrWhiteSpace(batchId)||batchId.Length>128||mode is not ("manual" or "scheduled")||
+            samples.Count is <1 or >3||samples.Select(x=>x.Analyte).Distinct(StringComparer.Ordinal).Count()!=samples.Count||
+            samples.Select(x=>x.Photo.MediaId).Distinct().Count()!=samples.Count||
+            samples.Any(x=>!Supported(x.Algorithm)||x.Analyte is not ("NO2" or "NO3" or "NH3")||
+                x.Photo.MediaId==Guid.Empty||x.Photo.Bytes.Length is <1 or >5*1024*1024)||
+            mode=="scheduled"&&samples.Count!=3)throw Invalid();
+        var data=await Post("v1/batches/analyze",new{batch_id=batchId,mode,samples=samples.Select(s=>AnalyzePayload(area,s))},ct);
+        try
+        {
+            var rows=data.GetProperty("results");
+            if(data.GetProperty("batch_id").GetString()!=batchId||rows.ValueKind!=JsonValueKind.Array||
+                rows.GetArrayLength()!=samples.Count)throw Invalid();
+            var mapped=new Dictionary<string,JsonElement>(StringComparer.Ordinal);
+            int estimated=0;
+            foreach(var r in rows.EnumerateArray())
+            {
+                var name=r.GetProperty("analyte").GetString();
+                var sample=samples.SingleOrDefault(s=>s.Analyte==name);
+                if(sample==null||r.GetProperty("media_id").GetString()!=sample.Photo.MediaId.ToString("D")||
+                    !mapped.TryAdd(sample.Analyte,r))throw Invalid();
+                var status=r.GetProperty("status").GetString();
+                if(status=="estimated")estimated++;
+                else if(status!="rejected")throw Invalid();
+            }
+            if(data.GetProperty("status").GetString()!=(estimated==samples.Count?"completed":estimated==0?"failed":"partial"))throw Invalid();
+            var results=new List<BatchOutcome>();
+            foreach(var s in samples)
+            {
+                var r=mapped[s.Analyte];
+                if(r.GetProperty("status").GetString()=="rejected")
+                {
+                    // Do not relay arbitrary upstream messages, tokens or image contents to clients.
+                    var error=r.TryGetProperty("error",out var code)&&code.ValueKind==JsonValueKind.String?code.GetString():null;
+                    results.Add(new(s.Analyte,null,string.IsNullOrWhiteSpace(error)?502:error=="internal_error"?503:400));
+                    continue;
+                }
+                try{results.Add(new(s.Analyte,ReadEstimate(r,s)));}
+                catch(AppException ex) when(ex.StatusCode==502){results.Add(new(s.Analyte,null,502));}
+            }
+            return results;
         }
         catch(Exception ex) when(ex is KeyNotFoundException or InvalidOperationException or FormatException or OverflowException){throw Invalid();}
     }
