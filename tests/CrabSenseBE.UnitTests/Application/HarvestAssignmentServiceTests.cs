@@ -360,6 +360,12 @@ public sealed class HarvestAssignmentServiceTests
         Assert.Equal(HarvestStatus.Completed, voucher.Status);
         Assert.Single(voucher.Lines);
         Assert.Equal(voucher.Id, result.Data!.VoucherId);
+
+        var frozenItem = Assert.Single(fixture.FrozenCrabItems);
+        Assert.Equal(fixture.FrozenLots[0].Id, frozenItem.FrozenLotId);
+        Assert.Equal(voucher.Lines.Single().Id, frozenItem.HarvestLineId);
+        Assert.Equal("PendingInbound", frozenItem.StockState);
+        Assert.Equal(frozenItem.BarcodeValue, Assert.Single(result.Data.CrabLabels!).BarcodeValue);
     }
 
     [Fact]
@@ -369,6 +375,7 @@ public sealed class HarvestAssignmentServiceTests
         var line = fixture.Lines[0];
         line.Outcome = HarvestAssignmentOutcome.Harvested;
         line.HarvestWeightGram = 350;
+        line.HarvestGrade = "M";
         line.HarvestCarapaceLengthMm = 72;
         line.HarvestCarapaceWidthMm = 85;
         line.PendingHarvestedAt = DateTime.UtcNow;
@@ -381,6 +388,28 @@ public sealed class HarvestAssignmentServiceTests
         Assert.Equal(CrabStatus.Harvested, fixture.Crabs[0].Status);
         Assert.Single(fixture.Vouchers);
         Assert.NotNull(result.Data!.VoucherId);
+    }
+
+    [Fact]
+    public async Task CompleteAssignment_RejectsHarvestWhenNoFrozenLotIsOpen()
+    {
+        var fixture = new Fixture(HarvestAssignmentStatus.InProgress, lineCount: 1);
+        var line = fixture.Lines[0];
+        line.Outcome = HarvestAssignmentOutcome.Harvested;
+        line.HarvestWeightGram = 350;
+        line.HarvestGrade = "M";
+        line.HarvestCarapaceLengthMm = 72;
+        line.HarvestCarapaceWidthMm = 85;
+        line.PendingHarvestedAt = DateTime.UtcNow;
+        fixture.FrozenLots.Clear();
+
+        await Assert.ThrowsAsync<AppException>(() =>
+            fixture.Service.CompleteAssignmentAsync(
+                fixture.Assignment.Id,
+                new CompleteHarvestAssignmentRequest()));
+
+        Assert.Empty(fixture.Vouchers);
+        Assert.Empty(fixture.FrozenCrabItems);
     }
 
     [Fact]
@@ -508,6 +537,8 @@ public sealed class HarvestAssignmentServiceTests
         public HarvestAssignment Assignment { get; }
         public List<HarvestAssignmentLine> Lines { get; }
         public List<Crab> Crabs { get; }
+        public List<FrozenLot> FrozenLots { get; }
+        public List<FrozenCrabItem> FrozenCrabItems { get; }
         public List<HarvestVoucher> Vouchers { get; }
         public List<MoltingRecord> MoltingRecords { get; }
 
@@ -583,6 +614,20 @@ public sealed class HarvestAssignmentServiceTests
                 });
             }
 
+            FrozenLots =
+            [
+                new FrozenLot
+                {
+                    Id = Guid.NewGuid(),
+                    LotCode = "FROZEN-TEST",
+                    FarmingAreaId = areaId,
+                    FrozenDate = DateTime.UtcNow.Date,
+                    ExpiryDate = DateTime.UtcNow.Date.AddMonths(6),
+                    IsOpenForInbound = true
+                }
+            ];
+            FrozenCrabItems = [];
+
             var rows = new List<FarmingRow>
             {
                 new()
@@ -623,6 +668,10 @@ public sealed class HarvestAssignmentServiceTests
                 .Returns(CreateRepository(Lines).Object);
             UnitOfWork.Setup(x => x.Crabs)
                 .Returns(CreateRepository(Crabs).Object);
+            UnitOfWork.Setup(x => x.FrozenLots)
+                .Returns(CreateRepository(FrozenLots).Object);
+            UnitOfWork.Setup(x => x.FrozenCrabItems)
+                .Returns(CreateRepository(FrozenCrabItems).Object);
             UnitOfWork.Setup(x => x.Boxes)
                 .Returns(CreateRepository(boxes).Object);
             UnitOfWork.Setup(x => x.FarmingRows)

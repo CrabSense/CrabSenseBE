@@ -288,7 +288,9 @@ public record HarvestAssignmentResultDto(
     Guid? VoucherId,
     string? VoucherCode,
     int HarvestedCount,
-    int DeferredCount);
+    int DeferredCount,
+    Guid? FrozenLotId = null,
+    IReadOnlyList<HarvestCrabLabelDto>? CrabLabels = null);
 
 public record HarvestAssignmentListItemDto(
 Guid Id,
@@ -364,6 +366,12 @@ public record HarvestAssignmentStaffDto(
     Guid Id,
     string FullName,
     string? UserCode);
+// Dữ liệu tối thiểu để màn hình in nhãn cho từng cua.
+public record HarvestCrabLabelDto(
+    Guid FrozenCrabItemId,
+    Guid CrabId,
+    string CrabCode,
+    string BarcodeValue);
 public record CompleteHarvestAssignmentRequest(string? VoucherNotes = null);
 
 public record ReviewHarvestAssignmentRequest(string? Notes = null);

@@ -706,14 +706,46 @@ public sealed class HarvestAssignmentService : IHarvestAssignmentService
         if (caller.Role != UserRole.FarmStaff || assignment.AssignedToUserId != caller.Id)
             throw AppException.Forbidden("Bạn không được giao nhiệm vụ này.");
         await _areas.EnsureAsync(assignment.FarmingAreaId, manage: false, ct);
-       
+
         if (assignment.Status is not (HarvestAssignmentStatus.InProgress or HarvestAssignmentStatus.PendingReview))
             throw AppException.Conflict("Chỉ có thể hoàn tất nhiệm vụ đang xử lý.");
 
         var now = DateTime.UtcNow;
         var (lines, harvestedLines, deferredLines) =
             await ValidateCompletionAsync(assignment, now, ct);
+        //Gán cua vào lot cấp đông nếu có cua được thu hoạch
+        FrozenLot? openLot = null;
+        var createdCrabItems = new List<FrozenCrabItem>();
 
+        if (harvestedLines.Count > 0)
+        {
+            // Chỉ yêu cầu lot khi Assignment có cua được thu hoạch.
+            var openLots = (await _uow.FrozenLots.FindAsync(
+                x => x.FarmingAreaId == assignment.FarmingAreaId
+                     && x.IsOpenForInbound,
+                ct)).ToList();
+
+            if (openLots.Count == 0)
+                throw AppException.Conflict(
+                    "Khu chưa có Frozen Lot đang mở. Vui lòng liên hệ Manager tạo lot.");
+
+            if (openLots.Count != 1)
+                throw AppException.Conflict(
+                    "Dữ liệu Frozen Lot không hợp lệ: khu phải có đúng một lot đang mở.");
+
+            openLot = openLots[0];
+
+            // Chỉ cho dùng các grade đã thống nhất với Harvest Line.
+            var allowedCrabGrades = new HashSet<string>(
+                ["S", "M", "L", "XL", "XXL", "A", "B", "C"],
+                StringComparer.OrdinalIgnoreCase);
+
+            if (harvestedLines.Any(line =>
+                    string.IsNullOrWhiteSpace(line.HarvestGrade)
+                    || !allowedCrabGrades.Contains(line.HarvestGrade.Trim())))
+                throw AppException.BadRequest(
+                    "Grade của cua thu hoạch không hợp lệ.");
+        }
         assignment.SubmittedAt ??= now;
         assignment.SubmissionNotes = NormalizeNullable(request.VoucherNotes);
         AppendAudit(assignment, "completed", assignment.SubmissionNotes);
@@ -780,6 +812,50 @@ public sealed class HarvestAssignmentService : IHarvestAssignmentService
                 createdHarvestLines,
                 ct);
         }
+        //Tạo barcode
+        if (openLot is not null && voucher is not null)
+        {
+            foreach (var harvestLine in createdHarvestLines)
+            {
+                var assignmentLine = harvestedLines.Single(
+                    line => line.Id == harvestLine.HarvestAssignmentLineId);
+
+                var itemGrade = assignmentLine.HarvestGrade?.Trim();
+
+                if (string.IsNullOrWhiteSpace(itemGrade))
+                    throw AppException.BadRequest(
+                        "Cua thu hoạch chưa có grade hợp lệ.");
+
+                var crab = await _uow.Crabs.GetByIdAsync(
+                    assignmentLine.CrabId, ct)
+                    ?? throw AppException.Conflict(
+                        "Không tìm thấy cua của Harvest Line.");
+
+                var item = new FrozenCrabItem
+                {
+                    FrozenLotId = openLot.Id,
+                    HarvestLineId = harvestLine.Id,
+                    CrabId = crab.Id,
+                    BarcodeValue = $"FC-{Guid.NewGuid():N}".ToUpperInvariant(),
+                    LotCode = openLot.LotCode,
+                    CrabCode = crab.Code,
+                    HarvestVoucherCode = voucher.VoucherCode,
+                    FrozenDate = openLot.FrozenDate,
+                    ExpiryDate = openLot.ExpiryDate,
+                    WeightGram = harvestLine.WeightGram,
+                    Grade = itemGrade.ToUpperInvariant(),
+                    // Chưa tính vào tồn kho cho đến khi phiếu nhập được duyệt và thực thi.
+                    StockState = "PendingInbound"
+                };
+
+                await _uow.FrozenCrabItems.AddAsync(item, ct);
+                createdCrabItems.Add(item);
+            }
+
+            // Token giúp phát hiện hai Assignment cập nhật cùng lot đồng thời.
+            openLot.ConcurrencyVersion++;
+            _uow.FrozenLots.Update(openLot);
+        }
 
         foreach (var line in deferredLines)
         {
@@ -803,7 +879,15 @@ public sealed class HarvestAssignmentService : IHarvestAssignmentService
                 voucher?.Id,
                 voucher?.VoucherCode,
                 harvestedLines.Count,
-                deferredLines.Count),
+                deferredLines.Count,
+                openLot?.Id,
+createdCrabItems
+    .Select(item => new HarvestCrabLabelDto(
+        item.Id,
+        item.CrabId,
+        item.CrabCode,
+        item.BarcodeValue))
+    .ToList()),
             "Đã hoàn tất nhiệm vụ thu hoạch.");
     }
 

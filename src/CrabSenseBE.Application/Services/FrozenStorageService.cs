@@ -119,6 +119,18 @@ public class FrozenStorageService : IFrozenStorageService
             throw AppException.BadRequest("Lô đông phải xác định khu sở hữu.");
         if (voucherAreaId is Guid harvestAreaId && harvestAreaId != ownerAreaId)
             throw AppException.BadRequest("Lô đông và phiếu thu hoạch phải thuộc cùng một khu.");
+        if (request.IsOpenForInbound)
+        {
+            // K nhận HarvestVoucherId khi tạo lô
+            if (request.HarvestVoucherId.HasValue)
+                throw AppException.BadRequest("Không gán HarvestVoucherId vào tạo thời điểm này");
+
+            // Chặn tạo lot mở thứ hai trong cùng khu.
+            if (await _uow.FrozenLots.AnyAsync(
+                    x => x.FarmingAreaId == ownerAreaId && x.IsOpenForInbound,
+                    ct))
+                throw AppException.Conflict("Khu này đã có lô cấp đông đang mở. Hãy đóng lô hiện tại trước.");
+        }
         await _areas.EnsureAsync(ownerAreaId, manage: false, ct);
 
         var lot = new FrozenLot
@@ -132,7 +144,8 @@ public class FrozenStorageService : IFrozenStorageService
             Grade = normalizedGrade,
             Quantity = 0,
             Status = FrozenLotStatus.Available,
-            StorageLocation = normalizedLocation
+            StorageLocation = normalizedLocation,
+            IsOpenForInbound = request.IsOpenForInbound
         };
 
         await _uow.FrozenLots.AddAsync(lot, ct);
@@ -154,7 +167,7 @@ public class FrozenStorageService : IFrozenStorageService
 
         if (lot is null)
         {
-            throw AppException.NotFound("Frozen lot");
+            throw AppException.NotFound("Lô cấp đông không tồn tại.");
         }
         await EnsureLotAreaAsync(lot, ct);
 
@@ -184,6 +197,37 @@ public class FrozenStorageService : IFrozenStorageService
                 throw AppException.BadRequest(
                     "Ngày cấp đông không được trước ngày thu hoạch.");
             }
+        }
+        if (request.IsOpenForInbound.HasValue)
+        {
+            if (request.IsOpenForInbound.Value)
+            {
+                // Lot đã có item thì phải tạo lot mới, không mở lại lot cũ.
+                if (!lot.IsOpenForInbound &&
+                    await _uow.FrozenCrabItems.AnyAsync(
+                        x => x.FrozenLotId == lot.Id, ct))
+                    throw AppException.BadRequest("Lot đã có lịch sử barcode; hãy tạo lô cấp đông mới.");
+
+                // Đảm bảo chỉ có một lot mở trong khu.
+                if (await _uow.FrozenLots.AnyAsync(
+                        x => x.Id != lot.Id
+                             && x.FarmingAreaId == lot.FarmingAreaId
+                             && x.IsOpenForInbound,
+                        ct))
+                    throw AppException.BadRequest("Khu này đã có lô cấp đông đang mở.");
+            }
+            else
+            {
+                // Không đóng lot khi còn cua chưa được nhập kho.
+                if (await _uow.FrozenCrabItems.AnyAsync(
+                        x => x.FrozenLotId == lot.Id
+                             && x.StockState == "PendingInbound",
+                        ct))
+                    throw AppException.Conflict(
+                        "Không thể đóng lot khi còn cua PendingInbound.");
+            }
+
+            lot.IsOpenForInbound = request.IsOpenForInbound.Value;
         }
 
         lot.FrozenDate = request.FrozenDate;
@@ -588,17 +632,62 @@ public class FrozenStorageService : IFrozenStorageService
         var selectedIds = request.FrozenCrabItemIds ?? [];
         if (transaction.Type == FrozenStorageTransactionType.Inbound)
         {
-            if (selectedIds.Count != 0)
-                throw AppException.BadRequest("Không chọn barcode đã đăng ký cho phiếu nhập.");
-            if (trackedItems.Count != 0)
-                throw AppException.Conflict("Lô đã đăng ký barcode; tạo lô mới cho lần nhập tiếp theo.");
+            var pendingItems = trackedItems
+                .Where(x => x.StockState == "PendingInbound")
+                .ToList();
+
+            if (pendingItems.Count > 0)
+            {
+                // Mỗi barcode chỉ được nhận một lần trong cùng phiếu nhập.
+                if (selectedIds.Count != selectedIds.Distinct().Count())
+                    throw AppException.BadRequest(
+                        "Danh sách barcode nhập kho bị trùng.");
+
+                if (selectedIds.Count != request.ActualQuantity)
+                    throw AppException.Conflict(
+                        "Số barcode nhập kho phải khớp số lượng thực nhập.");
+
+                var selectedItems = pendingItems
+                    .Where(item => selectedIds.Contains(item.Id))
+                    .ToList();
+
+                if (selectedItems.Count != selectedIds.Count)
+                    throw AppException.Conflict(
+                        "Có barcode không thuộc lot này hoặc không còn PendingInbound.");
+
+                var selectedWeightKg = decimal.Round(
+                    selectedItems.Sum(item => item.WeightGram) / 1000m,
+                    3,
+                    MidpointRounding.AwayFromZero);
+
+                if (selectedWeightKg != actualWeight)
+                    throw AppException.Conflict(
+                        "Tổng trọng lượng barcode không khớp trọng lượng thực nhập.");
+
+                // Chỉ tại bước thực thi phiếu nhập đã duyệt mới tính barcode là tồn kho.
+                foreach (var item in selectedItems)
+                    item.StockState = "Available";
+            }
+            else
+            {
+                if (selectedIds.Count != 0)
+                    throw AppException.Conflict(
+                        "Lô không còn barcode PendingInbound để nhập.");
+
+                // Giữ nguyên luồng nhập tồn tổng hợp cũ cho lot chưa dùng barcode.
+                if (trackedItems.Count != 0)
+                    throw AppException.Conflict(
+                        "Lô đã đăng ký barcode; không thể nhập tồn tổng hợp.");
+            }
         }
         else if (trackedItems.Count != 0 || lot.HarvestVoucherId.HasValue)
         {
             if (trackedItems.Count == 0)
                 throw AppException.Conflict("Cần đăng ký barcode cho lô có nguồn thu hoạch trước khi xuất.");
-            if (trackedItems.Any(x => x.StockState is not ("Available" or "Dispatched")))
-                throw AppException.Conflict("Cần đối soát barcode legacy trước khi xuất kho.");
+            if (trackedItems.Any(
+        x => x.StockState is not ("Available" or "Dispatched" or "PendingInbound")))
+                throw AppException.Conflict(
+                    "Cần đối soát barcode legacy trước khi xuất kho.");
             var available = trackedItems.Where(x => x.StockState == "Available").ToList();
             if (available.Count != lot.Quantity || decimal.Round(available.Sum(x => x.WeightGram) / 1000m, 3, MidpointRounding.AwayFromZero) != lot.WeightKg)
                 throw AppException.Conflict("Tồn barcode không khớp tồn lô; cần đối soát.");
@@ -947,6 +1036,10 @@ public class FrozenStorageService : IFrozenStorageService
             ?? throw AppException.NotFound("Frozen lot");
         await EnsureLotAreaAsync(lot, ct);
 
+        if (lot.IsOpenForInbound)
+            throw AppException.Conflict(
+                "Barcode của lot đang mở được tạo tự động khi hoàn tất Assignment.");
+
         if (lot.HarvestVoucherId is not Guid voucherId || voucherId == Guid.Empty)
             throw AppException.BadRequest(
                 "The frozen lot must be linked to a harvest voucher before registering crab items.");
@@ -1169,39 +1262,39 @@ public class FrozenStorageService : IFrozenStorageService
     public async Task<byte[]> GetCrabItemBarcodePngAsync(
     string barcodeValue,
     CancellationToken ct = default)
-{
-    if (string.IsNullOrWhiteSpace(barcodeValue))
-        throw AppException.BadRequest("Barcode value is required.");
-
-    // Chuẩn hóa giá trị trước khi tìm barcode đã lưu.
-    var normalizedBarcode = barcodeValue.Trim().ToUpperInvariant();
-
-    var item = await _uow.FrozenCrabItems.FirstOrDefaultAsync(
-        x => x.BarcodeValue == normalizedBarcode,
-        ct)
-        ?? throw AppException.NotFound("Frozen crab item");
-    var itemLot = await _uow.FrozenLots.GetByIdAsync(item.FrozenLotId, ct)
-        ?? throw AppException.NotFound("Frozen lot");
-    await EnsureLotAreaAsync(itemLot, ct);
-
-    // Tạo ảnh Code 128; giá trị encode chính là mã đã lưu cho cua này.
-    var writer = new BarcodeWriter
     {
-        Format = BarcodeFormat.CODE_128,
-        Options = new EncodingOptions
+        if (string.IsNullOrWhiteSpace(barcodeValue))
+            throw AppException.BadRequest("Barcode value is required.");
+
+        // Chuẩn hóa giá trị trước khi tìm barcode đã lưu.
+        var normalizedBarcode = barcodeValue.Trim().ToUpperInvariant();
+
+        var item = await _uow.FrozenCrabItems.FirstOrDefaultAsync(
+            x => x.BarcodeValue == normalizedBarcode,
+            ct)
+            ?? throw AppException.NotFound("Frozen crab item");
+        var itemLot = await _uow.FrozenLots.GetByIdAsync(item.FrozenLotId, ct)
+            ?? throw AppException.NotFound("Frozen lot");
+        await EnsureLotAreaAsync(itemLot, ct);
+
+        // Tạo ảnh Code 128; giá trị encode chính là mã đã lưu cho cua này.
+        var writer = new BarcodeWriter
         {
-            Width = 600,
-            Height = 160,
-            Margin = 20
-        }
-    };
+            Format = BarcodeFormat.CODE_128,
+            Options = new EncodingOptions
+            {
+                Width = 600,
+                Height = 160,
+                Margin = 20
+            }
+        };
 
-    using var bitmap = writer.Write(item.BarcodeValue);
-    using var image = SKImage.FromBitmap(bitmap);
-    using var png = image.Encode(SKEncodedImageFormat.Png, quality: 100);
+        using var bitmap = writer.Write(item.BarcodeValue);
+        using var image = SKImage.FromBitmap(bitmap);
+        using var png = image.Encode(SKEncodedImageFormat.Png, quality: 100);
 
-    return png.ToArray();
-}
+        return png.ToArray();
+    }
 
     // Chuyển entity sản phẩm cua cấp đông sang DTO trả về cho API.
     private static FrozenCrabItemDto MapToFrozenCrabItemDto(FrozenCrabItem item)

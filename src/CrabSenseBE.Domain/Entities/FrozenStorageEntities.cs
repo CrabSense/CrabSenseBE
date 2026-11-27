@@ -28,6 +28,8 @@ public class FrozenLot : BaseEntity
 
     public string? StorageLocation { get; set; }
     public uint ConcurrencyVersion { get; set; }
+    // Cho biết lot còn nhận cua từ các phiếu thu hoạch mới hay không.
+    public bool IsOpenForInbound { get; set; }
 
     // Navigation
     public FarmingArea? FarmingArea { get; set; }
