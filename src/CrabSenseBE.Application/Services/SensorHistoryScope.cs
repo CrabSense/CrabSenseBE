@@ -8,7 +8,21 @@ public sealed record SensorHistoryLocation(Guid AreaId, Guid? RowId);
 
 public static class SensorHistoryScope
 {
-    public static async Task<SensorHistoryLocation?> ResolveAsync(IUnitOfWork uow,Sensor sensor,Device? device,CancellationToken ct)
+    public static Task<SensorHistoryLocation?> ResolveAsync(IUnitOfWork uow,Sensor sensor,Device? device,CancellationToken ct)
+        => ResolveCoreAsync(sensor,device,
+            async id=>(await uow.FarmingRows.GetByIdAsync(id,ct))?.FarmingAreaId,
+            async id=>(await uow.WaterSystems.GetByIdAsync(id,ct))?.FarmingAreaId,
+            async id=>(await uow.RasComponents.GetByIdAsync(id,ct))?.WaterSystemId);
+
+    // Live list already loads these lookup tables. Use the same scope policy
+    // as ingest/history without one database round trip per sensor.
+    public static Task<SensorHistoryLocation?> ResolveFromSnapshotAsync(Sensor sensor,Device? device,
+        Func<Guid,Guid?> rowArea,Func<Guid,Guid?> systemArea,Func<Guid,Guid?> componentSystem)
+        => ResolveCoreAsync(sensor,device,id=>Task.FromResult(rowArea(id)),
+            id=>Task.FromResult(systemArea(id)),id=>Task.FromResult(componentSystem(id)));
+
+    private static async Task<SensorHistoryLocation?> ResolveCoreAsync(Sensor sensor,Device? device,
+        Func<Guid,Task<Guid?>> rowArea,Func<Guid,Task<Guid?>> systemArea,Func<Guid,Task<Guid?>> componentSystem)
     {
         if(sensor.DeviceId.HasValue && (device is null || device.Id!=sensor.DeviceId.Value))return null;
         if(!sensor.DeviceId.HasValue && device is not null)return null;
@@ -22,21 +36,18 @@ public static class SensorHistoryScope
         if(sensor.WaterSystemId is Guid ws)systems.Add(ws);
         if(sensor.RasComponentId is Guid componentId)
         {
-            var component=await uow.RasComponents.GetByIdAsync(componentId,ct);
-            if(component is null)return null;
-            systems.Add(component.WaterSystemId);
+            if(await componentSystem(componentId) is not Guid systemId)return null;
+            systems.Add(systemId);
         }
         if(rows.Count>1||systems.Count>1)return null;
         foreach(var id in rows)
         {
-            var row=await uow.FarmingRows.GetByIdAsync(id,ct);
-            if(row is null)return null;
-            areas.Add(row.FarmingAreaId);
+            if(await rowArea(id) is not Guid area)return null;
+            areas.Add(area);
         }
         foreach(var id in systems)
         {
-            var system=await uow.WaterSystems.GetByIdAsync(id,ct);
-            if(system is null || system.FarmingAreaId is not Guid area)return null;
+            if(await systemArea(id) is not Guid area)return null;
             areas.Add(area);
         }
         if(areas.Count!=1||areas.Contains(Guid.Empty)||rows.Contains(Guid.Empty))return null;

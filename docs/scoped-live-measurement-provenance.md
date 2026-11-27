@@ -1,0 +1,8 @@
+# Scoped live measurement provenance — P2.4.6.1 / T05
+
+2026-11-27. App #53 merged main 6fae55e; main CI #187, Mobile #64, Desktop #65, Pages #82 PASS; Mobile job 140564912101: 62 tests passed, including actual Dio interceptor adapter gate. HTTP adapter is not production JWT/network evidence.
+
+Audit found /api/iot/live fetched latest by SensorId only and attributed it to current configured area/row. This could show historical location data after reassignment, even when the app checked Realtime, unit and current area. Prioritize this over UI thresholds.
+
+- Area-scoped live requests reuse the ingest/history scope resolver with preloaded lookup maps, exclude ambiguous or outside-area sensors, and mask newest measurement/alarm if inactive, unqualified, wrong observed area/row/type/unit, wrong quality or invalid receipt/time. Do not fall back to older qualified rows; return missing measurement and Unknown quality. No schema migration, role changes, physical location verification or historical backfill. Keep unscoped platform technical diagnostics unchanged pending separate review. The newest query remains grouped by sensor with deterministic time/id ordering; no new per-sensor DB round trips. Config/read races are not an atomic database snapshot.
+- Live response no-store. Extend existing mandatory PostgreSQL HTTP test to cover true zero, unqualified newest row, assignment revocation, move and new ingest. No actual JWT or hardware; test-only authentication, isolated PostgreSQL. Verify CI and VPS deployment before App live UI changes and Kiosk/AI pin refresh. Other legacy history/latest endpoints and home metrics/threshold display still require audit. Do not close P2.4.6.1 or move to physical testing.

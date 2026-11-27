@@ -105,6 +105,26 @@ public sealed class ScopedSensorHistoryPostgresTests
             Assert.True(response.IsSuccessStatusCode,$"Ingest HTTP {(int)response.StatusCode}: {await response.Content.ReadAsStringAsync()}");
         }
         await Accepted(zero);await Accepted(second);await Accepted(zero);
+        async Task<JsonElement> Live(AppUser actor,Guid a)
+        {
+            using var response=await api.SendAsync(actor.Role.ToString(),actor.Id,HttpMethod.Get,$"/api/iot/live?farmingAreaId={a}");
+            var body=await response.Content.ReadAsStringAsync();
+            Assert.True(response.IsSuccessStatusCode,$"Live HTTP {(int)response.StatusCode}: {body}");
+            Assert.Equal("no-store",response.Headers.CacheControl?.ToString());
+            using var json=JsonDocument.Parse(body);
+            return Assert.Single(json.RootElement.GetProperty("data").EnumerateArray()
+                .Where(x=>x.GetProperty("sensorId").GetGuid()==sensor.Id).ToArray()).Clone();
+        }
+        void NoLiveMeasurement(JsonElement live)
+        {
+            foreach(var property in new[]{"latestValue","latestMeasuredAt","latestReceivedAt","alarm"})
+                Assert.True(!live.TryGetProperty(property,out var value)||value.ValueKind==JsonValueKind.Null,property);
+            Assert.Equal("Unknown",live.GetProperty("dataQuality").GetString());
+        }
+        var firstLive=await Live(staff,area.Id);
+        Assert.Equal(0m,firstLive.GetProperty("latestValue").GetDecimal());
+        Assert.Equal(area.Id,firstLive.GetProperty("farmingAreaId").GetGuid());
+        Assert.Equal(row.Id,firstLive.GetProperty("farmingRowId").GetGuid());
         await Accepted(zero with{Value=77m,MeasuredAt=start.AddMinutes(-5),EventId="history-backfill"});
         await Accepted(zero with{Value=88m,Unit=null,EventId="history-missing-unit"});
         await using(var verify=new AppDbContext(options))
@@ -160,10 +180,21 @@ public sealed class ScopedSensorHistoryPostgresTests
         Assert.False(page2.GetProperty("hasMore").GetBoolean());
         Assert.Equal(12m,Assert.Single(page2.GetProperty("items").EnumerateArray().ToArray()).GetProperty("value").GetDecimal());
 
+        // A strictly newer unqualified reading may not be shown or replaced
+        // by an older valid value that conceals the quality problem.
+        await using(var legacy=new AppDbContext(options))
+        {
+            var at=DateTime.UtcNow;
+            legacy.WaterMeasurements.Add(new WaterMeasurement{SensorId=sensor.Id,Value=101m,Unit="ppt",
+                MeasuredAt=at,ReceivedAt=at,DataQuality="Realtime",Source="realtime"});
+            await legacy.SaveChangesAsync();
+        }
+        NoLiveMeasurement(await Live(staff,area.Id));
         // Actual assignment removal is checked on the next request.
         seed.FarmStaffAssignments.Remove(staffAssignment);
         await seed.SaveChangesAsync();
         await Status(staff,path,HttpStatusCode.Forbidden);
+        await Status(staff,$"/api/iot/live?farmingAreaId={area.Id}",HttpStatusCode.Forbidden);
         // Moving the device/sensor to another area must never relabel historical rows.
         await using(var move=new AppDbContext(options))
         {
@@ -178,7 +209,11 @@ public sealed class ScopedSensorHistoryPostgresTests
         await Status(admin,path,HttpStatusCode.NotFound);
         var moved=await Read(admin,Path(other.Id,nextRow.Id));
         Assert.Empty(moved.GetProperty("items").EnumerateArray().ToArray());
-        await Accepted(zero with{Value=15m,MeasuredAt=DateTime.UtcNow.AddSeconds(-1),EventId="history-after-move"});
+        NoLiveMeasurement(await Live(admin,other.Id));
+        await Accepted(zero with{Value=15m,MeasuredAt=DateTime.UtcNow,EventId="history-after-move"});
+        var movedLive=await Live(admin,other.Id);
+        Assert.Equal(15m,movedLive.GetProperty("latestValue").GetDecimal());
+        Assert.Equal(nextRow.Id,movedLive.GetProperty("farmingRowId").GetGuid());
         to=DateTimeOffset.UtcNow;from=to.AddHours(-1);
         var after=await Read(admin,Path(other.Id,nextRow.Id));
         Assert.Equal(15m,Assert.Single(after.GetProperty("items").EnumerateArray().ToArray()).GetProperty("value").GetDecimal());
