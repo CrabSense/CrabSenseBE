@@ -280,12 +280,12 @@ public sealed class WaterBenchResultController(AppDbContext db,IUnitOfWork uow,I
         // Validate source syntax for the whole request before doing any external IO.
         foreach(var item in request.Samples)_=WaterBatchPlanning.Source(item.Assessment.SampleSource);
         var outcomes=new Dictionary<string,object>(StringComparer.Ordinal);
-        var prepared=new List<(BatchAssessItem Item,PreparedAssessment Prepared)>();
+        var prepared=new List<(BatchAssessItem Item,PreparedAssessment Prepared,Guid AttemptId)>();
         int succeeded=0;
         void Reject(BatchAssessItem item,int status,string message)=>outcomes[item.Analyte]=new
         {
             item.Analyte,requestId=item.Assessment.RequestId,status="assessment_rejected",httpStatus=status,
-            retryable=status is 502 or 503,message
+            retryable=status==503,message
         };
         void Accept(BatchAssessItem item,WaterBenchResultAssessment row)
         {
@@ -301,7 +301,12 @@ public sealed class WaterBenchResultController(AppDbContext db,IUnitOfWork uow,I
             {
                 var p=await PrepareAssessment(areaId,stationId,bootId,batchId,item.Analyte,item.Assessment,ct);
                 if(p.Existing)Accept(item,p.Row);
-                else prepared.Add((item,p));
+                else
+                {
+                    var reserved=await ReserveAttempt(areaId,p.Row,ct);
+                    if(reserved.Existing is {} prior)Accept(item,prior);
+                    else prepared.Add((item,p,reserved.AttemptId));
+                }
             }
             catch(AppException ex) when(ex.StatusCode is 400 or 404 or 409 or 502 or 503)
             {Reject(item,ex.StatusCode,ex.Message);}
@@ -318,7 +323,13 @@ public sealed class WaterBenchResultController(AppDbContext db,IUnitOfWork uow,I
                     prepared.Select(p=>p.Prepared.Sample!).ToArray(),ct);
             }
             catch(AppException ex) when(ex.StatusCode is 400 or 502 or 503)
-            {foreach(var p in prepared)Reject(p.Item,ex.StatusCode,ex.Message);}
+            {
+                foreach(var p in prepared)
+                {
+                    await FailAttempt(p.Prepared.Row.SessionEvidenceId,p.AttemptId,ex.StatusCode,ct);
+                    Reject(p.Item,ex.StatusCode,ex.Message);
+                }
+            }
             foreach(var p in prepared)
             {
                 if(outcomes.ContainsKey(p.Item.Analyte))continue;
@@ -326,16 +337,22 @@ public sealed class WaterBenchResultController(AppDbContext db,IUnitOfWork uow,I
                 var outcome=estimates.Single(x=>x.Analyte==p.Item.Analyte);
                 if(outcome.Estimate is not { } estimate)
                 {
-                    Reject(p.Item,outcome.ErrorStatus??502,"AI chưa thể đánh giá mẫu này.");continue;
+                    int error=outcome.ErrorStatus??502;
+                    await FailAttempt(p.Prepared.Row.SessionEvidenceId,p.AttemptId,error,ct);
+                    Reject(p.Item,error,"AI chưa thể đánh giá mẫu này.");continue;
                 }
                 try
                 {
                     CompleteEstimate(p.Prepared,estimate);
-                    var saved=await PersistAssessment(areaId,p.Prepared.Row,ct);
+                    var saved=await PersistAssessment(areaId,p.Prepared.Row,ct,p.AttemptId);
                     Accept(p.Item,saved);
                 }
                 catch(AppException ex) when(ex.StatusCode is 400 or 404 or 409 or 502 or 503)
-                {Reject(p.Item,ex.StatusCode,ex.Message);}
+                {
+                    db.ChangeTracker.Clear();
+                    await FailAttempt(p.Prepared.Row.SessionEvidenceId,p.AttemptId,ex.StatusCode,ct);
+                    Reject(p.Item,ex.StatusCode,ex.Message);
+                }
                 finally{db.ChangeTracker.Clear();}
             }
         }
@@ -352,10 +369,75 @@ public sealed class WaterBenchResultController(AppDbContext db,IUnitOfWork uow,I
         if(prepared.Existing)return Ok(ApiResponse<object>.Ok(View(prepared.Row)));
         if(prepared.Sample is { } s)
         {
-            var estimate=await ai.Analyze(areaId,s.CameraId,s.Analyte,s.Unit,s.Lot,s.Token,s.CalibrationId,s.Photo,ct,s.Algorithm);
-            CompleteEstimate(prepared,estimate);
+            var reserved=await ReserveAttempt(areaId,prepared.Row,ct);
+            if(reserved.Existing is {} prior)return Ok(ApiResponse<object>.Ok(View(prior)));
+            try
+            {
+                var estimate=await ai.Analyze(areaId,s.CameraId,s.Analyte,s.Unit,s.Lot,s.Token,s.CalibrationId,s.Photo,ct,s.Algorithm);
+                CompleteEstimate(prepared,estimate);
+                return Ok(ApiResponse<object>.Ok(View(await PersistAssessment(areaId,prepared.Row,ct,reserved.AttemptId))));
+            }
+            catch(AppException ex)
+            {
+                db.ChangeTracker.Clear();
+                await FailAttempt(prepared.Row.SessionEvidenceId,reserved.AttemptId,ex.StatusCode,ct);
+                throw;
+            }
         }
         return Ok(ApiResponse<object>.Ok(View(await PersistAssessment(areaId,prepared.Row,ct))));
+    }
+    [HttpGet("retry-status")]
+    public async Task<IActionResult> RetryStatus(Guid areaId,Guid stationId,string bootId,string batchId,CancellationToken ct)
+    {
+        await scope.EnsureAsync(areaId,false,ct);
+        Response.Headers["Cache-Control"]="no-store";
+        var q=Scoped(areaId,stationId,bootId,batchId);
+        var timeline=await Timeline(q,bootId,batchId,ct);
+        var sessions=await q.Where(x=>x.Kind=="session"&&x.ConnectionId==timeline.ConnectionId).ToListAsync(ct);
+        var channels=new List<object>();
+        foreach(var c in timeline.Channels)
+        {
+            var session=sessions.SingleOrDefault(s=>s.Analyte==c.Analyte&&s.FirmwareSessionId==c.SessionId);
+            if(session==null){channels.Add(new{c.Analyte,status="missing_session"});continue;}
+            var result=await db.WaterBenchResultAssessments.AsNoTracking().SingleOrDefaultAsync(x=>x.SessionEvidenceId==session.Id,ct);
+            var last=await db.WaterBenchAiAttempts.AsNoTracking().Where(x=>x.SessionEvidenceId==session.Id)
+                .OrderByDescending(x=>x.Number).FirstOrDefaultAsync(ct);
+            channels.Add(new{c.Analyte,c.SessionId,status=result?.Status??WaterBenchAiRetry.Status(last,DateTime.UtcNow),
+                attempts=last?.Number??0,maxAttempts=WaterBenchAiRetry.MaxAttempts,requestId=last?.RequestId,
+                leaseUntil=last?.LeaseUntil,retryAfter=last?.RetryAfter,hardwareReplay=false});
+        }
+        return Ok(ApiResponse<object>.Ok(new{channels,productionPublished=false}));
+    }
+    private Task<WaterBenchAiAttempt?> LatestAttempt(Guid session,CancellationToken ct)=>
+        db.WaterBenchAiAttempts.Where(x=>x.SessionEvidenceId==session).OrderByDescending(x=>x.Number).FirstOrDefaultAsync(ct);
+    private async Task LockSession(Guid session,CancellationToken ct)=>
+        _=await db.Database.ExecuteSqlInterpolatedAsync($"SELECT 1 FROM be.\"WaterBenchEvidence\" WHERE \"Id\"={session} FOR UPDATE",ct);
+    private async Task<(Guid AttemptId,WaterBenchResultAssessment? Existing)> ReserveAttempt(Guid area,WaterBenchResultAssessment row,CancellationToken ct)
+    {
+        await scope.EnsureAsync(area,true,ct);
+        await using var tx=await db.Database.BeginTransactionAsync(ct);
+        await LockSession(row.SessionEvidenceId,ct);
+        var prior=await db.WaterBenchResultAssessments.AsNoTracking().SingleOrDefaultAsync(x=>x.SessionEvidenceId==row.SessionEvidenceId,ct);
+        if(prior!=null)return (Guid.Empty,Existing(prior,row.RequestId,row.RequestHash));
+        var last=await LatestAttempt(row.SessionEvidenceId,ct);
+        var now=DateTime.UtcNow;
+        WaterBenchAiRetry.EnsureRetry(last,row.RequestId,row.RequestHash,now);
+        var attempt=new WaterBenchAiAttempt{SessionEvidenceId=row.SessionEvidenceId,RequestId=row.RequestId,RequestHash=row.RequestHash,
+            Number=(last?.Number??0)+1,State="running",LeaseUntil=now+WaterBenchAiRetry.Lease};
+        db.WaterBenchAiAttempts.Add(attempt);
+        await db.SaveChangesAsync(ct);await tx.CommitAsync(ct);
+        db.ChangeTracker.Clear();
+        return (attempt.Id,null);
+    }
+    private async Task FailAttempt(Guid session,Guid id,int status,CancellationToken ct)
+    {
+        await using var tx=await db.Database.BeginTransactionAsync(ct);
+        await LockSession(session,ct);
+        var last=await LatestAttempt(session,ct);
+        if(last==null||last.Id!=id||last.State!="running")return;
+        last.State=WaterBenchAiRetry.FailureState(status);last.UpdatedAt=DateTime.UtcNow;
+        last.RetryAfter=last.State=="retryable"?DateTime.UtcNow+WaterBenchAiRetry.Delay(last.Number):null;
+        await db.SaveChangesAsync(ct);await tx.CommitAsync(ct);db.ChangeTracker.Clear();
     }
     private sealed record PreparedAssessment(WaterBenchResultAssessment Row,bool Existing=false,WaterAiClient.BatchSample? Sample=null,
         string? KitRevision=null,string? ImageSha256=null,string? Source=null,uint? ReactionStartMs=null,int? ReactionDurationMs=null,
@@ -440,13 +522,21 @@ public sealed class WaterBenchResultController(AppDbContext db,IUnitOfWork uow,I
             ammoniaConversionApplied=false},WaterBatchPlanning.Json);
         if(Encoding.UTF8.GetByteCount(row.EvidenceJson)>65536)throw AppException.Conflict("Bằng chứng AI quá lớn.");
     }
-    private async Task<WaterBenchResultAssessment> PersistAssessment(Guid areaId,WaterBenchResultAssessment row,CancellationToken ct)
+    private async Task<WaterBenchResultAssessment> PersistAssessment(Guid areaId,WaterBenchResultAssessment row,CancellationToken ct,Guid? attemptId=null)
     {
         await scope.EnsureAsync(areaId,true,ct);
         await using var tx=await db.Database.BeginTransactionAsync(ct);
         await db.Database.ExecuteSqlInterpolatedAsync($"SELECT 1 FROM be.\"WaterBenchEvidence\" WHERE \"Id\"={row.SessionEvidenceId} FOR UPDATE",ct);
         var prior=await db.WaterBenchResultAssessments.AsNoTracking().SingleOrDefaultAsync(x=>x.SessionEvidenceId==row.SessionEvidenceId,ct);
         if(prior!=null)return Existing(prior,row.RequestId,row.RequestHash);
+        var attempt=await LatestAttempt(row.SessionEvidenceId,ct);
+        if(attemptId is Guid lease)
+        {
+            if(!WaterBenchAiRetry.Owns(attempt,lease,DateTime.UtcNow))throw AppException.Conflict("AI attempt lease expired or superseded.");
+            attempt!.State="succeeded";attempt.UpdatedAt=DateTime.UtcNow;
+        }
+        else if(attempt?.State=="running"&&attempt.LeaseUntil>DateTime.UtcNow)
+            throw AppException.Conflict("AI inference is running; wait before marking retest.");
         if(row.CalibrationId is Guid cal)
         {
             var now=DateTime.UtcNow;

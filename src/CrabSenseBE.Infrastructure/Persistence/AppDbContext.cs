@@ -53,6 +53,7 @@ public class AppDbContext : DbContext
     public DbSet<WaterBenchStation> WaterBenchStations => Set<WaterBenchStation>();
     public DbSet<WaterBenchEvidence> WaterBenchEvidence => Set<WaterBenchEvidence>();
     public DbSet<WaterBenchResultAssessment> WaterBenchResultAssessments => Set<WaterBenchResultAssessment>();
+    public DbSet<WaterBenchAiAttempt> WaterBenchAiAttempts => Set<WaterBenchAiAttempt>();
     public DbSet<WaterAssayChannel> WaterAssayChannels => Set<WaterAssayChannel>();
     public DbSet<WaterAnalysisBatch> WaterAnalysisBatches => Set<WaterAnalysisBatch>();
     public DbSet<WaterAnalysisSchedule> WaterAnalysisSchedules => Set<WaterAnalysisSchedule>();

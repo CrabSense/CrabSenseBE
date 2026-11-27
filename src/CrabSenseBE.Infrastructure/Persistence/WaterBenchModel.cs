@@ -54,6 +54,14 @@ internal static class WaterBenchModel
             b.HasIndex(x=>new{x.StationId,x.RequestId});
         });
 
+        model.Entity<WaterBenchAiAttempt>(b =>
+        {
+            b.ToTable("WaterBenchAiAttempts",t=>t.HasCheckConstraint("CK_WaterBenchAiAttempt_State","\"Number\" BETWEEN 1 AND 3 AND \"RequestHash\" ~ '^[0-9a-f]{64}$' AND \"State\" IN ('running','retryable','retest_required','contract_blocked','succeeded')"));
+            b.HasOne<WaterBenchEvidence>().WithMany().HasForeignKey(x=>x.SessionEvidenceId).OnDelete(DeleteBehavior.Restrict);
+            b.HasIndex(x=>new{x.SessionEvidenceId,x.Number}).IsUnique();
+            b.Property(x=>x.RequestHash).HasMaxLength(64);
+            b.Property(x=>x.State).HasMaxLength(32);
+        });
         model.Entity<WaterBenchResultAssessment>(b =>
         {
             b.ToTable("WaterBenchResultAssessments",t =>

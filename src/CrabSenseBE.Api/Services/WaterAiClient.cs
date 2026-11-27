@@ -241,7 +241,7 @@ public sealed class WaterAiClient(HttpClient http, IConfiguration config)
         if(!Uri.TryCreate(root,UriKind.Absolute,out var url)||url.Scheme is not ("http" or "https")||(url.Scheme=="http"&&!url.IsLoopback)||
            !string.IsNullOrEmpty(url.UserInfo)||!string.IsNullOrEmpty(url.Query)||!string.IsNullOrEmpty(url.Fragment)||
            string.IsNullOrWhiteSpace(key)||key.Length<32)
-            throw new AppException("Chưa cấu hình dịch vụ AI nước.",503);
+            throw new AppException("Chưa cấu hình dịch vụ AI nước.",502);
         using var request=new HttpRequestMessage(HttpMethod.Post,new Uri(url.AbsoluteUri.TrimEnd('/')+"/"+path));
         request.Headers.Add("X-AI-Key",key);
         request.Content=JsonContent.Create(payload,options:Json);
@@ -251,7 +251,11 @@ public sealed class WaterAiClient(HttpClient http, IConfiguration config)
             using var response=await http.SendAsync(request,HttpCompletionOption.ResponseHeadersRead,timeout.Token);
             if(response.StatusCode==HttpStatusCode.UnprocessableEntity)
                 throw AppException.BadRequest("AI từ chối mẫu hoặc hiệu chuẩn: kiểm tra ảnh, thời gian, độ mặn, dải màu và mẫu đối chứng.");
-            if(!response.IsSuccessStatusCode)throw new AppException("Dịch vụ AI nước chưa sẵn sàng.",503);
+            if(!response.IsSuccessStatusCode)
+            {
+                int status=(int)response.StatusCode;
+                throw new AppException("Dịch vụ AI nước chưa sẵn sàng.",status is 408 or 429 or 500 or 502 or 503 or 504?503:502);
+            }
             await using var stream=await response.Content.ReadAsStreamAsync(timeout.Token);
             using var buffer=new MemoryStream();var chunk=new byte[8192];int n;
             while((n=await stream.ReadAsync(chunk.AsMemory(),timeout.Token))>0)
