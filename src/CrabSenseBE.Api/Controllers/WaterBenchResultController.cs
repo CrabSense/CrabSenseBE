@@ -193,6 +193,7 @@ public sealed class WaterBenchResultController(AppDbContext db,IUnitOfWork uow,I
             sameSampleSourceOperatorAttested=true,measurandOperatorAttested=true,clockDriftValidated=false,sensorVialAlignmentVerified=false,
             chemicalResultValidated=false,crabToxicityThresholdValidated=false,productionPublished=false},WaterBatchPlanning.Json);
         await using var tx=await db.Database.BeginTransactionAsync(ct);
+        await LockSession(session.Id,ct);
         await db.Database.ExecuteSqlInterpolatedAsync($"SELECT 1 FROM be.\"WaterBenchResultAssessments\" WHERE \"Id\"={row.Id} FOR UPDATE",ct);
         var current=await db.WaterBenchResultAssessments.SingleAsync(x=>x.Id==row.Id,ct);
         if(ExistingReference(current) is {} concurrent)return Ok(ApiResponse<object>.Ok(concurrent));
@@ -303,7 +304,7 @@ public sealed class WaterBenchResultController(AppDbContext db,IUnitOfWork uow,I
                 if(p.Existing)Accept(item,p.Row);
                 else
                 {
-                    var reserved=await ReserveAttempt(areaId,p.Row,ct);
+                    var reserved=await ReserveAttempt(areaId,p.Row,item.Assessment,ct);
                     if(reserved.Existing is {} prior)Accept(item,prior);
                     else prepared.Add((item,p,reserved.AttemptId));
                 }
@@ -369,7 +370,7 @@ public sealed class WaterBenchResultController(AppDbContext db,IUnitOfWork uow,I
         if(prepared.Existing)return Ok(ApiResponse<object>.Ok(View(prepared.Row)));
         if(prepared.Sample is { } s)
         {
-            var reserved=await ReserveAttempt(areaId,prepared.Row,ct);
+            var reserved=await ReserveAttempt(areaId,prepared.Row,request,ct);
             if(reserved.Existing is {} prior)return Ok(ApiResponse<object>.Ok(View(prior)));
             try
             {
@@ -385,6 +386,165 @@ public sealed class WaterBenchResultController(AppDbContext db,IUnitOfWork uow,I
             }
         }
         return Ok(ApiResponse<object>.Ok(View(await PersistAssessment(areaId,prepared.Row,ct))));
+    }
+    [HttpGet("{analyte}/retry-request")]
+    [Authorize(Roles=AppRoles.FarmManage)]
+    public async Task<IActionResult> RetryRequest(Guid areaId,Guid stationId,string bootId,string batchId,string analyte,CancellationToken ct)
+    {
+        await scope.EnsureAsync(areaId,true,ct);
+        Response.Headers["Cache-Control"]="no-store";
+        var session=await AdminSession(areaId,stationId,bootId,batchId,analyte,ct);
+        if(await db.WaterBenchResultAssessments.AnyAsync(x=>x.SessionEvidenceId==session.Id,ct))
+            throw AppException.Conflict("Session already assessed.");
+        var last=await LatestAttempt(session.Id,ct)??throw AppException.NotFound("AI attempt");
+        if(WaterBenchAiRetry.Status(last,DateTime.UtcNow)!="retry_available")
+            throw AppException.Conflict("Retry is not available.");
+        if(last.RequestJson==null)throw AppException.Conflict("Legacy attempt has no recoverable body; use original request.");
+        if(WaterBenchAiEvidence.Hash(last.RequestJson)!=last.RequestHash)
+            throw AppException.Conflict("Retry request checksum mismatch.");
+        var request=JsonSerializer.Deserialize<AssessRequest>(last.RequestJson,WaterBatchPlanning.Json);
+        if(request==null||request.RequestId!=last.RequestId||request.Action!="estimate")
+            throw AppException.Conflict("Invalid stored retry request.");
+        return Ok(ApiResponse<object>.Ok(request));
+    }
+    private async Task<WaterBenchEvidence> AdminSession(Guid area,Guid station,string boot,string batch,string analyte,CancellationToken ct)
+    {
+        var q=Scoped(area,station,boot,batch);
+        var timeline=await Timeline(q,boot,batch,ct);
+        var channel=timeline.Channels.SingleOrDefault(x=>x.Analyte==analyte)??throw AppException.NotFound("Analyte");
+        return await q.SingleOrDefaultAsync(x=>x.Kind=="session"&&x.Analyte==analyte&&x.ConnectionId==timeline.ConnectionId&&
+            x.FirmwareSessionId==channel.SessionId,ct)??throw AppException.NotFound("Session");
+    }
+    [HttpGet("NH3/salinity-candidates")]
+    [Authorize(Roles=AppRoles.FarmManage)]
+    public async Task<IActionResult> SalinityCandidates(Guid areaId,Guid stationId,string bootId,string batchId,CancellationToken ct)
+    {
+        await scope.EnsureAsync(areaId,true,ct);
+        Response.Headers["Cache-Control"]="no-store";
+        var session=await AdminSession(areaId,stationId,bootId,batchId,"NH3",ct);
+        var q=Scoped(areaId,stationId,bootId,batchId);
+        var sample=await q.SingleOrDefaultAsync(x=>x.Kind=="sample_evidence"&&x.Analyte=="NH3"&&x.ConnectionId==session.ConnectionId&&
+            x.FirmwareSessionId==session.FirmwareSessionId,ct)??throw AppException.Conflict("NH3 sample evidence unavailable.");
+        _=WaterBenchReceiptPolicy.Read(sample);
+        var observation=JsonSerializer.Deserialize<Nh3EvidenceEvent>(sample.PayloadJson,WaterBatchPlanning.Json)!;
+        var at=observation.ClockEstimate?.EstimatedSampleUtc??throw AppException.Conflict("Sample clock unavailable.");
+        var start=at.UtcDateTime.AddSeconds(-10);var end=at.UtcDateTime.AddSeconds(10);
+        var candidates=await (from m in db.WaterMeasurements.AsNoTracking()
+            join sensor in db.Sensors.AsNoTracking() on m.SensorId equals sensor.Id
+            join d in db.Devices.AsNoTracking() on sensor.DeviceId equals (Guid?)d.Id
+            where sensor.IsActive&&sensor.SensorType=="Salinity"&&sensor.Unit=="ppt"&&sensor.FarmingAreaId==areaId&&
+                d.FarmingAreaId==areaId&&d.EdgeState!="Revoked"&&m.Unit=="ppt"&&m.DataQuality=="Realtime"&&m.MeasuredAt>=start&&m.MeasuredAt<=end
+            orderby m.MeasuredAt,m.Id
+            select new{Measurement=m,sensor.SensorCode,sensor.InstallationLocation}).Take(200).ToListAsync(ct);
+        var items=new List<object>();
+        foreach(var candidate in candidates)
+        {
+            var m=candidate.Measurement;
+            var cal=await db.SensorCalibrations.AsNoTracking().Where(x=>x.SensorId==m.SensorId&&x.PerformedAt<=m.MeasuredAt)
+                .OrderByDescending(x=>x.PerformedAt).ThenByDescending(x=>x.Id).FirstOrDefaultAsync(ct);
+            if(cal==null||cal.Result!="Passed"||cal.Unit!="ppt"||cal.PerformedAt<m.MeasuredAt.AddDays(-30))continue;
+            try
+            {
+                var env=WaterBenchAmmoniaPolicy.Environment(observation,m,DateTimeOffset.UtcNow);
+                items.Add(new{measurementId=m.Id,m.SensorId,candidate.SensorCode,candidate.InstallationLocation,m.Value,m.Unit,m.MeasuredAt,
+                    differenceSeconds=(env.SalinityAt-env.SampleAt).TotalSeconds,calibrationId=cal.Id,cal.PerformedAt});
+            }
+            catch(AppException){/* Not eligible; write endpoint independently rechecks. */}
+        }
+        return Ok(ApiResponse<object>.Ok(new{sampleAt=at,items,sourceConfirmationRequired=true,clockDriftValidated=false,limited=candidates.Count==200}));
+    }
+    public sealed record ReviewRequest(Guid RequestId,string Decision,string Reason,Guid? ReferenceMediaId=null,
+        decimal? ReferenceValue=null,string? ReferenceUnit=null,string? ReferenceMethod=null,bool SameSampleConfirmed=false);
+    public sealed record PublishRequest(Guid RequestId,string Reason);
+    [HttpGet("{analyte}/review")]
+    public async Task<IActionResult> GetReview(Guid areaId,Guid stationId,string bootId,string batchId,string analyte,CancellationToken ct)
+    {
+        await scope.EnsureAsync(areaId,false,ct);
+        Response.Headers["Cache-Control"]="no-store";
+        var session=await AdminSession(areaId,stationId,bootId,batchId,analyte,ct);
+        var row=await db.WaterBenchResultAssessments.AsNoTracking().SingleOrDefaultAsync(x=>x.SessionEvidenceId==session.Id,ct)
+            ??throw AppException.NotFound("Assessment");
+        var review=WaterBenchReviewPolicy.Read(row.EvidenceJson,"review");
+        var publication=WaterBenchReviewPolicy.Read(row.EvidenceJson,"publication");
+        if(publication!=null&&(review==null||publication.Value.GetProperty("reviewSha256").GetString()!=WaterBenchAiEvidence.Hash(review.Value.GetRawText())))
+            throw AppException.Conflict("Publication linkage mismatch.");
+        return Ok(ApiResponse<object>.Ok(new{assessmentId=row.Id,review,publication,status=publication!=null?"published":review?.GetProperty("decision").GetString()??"pending_review",
+            publicationScope="water_bench_reviewed_record",productionSensorPublished=false,chemicalAccuracyIndependentlyVerifiedBySystem=false}));
+    }
+    [HttpPost("{analyte}/review")]
+    [Authorize(Roles=AppRoles.FarmManage)]
+    [RequestSizeLimit(8192)]
+    public async Task<IActionResult> Review(Guid areaId,Guid stationId,string bootId,string batchId,string analyte,ReviewRequest request,CancellationToken ct)
+    {
+        await scope.EnsureAsync(areaId,true,ct);
+        WaterBenchReviewPolicy.Validate(request,analyte);
+        var session=await AdminSession(areaId,stationId,bootId,batchId,analyte,ct);
+        var requestHash=WaterBenchAiEvidence.Hash(JsonSerializer.Serialize(request,WaterBatchPlanning.Json));
+        await using var tx=await db.Database.BeginTransactionAsync(ct);
+        await LockSession(session.Id,ct);
+        var row=await db.WaterBenchResultAssessments.SingleOrDefaultAsync(x=>x.SessionEvidenceId==session.Id,ct)
+            ??throw AppException.NotFound("Assessment");
+        if(WaterBenchReviewPolicy.Replay(row.EvidenceJson,"review",request.RequestId,requestHash) is {} prior)
+            return Ok(ApiResponse<object>.Ok(prior));
+        var image=await db.WaterBenchEvidence.AsNoTracking().SingleOrDefaultAsync(x=>x.Id==row.ImageEvidenceId,ct)
+            ??throw AppException.Conflict("AI image missing.");
+        var provenance=WaterBenchAiEvidence.Verify(row,session,image)??throw AppException.Conflict("Verified AI snapshot required.");
+        string? referenceSha=null;
+        if(request.Decision=="approved")
+        {
+            if(row.Unit!=request.ReferenceUnit)throw AppException.BadRequest("Reference must use identical measurand.");
+            var asset=await (from a in db.MediaAssets.AsNoTracking() join d in db.Devices.AsNoTracking() on a.DeviceId equals (Guid?)d.Id
+                where a.Id==request.ReferenceMediaId&&d.FarmingAreaId==areaId&&a.Category=="image"&&!a.IsShared&&a.SizeBytes>0&&a.SizeBytes<=5*1024*1024
+                select a).SingleOrDefaultAsync(ct)??throw AppException.Conflict("Independent private reference image required.");
+            if(asset.Id==row.MediaId||asset.Notes?.StartsWith("water-bench:",StringComparison.OrdinalIgnoreCase)==true||
+                await Used(areaId,asset.Id,"",ct))throw AppException.Conflict("Reference must be independent of AI sample and calibration.");
+            var content=await media.OpenContentAsync(asset.Id,ct);
+            await using var stream=content.Content;using var buffer=new MemoryStream();var bytes=new byte[65536];int n;
+            while((n=await stream.ReadAsync(bytes.AsMemory(),ct))>0)
+            {if(buffer.Length+n>5*1024*1024)throw AppException.Conflict("Reference too large.");await buffer.WriteAsync(bytes.AsMemory(0,n),ct);}
+            if(buffer.Length!=asset.SizeBytes)throw AppException.Conflict("Reference size mismatch.");
+            referenceSha=Convert.ToHexString(SHA256.HashData(buffer.ToArray())).ToLowerInvariant();
+            if(referenceSha==provenance.ImageSha256||await Used(areaId,asset.Id,referenceSha,ct))throw AppException.Conflict("Reference reused AI evidence.");
+        }
+        var review=JsonSerializer.SerializeToElement(new{contract="water-bench-human-review-v1",request.RequestId,requestSha256=requestHash,
+            assessmentId=row.Id,request.Decision,reason=request.Reason.Trim(),reviewedBy=user.UserId,reviewedAt=DateTime.UtcNow,
+            provenanceSha256=WaterBenchAiEvidence.Digest(provenance),aiEstimate=row.CandidateValue,aiUnit=row.Unit,
+            request.ReferenceMediaId,referenceSha256=referenceSha,request.ReferenceValue,request.ReferenceUnit,request.ReferenceMethod,
+            sameSampleOperatorAttested=request.SameSampleConfirmed,chemicalAccuracyIndependentlyVerifiedBySystem=false},WaterBatchPlanning.Json);
+        row.EvidenceJson=WaterBenchReviewPolicy.Append(row.EvidenceJson,"review",review);
+        db.OperationLogs.Add(new OperationLog{UserId=user.UserId,Action="ReviewWaterBenchResult",EntityType="WaterBenchResultAssessment",
+            EntityId=row.Id,Details=request.Decision,IpAddress=HttpContext.Connection.RemoteIpAddress?.ToString()});
+        await db.SaveChangesAsync(ct);await tx.CommitAsync(ct);
+        return Ok(ApiResponse<object>.Ok(review));
+    }
+    [HttpPost("{analyte}/publish")]
+    [Authorize(Roles=AppRoles.FarmManage)]
+    [RequestSizeLimit(4096)]
+    public async Task<IActionResult> Publish(Guid areaId,Guid stationId,string bootId,string batchId,string analyte,PublishRequest request,CancellationToken ct)
+    {
+        await scope.EnsureAsync(areaId,true,ct);
+        if(request.RequestId==Guid.Empty||string.IsNullOrWhiteSpace(request.Reason)||request.Reason.Length>500)throw AppException.BadRequest("Publication reason required.");
+        var session=await AdminSession(areaId,stationId,bootId,batchId,analyte,ct);
+        var hash=WaterBenchAiEvidence.Hash(JsonSerializer.Serialize(request,WaterBatchPlanning.Json));
+        await using var tx=await db.Database.BeginTransactionAsync(ct);
+        await LockSession(session.Id,ct);
+        var row=await db.WaterBenchResultAssessments.SingleOrDefaultAsync(x=>x.SessionEvidenceId==session.Id,ct)??throw AppException.NotFound("Assessment");
+        if(WaterBenchReviewPolicy.Replay(row.EvidenceJson,"publication",request.RequestId,hash) is {} existing)return Ok(ApiResponse<object>.Ok(existing));
+        var review=WaterBenchReviewPolicy.Read(row.EvidenceJson,"review")??throw AppException.Conflict("Review required.");
+        if(review.GetProperty("decision").GetString()!="approved")throw AppException.Conflict("Approved independent reference required.");
+        var image=await db.WaterBenchEvidence.AsNoTracking().SingleAsync(x=>x.Id==row.ImageEvidenceId,ct);
+        var provenance=WaterBenchAiEvidence.Verify(row,session,image)??throw AppException.Conflict("AI evidence required.");
+        if(review.GetProperty("provenanceSha256").GetString()!=WaterBenchAiEvidence.Digest(provenance))throw AppException.Conflict("Review evidence mismatch.");
+        var publication=JsonSerializer.SerializeToElement(new{contract="water-bench-reviewed-publication-v1",request.RequestId,requestSha256=hash,
+            assessmentId=row.Id,reviewSha256=WaterBenchAiEvidence.Hash(review.GetRawText()),publishedBy=user.UserId,publishedAt=DateTime.UtcNow,
+            reason=request.Reason.Trim(),value=review.GetProperty("referenceValue").GetDecimal(),unit=review.GetProperty("referenceUnit").GetString(),
+            source="operator_attested_independent_reference",publicationScope="water_bench_reviewed_record",
+            productionSensorPublished=false,chemicalAccuracyIndependentlyVerifiedBySystem=false},WaterBatchPlanning.Json);
+        row.EvidenceJson=WaterBenchReviewPolicy.Append(row.EvidenceJson,"publication",publication);
+        db.OperationLogs.Add(new OperationLog{UserId=user.UserId,Action="PublishWaterBenchReviewedResult",EntityType="WaterBenchResultAssessment",
+            EntityId=row.Id,Details="water_bench_reviewed_record",IpAddress=HttpContext.Connection.RemoteIpAddress?.ToString()});
+        await db.SaveChangesAsync(ct);await tx.CommitAsync(ct);
+        return Ok(ApiResponse<object>.Ok(publication));
     }
     [HttpGet("retry-status")]
     public async Task<IActionResult> RetryStatus(Guid areaId,Guid stationId,string bootId,string batchId,CancellationToken ct)
@@ -412,7 +572,7 @@ public sealed class WaterBenchResultController(AppDbContext db,IUnitOfWork uow,I
         db.WaterBenchAiAttempts.Where(x=>x.SessionEvidenceId==session).OrderByDescending(x=>x.Number).FirstOrDefaultAsync(ct);
     private async Task LockSession(Guid session,CancellationToken ct)=>
         _=await db.Database.ExecuteSqlInterpolatedAsync($"SELECT 1 FROM be.\"WaterBenchEvidence\" WHERE \"Id\"={session} FOR UPDATE",ct);
-    private async Task<(Guid AttemptId,WaterBenchResultAssessment? Existing)> ReserveAttempt(Guid area,WaterBenchResultAssessment row,CancellationToken ct)
+    private async Task<(Guid AttemptId,WaterBenchResultAssessment? Existing)> ReserveAttempt(Guid area,WaterBenchResultAssessment row,AssessRequest request,CancellationToken ct)
     {
         await scope.EnsureAsync(area,true,ct);
         await using var tx=await db.Database.BeginTransactionAsync(ct);
@@ -423,7 +583,8 @@ public sealed class WaterBenchResultController(AppDbContext db,IUnitOfWork uow,I
         var now=DateTime.UtcNow;
         WaterBenchAiRetry.EnsureRetry(last,row.RequestId,row.RequestHash,now);
         var attempt=new WaterBenchAiAttempt{SessionEvidenceId=row.SessionEvidenceId,RequestId=row.RequestId,RequestHash=row.RequestHash,
-            Number=(last?.Number??0)+1,State="running",LeaseUntil=now+WaterBenchAiRetry.Lease};
+            Number=(last?.Number??0)+1,State="running",LeaseUntil=now+WaterBenchAiRetry.Lease,
+            RequestJson=JsonSerializer.Serialize(request,WaterBatchPlanning.Json)};
         db.WaterBenchAiAttempts.Add(attempt);
         await db.SaveChangesAsync(ct);await tx.CommitAsync(ct);
         db.ChangeTracker.Clear();
@@ -455,7 +616,7 @@ public sealed class WaterBenchResultController(AppDbContext db,IUnitOfWork uow,I
             ??throw AppException.NotFound("Water bench analyte");
         if(timeline.Status=="running_observed"||c.SessionId is null)
             throw AppException.Conflict("Phiên chưa kết thúc hoặc chưa có session.");
-        var session=await q.SingleOrDefaultAsync(x=>x.Kind=="session"&&x.Analyte==analyte&&x.FirmwareSessionId==c.SessionId,ct)
+        var session=await q.SingleOrDefaultAsync(x=>x.Kind=="session"&&x.Analyte==analyte&&x.FirmwareSessionId==c.SessionId&&x.ConnectionId==timeline.ConnectionId,ct)
             ??throw AppException.Conflict("Thiếu bằng chứng session.");
         string hash=Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(request,WaterBatchPlanning.Json)))).ToLowerInvariant();
         var prior=await db.WaterBenchResultAssessments.AsNoTracking().SingleOrDefaultAsync(x=>x.SessionEvidenceId==session.Id,ct);

@@ -5730,6 +5730,7 @@ namespace CrabSenseBE.Infrastructure.Persistence.Migrations
                     b.Property<int>("Number").HasColumnType("integer");
                     b.Property<string>("RequestHash").IsRequired().HasMaxLength(64).HasColumnType("character varying(64)");
                     b.Property<Guid>("RequestId").HasColumnType("uuid");
+                    b.Property<string>("RequestJson").HasColumnType("text");
                     b.Property<DateTime?>("RetryAfter").HasColumnType("timestamp with time zone");
                     b.Property<Guid>("SessionEvidenceId").HasColumnType("uuid");
                     b.Property<string>("State").IsRequired().HasMaxLength(32).HasColumnType("character varying(32)");
