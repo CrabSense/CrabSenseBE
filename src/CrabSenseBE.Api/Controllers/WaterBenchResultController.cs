@@ -65,6 +65,56 @@ public sealed class WaterBenchResultController(AppDbContext db,IUnitOfWork uow,I
             return new{c.Analyte,c.SessionId,c.CaptureId,status,assessment=a is null?null:View(a),productionPublished=false};
         }),productionPublished=false}));
     }
+    // Metadata-only preflight. Does not read image bytes, call AI, or create a result.
+    [HttpGet("ai-readiness")]
+    public async Task<IActionResult> AiReadiness(Guid areaId,Guid stationId,string bootId,string batchId,CancellationToken ct)
+    {
+        await scope.EnsureAsync(areaId,false,ct);
+        Response.Headers["Cache-Control"]="no-store";
+        var q=Scoped(areaId,stationId,bootId,batchId);
+        var timeline=await Timeline(q,bootId,batchId,ct);
+        var channels=new List<object>();
+        foreach(var c in timeline.Channels)
+        {
+            if(!WaterBenchResultPolicy.ReadyForEstimate(timeline,c))
+            {
+                channels.Add(new{c.Analyte,c.SessionId,c.CaptureId,status="awaiting_terminal_evidence"});continue;
+            }
+            var session=await q.SingleOrDefaultAsync(x=>x.Kind=="session"&&x.Analyte==c.Analyte&&
+                x.FirmwareSessionId==c.SessionId&&x.ConnectionId==timeline.ConnectionId,ct);
+            if(session?.KioskReceivedAt is not DateTime observed)
+            {channels.Add(new{c.Analyte,status="missing_session"});continue;}
+            if(await db.WaterBenchResultAssessments.AsNoTracking().AnyAsync(x=>x.SessionEvidenceId==session.Id,ct))
+            {channels.Add(new{c.Analyte,status="already_assessed"});continue;}
+            var receipts=await q.Where(x=>x.Kind=="jpeg"&&x.ConnectionId==timeline.ConnectionId&&
+                x.FirmwareSessionId==c.SessionId&&x.Analyte==c.Analyte&&x.CaptureId==c.CaptureId).Take(2).ToListAsync(ct);
+            if(receipts.Count!=1)
+            {channels.Add(new{c.Analyte,status=receipts.Count==0?"awaiting_media":"ambiguous_media"});continue;}
+            WaterBenchResultPolicy.CaptureReceipt receipt;
+            try{receipt=WaterBenchResultPolicy.VerifiedReceipt(receipts[0]);}
+            catch(AppException){channels.Add(new{c.Analyte,status="invalid_media_receipt"});continue;}
+            var profile=await db.WaterColorCalibrations.AsNoTracking().SingleOrDefaultAsync(x=>x.Id==receipt.CalibrationId&&
+                x.FarmingAreaId==areaId,ct);
+            if(profile==null||!WaterBenchResultPolicy.ReceiptMatches(receipt,profile.Id,profile.CameraDeviceId)||
+                !await db.Devices.AnyAsync(x=>x.Id==profile.CameraDeviceId&&x.FarmingAreaId==areaId,ct))
+            {channels.Add(new{c.Analyte,status="calibration_or_camera_mismatch"});continue;}
+            ColorProtocol protocol;
+            try{protocol=WaterBenchResultPolicy.Profile(profile,c.Analyte,observed,DateTime.UtcNow);}
+            catch(AppException){channels.Add(new{c.Analyte,status="calibration_unavailable"});continue;}
+            var asset=await db.MediaAssets.AsNoTracking().SingleOrDefaultAsync(x=>x.Id==receipt.MediaId,ct);
+            if(asset==null||!WaterBenchResultPolicy.AssetMatches(asset,profile.CameraDeviceId,stationId,bootId,batchId,c.Analyte,c.CaptureId!.Value))
+            {channels.Add(new{c.Analyte,status="invalid_private_media"});continue;}
+            if(await Used(areaId,receipt.MediaId,receipt.Sha256,ct))
+            {channels.Add(new{c.Analyte,status="media_already_used"});continue;}
+            channels.Add(new{c.Analyte,c.SessionId,c.CaptureId,status="operator_confirmation_required",
+                calibrationId=profile.Id,mediaId=receipt.MediaId,cameraId=profile.CameraDeviceId,profile.Unit,profile.ReagentLot,
+                algorithm=profile.AiAlgorithm,profile.KitRevision,profile.ValidUntil,receipt.ConfigurationVersion,
+                reactionSeconds=protocol.ReactionSeconds,timingToleranceSeconds=protocol.TimingToleranceSeconds,
+                minSalinityPpt=protocol.MinSalinityPpt,maxSalinityPpt=protocol.MaxSalinityPpt});
+        }
+        return Ok(ApiResponse<object>.Ok(new{timeline.Status,channels,metadataOnly=true,aiCalled=false,
+            actualSampleConditionsVerified=false,chemicalResultValidated=false,productionPublished=false}));
+    }
     [HttpPost("{analyte}/assessment")]
     [Authorize(Roles=AppRoles.FarmManage)]
     [RequestSizeLimit(8192)]
@@ -97,20 +147,18 @@ public sealed class WaterBenchResultController(AppDbContext db,IUnitOfWork uow,I
             var receiptRows=await q.Where(x=>x.Kind=="jpeg"&&x.ConnectionId==timeline.ConnectionId&&x.FirmwareSessionId==c.SessionId&&
                 x.Analyte==analyte&&x.CaptureId==c.CaptureId).Take(2).ToListAsync(ct);
             if(receiptRows.Count!=1)throw AppException.Conflict("Chưa có đúng một biên nhận ảnh của lần chụp.");
-            var receiptRow=receiptRows[0];var receipt=WaterBenchResultPolicy.Receipt(receiptRow.PayloadJson);
+            var receiptRow=receiptRows[0];var receipt=WaterBenchResultPolicy.VerifiedReceipt(receiptRow);
             if(receipt.CalibrationId!=calibration||receipt.CameraId is null||receipt.ConfigurationVersion is not >0)
                 throw AppException.Conflict("Hiệu chuẩn không khớp biên nhận ảnh.");
             var profile=await db.WaterColorCalibrations.AsNoTracking().SingleOrDefaultAsync(x=>x.Id==calibration&&x.FarmingAreaId==areaId,ct)
                 ??throw AppException.NotFound("Water color calibration");
             var observed=session.KioskReceivedAt??throw AppException.Conflict("Thiếu thời gian quan sát.");
             WaterBenchResultPolicy.Conditions(profile,analyte,observed,DateTime.UtcNow,request.ReagentLot,seconds,salinity);
-            if(receipt.CameraId!=profile.CameraDeviceId||!await db.Devices.AnyAsync(x=>x.Id==profile.CameraDeviceId&&x.FarmingAreaId==areaId,ct))
+            if(!WaterBenchResultPolicy.ReceiptMatches(receipt,profile.Id,profile.CameraDeviceId)||!await db.Devices.AnyAsync(x=>x.Id==profile.CameraDeviceId&&x.FarmingAreaId==areaId,ct))
                 throw AppException.Conflict("Camera ngoài khu.");
             var asset=await db.MediaAssets.AsNoTracking().SingleOrDefaultAsync(x=>x.Id==receipt.MediaId,ct)
                 ??throw AppException.NotFound("Media");
-            if(asset.DeviceId!=profile.CameraDeviceId||asset.Category!="image"||asset.IsShared||asset.CrabId!=null||asset.BoxId!=null||
-                asset.RelatedEntityType!="device"||asset.RelatedEntityId!=profile.CameraDeviceId||
-                asset.SizeBytes<=0||asset.SizeBytes>5*1024*1024||asset.Notes!=WaterBenchResultPolicy.Marker(stationId,bootId,batchId,analyte,c.CaptureId!.Value))
+            if(!WaterBenchResultPolicy.AssetMatches(asset,profile.CameraDeviceId,stationId,bootId,batchId,analyte,c.CaptureId!.Value))
                 throw AppException.Conflict("Ảnh không thuộc camera và phiên này.");
             if(await Used(areaId,receipt.MediaId,receipt.Sha256,ct))throw AppException.Conflict("Ảnh đã sử dụng cho mẫu khác hoặc hiệu chuẩn.");
             var content=await media.OpenContentAsync(receipt.MediaId,ct);
