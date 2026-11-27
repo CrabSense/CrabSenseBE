@@ -42,7 +42,7 @@ public sealed class WaterBenchResultController(AppDbContext db,IUnitOfWork uow,I
         return WaterBenchBatchTimeline.Replay(rows);
     }
     private static object View(WaterBenchResultAssessment a)=>new {
-        a.Id,a.SessionEvidenceId,a.Status,a.Reason,a.MediaId,a.CalibrationId,
+        a.Id,a.RequestId,a.SessionEvidenceId,a.ImageEvidenceId,a.Status,a.Reason,a.MediaId,a.CalibrationId,
         estimatedValue=a.CandidateValue,a.Unit,a.HoldoutError,confidence=(decimal?)null,
         a.AssessedBy,a.CreatedAt,a.EvidenceJson,chemicalResultValidated=false,productionPublished=false,
         ammoniaConversionApplied=false
@@ -66,6 +66,48 @@ public sealed class WaterBenchResultController(AppDbContext db,IUnitOfWork uow,I
                 !linked?"awaiting_media":"awaiting_assessment");
             return new{c.Analyte,c.SessionId,c.CaptureId,status,assessment=a is null?null:View(a),productionPublished=false};
         }),productionPublished=false}));
+    }
+    // Read-only chain verification, not a new inference or a storage download.
+    [HttpGet("{analyte}/evidence")]
+    public async Task<IActionResult> ResultEvidence(Guid areaId,Guid stationId,string bootId,string batchId,string analyte,CancellationToken ct)
+    {
+        await scope.EnsureAsync(areaId,false,ct);
+        Response.Headers["Cache-Control"]="no-store";
+        var q=Scoped(areaId,stationId,bootId,batchId);
+        var timeline=await Timeline(q,bootId,batchId,ct);
+        var c=timeline.Channels.SingleOrDefault(x=>x.Analyte==analyte)??throw AppException.NotFound("Water bench analyte");
+        if(c.SessionId==null)throw AppException.NotFound("Session evidence");
+        var session=await q.SingleOrDefaultAsync(x=>x.Kind=="session"&&x.Analyte==analyte&&
+            x.FirmwareSessionId==c.SessionId&&x.ConnectionId==timeline.ConnectionId,ct)
+            ??throw AppException.NotFound("Session evidence");
+        var sessionReceipt=WaterBenchReceiptPolicy.Read(session);
+        var row=await db.WaterBenchResultAssessments.AsNoTracking().SingleOrDefaultAsync(x=>x.SessionEvidenceId==session.Id,ct)
+            ??throw AppException.NotFound("Water bench assessment");
+        if(row.Status=="needs_retest")
+            return Ok(ApiResponse<object>.Ok(new{assessmentId=row.Id,row.RequestId,row.Status,session=sessionReceipt,
+                provenanceStatus="no_inference",mediaContentRechecked=false,chemicalResultValidated=false,productionPublished=false}));
+        if(!WaterBenchResultPolicy.ReadyForEstimate(timeline,c))throw AppException.Conflict("Incomplete assessment timeline.");
+        var image=await q.SingleOrDefaultAsync(x=>x.Id==row.ImageEvidenceId&&x.Kind=="jpeg"&&x.Analyte==analyte&&
+            x.FirmwareSessionId==c.SessionId&&x.ConnectionId==timeline.ConnectionId&&x.CaptureId==c.CaptureId,ct)
+            ??throw AppException.Conflict("Assessment image linkage missing.");
+        var provenance=WaterBenchAiEvidence.Verify(row,session,image);
+        var receipt=WaterBenchResultPolicy.VerifiedReceipt(image);
+        var profile=await db.WaterColorCalibrations.AsNoTracking().SingleOrDefaultAsync(x=>x.Id==row.CalibrationId&&
+            x.FarmingAreaId==areaId,ct)??throw AppException.Conflict("Calibration linkage missing.");
+        if(!WaterBenchResultPolicy.ReceiptMatches(receipt,profile.Id,profile.CameraDeviceId))
+            throw AppException.Conflict("Calibration linkage mismatch.");
+        var asset=await db.MediaAssets.AsNoTracking().SingleOrDefaultAsync(x=>x.Id==row.MediaId,ct)
+            ??throw AppException.Conflict("Media linkage missing.");
+        if(!WaterBenchResultPolicy.AssetMatches(asset,profile.CameraDeviceId,stationId,bootId,batchId,analyte,c.CaptureId!.Value))
+            throw AppException.Conflict("Private media linkage mismatch.");
+        return Ok(ApiResponse<object>.Ok(new{assessmentId=row.Id,row.RequestId,row.Status,row.CandidateValue,row.Unit,row.HoldoutError,
+            session=sessionReceipt,image=WaterBenchReceiptPolicy.Read(image),provenance,
+            provenanceStatus=provenance==null?"legacy_linkage_only":"snapshot_verified",
+            provenanceSha256=provenance==null?null:WaterBenchAiEvidence.Digest(provenance),
+            calibration=new{profile.Id,profile.CameraDeviceId,profile.RevokedAt,profile.ValidUntil,
+                currentlyUsable=profile.RevokedAt==null&&profile.ValidUntil>DateTime.UtcNow&&
+                    (profile.QualityCheckDueAt==null||profile.QualityCheckDueAt>DateTime.UtcNow)},
+            mediaContentRechecked=false,chemicalResultValidated=false,productionPublished=false}));
     }
     // Metadata-only preflight. Does not read image bytes, call AI, or create a result.
     [HttpGet("ai-readiness")]
@@ -215,7 +257,8 @@ public sealed class WaterBenchResultController(AppDbContext db,IUnitOfWork uow,I
         return Ok(ApiResponse<object>.Ok(View(await PersistAssessment(areaId,prepared.Row,ct))));
     }
     private sealed record PreparedAssessment(WaterBenchResultAssessment Row,bool Existing=false,WaterAiClient.BatchSample? Sample=null,
-        string? KitRevision=null,string? ImageSha256=null,string? Source=null,uint? ReactionStartMs=null,int? ReactionDurationMs=null);
+        string? KitRevision=null,string? ImageSha256=null,string? Source=null,uint? ReactionStartMs=null,int? ReactionDurationMs=null,
+        WaterBenchAiProvenance? Provenance=null);
     private async Task<PreparedAssessment> PrepareAssessment(Guid areaId,Guid stationId,string bootId,string batchId,string analyte,
         AssessRequest request,CancellationToken ct)
     {
@@ -271,7 +314,8 @@ public sealed class WaterBenchResultController(AppDbContext db,IUnitOfWork uow,I
             row.ImageEvidenceId=receiptRow.Id;row.MediaId=receipt.MediaId;row.CalibrationId=profile.Id;
             return new(row,false,new(profile.CameraDeviceId,analyte,profile.Unit,profile.ReagentLot,
                 profile.AiCalibrationToken!,profile.AiCalibrationId!,new(receipt.MediaId,bytes,seconds,salinity),profile.AiAlgorithm!),
-                profile.KitRevision,receipt.Sha256,source,c.ReactionStartMs,c.ReactionDurationMs);
+                profile.KitRevision,receipt.Sha256,source,c.ReactionStartMs,c.ReactionDurationMs,
+                WaterBenchAiEvidence.Build(row,session,receiptRow,profile.AiCalibrationId!,profile.AiAlgorithm!));
         }
         else if(request.CalibrationId!=null||request.ReagentLot!=null||request.ReactionSeconds!=null||request.SalinityPpt!=null||
             request.SampleSource!=null||request.OperatorConditionsConfirmed)
@@ -283,7 +327,11 @@ public sealed class WaterBenchResultController(AppDbContext db,IUnitOfWork uow,I
         var s=p.Sample??throw new InvalidOperationException("Missing prepared sample.");
         var row=p.Row;
         row.Status="estimate_review_required";row.CandidateValue=estimate.Value;row.Unit=s.Unit;row.HoldoutError=estimate.HoldoutError;
+        var provenance=p.Provenance??throw new InvalidOperationException("Missing AI provenance.");
         row.EvidenceJson=JsonSerializer.Serialize(new{algorithm=s.Algorithm,AiCalibrationId=s.CalibrationId,p.KitRevision,
+            provenance,provenanceSha256=WaterBenchAiEvidence.Digest(provenance),
+            candidateValue=row.CandidateValue,unit=row.Unit,holdoutError=row.HoldoutError,
+            readingSha256=WaterBenchAiEvidence.Hash(JsonSerializer.Serialize(estimate.Evidence,WaterBatchPlanning.Json)),
             imageSha256=p.ImageSha256,reading=estimate.Evidence,source=p.Source,reagentLot=s.Lot,
             seconds=s.Photo.ReactionSeconds,salinity=s.Photo.SalinityPpt,
             conditionsSource="operator_attested",reactionClock="firmware_boot_uptime",p.ReactionStartMs,p.ReactionDurationMs,
@@ -305,6 +353,9 @@ public sealed class WaterBenchResultController(AppDbContext db,IUnitOfWork uow,I
                 x.ValidUntil>now&&(x.QualityCheckDueAt==null||x.QualityCheckDueAt>now))
                 .ExecuteUpdateAsync(u=>u.SetProperty(x=>x.UpdatedAt,now),ct);
             if(locked!=1)throw AppException.Conflict("Hiệu chuẩn không còn hợp lệ.");
+            var session=await db.WaterBenchEvidence.AsNoTracking().SingleAsync(x=>x.Id==row.SessionEvidenceId,ct);
+            var image=await db.WaterBenchEvidence.AsNoTracking().SingleAsync(x=>x.Id==row.ImageEvidenceId,ct);
+            if(WaterBenchAiEvidence.Verify(row,session,image)==null)throw AppException.Conflict("Missing AI evidence snapshot.");
             using var evidence=JsonDocument.Parse(row.EvidenceJson);
             if(await Used(areaId,row.MediaId!.Value,evidence.RootElement.GetProperty("imageSha256").GetString()!,ct))
                 throw AppException.Conflict("Ảnh đã được sử dụng.");

@@ -1,0 +1,5 @@
+# P2.3.3 — AI evidence provenance
+
+New estimates store water-bench-ai-evidence-v1 in the existing assessment evidence JSON. Links include assessment/request, station/boot/connection/batch/session/capture, session/image receipt IDs and payload hashes, media digest, camera, configuration and calibration IDs, AI algorithm and calibration ID. The snapshot digest and numeric/reading comparisons detect inconsistent records; SHA-256 here is not a signature or protection against a privileged writer changing all fields.
+
+GET /api/areas/{areaId}/water-bench/batches/{stationId}/{bootId}/{batchId}/results/{analyte}/evidence returns scoped linkage, current calibration validity and integrity status (snapshot_verified, legacy_linkage_only, no_inference). It does not download media again, expose calibration tokens/storage credentials, or publish concentrations. Historical estimates are not backfilled. Revocation is shown without rewriting historical evidence. No schema migration. Unit tests cover mismatched values and linkage; real runtime/chemical acceptance remains outstanding.
