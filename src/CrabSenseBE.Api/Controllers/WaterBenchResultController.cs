@@ -23,6 +23,8 @@ public sealed class WaterBenchResultController(AppDbContext db,IUnitOfWork uow,I
     private readonly FarmAreaScope scope=new(uow,user);
     public record AssessRequest(Guid RequestId,string Action,string Reason,Guid? CalibrationId=null,string? ReagentLot=null,
         int? ReactionSeconds=null,decimal? SalinityPpt=null,string? SampleSource=null,bool OperatorConditionsConfirmed=false);
+    public record BatchAssessItem(string Analyte,AssessRequest Assessment);
+    public record BatchAssessRequest(IReadOnlyList<BatchAssessItem> Samples);
     private IQueryable<WaterBenchEvidence> Scoped(Guid areaId,Guid stationId,string bootId,string batchId)=>
         from e in db.WaterBenchEvidence.AsNoTracking()
         join s in db.WaterBenchStations on e.StationId equals s.Id
@@ -114,6 +116,51 @@ public sealed class WaterBenchResultController(AppDbContext db,IUnitOfWork uow,I
         }
         return Ok(ApiResponse<object>.Ok(new{timeline.Status,channels,metadataOnly=true,aiCalled=false,
             actualSampleConditionsVerified=false,chemicalResultValidated=false,productionPublished=false}));
+    }
+    // One HTTP operation for 1–3 independent assessments; never share an EF context across concurrent tasks.
+    [HttpPost("batch-assessment")]
+    [Authorize(Roles=AppRoles.FarmManage)]
+    [RequestSizeLimit(32768)]
+    public async Task<IActionResult> AssessBatch(Guid areaId,Guid stationId,string bootId,string batchId,BatchAssessRequest request,CancellationToken ct)
+    {
+        await scope.EnsureAsync(areaId,true,ct);
+        if(request.Samples is null||request.Samples.Count is <1 or >3||
+            request.Samples.Any(s=>s is null||s.Assessment is null||s.Assessment.Action!="estimate"||
+                !s.Assessment.OperatorConditionsConfirmed||s.Assessment.CalibrationId is null||
+                s.Assessment.CalibrationId==Guid.Empty||s.Assessment.ReactionSeconds is null||
+                s.Assessment.SalinityPpt is null||string.IsNullOrWhiteSpace(s.Assessment.ReagentLot)||
+                s.Assessment.ReagentLot.Length>128||string.IsNullOrWhiteSpace(s.Assessment.Reason)||s.Assessment.Reason.Length>500))
+            throw AppException.BadRequest("Mỗi mẫu cần xác nhận điều kiện và hiệu chuẩn riêng.");
+        var timeline=await Timeline(Scoped(areaId,stationId,bootId,batchId),bootId,batchId,ct);
+        WaterBenchResultPolicy.ValidateBatchSelection(timeline,request.Samples.Select(s=>s.Analyte).ToArray(),
+            request.Samples.Select(s=>s.Assessment.RequestId).ToArray());
+        // Validate source syntax for the whole request before doing any external IO.
+        foreach(var item in request.Samples)_=WaterBatchPlanning.Source(item.Assessment.SampleSource);
+        var outcomes=new List<object>();int succeeded=0;
+        foreach(var item in request.Samples)
+        {
+            ct.ThrowIfCancellationRequested();
+            try
+            {
+                var result=await Assess(areaId,stationId,bootId,batchId,item.Analyte,item.Assessment,ct);
+                if(result is not OkObjectResult ok)throw new InvalidOperationException("Unexpected assessment response.");
+                succeeded++;
+                outcomes.Add(new{item.Analyte,requestId=item.Assessment.RequestId,status="estimate_review_required",assessment=ok.Value});
+            }
+            catch(AppException ex) when(ex.StatusCode is 400 or 404 or 409 or 502 or 503)
+            {
+                outcomes.Add(new{item.Analyte,requestId=item.Assessment.RequestId,status="assessment_rejected",
+                    httpStatus=ex.StatusCode,retryable=ex.StatusCode is 502 or 503,message=ex.Message});
+            }
+            finally
+            {
+                // A failed SaveChanges can leave added entries tracked. Never carry them into another sample.
+                db.ChangeTracker.Clear();
+            }
+        }
+        return Ok(ApiResponse<object>.Ok(new{batchId,mode=timeline.Mode,
+            status=succeeded==outcomes.Count?"completed":succeeded>0?"partial":"failed",
+            results=outcomes,productionPublished=false,chemicalResultValidated=false}));
     }
     [HttpPost("{analyte}/assessment")]
     [Authorize(Roles=AppRoles.FarmManage)]
