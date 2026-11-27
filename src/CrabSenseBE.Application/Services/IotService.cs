@@ -567,6 +567,25 @@ public class IotService : IIotService
         }
         var components = (await _uow.RasComponents.GetAllAsync(ct)).ToDictionary(c => c.Id);
 
+        var systems=(await _uow.WaterSystems.GetAllAsync(ct)).ToDictionary(w=>w.Id);
+        // Area-scoped callers must not get measurements attributed to a
+        // different historical location or an ambiguous current configuration.
+        // Keep unscoped platform technical diagnostics compatible for now.
+        var locations=new Dictionary<Guid,SensorHistoryLocation>();
+        if(selectedAreas is not null)
+        {
+            foreach(var sensor in sensors)
+            {
+                var location=await SensorHistoryScope.ResolveFromSnapshotAsync(sensor,
+                    devices.GetValueOrDefault(sensor.DeviceId??Guid.Empty),
+                    id=>rows.GetValueOrDefault(id)?.FarmingAreaId,
+                    id=>systems.GetValueOrDefault(id)?.FarmingAreaId,
+                    id=>components.GetValueOrDefault(id)?.WaterSystemId);
+                if(location is not null && selectedAreas.Contains(location.AreaId))
+                    locations[sensor.Id]=location;
+            }
+            sensors=sensors.Where(sensor=>locations.ContainsKey(sensor.Id)).ToList();
+        }
         // Only the newest reading per sensor. WaterMeasurements grows with every telemetry
         // tick, so loading the whole table here made /iot/live take seconds over WAN.
         var latestBySensor = new Dictionary<Guid, WaterMeasurement>();
@@ -577,7 +596,7 @@ public class IotService : IIotService
                 .AsNoTracking()
                 .Where(m => sensorIds.Contains(m.SensorId))
                 .GroupBy(m => m.SensorId)
-                .Select(g => g.OrderByDescending(x => x.MeasuredAt).First())
+                .Select(g => g.OrderByDescending(x => x.MeasuredAt).ThenByDescending(x=>x.Id).First())
                 .ToListAsync(ct);
             foreach (var m in latest) latestBySensor[m.SensorId] = m;
         }
@@ -585,13 +604,21 @@ public class IotService : IIotService
         var ports = (await _uow.ControllerPorts.GetAllAsync(ct)).ToDictionary(p=>p.Id);
         var errors = (await _uow.Alerts.FindAsync(a=>a.SensorId.HasValue && sensorIds.Contains(a.SensorId.Value)
             && a.IncidentType=="sensor_read_error" && (a.Status==AlertStatus.Active||a.Status==AlertStatus.Acknowledged||a.Status==AlertStatus.InProgress),ct)).Select(a=>a.SensorId!.Value).ToHashSet();
-        var systems=(await _uow.WaterSystems.GetAllAsync(ct)).ToDictionary(w=>w.Id);
+        var now=DateTime.UtcNow;
         var list = new List<SensorLiveDto>();
         foreach (var s in sensors.OrderBy(s => s.SensorCode))
         {
             devices.TryGetValue(s.DeviceId ?? Guid.Empty, out var dev);
             latestBySensor.TryGetValue(s.Id, out var latest);
             components.TryGetValue(s.RasComponentId ?? Guid.Empty, out var loc);
+            var scope=locations.GetValueOrDefault(s.Id);
+            if(selectedAreas is not null && latest is not null &&
+                (scope is null || !s.IsActive || latest.ObservedAreaId!=scope.AreaId ||
+                 latest.ObservedRowId!=scope.RowId || latest.ObservedSensorType!=s.SensorType ||
+                 string.IsNullOrWhiteSpace(latest.Unit) || latest.Unit!=s.Unit ||
+                 latest.DataQuality!="Realtime" || !latest.ReceivedAt.HasValue ||
+                 latest.ReceivedAt>now || latest.MeasuredAt>now))
+                latest=null; // No fallback to an earlier row that may hide a data-quality issue.
             string? alarm = null;
             if (latest is not null)
             {
@@ -600,7 +627,7 @@ public class IotService : IIotService
                 else if (s.MaxThreshold.HasValue && latest.Value > s.MaxThreshold.Value)
                     alarm = "above_max";
             }
-            var rowId = s.FarmingRowId ?? dev?.FarmingRowId;
+            var rowId = scope is not null ? scope.RowId : s.FarmingRowId ?? dev?.FarmingRowId;
             rows.TryGetValue(rowId ?? Guid.Empty, out var row);
             list.Add(new SensorLiveDto(
                 s.Id, s.SensorCode, s.SensorType, s.Unit,
@@ -610,7 +637,7 @@ public class IotService : IIotService
                 loc?.Name, loc?.Type,
                 rowId, row?.Name, row?.Code, s.Name,
                 SensorStatusPolicy.Status(s,dev,ports.GetValueOrDefault(s.ControllerPortId??s.BusPortId??Guid.Empty),errors.Contains(s.Id)),
-                latest?.DataQuality??"Unknown",latest?.ReceivedAt,s.FarmingAreaId??row?.FarmingAreaId??systems.GetValueOrDefault(s.WaterSystemId??Guid.Empty)?.FarmingAreaId??dev?.FarmingAreaId));
+                latest?.DataQuality??"Unknown",latest?.ReceivedAt,scope?.AreaId??s.FarmingAreaId??row?.FarmingAreaId??systems.GetValueOrDefault(s.WaterSystemId??Guid.Empty)?.FarmingAreaId??dev?.FarmingAreaId));
         }
         return ApiResponse<IEnumerable<SensorLiveDto>>.Ok(list);
     }

@@ -109,7 +109,10 @@ public class IotController : ControllerBase
         [FromQuery] Guid? deviceId = null,
         [FromQuery] Guid? farmingAreaId = null,
         CancellationToken ct = default)
-        => Ok(await _service.GetLiveSnapshotAsync(deviceId, farmingAreaId, ct));
+    {
+        Response.Headers["Cache-Control"]="no-store";
+        return Ok(await _service.GetLiveSnapshotAsync(deviceId, farmingAreaId, ct));
+    }
 
     /// <summary>[READ] Aggregated water-quality history for charts (period=24h|7d|30d)</summary>
     [HttpGet("history")]
