@@ -364,6 +364,71 @@ public sealed class FarmAreaScopeTests
         error.Which.StatusCode.Should().Be(403);
     }
 
+    [Fact]
+    public async Task Boxes_overview_never_reuses_first_area_or_global_devices()
+    {
+        var a = Guid.NewGuid();
+        var b = Guid.NewGuid();
+        var rowA = Guid.NewGuid();
+        var rowB = Guid.NewGuid();
+        var sensorA = Guid.NewGuid();
+        var sensorB = Guid.NewGuid();
+        var systemA = Guid.NewGuid();
+        var systemB = Guid.NewGuid();
+        var now = DateTime.UtcNow.AddSeconds(-10);
+        var uow = new Mock<IUnitOfWork>();
+        uow.Setup(x => x.FarmingAreas).Returns(RepositoryWithAll(
+            new FarmingArea { Id = a, Name = "A" }, new FarmingArea { Id = b, Name = "B" }).Object);
+        uow.Setup(x => x.FarmingRows).Returns(RepositoryWithAll(
+            new FarmingRow { Id = rowA, FarmingAreaId = a },
+            new FarmingRow { Id = rowB, FarmingAreaId = b }).Object);
+        uow.Setup(x => x.Boxes).Returns(RepositoryWithAll(
+            new Box { Id = Guid.NewGuid(), FarmingRowId = rowA, Code = "A" },
+            new Box { Id = Guid.NewGuid(), FarmingRowId = rowB, Code = "B" }).Object);
+        uow.Setup(x => x.WaterSystems).Returns(RepositoryWithAll(
+            new WaterSystem { Id = systemA, FarmingAreaId = a },
+            new WaterSystem { Id = systemB, FarmingAreaId = b }).Object);
+        uow.Setup(x => x.RasComponents).Returns(RepositoryWithAll<RasComponent>().Object);
+        uow.Setup(x => x.Sensors).Returns(RepositoryWithAll(
+            new Sensor { Id = sensorA, WaterSystemId = systemA, SensorType = "Temperature", Unit = "°C" },
+            new Sensor { Id = sensorB, WaterSystemId = systemB, SensorType = "Temperature", Unit = "°C", MaxThreshold = 25 }).Object);
+        uow.Setup(x => x.Devices).Returns(RepositoryWithAll(
+            new Device { Id = Guid.NewGuid(), FarmingAreaId = b, Status = DeviceStatus.Online },
+            new Device { Id = Guid.NewGuid(), Status = DeviceStatus.Online }).Object);
+        uow.Setup(x => x.WaterMeasurements).Returns(RepositoryWithAll(
+            new WaterMeasurement { SensorId = sensorA, ObservedAreaId = a, ObservedSensorType = "Temperature",
+                Unit = "°C", Value = 0, MeasuredAt = now, ReceivedAt = now, DataQuality = "Realtime" },
+            new WaterMeasurement { SensorId = sensorB, ObservedAreaId = b, ObservedSensorType = "Temperature",
+                Unit = "°C", Value = 28, MeasuredAt = now, ReceivedAt = now, DataQuality = "Realtime" }).Object);
+        uow.Setup(x => x.Alerts).Returns(RepositoryWithAll<Alert>().Object);
+        uow.Setup(x => x.Crabs).Returns(RepositoryWithAll<Crab>().Object);
+        uow.Setup(x => x.CrabBoxAllocations).Returns(RepositoryWithAll<CrabBoxAllocation>().Object);
+        uow.Setup(x => x.CrabLots).Returns(RepositoryWithAll<CrabLot>().Object);
+        uow.Setup(x => x.MoltingRecords).Returns(RepositoryWithAll<MoltingRecord>().Object);
+        uow.Setup(x => x.FarmOperations).Returns(RepositoryWithAll<FarmOperation>().Object);
+        var service = new BoxOverviewService(uow.Object);
+        var all = (await service.GetOverviewAsync()).Data!;
+        all.FarmingAreaId.Should().BeNull();
+        all.AreaWater.Temperature.Should().BeNull();
+        all.AreaDevices.TotalCount.Should().Be(0);
+        var first = all.Items.Single(i => i.FarmingAreaId == a);
+        var second = all.Items.Single(i => i.FarmingAreaId == b);
+        first.Water.Temperature.Should().Be(0);
+        second.Water.Temperature.Should().Be(28);
+        first.Water.Alarms.Should().BeEmpty();
+        second.Water.Alarms.Should().ContainSingle().Which.Should().Be("Temperature above_max");
+        first.Devices.TotalCount.Should().Be(0);
+        first.Devices.IsOnline.Should().BeFalse();
+        second.Devices.TotalCount.Should().Be(1);
+        var selected = (await service.GetOverviewAsync(a)).Data!;
+        selected.AreaWater.Temperature.Should().Be(0);
+        selected.AreaDevices.TotalCount.Should().Be(0);
+        selected.Items.Should().ContainSingle();
+        var emptyScope = (await service.GetOverviewAsync(Guid.NewGuid())).Data!;
+        emptyScope.AreaWater.Temperature.Should().BeNull();
+        emptyScope.AreaDevices.TotalCount.Should().Be(0);
+    }
+
     private static (Mock<IUnitOfWork> Uow, Mock<ICurrentUserService> Current) UnassignedStaff()
     {
         var userId = Guid.NewGuid();

@@ -57,24 +57,26 @@ public class BoxOverviewService : IBoxOverviewService
         var boxList = boxes.OrderBy(b => b.Code).ToList();
         var boxIds = boxList.Select(b => b.Id).ToHashSet();
 
-        // Resolve primary area for IoT (first box's area, or filter)
-        Guid? scopeAreaId = farmingAreaId;
-        if (scopeAreaId is null || scopeAreaId == Guid.Empty)
-        {
-            if (boxList.Count > 0 && rowMap.TryGetValue(boxList[0].FarmingRowId, out var firstRow))
-                scopeAreaId = firstRow.FarmingAreaId;
-        }
-
-        string farmName = "Trang trại";
-        if (scopeAreaId is Guid aid && areas.TryGetValue(aid, out var areaEntity))
-            farmName = areaEntity.Name;
-
-        var (waterSystems, sensors, devices, measurements, alerts) =
-            await LoadAreaIoTAsync(scopeAreaId, ct);
-
-        var water = BuildWaterSnapshot(sensors, measurements);
-        var deviceSnap = BuildDeviceSnapshot(devices);
-        var (waterScore, deviceScore) = ComputeAreaScores(sensors, devices, alerts);
+        // Only an explicit area (or explicit row) may populate the header.
+        // An All Areas request must never present the first area's RAS as global.
+        Guid? scopeAreaId = farmingAreaId is Guid selected && selected != Guid.Empty
+            ? selected
+            : farmingRowId is Guid selectedRow && rowMap.TryGetValue(selectedRow, out var filterRow)
+                && (scope is null || scope.Contains(filterRow.FarmingAreaId))
+                ? filterRow.FarmingAreaId : null;
+        var requiredAreas = boxList
+            .Where(box => rowMap.ContainsKey(box.FarmingRowId))
+            .Select(box => rowMap[box.FarmingRowId].FarmingAreaId)
+            .Where(id => id != Guid.Empty && (scope is null || scope.Contains(id)))
+            .ToHashSet();
+        if (scopeAreaId is Guid headerArea && (scope is null || scope.Contains(headerArea)))
+            requiredAreas.Add(headerArea);
+        var areaIoT = await LoadAreaIoTAsync(requiredAreas, rowMap, ct);
+        var empty = new AreaIoT(new BoxWaterSnapshotDto(null, null, null, null, []),
+            new BoxDeviceSnapshotDto(false, 0, 0), 0, 0, []);
+        var header = scopeAreaId is Guid aid ? areaIoT.GetValueOrDefault(aid, empty) : empty;
+        var farmName = scopeAreaId is Guid namedArea && areas.TryGetValue(namedArea, out var areaEntity)
+            ? areaEntity.Name : "Trang trại";
 
         // Crabs currently in these boxes: Crab.BoxId or open allocation
         var liveCrabs = (await _uow.Crabs.GetAllAsync(ct)).Where(IsLiveCrab).ToList();
@@ -159,7 +161,11 @@ public class BoxOverviewService : IBoxOverviewService
                 ? box.Status
                 : BoxStatuses.Empty;
 
-            var health = ComputeBoxHealth(box, waterScore, deviceScore, alerts.Count, lastMolt);
+            var io = areaIoT.GetValueOrDefault(areaId, empty);
+            var water = io.Water;
+            var deviceSnap = io.Devices;
+            var alerts = io.Alerts;
+            var health = ComputeBoxHealth(box, io.WaterScore, io.DeviceScore, alerts.Count, lastMolt);
             var healthStatus = MapHealthStatus(box, health.Score, deviceSnap.IsOnline);
             var ai = BuildAiTip(box, alerts, healthStatus);
             var priority = healthStatus switch
@@ -256,81 +262,111 @@ public class BoxOverviewService : IBoxOverviewService
             FarmingAreaId: scopeAreaId,
             FarmName: farmName,
             Summary: summary,
-            AreaWater: water,
-            AreaDevices: deviceSnap,
+            AreaWater: header.Water,
+            AreaDevices: header.Devices,
             Items: items,
             SyncedAt: DateTime.UtcNow));
     }
 
-    private async Task<(
-        List<WaterSystem> WaterSystems,
-        List<Sensor> Sensors,
-        List<Device> Devices,
-        List<WaterMeasurement> Measurements,
-        List<Alert> Alerts)> LoadAreaIoTAsync(Guid? farmingAreaId, CancellationToken ct)
+    private sealed record AreaIoT(BoxWaterSnapshotDto Water, BoxDeviceSnapshotDto Devices,
+        int WaterScore, int DeviceScore, List<Alert> Alerts);
+
+    private async Task<Dictionary<Guid, AreaIoT>> LoadAreaIoTAsync(
+        HashSet<Guid> requiredAreas, Dictionary<Guid, FarmingRow> rowMap, CancellationToken ct)
     {
+        var result = new Dictionary<Guid, AreaIoT>();
+        if (requiredAreas.Count == 0) return result;
+
         var allSensors = (await _uow.Sensors.GetAllAsync(ct)).ToList();
-        var allDevices = (await _uow.Devices.GetAllAsync(ct)).ToList();
+        var allDevices = (await _uow.Devices.GetAllAsync(ct)).ToDictionary(d => d.Id);
+        var systems = (await _uow.WaterSystems.GetAllAsync(ct)).ToDictionary(w => w.Id);
+        var components = (await _uow.RasComponents.GetAllAsync(ct)).ToDictionary(c => c.Id);
         var allMeas = (await _uow.WaterMeasurements.GetAllAsync(ct)).ToList();
         var activeAlerts = (await _uow.Alerts.FindAsync(a => a.Status == AlertStatus.Active, ct)).ToList();
+        var locations = new Dictionary<Guid, SensorHistoryLocation>();
+        foreach (var sensor in allSensors)
+        {
+            var device = sensor.DeviceId is Guid did ? allDevices.GetValueOrDefault(did) : null;
+            var location = await SensorHistoryScope.ResolveFromSnapshotAsync(sensor, device,
+                id => rowMap.GetValueOrDefault(id)?.FarmingAreaId,
+                id => systems.GetValueOrDefault(id)?.FarmingAreaId,
+                id => components.GetValueOrDefault(id)?.WaterSystemId);
+            if (location is not null) locations[sensor.Id] = location;
+        }
 
-        if (farmingAreaId is null || farmingAreaId == Guid.Empty)
-            return ([], allSensors, allDevices, allMeas, activeAlerts);
-
-        var ws = (await _uow.WaterSystems.FindAsync(w => w.FarmingAreaId == farmingAreaId.Value, ct)).ToList();
-        var wsIds = ws.Select(w => w.Id).ToHashSet();
-        var sensors = allSensors
-            .Where(s => s.WaterSystemId != null && wsIds.Contains(s.WaterSystemId.Value))
-            .ToList();
-        var sensorIds = sensors.Select(s => s.Id).ToHashSet();
-        var deviceIds = sensors.Where(s => s.DeviceId.HasValue).Select(s => s.DeviceId!.Value).ToHashSet();
-        var devices = allDevices.Where(d => deviceIds.Contains(d.Id)).ToList();
-        if (devices.Count == 0)
-            devices = allDevices; // fallback if sensors not linked yet
-        var meas = allMeas.Where(m => sensorIds.Contains(m.SensorId)).ToList();
-        var alerts = activeAlerts
-            .Where(a => a.SensorId is Guid sid && sensorIds.Contains(sid))
-            .ToList();
-
-        return (ws, sensors, devices, meas, alerts);
+        foreach (var area in requiredAreas)
+        {
+            var sensors = allSensors.Where(s => locations.GetValueOrDefault(s.Id)?.AreaId == area).ToList();
+            var sensorIds = sensors.Select(s => s.Id).ToHashSet();
+            // Explicit area/row configuration only; conflicting or unassigned devices
+            // never inherit the global inventory through an empty association.
+            var devices = allDevices.Values.Where(d =>
+                (d.FarmingAreaId == area || (d.FarmingAreaId is null && d.FarmingRowId is Guid rowId
+                    && rowMap.GetValueOrDefault(rowId)?.FarmingAreaId == area))
+                && (d.FarmingRowId is null || rowMap.GetValueOrDefault(d.FarmingRowId.Value)?.FarmingAreaId == area))
+                .ToList();
+            var meas = allMeas.Where(m => sensorIds.Contains(m.SensorId)).ToList();
+            // Use the captured area; do not reassign old alerts if a sensor moved.
+            var alerts = activeAlerts.Where(a => a.FarmingAreaId == area).ToList();
+            var water = BuildWaterSnapshot(sensors, meas, locations, area);
+            var deviceSnap = BuildDeviceSnapshot(devices);
+            var (waterScore, deviceScore) = ComputeAreaScores(sensors, devices, alerts);
+            result[area] = new AreaIoT(water, deviceSnap, waterScore, deviceScore, alerts);
+        }
+        return result;
     }
 
     private static BoxWaterSnapshotDto BuildWaterSnapshot(
-        List<Sensor> sensors, List<WaterMeasurement> measurements)
+        List<Sensor> sensors, List<WaterMeasurement> measurements,
+        Dictionary<Guid, SensorHistoryLocation> locations, Guid area)
     {
-        var latestBySensor = measurements
-            .GroupBy(m => m.SensorId)
+        // The legacy scalar contract cannot represent multiple sources of one
+        // metric. Only a unique qualified sensor can populate each scalar.
+        var now = DateTime.UtcNow;
+        var latestBySensor = measurements.GroupBy(m => m.SensorId)
             .ToDictionary(g => g.Key, g => g.OrderByDescending(x => x.MeasuredAt).First());
-
-        decimal? temp = null, ph = null, dout = null;
-        DateTime? measuredAt = null;
+        var qualified = new List<(string Kind, WaterMeasurement Measurement)>();
         var alarms = new List<string>();
-
-        foreach (var s in sensors.Where(s => s.IsActive))
+        foreach (var sensor in sensors.Where(s => s.IsActive))
         {
-            if (!latestBySensor.TryGetValue(s.Id, out var latest)) continue;
-            measuredAt = MaxDate(measuredAt, latest.MeasuredAt);
-            var type = s.SensorType?.Trim().ToLowerInvariant() ?? "";
-            if (type is "temperature" or "temp" or "nhiệt độ")
-                temp = latest.Value;
-            else if (type is "ph")
-                ph = latest.Value;
-            else if (type is "do" or "dissolvedoxygen" or "dissolved_oxygen" or "oxy")
-                dout = latest.Value;
-
-            if (s.MinThreshold.HasValue && latest.Value < s.MinThreshold.Value)
-                alarms.Add($"{s.SensorType} below_min");
-            else if (s.MaxThreshold.HasValue && latest.Value > s.MaxThreshold.Value)
-                alarms.Add($"{s.SensorType} above_max");
+            if (!latestBySensor.TryGetValue(sensor.Id, out var latest)
+                || !locations.TryGetValue(sensor.Id, out var location)
+                || latest.ObservedAreaId != area || latest.ObservedRowId != location.RowId
+                || latest.ObservedSensorType != sensor.SensorType || latest.DataQuality != "Realtime"
+                || latest.ReceivedAt is not DateTime received || received < latest.MeasuredAt
+                || received > now || latest.MeasuredAt > now
+                || now - received > TimeSpan.FromMinutes(5) || now - latest.MeasuredAt > TimeSpan.FromMinutes(5)
+                || string.IsNullOrWhiteSpace(sensor.Unit) || latest.Unit != sensor.Unit) continue;
+            var kind = (sensor.SensorType?.Trim().ToLowerInvariant(), latest.Unit) switch
+            {
+                ("temperature", "°C") => "temperature",
+                ("ph", "pH") => "ph",
+                ("do" or "dissolvedoxygen" or "dissolved_oxygen", "mg/L") => "do",
+                _ => ""
+            };
+            if (kind.Length == 0) continue;
+            qualified.Add((kind, latest));
+            if (sensor.MinThreshold is decimal min && sensor.MaxThreshold is decimal max && min >= max)
+                continue;
+            if (sensor.MinThreshold is decimal lower && latest.Value < lower)
+                alarms.Add($"{sensor.SensorType} below_min");
+            else if (sensor.MaxThreshold is decimal upper && latest.Value > upper)
+                alarms.Add($"{sensor.SensorType} above_max");
         }
-
-        return new BoxWaterSnapshotDto(temp, ph, dout, measuredAt, alarms);
+        var unique = qualified.GroupBy(p => p.Kind).Where(g => g.Count() == 1)
+            .ToDictionary(g => g.Key, g => g.Single().Measurement);
+        decimal? Value(string kind) => unique.TryGetValue(kind, out var m) ? m.Value : null;
+        // One timestamp cannot describe different samples. Leave it absent
+        // unless all reported scalars actually have the same measured time.
+        var stamps = unique.Values.Select(m => m.MeasuredAt).Distinct().ToList();
+        return new BoxWaterSnapshotDto(Value("temperature"), Value("ph"), Value("do"),
+            stamps.Count == 1 ? stamps[0] : null, alarms);
     }
 
     private static BoxDeviceSnapshotDto BuildDeviceSnapshot(List<Device> devices)
     {
         if (devices.Count == 0)
-            return new BoxDeviceSnapshotDto(true, 0, 0);
+            return new BoxDeviceSnapshotDto(false, 0, 0);
         var online = devices.Count(d => d.Status == DeviceStatus.Online);
         return new BoxDeviceSnapshotDto(online > 0, online, devices.Count);
     }
