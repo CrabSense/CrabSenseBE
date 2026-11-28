@@ -414,6 +414,31 @@ END $$;
     finally {
         $env:CRABSENSE_SCOPED_HISTORY_TEST_DB = $oldHistoryDb
     }
+    # Recovery drill: a separate target cloned from the isolated migrated fixture.
+    # The test validates current_database and the actual cluster data directory
+    # before invoking the production backup service; never use a VPS connection.
+    & $createdb -h 127.0.0.1 -p $Port -U postgres -T clean_migration recovery_target
+    Assert-Exit "Could not create isolated recovery target"
+    $oldRecoveryPort = $env:CRABSENSE_RECOVERY_TEST_PORT
+    $oldRecoveryDir = $env:CRABSENSE_RECOVERY_TEST_CLUSTER
+    $oldRecoveryBin = $env:CRABSENSE_RECOVERY_TEST_PGBIN
+    $recoveryResults = Join-Path $data "recovery-test-results"
+    try {
+        $env:CRABSENSE_RECOVERY_TEST_PORT = "$Port"
+        $env:CRABSENSE_RECOVERY_TEST_CLUSTER = $data
+        $env:CRABSENSE_RECOVERY_TEST_PGBIN = $PostgresBin
+        & dotnet test tests/CrabSenseBE.UnitTests/CrabSenseBE.UnitTests.csproj -c Release --filter "FullyQualifiedName~DatabaseBackupRecoveryPostgresTests" --logger "trx;LogFileName=recovery.trx" --results-directory $recoveryResults
+        Assert-Exit "Isolated backup/recovery test failed"
+        [xml]$report = Get-Content (Join-Path $recoveryResults "recovery.trx") -Raw
+        $results = @($report.TestRun.Results.UnitTestResult)
+        if ($results.Count -ne 1 -or $results[0].outcome -ne "Passed") { throw "Expected one executed and passed recovery test, not a skip." }
+        Write-Output "ISOLATED_BACKUP_RECOVERY_PASSED=1"
+    }
+    finally {
+        $env:CRABSENSE_RECOVERY_TEST_PORT = $oldRecoveryPort
+        $env:CRABSENSE_RECOVERY_TEST_CLUSTER = $oldRecoveryDir
+        $env:CRABSENSE_RECOVERY_TEST_PGBIN = $oldRecoveryBin
+    }
     Write-Output "FARM_STATE_VERSION_TESTS_PASSED=1"
     Write-Output "NON_SALES_SCHEMA_TESTS_PASSED=1"
     Write-Output "CUSTOMER_AREA_SCHEMA_TESTS_PASSED=1"

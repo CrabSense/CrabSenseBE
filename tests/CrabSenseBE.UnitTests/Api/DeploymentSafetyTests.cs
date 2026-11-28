@@ -32,6 +32,7 @@ public sealed class DeploymentSafetyTests
     {
         var workflow = File.ReadAllText(Path.Combine(RepositoryRoot(), ".github", "workflows", "deploy-vps.yml"));
         workflow.Should().Contain("run.event === 'push' && run.head_branch === 'main'");
+        workflow.Should().Contain("latest?.status === 'completed' && latest.conclusion === 'success'");
         workflow.Should().Contain("Refusing stale or non-main deployment");
         workflow.Should().Contain("/var/lib/crabsense/media-storage");
         workflow.Should().Contain("cmp -s /opt/crabsense-api.previous/.schema-migration");

@@ -6,6 +6,9 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
@@ -180,17 +183,48 @@ jobs:
         shell: pwsh
         run: ./tests/PostgresIntegration/run-migration-tests.ps1 -MigrationBundle /tmp/crabsense-publish/efbundle -UseExistingBuild
 
+  security-tests:
+    name: CI/CD security and NuGet audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+      - name: Validate merge and deployment policy
+        run: |
+          node --test tests/test-deploy-policy.cjs
+          python3 -m unittest discover -s tests -p test_nuget_audit.py
+      - name: Restore and audit direct/transitive NuGet packages
+        run: |
+          set -euo pipefail
+          dotnet restore CrabSenseBE.sln --force-evaluate -p:NuGetAudit=true -p:NuGetAuditMode=all -p:WarningsAsErrors=NU1900%3BNU1605
+          dotnet list CrabSenseBE.sln package --vulnerable --include-transitive --format json > /tmp/nuget-audit.json
+          python3 scripts/check-nuget-audit.py /tmp/nuget-audit.json
+      - name: Upload NuGet audit report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nuget-audit-${{ github.sha }}
+          path: /tmp/nuget-audit.json
+          if-no-files-found: warn
+          retention-days: 14
+
   build-test:
     name: Build, Test & SonarCloud
     runs-on: ubuntu-latest
-    needs: [unit-tests, database-tests]
+    needs: [unit-tests, database-tests, security-tests]
     if: ${{ always() }}
     steps:
       - name: Require all validation jobs
         env:
           UNIT_TESTS_RESULT: ${{ needs.unit-tests.result }}
           DATABASE_TESTS_RESULT: ${{ needs.database-tests.result }}
+          SECURITY_TESTS_RESULT: ${{ needs.security-tests.result }}
         run: |
           set -euo pipefail
           test "$UNIT_TESTS_RESULT" = success
           test "$DATABASE_TESTS_RESULT" = success
+          test "$SECURITY_TESTS_RESULT" = success
