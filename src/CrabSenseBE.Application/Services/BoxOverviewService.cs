@@ -9,7 +9,7 @@ namespace CrabSenseBE.Application.Services;
 
 /// <summary>
 /// Aggregates farming status + area IoT + alerts into one Mobile Boxes payload.
-/// Water/devices are area-scoped (RAS); per-box score blends box crab status with area IoT.
+/// Water/devices are area-scoped (RAS); unverified assessments are unavailable.
 /// </summary>
 public class BoxOverviewService : IBoxOverviewService
 {
@@ -73,7 +73,7 @@ public class BoxOverviewService : IBoxOverviewService
             requiredAreas.Add(headerArea);
         var areaIoT = await LoadAreaIoTAsync(requiredAreas, rowMap, ct);
         var empty = new AreaIoT(new BoxWaterSnapshotDto(null, null, null, null, []),
-            new BoxDeviceSnapshotDto(false, 0, 0), 0, 0, []);
+            new BoxDeviceSnapshotDto(false, 0, 0), []);
         var header = scopeAreaId is Guid aid ? areaIoT.GetValueOrDefault(aid, empty) : empty;
         var farmName = scopeAreaId is Guid namedArea && areas.TryGetValue(namedArea, out var areaEntity)
             ? areaEntity.Name : "Trang trại";
@@ -165,17 +165,11 @@ public class BoxOverviewService : IBoxOverviewService
             var water = io.Water;
             var deviceSnap = io.Devices;
             var alerts = io.Alerts;
-            var health = ComputeBoxHealth(box, io.WaterScore, io.DeviceScore, alerts.Count, lastMolt);
-            var healthStatus = MapHealthStatus(box, health.Score, deviceSnap.IsOnline);
-            var ai = BuildAiTip(box, alerts, healthStatus);
-            var priority = healthStatus switch
-            {
-                "critical" => "high",
-                "warning" => "medium",
-                "offline" => "medium",
-                _ => ai?.HasRecommendation == true ? "medium" : "low"
-            };
-
+            // No verified assessment or model provenance is available on this route.
+            // Preserve operational status, crab condition and scoped alerts separately.
+            const string healthStatus = "unknown";
+            var health = new BoxHealthScoreDto(null, null, null, "Unknown", "unknown",
+                "No verified health or AI assessment available.");
             layoutIndex.TryGetValue(box.Id, out var layout);
             layout ??= new BoxMapLayoutDto(0.5, 0.5, 0, 0);
 
@@ -191,19 +185,9 @@ public class BoxOverviewService : IBoxOverviewService
                 : alive.Max(c => c.UpdatedAt ?? c.CreatedAt);
             // Lần cập nhật hộp = phiếu chăm sóc / tình trạng cua, không lấy
             // sensor khu (mọi hộp cùng một mốc đo nước).
-            var lastUpdated = new[]
-                {
-                    box.UpdatedAt,
-                    box.CreatedAt,
-                    lastMolt?.MoltTime,
-                    alloc?.StartTime,
-                    crabTouch,
-                    lastOp
-                }
-                .Where(d => d.HasValue)
-                .Select(d => d!.Value)
-                .DefaultIfEmpty(DateTime.UtcNow)
-                .Max();
+            var lastUpdated = LatestRecordedUpdate(DateTime.UtcNow,
+                box.UpdatedAt, box.CreatedAt, lastMolt?.MoltTime,
+                alloc?.StartTime, crabTouch, lastOp);
 
             DateTime? harvestAt = null;
             if (occupied && string.Equals(boxStatus, BoxStatuses.Molting, StringComparison.OrdinalIgnoreCase))
@@ -240,23 +224,24 @@ public class BoxOverviewService : IBoxOverviewService
                 AlertCount: alertCount,
                 LatestAlertTitle: latestAlert?.Message,
                 LatestAlertAt: latestAlert?.CreatedAt,
-                AiRecommendation: ai,
+                AiRecommendation: null,
                 Layout: layout,
                 LastUpdated: lastUpdated,
                 ExpectedHarvestAt: harvestAt,
                 WaterTestDue: waterTestDue,
                 VideoDue: videoDue,
-                Priority: priority,
+                Priority: null,
                 CrabCondition: WorstCrabCondition(boxCrabs)));
         }
 
         var summary = new BoxesFarmSummaryDto(
             Total: items.Count,
-            Healthy: items.Count(i => i.HealthStatus == "healthy"),
-            Warning: items.Count(i => i.HealthStatus == "warning"),
-            Critical: items.Count(i => i.HealthStatus == "critical"),
-            Offline: items.Count(i => i.HealthStatus == "offline"),
-            WithAiRecommendation: items.Count(i => i.AiRecommendation?.HasRecommendation == true));
+            Healthy: null,
+            Warning: null,
+            Critical: null,
+            Offline: scopeAreaId.HasValue && header.Devices.TotalCount > 0
+                ? items.Count(i => i.Devices.TotalCount > 0 && !i.Devices.IsOnline) : null,
+            WithAiRecommendation: null);
 
         return ApiResponse<BoxesOverviewResponseDto>.Ok(new BoxesOverviewResponseDto(
             FarmingAreaId: scopeAreaId,
@@ -269,7 +254,7 @@ public class BoxOverviewService : IBoxOverviewService
     }
 
     private sealed record AreaIoT(BoxWaterSnapshotDto Water, BoxDeviceSnapshotDto Devices,
-        int WaterScore, int DeviceScore, List<Alert> Alerts);
+        List<Alert> Alerts);
 
     private async Task<Dictionary<Guid, AreaIoT>> LoadAreaIoTAsync(
         HashSet<Guid> requiredAreas, Dictionary<Guid, FarmingRow> rowMap, CancellationToken ct)
@@ -310,8 +295,7 @@ public class BoxOverviewService : IBoxOverviewService
             var alerts = activeAlerts.Where(a => a.FarmingAreaId == area).ToList();
             var water = BuildWaterSnapshot(sensors, meas, locations, area);
             var deviceSnap = BuildDeviceSnapshot(devices);
-            var (waterScore, deviceScore) = ComputeAreaScores(sensors, devices, alerts);
-            result[area] = new AreaIoT(water, deviceSnap, waterScore, deviceScore, alerts);
+            result[area] = new AreaIoT(water, deviceSnap, alerts);
         }
         return result;
     }
@@ -371,83 +355,13 @@ public class BoxOverviewService : IBoxOverviewService
         return new BoxDeviceSnapshotDto(online > 0, online, devices.Count);
     }
 
-    private static (int WaterScore, int DeviceScore) ComputeAreaScores(
-        List<Sensor> sensors, List<Device> devices, List<Alert> alerts)
+    private static DateTime? LatestRecordedUpdate(DateTime now, params DateTime?[] timestamps)
     {
-        var deviceScore = devices.Count == 0
-            ? 80
-            : (int)Math.Round(devices.Count(d => d.Status == DeviceStatus.Online) * 100.0 / devices.Count);
-
-        var activeSensors = sensors.Count(s => s.IsActive);
-        var staleCutoff = DateTime.UtcNow.AddHours(-2);
-        var fresh = sensors.Count(s => s.IsActive && s.LastSeenAt != null && s.LastSeenAt > staleCutoff);
-        var waterScore = activeSensors == 0
-            ? 82
-            : (int)Math.Round(Math.Max(fresh, activeSensors * 0.7) * 100.0 / activeSensors);
-        waterScore = Math.Clamp(waterScore - alerts.Count(a => a.Severity >= AlertSeverity.Warning) * 4, 0, 100);
-
-        return (waterScore, deviceScore);
-    }
-
-    private static BoxHealthScoreDto ComputeBoxHealth(
-        Box box, int waterScore, int deviceScore, int alertCount, MoltingRecord? lastMolt)
-    {
-        var status = box.Status ?? "";
-        var crabScore = 85;
-        if (string.Equals(status, BoxStatuses.Quarantine, StringComparison.OrdinalIgnoreCase))
-            crabScore = 35;
-        else if (string.Equals(status, BoxStatuses.Maintenance, StringComparison.OrdinalIgnoreCase))
-            crabScore = 55;
-        else if (string.Equals(status, BoxStatuses.Empty, StringComparison.OrdinalIgnoreCase) && !box.IsOccupied)
-            crabScore = 90;
-        else if (string.Equals(status, BoxStatuses.Molting, StringComparison.OrdinalIgnoreCase))
-            crabScore = 78;
-        else if (string.Equals(status, BoxStatuses.Harvested, StringComparison.OrdinalIgnoreCase))
-            crabScore = 88;
-        else if (string.Equals(status, BoxStatuses.Active, StringComparison.OrdinalIgnoreCase) || box.IsOccupied)
-            crabScore = 92;
-
-        crabScore = Math.Clamp(crabScore - Math.Min(alertCount, 5) * 3, 0, 100);
-
-        var score = (int)Math.Round(waterScore * 0.35 + crabScore * 0.40 + deviceScore * 0.25);
-        score = Math.Clamp(score, 0, 100);
-
-        var (level, label) = score switch
-        {
-            >= 85 => ("excellent", "Excellent"),
-            >= 70 => ("good", "Good"),
-            >= 50 => ("warning", "Warning"),
-            _ => ("danger", "Critical")
-        };
-
-        var trend = "stable";
-        if (lastMolt is not null &&
-            string.Equals(lastMolt.Result, "success", StringComparison.OrdinalIgnoreCase) &&
-            lastMolt.MoltTime > DateTime.UtcNow.AddDays(-3))
-            trend = "improving";
-        else if (string.Equals(status, BoxStatuses.Quarantine, StringComparison.OrdinalIgnoreCase) || alertCount >= 2)
-            trend = "declining";
-
-        var confidence = Math.Clamp(70 + deviceScore / 5 + (alertCount == 0 ? 10 : 0), 60, 99);
-
-        var explanation =
-            $"Điểm tổng hợp: nước {waterScore}%, cua {crabScore}%, thiết bị {deviceScore}% (trọng số 35/40/25).";
-
-        return new BoxHealthScoreDto(score, confidence, trend, label, level, explanation);
-    }
-
-    private static string MapHealthStatus(Box box, int score, bool areaOnline)
-    {
-        var status = box.Status ?? "";
-        if (!areaOnline && string.Equals(status, BoxStatuses.Maintenance, StringComparison.OrdinalIgnoreCase))
-            return "offline";
-        if (string.Equals(status, BoxStatuses.Maintenance, StringComparison.OrdinalIgnoreCase))
-            return "offline";
-        if (string.Equals(status, BoxStatuses.Quarantine, StringComparison.OrdinalIgnoreCase) || score < 50)
-            return "critical";
-        if (score < 70 || string.Equals(status, BoxStatuses.Molting, StringComparison.OrdinalIgnoreCase))
-            return "warning";
-        return "healthy";
+        // Persisted timestamps are UTC; reject default and future values.
+        // Unspecified kind is not accepted as a verified instant.
+        return timestamps.Where(t => t.HasValue && t.Value.Kind == DateTimeKind.Utc
+                && t.Value.Year >= 2000 && t.Value <= now)
+            .Max();
     }
 
     /// <summary>
@@ -480,36 +394,6 @@ public class BoxOverviewService : IBoxOverviewService
             }
         }
         return worst is null ? null : CrabConditions.ToApi(worst.Value);
-    }
-
-    private static BoxAiTipDto? BuildAiTip(Box box, List<Alert> alerts, string healthStatus)
-    {
-        if (string.Equals(box.Status, BoxStatuses.Molting, StringComparison.OrdinalIgnoreCase))
-        {
-            return new BoxAiTipDto(
-                box.Id.ToString(),
-                $"Thu hoạch box {box.Code}",
-                $"Box {box.Code} đang lột — kiểm tra softshell và thu hoạch khi đạt.",
-                "high",
-                88,
-                true);
-        }
-
-        if (healthStatus is "critical" or "warning")
-        {
-            var alert = alerts.OrderByDescending(a => a.Severity).ThenByDescending(a => a.CreatedAt).FirstOrDefault();
-            return new BoxAiTipDto(
-                alert?.Id.ToString() ?? box.Id.ToString(),
-                healthStatus == "critical" ? "Ưu tiên kiểm tra nước" : "Đề xuất quay video AI",
-                string.IsNullOrWhiteSpace(alert?.Message)
-                    ? $"Box {box.Code} cần theo dõi thêm."
-                    : alert!.Message,
-                healthStatus == "critical" ? "high" : "medium",
-                healthStatus == "critical" ? 92 : 80,
-                true);
-        }
-
-        return new BoxAiTipDto("none", "", "", "low", 99, false);
     }
 
     private static Dictionary<Guid, BoxMapLayoutDto> BuildLayoutIndices(
