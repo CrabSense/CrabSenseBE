@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Security.Cryptography;
+using System.Text.Json;
 using CrabSenseBE.Infrastructure.Services;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -26,6 +27,10 @@ public sealed class DatabaseBackupRecoveryPostgresTests
         Assert.True(Directory.Exists(cluster));
         Assert.True(int.TryParse(Environment.GetEnvironmentVariable("CRABSENSE_RECOVERY_TEST_PORT"), out var port));
         Assert.InRange(port, 1024, 65535);
+        var evidenceDirectory = Path.GetFullPath(Environment.GetEnvironmentVariable("CRABSENSE_RECOVERY_TEST_EVIDENCE")!);
+        Assert.True(Directory.Exists(evidenceDirectory));
+        var metricsPath = Path.Combine(evidenceDirectory, "recovery-metrics.json");
+        Assert.False(File.Exists(metricsPath));
         var bin = Environment.GetEnvironmentVariable("CRABSENSE_RECOVERY_TEST_PGBIN")!;
         Assert.True(Directory.Exists(bin));
         string Conn(string db) => new NpgsqlConnectionStringBuilder {
@@ -119,6 +124,21 @@ public sealed class DatabaseBackupRecoveryPostgresTests
         Assert.Equal("be",ex.SchemaName);
         await tx.RollbackAsync();
         Assert.Equal(before.OrderBy(x=>x.Key),(await Snapshot(target)).OrderBy(x=>x.Key));
-        Console.WriteLine($"RECOVERY_DRILL backup_ms={backupMs} restore_ms={recoveryMs} tables={before.Count} sha256_verified=true");
+        // Write only after every recovery assertion, including post-rollback comparison.
+        // No archive bytes, connection strings, row contents or credentials in the report.
+        Assert.True(backupMs > 0);
+        Assert.True(recoveryMs > 0);
+        var metrics = new {
+            schema_version = 1,
+            scope = "isolated_synthetic_postgresql",
+            backup_ms = backupMs,
+            restore_ms = recoveryMs,
+            restore_includes_safety_backup = true,
+            archive_bytes = new FileInfo(file).Length,
+            tables = before.Count,
+            sha256_verified = true
+        };
+        await using var metricsStream = new FileStream(metricsPath, FileMode.CreateNew, FileAccess.Write, FileShare.None);
+        await JsonSerializer.SerializeAsync(metricsStream, metrics);
     }
 }

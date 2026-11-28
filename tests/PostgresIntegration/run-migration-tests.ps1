@@ -2,7 +2,8 @@ param(
     [string]$PostgresBin = "",
     [int]$Port = 55440,
     [string]$MigrationBundle = "",
-    [switch]$UseExistingBuild
+    [switch]$UseExistingBuild,
+    [string]$RecoveryEvidenceDirectory = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -422,22 +423,51 @@ END $$;
     $oldRecoveryPort = $env:CRABSENSE_RECOVERY_TEST_PORT
     $oldRecoveryDir = $env:CRABSENSE_RECOVERY_TEST_CLUSTER
     $oldRecoveryBin = $env:CRABSENSE_RECOVERY_TEST_PGBIN
-    $recoveryResults = Join-Path $data "recovery-test-results"
+    $oldRecoveryEvidence = $env:CRABSENSE_RECOVERY_TEST_EVIDENCE
+    # Store only metrics/TRX outside the disposable cluster, never its archive or data.
+    if ([string]::IsNullOrWhiteSpace($RecoveryEvidenceDirectory)) {
+        $RecoveryEvidenceDirectory = Join-Path ([System.IO.Path]::GetTempPath()) ("crabsense-recovery-evidence-" + [Guid]::NewGuid().ToString("N"))
+    }
+    $recoveryResults = [System.IO.Path]::GetFullPath($RecoveryEvidenceDirectory)
+    $clusterRoot = [System.IO.Path]::GetFullPath($data)
+    if ($recoveryResults -eq $clusterRoot -or $recoveryResults.StartsWith($clusterRoot + [System.IO.Path]::DirectorySeparatorChar, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "Recovery evidence must be outside the disposable PostgreSQL cluster."
+    }
+    if (Test-Path -LiteralPath $recoveryResults) { throw "Recovery evidence directory must be new." }
+    New-Item -ItemType Directory -Path $recoveryResults | Out-Null
     try {
         $env:CRABSENSE_RECOVERY_TEST_PORT = "$Port"
         $env:CRABSENSE_RECOVERY_TEST_CLUSTER = $data
         $env:CRABSENSE_RECOVERY_TEST_PGBIN = $PostgresBin
+        $env:CRABSENSE_RECOVERY_TEST_EVIDENCE = $recoveryResults
         & dotnet test tests/CrabSenseBE.UnitTests/CrabSenseBE.UnitTests.csproj -c Release --filter "FullyQualifiedName~DatabaseBackupRecoveryPostgresTests" --logger "trx;LogFileName=recovery.trx" --results-directory $recoveryResults
         Assert-Exit "Isolated backup/recovery test failed"
         [xml]$report = Get-Content (Join-Path $recoveryResults "recovery.trx") -Raw
         $results = @($report.TestRun.Results.UnitTestResult)
         if ($results.Count -ne 1 -or $results[0].outcome -ne "Passed") { throw "Expected one executed and passed recovery test, not a skip." }
+        $counters = $report.TestRun.ResultSummary.Counters
+        if ([int]$counters.total -ne 1 -or [int]$counters.executed -ne 1 -or [int]$counters.passed -ne 1 -or [int]$counters.failed -ne 0 -or [int]$counters.notExecuted -ne 0) {
+            throw "Recovery TRX counters must show exactly one executed pass."
+        }
+        $metrics = Get-Content -LiteralPath (Join-Path $recoveryResults "recovery-metrics.json") -Raw | ConvertFrom-Json
+        if ($metrics.schema_version -ne 1 -or $metrics.scope -cne "isolated_synthetic_postgresql" -or
+            $metrics.sha256_verified -isnot [bool] -or !$metrics.sha256_verified -or
+            $metrics.restore_includes_safety_backup -isnot [bool] -or !$metrics.restore_includes_safety_backup) {
+            throw "Invalid recovery metrics contract."
+        }
+        foreach ($key in @("backup_ms", "restore_ms", "archive_bytes", "tables")) {
+            $value = $metrics.$key
+            if (($value -isnot [long] -and $value -isnot [int]) -or $value -le 0) { throw "Missing or invalid recovery metric: $key" }
+        }
+        if ($metrics.archive_bytes -lt 1024) { throw "Invalid recovery archive size metric." }
+        Write-Output ("RECOVERY_DRILL backup_ms={0} restore_ms={1} tables={2} archive_bytes={3} sha256_verified=true restore_includes_safety_backup=true scope=isolated_synthetic_postgresql" -f $metrics.backup_ms,$metrics.restore_ms,$metrics.tables,$metrics.archive_bytes)
         Write-Output "ISOLATED_BACKUP_RECOVERY_PASSED=1"
     }
     finally {
         $env:CRABSENSE_RECOVERY_TEST_PORT = $oldRecoveryPort
         $env:CRABSENSE_RECOVERY_TEST_CLUSTER = $oldRecoveryDir
         $env:CRABSENSE_RECOVERY_TEST_PGBIN = $oldRecoveryBin
+        $env:CRABSENSE_RECOVERY_TEST_EVIDENCE = $oldRecoveryEvidence
     }
     Write-Output "FARM_STATE_VERSION_TESTS_PASSED=1"
     Write-Output "NON_SALES_SCHEMA_TESTS_PASSED=1"
