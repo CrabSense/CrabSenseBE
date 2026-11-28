@@ -8,21 +8,9 @@ using CrabSenseBE.Application.Common;
 namespace CrabSenseBE.Application.Services;
 
 /// <summary>
-/// Báo cáo hiệu quả vận hành tổng hợp.
-///
-/// Mặc định lọc theo tháng hiện tại.
-/// Công thức:
-///     MoltingRate   = MoltedCrabs    / TotalCrabs × 100
-///     HarvestRate   = HarvestedCrabs / TotalCrabs × 100
-///     MortalityRate = DeadCrabs      / TotalCrabs × 100
-///     AliveRate     = AliveCrabs     / TotalCrabs × 100
-///
-/// AliveCrabs (đang nuôi):
-///     Alive + Quarantined
-///
-/// Thời gian lọc:
-///     Dựa trên thời điểm thả cua (StockedAt).
-///     Mặc định: tháng hiện tại.
+/// Current recorded status of crabs stocked during the selected UTC calendar
+/// period, scoped by current assigned box; not a historical as-of report.
+/// Rates use the same nonempty cohort denominator. No inferred health score.
 /// </summary>
 public class OperationalEfficiencyReportService
     : IOperationalEfficiencyReportService
@@ -54,6 +42,11 @@ public class OperationalEfficiencyReportService
             throw AppException.BadRequest(
                 "FromDate cannot be greater than ToDate.");
         }
+
+        if (filter.FarmingAreaId == Guid.Empty)
+            throw AppException.BadRequest("FarmingAreaId must not be empty.");
+
+        var boxIds = await _areas.BoxIdsAsync(filter.FarmingAreaId, cancellationToken);
 
         if (filter.CrabLotId.HasValue)
         {
@@ -92,11 +85,16 @@ public class OperationalEfficiencyReportService
         // parameter (Unspecified) và DB column (Utc).
         // ============================================================
 
-        var allCrabs = await _uow.Crabs
-            .Query()
-            .ToListAsync(cancellationToken);
+        if (fromDate >= toDate)
+            throw AppException.BadRequest("Invalid effective date range.");
 
-        var boxIds = await _areas.BoxIdsAsync(null, cancellationToken);
+        var source = _uow.Crabs.Query();
+        var allCrabs = source is null
+            ? await _uow.Crabs.GetAllAsync(cancellationToken)
+            : source.Provider is Microsoft.EntityFrameworkCore.Query.IAsyncQueryProvider
+                ? await source.ToListAsync(cancellationToken)
+                : source.ToList();
+
         var crabs = allCrabs
             .Where(c => c.StockedAt >= fromDate
                      && c.StockedAt < toDate)
@@ -127,12 +125,8 @@ public class OperationalEfficiencyReportService
             c.Status == CrabStatus.Molting);
 
         var molted = crabs.Count(c =>
-    c.MoltedAt != null
-    && c.Status != CrabStatus.Molting
-    && c.Status != CrabStatus.Harvested
-    && c.Status != CrabStatus.Dead
-    && c.Status != CrabStatus.Missing
-    && c.Status != CrabStatus.Sold);
+            c.MoltedAt != null
+            && (c.Status == CrabStatus.Alive || c.Status == CrabStatus.Quarantined));
 
         var harvested = crabs.Count(c =>
             c.Status == CrabStatus.Harvested
@@ -147,7 +141,7 @@ public class OperationalEfficiencyReportService
         // 4. TÍNH TỶ LỆ
         // ============================================================
 
-        var survivalRate = CalculateRate(alive + molting, total);
+        var survivalRate = CalculateRate(alive + molting + molted, total);
         var moltingRate = CalculateRate(molting, total);
         var harvestRate = CalculateRate(harvested, total);
         var mortalityRate = CalculateRate(dead, total);
@@ -162,32 +156,6 @@ public class OperationalEfficiencyReportService
     dead;
 
         var unclassified = total - classified;
-
-        // ============================================================
-        // 5. TÍNH HEALTH SCORE (composite)
-        // ============================================================
-        //
-        // Công thức:
-        //   HealthScore = SurvivalRate × 0.4
-        //               + (100 - MortalityRate) × 0.3
-        //               + HarvestRate × 0.2
-        //               + MoltingRate × 0.1
-        //
-        // MoltingRate có trọng số thấp vì lột là tự nhiên,
-        // không xấu cũng không tốt — chỉ cho thấy hoạt động.
-        // ============================================================
-
-        var healthScore = (int)Math.Round(
-            survivalRate * 0.4m
-            + (100 - mortalityRate) * 0.3m
-            + harvestRate * 0.2m
-            + moltingRate * 0.1m);
-
-        healthScore = Math.Clamp(healthScore, 0, 100);
-
-        // ============================================================
-        // 6. TRẢ KẾT QUẢ
-        // ============================================================
 
         return new OperationalEfficiencyDto(
             TotalCrabs: total,
@@ -205,13 +173,15 @@ public class OperationalEfficiencyReportService
             MortalityRate: mortalityRate,
             AliveRate: aliveRate,
 
-            HealthScore: healthScore);
+            HealthScore: null,
+            FarmingAreaId: filter.FarmingAreaId,
+            CohortBasis: "stockedAt-current-status-v1");
     }
 
-    private static decimal CalculateRate(int count, int total)
+    private static decimal? CalculateRate(int count, int total)
     {
         return total > 0
             ? decimal.Round((decimal)count / total * 100, 2)
-            : 0;
+            : null;
     }
 }
