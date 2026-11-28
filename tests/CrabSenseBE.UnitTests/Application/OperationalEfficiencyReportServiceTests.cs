@@ -129,8 +129,51 @@ public class OperationalEfficiencyReportServiceTests
         result.AliveCrabs.Should().Be(1);
         result.DeadCrabs.Should().Be(1);
         result.HarvestedCrabs.Should().Be(1);
-        result.SurvivalRate.Should().BeApproximately(33.33m, 0.01m);
-        result.MortalityRate.Should().BeApproximately(33.33m, 0.01m);
+        result.SurvivalRate.Should().Be(33.33m);
+        result.MortalityRate.Should().Be(33.33m);
+    }
+
+    [Fact]
+    public async Task EmptyCohort_ReturnsUnknownRatesAndHealth()
+    {
+        var uow = new Mock<IUnitOfWork>();
+        uow.Setup(unit => unit.Crabs).Returns(CreateCrabRepository(Array.Empty<Crab>()).Object);
+        var date = new DateTime(2026, 10, 15);
+        var result = await new OperationalEfficiencyReportService(uow.Object)
+            .GetOperationalEfficiencyReportAsync(new(date, date));
+        result.TotalCrabs.Should().Be(0);
+        result.SurvivalRate.Should().BeNull();
+        result.MoltingRate.Should().BeNull();
+        result.HarvestRate.Should().BeNull();
+        result.MortalityRate.Should().BeNull();
+        result.AliveRate.Should().BeNull();
+        result.HealthScore.Should().BeNull();
+        result.CohortBasis.Should().Be("stockedAt-current-status-v1");
+    }
+
+    [Fact]
+    public async Task CurrentStatus_IncludesMoltedLivingCrabs_AndKeepsRealZeroRates()
+    {
+        var date = new DateTime(2026, 10, 15);
+        var crabs = new[]
+        {
+            new Crab { Code = "A", StockedAt = date, Status = CrabStatus.Alive, MoltedAt = date },
+            new Crab { Code = "B", StockedAt = date, Status = CrabStatus.Molting },
+            new Crab { Code = "C", StockedAt = date, Status = CrabStatus.Missing, MoltedAt = date },
+            new Crab { Code = "D", StockedAt = date, Status = CrabStatus.Sold, MoltedAt = date }
+        };
+        var uow = new Mock<IUnitOfWork>();
+        uow.Setup(unit => unit.Crabs).Returns(CreateCrabRepository(crabs).Object);
+        var result = await new OperationalEfficiencyReportService(uow.Object)
+            .GetOperationalEfficiencyReportAsync(new(date, date));
+        result.TotalCrabs.Should().Be(4);
+        result.MoltedCrabs.Should().Be(1);
+        result.UnclassifiedCrabs.Should().Be(1);
+        result.SurvivalRate.Should().Be(50m);
+        result.MoltingRate.Should().Be(25m);
+        result.HarvestRate.Should().Be(25m);
+        result.MortalityRate.Should().Be(0m);
+        result.HealthScore.Should().BeNull();
     }
 
     private static Mock<IRepository<Crab>> CreateCrabRepository(

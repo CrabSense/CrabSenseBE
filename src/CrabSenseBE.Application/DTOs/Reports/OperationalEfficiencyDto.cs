@@ -8,7 +8,8 @@ public record OperationalEfficiencyFilterDto
 (
     DateTime? FromDate,
     DateTime? ToDate,
-    Guid? CrabLotId = null
+    Guid? CrabLotId = null,
+    Guid? FarmingAreaId = null
 );
 
 /// <summary>
@@ -24,11 +25,13 @@ public record OperationalEfficiencyDto
     int DeadCrabs,
     int UnclassifiedCrabs,
 
-    decimal SurvivalRate,    // (Alive + Molting) / Total × 100
-    decimal MoltingRate,     // Molting / Total × 100
-    decimal HarvestRate,     // Harvested / Total × 100
-    decimal MortalityRate,   // Dead / Total × 100
-    decimal AliveRate,       // Alive / Total × 100 (chỉ cua chưa lột)
+    decimal? SurvivalRate,    // (Alive + Molting + Molted) / Total × 100
+    decimal? MoltingRate,     // Molting / Total × 100
+    decimal? HarvestRate,     // Harvested / Total × 100
+    decimal? MortalityRate,   // Dead / Total × 100
+    decimal? AliveRate,       // Alive / Total × 100 (chỉ cua chưa lột)
 
-    decimal HealthScore      // Điểm tổng hợp 0-100
+    decimal? HealthScore,    // Unavailable without verified assessment
+    Guid? FarmingAreaId,
+    string CohortBasis
 );

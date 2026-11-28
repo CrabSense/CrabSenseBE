@@ -116,15 +116,15 @@ public sealed class FarmReportPermissionTests : IAsyncLifetime
         uow.Setup(u => u.FarmingAreas).Returns(areaRepo.Object);
         uow.Setup(u => u.FarmManagerAssignments).Returns(managers.Object);
         uow.Setup(u => u.FarmStaffAssignments).Returns(staffRepo.Object);
-        uow.Setup(u => u.FarmingRows).Returns(ListRepo(rows));
-        uow.Setup(u => u.Boxes).Returns(ListRepo(boxes));
+        uow.Setup(u => u.FarmingRows).Returns(ListRepo(rows, queryable: true));
+        uow.Setup(u => u.Boxes).Returns(ListRepo(boxes, queryable: true));
         uow.Setup(u => u.CrabLots).Returns(ListRepo(lots));
         uow.Setup(u => u.CrabLotAreas).Returns(ListRepo(new[]
         {
             new CrabLotArea { CrabLotId = LotA, FarmingAreaId = AreaA },
             new CrabLotArea { CrabLotId = LotB, FarmingAreaId = AreaB }
         }));
-        uow.Setup(u => u.Crabs).Returns(ListRepo(crabs));
+        uow.Setup(u => u.Crabs).Returns(ListRepo(crabs, queryable: true));
         uow.Setup(u => u.CrabBoxAllocations).Returns(ListRepo(Array.Empty<CrabBoxAllocation>()));
         uow.Setup(u => u.CrabHarvestHistories).Returns(ListRepo(Array.Empty<CrabHarvestHistory>()));
         uow.Setup(u => u.HarvestVouchers).Returns(ListRepo(vouchers));
@@ -209,10 +209,33 @@ public sealed class FarmReportPermissionTests : IAsyncLifetime
         Assert.True(failures.Count == 0, string.Join(Environment.NewLine, failures));
     }
 
-    private static IRepository<T> ListRepo<T>(IEnumerable<T> items) where T : class
+    [Fact]
+    public async Task Efficiency_enforces_requested_area_and_returns_scope_marker()
+    {
+        const string dates = "&fromDate=2026-11-01&toDate=2026-11-01";
+        var allowed = await Send(AppRoles.FarmAdministrator, AdminA, HttpMethod.Get,
+            $"/api/reports/operational-efficiency?farmingAreaId={AreaA}{dates}", null);
+        var denied = await Send(AppRoles.FarmAdministrator, AdminA, HttpMethod.Get,
+            $"/api/reports/operational-efficiency?farmingAreaId={AreaB}{dates}", null);
+        var body = await allowed.Content.ReadAsStringAsync();
+        Assert.Equal(200, (int)allowed.StatusCode);
+        Assert.Equal(403, (int)denied.StatusCode);
+        using var json = System.Text.Json.JsonDocument.Parse(body);
+        var data = json.RootElement.GetProperty("data");
+        Assert.Equal(1, data.GetProperty("totalCrabs").GetInt32());
+        Assert.Equal(1, data.GetProperty("aliveCrabs").GetInt32());
+        Assert.Equal(100m, data.GetProperty("survivalRate").GetDecimal());
+        Assert.Equal(0m, data.GetProperty("harvestRate").GetDecimal());
+        Assert.Equal(AreaA, data.GetProperty("farmingAreaId").GetGuid());
+        Assert.Equal("stockedAt-current-status-v1", data.GetProperty("cohortBasis").GetString());
+    }
+
+    private static IRepository<T> ListRepo<T>(IEnumerable<T> items, bool queryable = false) where T : class
     {
         var list = items.ToList();
         var repo = new Mock<IRepository<T>>();
+        if (queryable)
+            repo.Setup(r => r.Query()).Returns(() => list.AsQueryable());
         repo.Setup(r => r.GetAllAsync(It.IsAny<CancellationToken>())).ReturnsAsync(list);
         repo.Setup(r => r.FindAsync(
                 It.IsAny<System.Linq.Expressions.Expression<Func<T, bool>>>(),
