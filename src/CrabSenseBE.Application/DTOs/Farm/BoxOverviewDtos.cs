@@ -14,11 +14,11 @@ public record BoxDeviceSnapshotDto(
     int OnlineCount,
     int TotalCount);
 
-/// <summary>AI health score for a single box card.</summary>
+/// <summary>Assessment fields are null until verified provenance is available.</summary>
 public record BoxHealthScoreDto(
-    int Score,
-    double AiConfidence,
-    string Trend,
+    int? Score,
+    double? AiConfidence,
+    string? Trend,
     string StatusLabel,
     string StatusLevel,
     string Explanation);
@@ -65,11 +65,11 @@ public record BoxOverviewItemDto(
     DateTime? LatestAlertAt,
     BoxAiTipDto? AiRecommendation,
     BoxMapLayoutDto Layout,
-    DateTime LastUpdated,
+    DateTime? LastUpdated,
     DateTime? ExpectedHarvestAt,
     bool WaterTestDue,
     bool VideoDue,
-    string Priority,
+    string? Priority,
     /// Tình trạng xấu nhất trong số cua đang nuôi ở hộp (normal | premolt |
     /// molting | softshell | problem | weak). Null = hộp trống/chưa đánh dấu.
     string? CrabCondition = null);
@@ -77,11 +77,11 @@ public record BoxOverviewItemDto(
 /// <summary>Farm-level summary counts for Boxes header.</summary>
 public record BoxesFarmSummaryDto(
     int Total,
-    int Healthy,
-    int Warning,
-    int Critical,
-    int Offline,
-    int WithAiRecommendation);
+    int? Healthy,
+    int? Warning,
+    int? Critical,
+    int? Offline,
+    int? WithAiRecommendation);
 
 /// <summary>Full payload for GET /api/boxes/overview.</summary>
 public record BoxesOverviewResponseDto(

@@ -383,8 +383,8 @@ public sealed class FarmAreaScopeTests
             new FarmingRow { Id = rowA, FarmingAreaId = a },
             new FarmingRow { Id = rowB, FarmingAreaId = b }).Object);
         uow.Setup(x => x.Boxes).Returns(RepositoryWithAll(
-            new Box { Id = Guid.NewGuid(), FarmingRowId = rowA, Code = "A" },
-            new Box { Id = Guid.NewGuid(), FarmingRowId = rowB, Code = "B" }).Object);
+            new Box { Id = Guid.NewGuid(), FarmingRowId = rowA, Code = "A", CreatedAt = default },
+            new Box { Id = Guid.NewGuid(), FarmingRowId = rowB, Code = "B", CreatedAt = now, UpdatedAt = now.AddDays(1) }).Object);
         uow.Setup(x => x.WaterSystems).Returns(RepositoryWithAll(
             new WaterSystem { Id = systemA, FarmingAreaId = a },
             new WaterSystem { Id = systemB, FarmingAreaId = b }).Object);
@@ -413,6 +413,19 @@ public sealed class FarmAreaScopeTests
         all.AreaDevices.TotalCount.Should().Be(0);
         var first = all.Items.Single(i => i.FarmingAreaId == a);
         var second = all.Items.Single(i => i.FarmingAreaId == b);
+        first.Health.Score.Should().BeNull();
+        first.Health.AiConfidence.Should().BeNull();
+        first.Health.Trend.Should().BeNull();
+        first.HealthStatus.Should().Be("unknown");
+        first.AiRecommendation.Should().BeNull();
+        first.Priority.Should().BeNull();
+        first.LastUpdated.Should().BeNull();
+        second.LastUpdated.Should().Be(now);
+        all.Summary.Healthy.Should().BeNull();
+        all.Summary.Warning.Should().BeNull();
+        all.Summary.Critical.Should().BeNull();
+        all.Summary.Offline.Should().BeNull();
+        all.Summary.WithAiRecommendation.Should().BeNull();
         first.Water.Temperature.Should().Be(0);
         second.Water.Temperature.Should().Be(28);
         first.Water.Alarms.Should().BeEmpty();
