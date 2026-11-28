@@ -181,7 +181,18 @@ jobs:
 
       - name: Full clean and legacy EF migration tests (including production bundle)
         shell: pwsh
-        run: ./tests/PostgresIntegration/run-migration-tests.ps1 -MigrationBundle /tmp/crabsense-publish/efbundle -UseExistingBuild
+        run: ./tests/PostgresIntegration/run-migration-tests.ps1 -MigrationBundle /tmp/crabsense-publish/efbundle -UseExistingBuild -RecoveryEvidenceDirectory (Join-Path $env:RUNNER_TEMP "crabsense-recovery-evidence")
+
+      - name: Upload isolated recovery evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: recovery-evidence-${{ github.sha }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/crabsense-recovery-evidence/recovery.trx
+            ${{ runner.temp }}/crabsense-recovery-evidence/recovery-metrics.json
+          if-no-files-found: warn
+          retention-days: 14
 
   security-tests:
     name: CI/CD security and NuGet audit
